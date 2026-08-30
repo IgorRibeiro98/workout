@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import com.example.data.local.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.InputStreamReader
 
@@ -41,8 +42,13 @@ class ProgramImporter(
     }
 
     suspend fun importProgramFromJson(jsonString: String): ProgramImportResult = withContext(Dispatchers.IO) {
+        val trimmed = jsonString.trim()
+        if (trimmed.isEmpty()) {
+            return@withContext ProgramImportResult(false, error = "Conteúdo JSON está vazio")
+        }
+
         try {
-            val root = JSONObject(jsonString.trim())
+            val root = JSONObject(trimmed)
             val programObj = root.optJSONObject("program") 
                 ?: return@withContext ProgramImportResult(false, error = "JSON inválido: objeto 'program' não encontrado")
 
@@ -50,6 +56,9 @@ class ProgramImporter(
             if (pName.isBlank()) {
                 return@withContext ProgramImportResult(false, error = "Nome do programa não pode ser vazio")
             }
+
+            val programCanonicalId = programObj.optString("id").takeIf { it.isNotBlank() }
+                ?: programObj.optString("canonicalId").takeIf { it.isNotBlank() }
 
             val workoutsArr = programObj.optJSONArray("workouts")
             if (workoutsArr == null || workoutsArr.length() == 0) {
@@ -61,7 +70,21 @@ class ProgramImporter(
             var missingExercises = 0
 
             database.withTransaction {
-                val programId = dao.insertProgram(WorkoutProgramEntity(name = pName, isCurrent = false))
+                // Idempotent program insertion: check if program with canonicalId or name already exists
+                val existingProgram = if (programCanonicalId != null) {
+                    dao.getAllProgramsSync().firstOrNull { it.name == pName }
+                } else {
+                    dao.getAllProgramsSync().firstOrNull { it.name == pName }
+                }
+
+                val programId = existingProgram?.id ?: dao.insertProgram(
+                    WorkoutProgramEntity(name = pName, isCurrent = false)
+                )
+
+                if (existingProgram != null) {
+                    // Update existing program name
+                    dao.updateProgram(existingProgram.copy(name = pName))
+                }
 
                 for (i in 0 until workoutsArr.length()) {
                     val wObj = workoutsArr.getJSONObject(i)
@@ -69,15 +92,26 @@ class ProgramImporter(
                     val shortCode = wObj.optString("shortCode").takeIf { it.isNotBlank() }
                     val dayOfWeek = wObj.optString("dayOfWeek").takeIf { it.isNotBlank() }
 
-                    val templateId = dao.insertTemplate(
-                        WorkoutTemplateEntity(
-                            programId = programId,
-                            name = wName,
-                            shortIdentifier = shortCode,
-                            orderInProgram = i,
-                            dayOfWeek = dayOfWeek
+                    // Check if template with same name in program exists
+                    val existingTemplates = dao.getTemplatesForProgramSync(programId)
+                    val existingTpl = existingTemplates.firstOrNull { it.name == wName }
+
+                    val templateId = if (existingTpl != null) {
+                        dao.updateTemplate(existingTpl.copy(shortIdentifier = shortCode, dayOfWeek = dayOfWeek, orderInProgram = i))
+                        // Clear old template exercises to re-import freshly
+                        dao.deleteTemplateExercisesForTemplate(existingTpl.id)
+                        existingTpl.id
+                    } else {
+                        dao.insertTemplate(
+                            WorkoutTemplateEntity(
+                                programId = programId,
+                                name = wName,
+                                shortIdentifier = shortCode,
+                                orderInProgram = i,
+                                dayOfWeek = dayOfWeek
+                            )
                         )
-                    )
+                    }
                     workoutsCount++
 
                     val exArr = wObj.optJSONArray("exercises")
@@ -118,6 +152,8 @@ class ProgramImporter(
             }
 
             ProgramImportResult(true, pName, workoutsCount, exercisesCount, missingExercises)
+        } catch (e: JSONException) {
+            ProgramImportResult(false, error = "JSON malformatado: ${e.message}")
         } catch (e: Exception) {
             ProgramImportResult(false, error = "Erro ao importar programa: ${e.message}")
         }

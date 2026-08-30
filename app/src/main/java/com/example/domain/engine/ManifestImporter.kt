@@ -3,13 +3,16 @@ package com.example.domain.engine
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
+import com.example.data.datastore.SettingsManager
 import com.example.data.local.AppDatabase
 import com.example.data.local.ExerciseAlternativeEntity
 import com.example.data.local.ExerciseEntity
 import com.example.data.local.WorkoutDao
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 data class ImportResult(
@@ -18,7 +21,9 @@ data class ImportResult(
     val unchanged: Int = 0,
     val ignored: Int = 0,
     val alternativesAdded: Int = 0,
-    val errors: List<String> = emptyList()
+    val alternativesExisting: Int = 0,
+    val errors: List<String> = emptyList(),
+    val isSkippedSameVersion: Boolean = false
 )
 
 data class CatalogValidationResult(
@@ -26,14 +31,15 @@ data class CatalogValidationResult(
     val exerciseCount: Int,
     val alternativeCount: Int,
     val localePtBr: Boolean,
+    val contentVersion: Int,
     val validationErrors: List<String>
 )
 
 class ManifestImporter(
     private val database: AppDatabase,
-    private val context: Context
+    private val context: Context,
+    private val settingsManager: SettingsManager = SettingsManager(context)
 ) {
-    // Secondary constructor for backwards compatibility
     constructor(dao: WorkoutDao, context: Context) : this(
         AppDatabase.getDatabase(context),
         context
@@ -41,21 +47,24 @@ class ManifestImporter(
 
     private val dao: WorkoutDao = database.workoutDao()
 
-    suspend fun importFromAssets(assetPath: String = "catalog/catalogo_exercicios_base_ptbr.v1.json"): ImportResult = withContext(Dispatchers.IO) {
+    suspend fun importFromAssets(
+        assetPath: String = "catalog/catalogo_exercicios_base_ptbr.v1.json",
+        force: Boolean = false
+    ): ImportResult = withContext(Dispatchers.IO) {
         try {
             val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
-            importFromJsonString(jsonString)
+            importFromJsonString(jsonString, force = force)
         } catch (e: Exception) {
             ImportResult(errors = listOf("Erro ao abrir asset $assetPath: ${e.message}"))
         }
     }
 
-    suspend fun importExercises(uri: Uri): ImportResult = withContext(Dispatchers.IO) {
+    suspend fun importExercises(uri: Uri, force: Boolean = false): ImportResult = withContext(Dispatchers.IO) {
         try {
             val inputStream = context.contentResolver.openInputStream(uri) 
                 ?: return@withContext ImportResult(errors = listOf("Arquivo inacessível"))
             val content = inputStream.bufferedReader().use { it.readText() }
-            importFromJsonString(content)
+            importFromJsonString(content, force = force)
         } catch (e: Exception) {
             ImportResult(errors = listOf("Erro ao importar do arquivo: ${e.message}"))
         }
@@ -66,13 +75,22 @@ class ManifestImporter(
         var exerciseCount = 0
         var altCount = 0
         var hasPtBr = true
+        var contentVersion = 1
 
         try {
             val trimmed = jsonString.trim()
+            if (trimmed.isEmpty()) {
+                errors.add("Conteúdo JSON está vazio.")
+                return CatalogValidationResult(false, 0, 0, false, 0, errors)
+            }
+
             val jsonArray: JSONArray = if (trimmed.startsWith("[")) {
                 JSONArray(trimmed)
             } else {
                 val obj = JSONObject(trimmed)
+                if (obj.has("contentVersion")) {
+                    contentVersion = obj.getInt("contentVersion")
+                }
                 if (obj.has("locale")) {
                     val loc = obj.getString("locale")
                     if (!loc.equals("pt-BR", ignoreCase = true) && !loc.equals("pt_BR", ignoreCase = true)) {
@@ -104,8 +122,10 @@ class ManifestImporter(
                     altCount += alts.length()
                 }
             }
+        } catch (e: JSONException) {
+            errors.add("Sintaxe JSON inválida: ${e.message}")
         } catch (e: Exception) {
-            errors.add("JSON inválido ou corrompido: ${e.message}")
+            errors.add("Erro de validação: ${e.message}")
         }
 
         return CatalogValidationResult(
@@ -113,14 +133,27 @@ class ManifestImporter(
             exerciseCount = exerciseCount,
             alternativeCount = altCount,
             localePtBr = hasPtBr,
+            contentVersion = contentVersion,
             validationErrors = errors
         )
     }
 
-    suspend fun importFromJsonString(jsonString: String): ImportResult = withContext(Dispatchers.IO) {
+    suspend fun importFromJsonString(
+        jsonString: String,
+        force: Boolean = false
+    ): ImportResult = withContext(Dispatchers.IO) {
         val validation = validateCatalog(jsonString)
-        if (!validation.isValid && validation.exerciseCount == 0) {
+        if (!validation.isValid) {
             return@withContext ImportResult(errors = validation.validationErrors)
+        }
+
+        // Check contentVersion in SettingsManager
+        val installedVersion = settingsManager.installedCatalogContentVersionFlow.firstOrNull() ?: 0
+        if (!force && validation.contentVersion > 0 && validation.contentVersion <= installedVersion) {
+            return@withContext ImportResult(
+                unchanged = validation.exerciseCount,
+                isSkippedSameVersion = true
+            )
         }
 
         var added = 0
@@ -128,6 +161,7 @@ class ManifestImporter(
         var unchanged = 0
         var ignored = 0
         var altsAdded = 0
+        var altsExisting = 0
         val errors = mutableListOf<String>()
 
         try {
@@ -144,156 +178,166 @@ class ManifestImporter(
                 }
             }
 
+            // Execute transaction atomically. Any thrown exception will roll back Room transaction.
             database.withTransaction {
                 // First pass: Import/Upsert all canonical exercises
                 for (i in 0 until jsonArray.length()) {
-                    try {
-                        val wrapperObj = jsonArray.getJSONObject(i)
-                        val exObj = if (wrapperObj.has("exercise")) wrapperObj.getJSONObject("exercise") else wrapperObj
+                    val wrapperObj = jsonArray.getJSONObject(i)
+                    val exObj = if (wrapperObj.has("exercise")) wrapperObj.getJSONObject("exercise") else wrapperObj
 
-                        val canonicalId = exObj.optString("id")
-                        if (canonicalId.isNullOrEmpty()) {
-                            ignored++
-                            continue
+                    val canonicalId = exObj.optString("id")
+                    if (canonicalId.isNullOrEmpty()) {
+                        ignored++
+                        continue
+                    }
+
+                    val slug = exObj.optString("slug", canonicalId)
+                    val wrapperVersion = if (wrapperObj.has("contentVersion")) wrapperObj.getInt("contentVersion") else validation.contentVersion
+
+                    val identity = exObj.optJSONObject("identity")
+                    val name = identity?.optString("namePtBr") ?: exObj.optString("namePtBr", canonicalId)
+
+                    val aliasesArr = identity?.optJSONArray("aliases")
+                    val aliasesList = mutableListOf<String>()
+                    if (aliasesArr != null) {
+                        for (j in 0 until aliasesArr.length()) {
+                            aliasesList.add(aliasesArr.getString(j))
                         }
+                    }
+                    val aliasesStr = if (aliasesList.isNotEmpty()) aliasesList.joinToString(",") else null
 
-                        val slug = exObj.optString("slug", canonicalId)
-                        val wrapperVersion = wrapperObj.optInt("contentVersion", 1)
+                    val classification = exObj.optJSONObject("classification")
+                    val primaryMuscleObj = exObj.optJSONObject("muscles")?.optJSONArray("primary")?.optJSONObject(0)
+                    val primaryMuscle = primaryMuscleObj?.optString("namePtBr")
+                        ?: classification?.optJSONArray("bodyParts")?.optString(0)
+                        ?: exObj.optString("primaryMuscle").takeIf { it.isNotEmpty() }
 
-                        val identity = exObj.optJSONObject("identity")
-                        val name = identity?.optString("namePtBr") ?: exObj.optString("namePtBr", canonicalId)
+                    val equipmentArr = exObj.optJSONObject("equipment")?.optJSONArray("required")
+                    val equipment = equipmentArr?.optJSONObject(0)?.optString("namePtBr")
 
-                        val aliasesArr = identity?.optJSONArray("aliases")
-                        val aliasesList = mutableListOf<String>()
-                        if (aliasesArr != null) {
-                            for (j in 0 until aliasesArr.length()) {
-                                aliasesList.add(aliasesArr.getString(j))
-                            }
+                    val nameEn = exObj.optString("nameEn").takeIf { it.isNotEmpty() }
+                    val secondaryMusclesArr = exObj.optJSONArray("secondaryMuscles")
+                    val secMusclesList = mutableListOf<String>()
+                    if (secondaryMusclesArr != null) {
+                        for (j in 0 until secondaryMusclesArr.length()) {
+                            secMusclesList.add(secondaryMusclesArr.getString(j))
                         }
-                        val aliasesStr = if (aliasesList.isNotEmpty()) aliasesList.joinToString(",") else null
+                    }
+                    val secMusclesStr = if (secMusclesList.isNotEmpty()) secMusclesList.joinToString(",") else null
 
-                        val classification = exObj.optJSONObject("classification")
-                        val primaryMuscleObj = exObj.optJSONObject("muscles")?.optJSONArray("primary")?.optJSONObject(0)
-                        val primaryMuscle = primaryMuscleObj?.optString("namePtBr")
-                            ?: classification?.optJSONArray("bodyParts")?.optString(0)
-                            ?: exObj.optString("primaryMuscle").takeIf { it.isNotEmpty() }
+                    val eqStr = exObj.optString("equipment").takeIf { it.isNotEmpty() } ?: equipment
+                    val movementPattern = exObj.optString("movementPattern").takeIf { it.isNotEmpty() }
+                    val substitutionGroup = exObj.optString("substitutionGroup").takeIf { it.isNotEmpty() }
+                    val exerciseDbSearch = exObj.optString("exerciseDbSearch").takeIf { it.isNotEmpty() }
+                    val gifUrl = exObj.optString("gifUrl").takeIf { it.isNotEmpty() }
 
-                        val equipmentArr = exObj.optJSONObject("equipment")?.optJSONArray("required")
-                        val equipment = equipmentArr?.optJSONObject(0)?.optString("namePtBr")
-
-                        val nameEn = exObj.optString("nameEn").takeIf { it.isNotEmpty() }
-                        val secondaryMusclesArr = exObj.optJSONArray("secondaryMuscles")
-                        val secMusclesList = mutableListOf<String>()
-                        if (secondaryMusclesArr != null) {
-                            for (j in 0 until secondaryMusclesArr.length()) {
-                                secMusclesList.add(secondaryMusclesArr.getString(j))
-                            }
-                        }
-                        val secMusclesStr = if (secMusclesList.isNotEmpty()) secMusclesList.joinToString(",") else null
-
-                        val eqStr = exObj.optString("equipment").takeIf { it.isNotEmpty() } ?: equipment
-                        val movementPattern = exObj.optString("movementPattern").takeIf { it.isNotEmpty() }
-                        val substitutionGroup = exObj.optString("substitutionGroup").takeIf { it.isNotEmpty() }
-                        val exerciseDbSearch = exObj.optString("exerciseDbSearch").takeIf { it.isNotEmpty() }
-                        val gifUrl = exObj.optString("gifUrl").takeIf { it.isNotEmpty() }
-
-                        val existing = dao.getExerciseByCanonicalId(canonicalId)
-                        if (existing != null) {
-                            if (existing.isUserCreated) {
-                                // Preserve user custom exercises without modifying user fields
-                                unchanged++
-                            } else if (existing.contentVersion >= wrapperVersion) {
-                                unchanged++
-                            } else {
-                                val updatedEx = existing.copy(
-                                    name = name,
-                                    primaryMuscle = primaryMuscle ?: existing.primaryMuscle,
-                                    equipment = eqStr ?: existing.equipment,
-                                    slug = slug,
-                                    contentVersion = wrapperVersion,
-                                    aliases = aliasesStr ?: existing.aliases,
-                                    nameEn = nameEn ?: existing.nameEn,
-                                    secondaryMuscles = secMusclesStr ?: existing.secondaryMuscles,
-                                    movementPattern = movementPattern ?: existing.movementPattern,
-                                    substitutionGroup = substitutionGroup ?: existing.substitutionGroup,
-                                    exerciseDbSearch = exerciseDbSearch ?: existing.exerciseDbSearch,
-                                    gifUrl = gifUrl ?: existing.gifUrl
-                                )
-                                dao.updateExercise(updatedEx)
-                                updated++
-                            }
+                    val existing = dao.getExerciseByCanonicalId(canonicalId)
+                    if (existing != null) {
+                        if (existing.isUserCreated) {
+                            // User created exercise (should not happen if canonicalId is set, but respect user flag)
+                            unchanged++
+                        } else if (!force && existing.contentVersion >= wrapperVersion) {
+                            unchanged++
                         } else {
-                            val newEx = ExerciseEntity(
+                            val updatedEx = existing.copy(
                                 name = name,
-                                primaryMuscle = primaryMuscle,
-                                equipment = eqStr,
-                                canonicalId = canonicalId,
+                                primaryMuscle = primaryMuscle ?: existing.primaryMuscle,
+                                equipment = eqStr ?: existing.equipment,
                                 slug = slug,
                                 contentVersion = wrapperVersion,
-                                aliases = aliasesStr,
-                                nameEn = nameEn,
-                                secondaryMuscles = secMusclesStr,
-                                movementPattern = movementPattern,
-                                substitutionGroup = substitutionGroup,
-                                exerciseDbSearch = exerciseDbSearch,
-                                gifUrl = gifUrl,
-                                active = true,
-                                isUserCreated = false
+                                aliases = aliasesStr ?: existing.aliases,
+                                nameEn = nameEn ?: existing.nameEn,
+                                secondaryMuscles = secMusclesStr ?: existing.secondaryMuscles,
+                                movementPattern = movementPattern ?: existing.movementPattern,
+                                substitutionGroup = substitutionGroup ?: existing.substitutionGroup,
+                                exerciseDbSearch = exerciseDbSearch ?: existing.exerciseDbSearch,
+                                gifUrl = gifUrl ?: existing.gifUrl
                             )
-                            dao.insertExercise(newEx)
-                            added++
+                            dao.updateExercise(updatedEx)
+                            updated++
                         }
-                    } catch (e: Exception) {
-                        ignored++
-                        errors.add("Erro no item $i: ${e.message}")
+                    } else {
+                        val newEx = ExerciseEntity(
+                            name = name,
+                            primaryMuscle = primaryMuscle,
+                            equipment = eqStr,
+                            canonicalId = canonicalId,
+                            slug = slug,
+                            contentVersion = wrapperVersion,
+                            aliases = aliasesStr,
+                            nameEn = nameEn,
+                            secondaryMuscles = secMusclesStr,
+                            movementPattern = movementPattern,
+                            substitutionGroup = substitutionGroup,
+                            exerciseDbSearch = exerciseDbSearch,
+                            gifUrl = gifUrl,
+                            active = true,
+                            isUserCreated = false
+                        )
+                        dao.insertExercise(newEx)
+                        added++
                     }
                 }
 
                 // Second pass: Link alternatives idempotently without self-references
                 for (i in 0 until jsonArray.length()) {
-                    try {
-                        val wrapperObj = jsonArray.getJSONObject(i)
-                        val exObj = if (wrapperObj.has("exercise")) wrapperObj.getJSONObject("exercise") else wrapperObj
+                    val wrapperObj = jsonArray.getJSONObject(i)
+                    val exObj = if (wrapperObj.has("exercise")) wrapperObj.getJSONObject("exercise") else wrapperObj
 
-                        val canonicalId = exObj.optString("id")
-                        if (canonicalId.isNullOrEmpty()) continue
+                    val canonicalId = exObj.optString("id")
+                    if (canonicalId.isNullOrEmpty()) continue
 
-                        val existing = dao.getExerciseByCanonicalId(canonicalId) ?: continue
+                    val existing = dao.getExerciseByCanonicalId(canonicalId) ?: continue
 
-                        val altsArr = exObj.optJSONArray("alternatives")
-                        if (altsArr != null) {
-                            for (j in 0 until altsArr.length()) {
-                                val altObj = altsArr.getJSONObject(j)
-                                val altId = altObj.optString("exerciseId")
-                                val reason = altObj.optString("reason", "SAME_MUSCLE")
+                    val altsArr = exObj.optJSONArray("alternatives")
+                    if (altsArr != null) {
+                        for (j in 0 until altsArr.length()) {
+                            val altObj = altsArr.getJSONObject(j)
+                            val altId = altObj.optString("exerciseId")
+                            val reason = altObj.optString("reason", "SAME_MUSCLE")
 
-                                if (altId.equals(canonicalId, ignoreCase = true)) {
-                                    // Ignore self-reference
-                                    continue
-                                }
+                            if (altId.equals(canonicalId, ignoreCase = true)) {
+                                // Ignore self-reference
+                                continue
+                            }
 
-                                val altExisting = dao.getExerciseByCanonicalId(altId)
-                                if (altExisting != null && altExisting.id != existing.id) {
-                                    dao.insertAlternative(
-                                        ExerciseAlternativeEntity(
-                                            exerciseId = existing.id,
-                                            alternativeExerciseId = altExisting.id,
-                                            type = reason
-                                        )
+                            val altExisting = dao.getExerciseByCanonicalId(altId)
+                            if (altExisting != null && altExisting.id != existing.id) {
+                                val insertedRowId = dao.insertAlternative(
+                                    ExerciseAlternativeEntity(
+                                        exerciseId = existing.id,
+                                        alternativeExerciseId = altExisting.id,
+                                        type = reason
                                     )
+                                )
+                                if (insertedRowId != -1L) {
                                     altsAdded++
+                                } else {
+                                    altsExisting++
                                 }
                             }
                         }
-                    } catch (e: Exception) {
-                        // Ignore individual alternative insertion error
                     }
                 }
             }
+
+            // Update content version in DataStore upon success
+            if (validation.contentVersion > 0) {
+                settingsManager.setInstalledCatalogContentVersion(validation.contentVersion)
+            }
         } catch (e: Exception) {
-            errors.add("Erro durante a transação de importação: ${e.message}")
+            errors.add("Erro na transação de importação: ${e.message}")
+            return@withContext ImportResult(errors = errors)
         }
 
-        ImportResult(added, updated, unchanged, ignored, altsAdded, errors)
+        ImportResult(
+            added = added,
+            updated = updated,
+            unchanged = unchanged,
+            ignored = ignored,
+            alternativesAdded = altsAdded,
+            alternativesExisting = altsExisting,
+            errors = errors
+        )
     }
 }

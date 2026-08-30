@@ -1,20 +1,45 @@
 package com.example.domain.engine
 
+import com.example.data.datastore.SettingsManager
 import com.example.data.local.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import com.example.data.datastore.SettingsManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
 
 class WorkoutEngine(
     private val dao: WorkoutDao,
-    private val settingsManager: SettingsManager
+    private val settingsManager: SettingsManager,
+    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 ) {
 
     val activeSessionFlow: Flow<WorkoutSessionEntity?> = dao.getActiveSessionFlow()
     val activeSessionWithDetailsFlow: Flow<SessionWithDetails?> = dao.getActiveSessionWithDetailsFlow()
     val activeCheckInFlow: Flow<CheckInEntity?> = dao.getActiveCheckInFlow()
+
+    private val _restTimerTarget = MutableStateFlow<Long?>(null)
+    val restTimerTarget: Flow<Long?> = _restTimerTarget
+
+    init {
+        // Process restoration check: restore timer if valid active session and deadline in future
+        coroutineScope.launch {
+            try {
+                val deadline = settingsManager.restTimerDeadlineFlow.firstOrNull()
+                val activeSession = dao.getActiveSession()
+                val now = System.currentTimeMillis()
+                if (deadline != null && deadline > now && activeSession != null) {
+                    _restTimerTarget.value = deadline
+                } else if (deadline != null && deadline <= now) {
+                    skipRestTimer()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
 
     suspend fun manualCheckIn(gymName: String? = null) {
         val active = dao.getActiveCheckIn()
@@ -30,38 +55,65 @@ class WorkoutEngine(
         }
     }
 
-    private val _restTimerTarget = MutableStateFlow<Long?>(null)
-    val restTimerTarget: Flow<Long?> = _restTimerTarget
-
-    suspend fun startRestTimer(durationSeconds: Int) {
+    suspend fun startRestTimer(
+        durationSeconds: Int,
+        workoutSessionId: Long? = null,
+        exerciseSessionId: Long? = null,
+        timerType: String = "REST_SET"
+    ) {
         val target = System.currentTimeMillis() + (durationSeconds * 1000L)
         _restTimerTarget.value = target
-        settingsManager.setRestTimerDeadline(target)
+        settingsManager.setRestTimerState(
+            deadlineMs = target,
+            workoutSessionId = workoutSessionId,
+            exerciseSessionId = exerciseSessionId,
+            timerType = timerType
+        )
     }
 
     suspend fun adjustRestTimer(secondsToAdd: Int) {
         val currentTarget = _restTimerTarget.value ?: System.currentTimeMillis()
-        val newTarget = currentTarget + (secondsToAdd * 1000L)
+        val newTarget = (currentTarget + (secondsToAdd * 1000L)).coerceAtLeast(System.currentTimeMillis())
         _restTimerTarget.value = newTarget
         settingsManager.setRestTimerDeadline(newTarget)
     }
 
     suspend fun skipRestTimer() {
         _restTimerTarget.value = null
-        settingsManager.setRestTimerDeadline(null)
+        settingsManager.setRestTimerState(null)
     }
 
     suspend fun getLastExecutionSetsForExercise(exerciseId: Long): List<SetLogEntity> {
         return dao.getLastExecutionSetsForExercise(exerciseId)
     }
 
+    /**
+     * Updates set log and triggers auto rest timer when completed according to hierarchy:
+     * 1. ExerciseSession.restDurationSecondsSnapshot
+     * 2. ExerciseUserOverride.defaultRestSeconds
+     * 3. Settings.defaultExerciseRestSeconds
+     * 4. Settings.defaultRestSeconds
+     */
     suspend fun updateSet(setLog: SetLogEntity) {
         dao.updateSetLog(setLog)
         if (setLog.completed) {
             val autoTimer = settingsManager.autoRestTimerOnSetFlow.firstOrNull() ?: true
             if (autoTimer) {
-                val defaultRest = settingsManager.defaultRestSecondsFlow.firstOrNull() ?: 90
-                startRestTimer(defaultRest)
+                val exSession = dao.getExerciseSessionById(setLog.exerciseSessionId)
+                val override = exSession?.actualExerciseId?.let { dao.getOverrideForExercise(it) }
+                
+                val restDuration = exSession?.restDurationSecondsSnapshot
+                    ?: override?.defaultRestSeconds
+                    ?: settingsManager.defaultExerciseRestSecondsFlow.firstOrNull()
+                    ?: settingsManager.defaultRestSecondsFlow.firstOrNull()
+                    ?: 90
+
+                startRestTimer(
+                    durationSeconds = restDuration,
+                    workoutSessionId = exSession?.sessionId,
+                    exerciseSessionId = setLog.exerciseSessionId,
+                    timerType = "REST_SET"
+                )
             }
         }
     }
@@ -183,7 +235,8 @@ class WorkoutEngine(
                     exerciseNameSnapshot = plannedWithDetails.exercise.name, // Historic snapshot
                     sortOrder = plannedWithDetails.templateExercise.sortOrder,
                     machineLabelSnapshot = plannedWithDetails.templateExercise.machineLabel,
-                    primaryMuscleSnapshot = plannedWithDetails.exercise.primaryMuscle
+                    primaryMuscleSnapshot = plannedWithDetails.exercise.primaryMuscle,
+                    restDurationSecondsSnapshot = plannedWithDetails.templateExercise.restDurationSeconds
                 )
             )
 
@@ -251,6 +304,7 @@ class WorkoutEngine(
                 }
             }
         }
+        skipRestTimer()
         evaluatePersonalRecords(sessionId)
     }
 
@@ -264,37 +318,65 @@ class WorkoutEngine(
                 )
             )
         }
+        skipRestTimer()
     }
     
-    
+    /**
+     * Evaluates personal records strictly excluding warm-up sets.
+     */
     private suspend fun evaluatePersonalRecords(sessionId: Long) {
         val summaries = dao.getAllCompletedSessionsWithDetails()
         val currentSummary = summaries.find { it.session.id == sessionId } ?: return
         
         currentSummary.exercises.forEach { ex ->
             val exerciseId = ex.exerciseSession.actualExerciseId ?: ex.exerciseSession.plannedExerciseId ?: return@forEach
-            val completedSets = ex.sets.filter { it.completed }
-            if (completedSets.isEmpty()) return@forEach
+            // Strictly exclude warm-up sets from PR calculation
+            val workingCompletedSets = ex.sets.filter { it.completed && it.type != SetType.WARMUP.name }
+            if (workingCompletedSets.isEmpty()) return@forEach
             
             // Max Weight PR
-            val maxWeightThisSession = completedSets.maxOf { it.weight }
+            val maxWeightThisSession = workingCompletedSets.maxOf { it.weight }
             val pastMaxWeight = dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_WEIGHT.name)?.value ?: 0f
-            if (maxWeightThisSession > pastMaxWeight) {
-                dao.insertPersonalRecord(com.example.data.local.PersonalRecordEntity(exerciseId = exerciseId, date = System.currentTimeMillis(), prType = com.example.data.local.PRType.MAX_WEIGHT, value = maxWeightThisSession))
+            if (maxWeightThisSession > pastMaxWeight && maxWeightThisSession > 0f) {
+                dao.insertPersonalRecord(
+                    PersonalRecordEntity(
+                        exerciseId = exerciseId,
+                        date = System.currentTimeMillis(),
+                        prType = com.example.data.local.PRType.MAX_WEIGHT,
+                        value = maxWeightThisSession
+                    )
+                )
             }
             
-            // Max Volume PR
-            val volumeThisSession = com.example.domain.engine.VolumeCalculator.calculateVolume(ex.sets).toFloat()
+            // Max Volume PR (Tonnage on working sets)
+            val volumeThisSession = VolumeCalculator.calculateVolume(ex.sets).toFloat()
             val pastMaxVolume = dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_VOLUME.name)?.value ?: 0f
-            if (volumeThisSession > pastMaxVolume) {
-                dao.insertPersonalRecord(com.example.data.local.PersonalRecordEntity(exerciseId = exerciseId, date = System.currentTimeMillis(), prType = com.example.data.local.PRType.MAX_VOLUME, value = volumeThisSession))
+            if (volumeThisSession > pastMaxVolume && volumeThisSession > 0f) {
+                dao.insertPersonalRecord(
+                    PersonalRecordEntity(
+                        exerciseId = exerciseId,
+                        date = System.currentTimeMillis(),
+                        prType = com.example.data.local.PRType.MAX_VOLUME,
+                        value = volumeThisSession
+                    )
+                )
             }
             
-            // 1RM
-            val best1RMThisSession = completedSets.maxOf { com.example.domain.engine.VolumeCalculator.calculateOneRepMax(it.weight, it.repetitions) }
+            // 1RM Estimated on working sets
+            val best1RMThisSession = workingCompletedSets
+                .filter { it.weight > 0f && it.repetitions > 0 }
+                .maxOfOrNull { VolumeCalculator.calculateOneRepMax(it.weight, it.repetitions) } ?: 0f
+
             val past1RM = dao.getHighestPR(exerciseId, com.example.data.local.PRType.ONE_REP_MAX.name)?.value ?: 0f
-            if (best1RMThisSession > past1RM) {
-                dao.insertPersonalRecord(com.example.data.local.PersonalRecordEntity(exerciseId = exerciseId, date = System.currentTimeMillis(), prType = com.example.data.local.PRType.ONE_REP_MAX, value = best1RMThisSession))
+            if (best1RMThisSession > past1RM && best1RMThisSession > 0f) {
+                dao.insertPersonalRecord(
+                    PersonalRecordEntity(
+                        exerciseId = exerciseId,
+                        date = System.currentTimeMillis(),
+                        prType = com.example.data.local.PRType.ONE_REP_MAX,
+                        value = best1RMThisSession
+                    )
+                )
             }
         }
     }

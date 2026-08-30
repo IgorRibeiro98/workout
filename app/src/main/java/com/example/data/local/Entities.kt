@@ -31,7 +31,8 @@ data class ExerciseEntity(
     val gifUrl: String? = null,
     val lastVerifiedAt: Long? = null,
     val isUserCreated: Boolean = false,
-    val customPhotoUri: String? = null
+    val customPhotoUri: String? = null,
+    val mappingStatus: String? = null
 )
 
 @Entity(tableName = "workout_programs")
@@ -109,7 +110,8 @@ data class ExerciseSessionEntity(
     val notes: String? = null,
     val replacementReason: String? = null,
     val machineLabelSnapshot: String? = null,
-    val primaryMuscleSnapshot: String? = null
+    val primaryMuscleSnapshot: String? = null,
+    val restDurationSecondsSnapshot: Int? = null
 )
 
 enum class SetType { NORMAL, WARMUP, DROP_SET, BACKOFF, AMRAP, REST_PAUSE, FAILURE }

@@ -217,7 +217,7 @@ fun SettingsScreen() {
                             dialogMessage = if (result.isOffline) {
                                 "Não foi possível conectar ao ExerciseDB.\n\nVerifique a conexão de internet. Todo o treino continua funcionando 100% offline."
                             } else {
-                                "Demonstrações atualizadas com sucesso!\n\nAtualizados: ${result.updated}\nInalterados/Já presentes: ${result.unchanged}\nNão encontrados no catálogo remoto: ${result.notFound}"
+                                "Demonstrações atualizadas com sucesso!\n\nMapeados: ${result.matched}\nAmbíguos: ${result.ambiguous}\nNão encontrados: ${result.notFound}"
                             }
                             showDialog = true
                         }

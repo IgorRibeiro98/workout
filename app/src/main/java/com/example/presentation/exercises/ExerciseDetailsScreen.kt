@@ -4,14 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebChromeClient
-import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -331,107 +329,93 @@ fun ExerciseDetailsScreen(
                 }
             }
 
-            // Video Guide Card (Curated or YouTube Search Fallback)
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+            // Video Guide Card - ONLY shown if curated video mapping exists
+            if (curatedVideo != null) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
                             Row(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Icon(
-                                    Icons.Default.PlayCircle,
-                                    contentDescription = "Vídeo",
-                                    tint = Red500,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                                Column {
-                                    Text("Guia de Execução em Vídeo", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    Text(
-                                        text = curatedVideo?.title ?: "Buscar tutorial no YouTube",
-                                        color = TextSecondary,
-                                        fontSize = 12.sp,
-                                        maxLines = 1
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.PlayCircle,
+                                        contentDescription = "Vídeo",
+                                        tint = Red500,
+                                        modifier = Modifier.size(32.dp)
                                     )
-                                }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (curatedVideo != null) {
-                                    TextButton(onClick = { showInlineVideo = !showInlineVideo }) {
-                                        Text(if (showInlineVideo) "Ocultar" else "Player", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Column {
+                                        Text("Guia de Execução em Vídeo", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        Text(
+                                            text = curatedVideo.title,
+                                            color = TextSecondary,
+                                            fontSize = 12.sp,
+                                            maxLines = 1
+                                        )
                                     }
                                 }
-                                IconButton(
-                                    onClick = {
-                                        val searchQuery = "${resolvedName} ${equipment ?: ""} execucao correta"
-                                        val youtubeIntent = Intent(
-                                            Intent.ACTION_SEARCH
-                                        ).apply {
-                                            `package` = "com.google.android.youtube"
-                                            putExtra("query", searchQuery)
-                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        }
-                                        try {
-                                            context.startActivity(youtubeIntent)
-                                        } catch (_: Exception) {
-                                            // Fallback to web search
-                                            val webIntent = Intent(
-                                                Intent.ACTION_VIEW,
-                                                Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(searchQuery)}")
-                                            )
-                                            context.startActivity(webIntent)
-                                        }
-                                    },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Default.OpenInNew, contentDescription = "Abrir no App do YouTube", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                                TextButton(onClick = { showInlineVideo = !showInlineVideo }) {
+                                    Text(if (showInlineVideo) "Ocultar" else "Assistir", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
-                        }
 
-                        if (curatedVideo != null && showInlineVideo) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(200.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                            ) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        WebView(ctx).apply {
-                                            settings.javaScriptEnabled = true
-                                            settings.domStorageEnabled = true
-                                            settings.mediaPlaybackRequiresUserGesture = false
-                                            webChromeClient = WebChromeClient()
-                                            webViewClient = WebViewClient()
-                                            val embedHtml = """
-                                                <!DOCTYPE html>
-                                                <html>
-                                                <head>
-                                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                                                    <style>body{margin:0;background-color:#000;display:flex;justify-content:center;align-items:center;height:100vh;}</style>
-                                                </head>
-                                                <body>
-                                                    <iframe width="100%" height="100%" src="${curatedVideo.getEmbedUrl()}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-                                                </body>
-                                                </html>
-                                            """.trimIndent()
-                                            loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "UTF-8", null)
+                            if (showInlineVideo) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(200.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                ) {
+                                    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+                                    DisposableEffect(Unit) {
+                                        onDispose {
+                                            webViewRef?.apply {
+                                                stopLoading()
+                                                loadUrl("about:blank")
+                                                destroy()
+                                            }
                                         }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                    }
+
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            WebView(ctx).apply {
+                                                webViewRef = this
+                                                settings.javaScriptEnabled = true
+                                                settings.domStorageEnabled = true
+                                                settings.mediaPlaybackRequiresUserGesture = false
+                                                webChromeClient = WebChromeClient()
+                                                webViewClient = WebViewClient()
+                                                val embedHtml = """
+                                                    <!DOCTYPE html>
+                                                    <html>
+                                                    <head>
+                                                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                                        <style>body{margin:0;background-color:#000;display:flex;justify-content:center;align-items:center;height:100vh;}</style>
+                                                    </head>
+                                                    <body>
+                                                        <iframe width="100%" height="100%" src="${curatedVideo.getEmbedUrl()}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                                                    </body>
+                                                    </html>
+                                                """.trimIndent()
+                                                loadDataWithBaseURL("https://www.youtube.com", embedHtml, "text/html", "UTF-8", null)
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
                         }
                     }

@@ -23,9 +23,14 @@ class SettingsManager(private val context: Context) {
         val AUTO_CHECK_OUT = booleanPreferencesKey("auto_check_out")
         val SHOW_GIFS = booleanPreferencesKey("show_gifs")
         val DEFAULT_REST_SECONDS = intPreferencesKey("default_rest_seconds")
+        val DEFAULT_EXERCISE_REST_SECONDS = intPreferencesKey("default_exercise_rest_seconds")
         val REST_TIMER_DEADLINE = longPreferencesKey("rest_timer_deadline")
+        val REST_TIMER_WORKOUT_SESSION_ID = longPreferencesKey("rest_timer_workout_session_id")
+        val REST_TIMER_EXERCISE_SESSION_ID = longPreferencesKey("rest_timer_exercise_session_id")
+        val REST_TIMER_TYPE = stringPreferencesKey("rest_timer_type")
         val RIR_RPE_ENABLED = booleanPreferencesKey("rir_rpe_enabled")
         val AUTO_REST_TIMER_ON_SET = booleanPreferencesKey("auto_rest_timer_on_set")
+        val INSTALLED_CATALOG_CONTENT_VERSION = intPreferencesKey("installed_catalog_content_version")
     }
 
     val weeklyGoalFlow: Flow<Int> = context.dataStore.data.map { it[WEEKLY_GOAL] ?: 5 }
@@ -38,10 +43,15 @@ class SettingsManager(private val context: Context) {
     val autoCheckOutFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_OUT] ?: true }
     val showGifsFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_GIFS] ?: true }
     val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
+    val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: (it[DEFAULT_REST_SECONDS] ?: 90) }
+    val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
     val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { 
         val deadline = it[REST_TIMER_DEADLINE] ?: 0L
         if (deadline > System.currentTimeMillis()) deadline else null
     }
+    val restTimerSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_WORKOUT_SESSION_ID] }
+    val restTimerExerciseSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_EXERCISE_SESSION_ID] }
+    val restTimerTypeFlow: Flow<String?> = context.dataStore.data.map { it[REST_TIMER_TYPE] }
     val rirRpeEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[RIR_RPE_ENABLED] ?: true }
     val autoRestTimerOnSetFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_REST_TIMER_ON_SET] ?: true }
     val overrideTemplateIdFlow: Flow<Long?> = context.dataStore.data.map { it[OVERRIDE_TEMPLATE_ID] }
@@ -82,11 +92,37 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[DEFAULT_REST_SECONDS] = seconds }
     }
 
-    suspend fun setRestTimerDeadline(deadlineMs: Long?) {
-        context.dataStore.edit {
-            if (deadlineMs == null) it.remove(REST_TIMER_DEADLINE)
-            else it[REST_TIMER_DEADLINE] = deadlineMs
+    suspend fun setDefaultExerciseRestSeconds(seconds: Int) {
+        context.dataStore.edit { it[DEFAULT_EXERCISE_REST_SECONDS] = seconds }
+    }
+
+    suspend fun setInstalledCatalogContentVersion(version: Int) {
+        context.dataStore.edit { it[INSTALLED_CATALOG_CONTENT_VERSION] = version }
+    }
+
+    suspend fun setRestTimerState(
+        deadlineMs: Long?,
+        workoutSessionId: Long? = null,
+        exerciseSessionId: Long? = null,
+        timerType: String? = null
+    ) {
+        context.dataStore.edit { prefs ->
+            if (deadlineMs == null) {
+                prefs.remove(REST_TIMER_DEADLINE)
+                prefs.remove(REST_TIMER_WORKOUT_SESSION_ID)
+                prefs.remove(REST_TIMER_EXERCISE_SESSION_ID)
+                prefs.remove(REST_TIMER_TYPE)
+            } else {
+                prefs[REST_TIMER_DEADLINE] = deadlineMs
+                if (workoutSessionId != null) prefs[REST_TIMER_WORKOUT_SESSION_ID] = workoutSessionId else prefs.remove(REST_TIMER_WORKOUT_SESSION_ID)
+                if (exerciseSessionId != null) prefs[REST_TIMER_EXERCISE_SESSION_ID] = exerciseSessionId else prefs.remove(REST_TIMER_EXERCISE_SESSION_ID)
+                if (timerType != null) prefs[REST_TIMER_TYPE] = timerType else prefs.remove(REST_TIMER_TYPE)
+            }
         }
+    }
+
+    suspend fun setRestTimerDeadline(deadlineMs: Long?) {
+        setRestTimerState(deadlineMs)
     }
 
     suspend fun setRirRpeEnabled(enabled: Boolean) {

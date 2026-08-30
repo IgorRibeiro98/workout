@@ -34,7 +34,7 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_programs ORDER BY id DESC")
     fun getAllPrograms(): Flow<List<WorkoutProgramEntity>>
 
-    @Query("SELECT * FROM workout_programs")
+    @Query("SELECT * FROM workout_programs ORDER BY id DESC")
     suspend fun getAllProgramsSync(): List<WorkoutProgramEntity>
 
     @Query("SELECT * FROM workout_programs WHERE isCurrent = 1 LIMIT 1")
@@ -42,6 +42,9 @@ interface WorkoutDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertProgram(program: WorkoutProgramEntity): Long
+
+    @Update
+    suspend fun updateProgram(program: WorkoutProgramEntity)
 
     @Query("UPDATE workout_programs SET isCurrent = 0")
     suspend fun clearCurrentProgram()
@@ -53,8 +56,17 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
     fun getTemplatesForProgram(programId: Long): Flow<List<WorkoutTemplateEntity>>
 
+    @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
+    suspend fun getTemplatesForProgramSync(programId: Long): List<WorkoutTemplateEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTemplate(template: WorkoutTemplateEntity): Long
+
+    @Update
+    suspend fun updateTemplate(template: WorkoutTemplateEntity)
+
+    @Query("DELETE FROM workout_template_exercises WHERE templateId = :templateId")
+    suspend fun deleteTemplateExercisesForTemplate(templateId: Long)
 
     // Sessions (for history and next workout logic)
     @Query("SELECT * FROM workout_sessions WHERE status = 'COMPLETED' ORDER BY finishedAt DESC LIMIT 1")
@@ -167,7 +179,7 @@ interface WorkoutDao {
     suspend fun getAlternativesForExercise(exerciseId: Long): List<ExerciseAlternativeEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertAlternative(alt: ExerciseAlternativeEntity)
+    suspend fun insertAlternative(alt: ExerciseAlternativeEntity): Long
 
     @Query("SELECT * FROM exercises WHERE id = :id LIMIT 1")
     suspend fun getExerciseById(id: Long): ExerciseEntity?
@@ -179,11 +191,26 @@ interface WorkoutDao {
     @Query("SELECT * FROM exercise_user_overrides WHERE exerciseId = :exerciseId LIMIT 1")
     suspend fun getOverrideForExercise(exerciseId: Long): ExerciseUserOverrideEntity?
 
+    @Query("SELECT * FROM exercise_user_overrides")
+    suspend fun getAllOverrides(): List<ExerciseUserOverrideEntity>
+
+    @Query("SELECT * FROM exercise_user_overrides")
+    fun getAllOverridesFlow(): Flow<List<ExerciseUserOverrideEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateOverride(override: ExerciseUserOverrideEntity)
 
     @Delete
     suspend fun deleteOverride(override: ExerciseUserOverrideEntity)
+
+    @Query("SELECT MAX(contentVersion) FROM exercises")
+    suspend fun getMaxContentVersion(): Int?
+
+    @Query("SELECT COUNT(*) FROM exercises WHERE canonicalId IS NOT NULL AND TRIM(canonicalId) != ''")
+    suspend fun getCanonicalExercisesCount(): Int
+
+    @Query("SELECT * FROM exercise_sessions WHERE id = :id LIMIT 1")
+    suspend fun getExerciseSessionById(id: Long): ExerciseSessionEntity?
 
     @Query("""
         SELECT e.* FROM exercises e 
@@ -298,3 +325,4 @@ data class SessionCalendarSummary(
     )
     val exercises: List<ExerciseSessionWithSets>
 )
+
