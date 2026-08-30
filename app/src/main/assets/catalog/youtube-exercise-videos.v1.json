@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "locale": "pt-BR",
+  "videos": [
+    {
+      "exerciseId": "supino-reto-barra",
+      "canonicalSlug": "supino-reto-barra",
+      "youtubeVideoId": "rT7DgCr-3pg",
+      "title": "Execução Correta do Supino Reto com Barra",
+      "channel": "Treino & Ciência",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "supino-inclinado-halteres",
+      "canonicalSlug": "supino-inclinado-halteres",
+      "youtubeVideoId": "8iPEnn-ltC8",
+      "title": "Supino Inclinado com Halteres Passo a Passo",
+      "channel": "Guia de Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "crucifixo-halteres",
+      "canonicalSlug": "crucifixo-halteres",
+      "youtubeVideoId": "eozdVDA78K0",
+      "title": "Crucifixo Reto com Halteres - Técnica Perfeita",
+      "channel": "Biomecânica do Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "agachamento-livre",
+      "canonicalSlug": "agachamento-livre",
+      "youtubeVideoId": "ultWZbUMPL8",
+      "title": "Como Fazer Agachamento Livre Sem Lesões",
+      "channel": "Treino Seguro",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "leg-press-45",
+      "canonicalSlug": "leg-press-45",
+      "youtubeVideoId": "IZxyjW7MPJQ",
+      "title": "Leg Press 45 Graus: Posição dos Pés e Execução",
+      "channel": "Musculação Científica",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "cadeira-extensora",
+      "canonicalSlug": "cadeira-extensora",
+      "youtubeVideoId": "YyvSfVjQeL0",
+      "title": "Cadeira Extensora - Amplitude e Ajustes",
+      "channel": "Treino & Ciência",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "stiff-barra",
+      "canonicalSlug": "stiff-barra",
+      "youtubeVideoId": "1uDiW5--rAE",
+      "title": "Stiff com Barra - Ativação Máxima de Glúteo e Posterior",
+      "channel": "Treino Seguro",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "mesa-flexora",
+      "canonicalSlug": "mesa-flexora",
+      "youtubeVideoId": "1Tq3QdYUuHs",
+      "title": "Mesa Flexora - Dicas de Execução",
+      "channel": "Guia de Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "puxada-frente-aberta",
+      "canonicalSlug": "puxada-frente-aberta",
+      "youtubeVideoId": "CAwf7n6Luuc",
+      "title": "Puxada Frontal Aberta no Pulley",
+      "channel": "Biomecânica do Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "remada-curvada-barra",
+      "canonicalSlug": "remada-curvada-barra",
+      "youtubeVideoId": "G8l_8chR5BE",
+      "title": "Remada Curvada com Barra - Pronada vs Supinada",
+      "channel": "Treino & Ciência",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "remada-baixa-cabo",
+      "canonicalSlug": "remada-baixa-cabo",
+      "youtubeVideoId": "GZbfZ033fBo",
+      "title": "Remada Baixa com Triângulo",
+      "channel": "Guia de Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "desenvolvimento-halteres",
+      "canonicalSlug": "desenvolvimento-halteres",
+      "youtubeVideoId": "qEwKCR5JCog",
+      "title": "Desenvolvimento de Ombros com Halteres",
+      "channel": "Treino Seguro",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "elevacao-lateral-halteres",
+      "canonicalSlug": "elevacao-lateral-halteres",
+      "youtubeVideoId": "3VcKaXpzqRo",
+      "title": "Elevação Lateral - Segredo para Ombros Largos",
+      "channel": "Biomecânica do Treino",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "rosca-direta-ez",
+      "canonicalSlug": "rosca-direta-ez",
+      "youtubeVideoId": "ykJmrZ5v0Oo",
+      "title": "Rosca Direta na Barra W - Técnica Correta",
+      "channel": "Musculação Científica",
+      "startSeconds": 0
+    },
+    {
+      "exerciseId": "triceps-corda",
+      "canonicalSlug": "triceps-corda",
+      "youtubeVideoId": "vB5OHsJ3EME",
+      "title": "Tríceps Corda no Pulley",
+      "channel": "Treino & Ciência",
+      "startSeconds": 0
+    }
+  ]
+}

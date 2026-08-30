@@ -1,0 +1,3920 @@
+{
+  "schemaVersion": 1,
+  "locale": "pt-BR",
+  "description": "Catálogo canônico inicial para app de treino. Mídia pode ser enriquecida via ExerciseDB V1; alternativas são relações locais e não dependem da API.",
+  "externalMediaProvider": {
+    "name": "ExerciseDB V1 / AscendAPI Free",
+    "baseUrl": "https://oss.exercisedb.dev/api/v1",
+    "lookupStrategy": "Buscar por exerciseDbSearch; persistir externalExerciseId e gifUrl quando houver correspondência confiável.",
+    "fallback": "Usar thumbnail local/customizada e manter todo o treino funcional offline."
+  },
+  "exerciseCount": 144,
+  "exercises": [
+    {
+      "id": "supino-reto-barra",
+      "namePtBr": "Supino reto com barra",
+      "nameEn": "Barbell Bench Press",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "empurrar_horizontal",
+      "substitutionGroup": "peito_press_horizontal",
+      "exerciseDbSearch": "Barbell Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-reto-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-reto-halteres",
+      "namePtBr": "Supino reto com halteres",
+      "nameEn": "Dumbbell Bench Press",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "empurrar_horizontal",
+      "substitutionGroup": "peito_press_horizontal",
+      "exerciseDbSearch": "Dumbbell Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-reto-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-reto-maquina",
+      "namePtBr": "Supino reto na máquina",
+      "nameEn": "Machine Chest Press",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "empurrar_horizontal",
+      "substitutionGroup": "peito_press_horizontal",
+      "exerciseDbSearch": "Machine Chest Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-reto-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-reto-smith",
+      "namePtBr": "Supino reto no Smith",
+      "nameEn": "Smith Bench Press",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Smith",
+      "movementPattern": "empurrar_horizontal",
+      "substitutionGroup": "peito_press_horizontal",
+      "exerciseDbSearch": "Smith Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-reto-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "flexao",
+      "namePtBr": "Flexão de braços",
+      "nameEn": "Push-Up",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "empurrar_horizontal",
+      "substitutionGroup": "peito_press_horizontal",
+      "exerciseDbSearch": "Push-Up",
+      "alternatives": [
+        {
+          "exerciseId": "supino-reto-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-reto-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-inclinado-barra",
+      "namePtBr": "Supino inclinado com barra",
+      "nameEn": "Incline Barbell Bench Press",
+      "primaryMuscle": "Peitoral superior",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "empurrar_inclinado",
+      "substitutionGroup": "peito_press_inclinado",
+      "exerciseDbSearch": "Incline Barbell Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-inclinado-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-inclinado-halteres",
+      "namePtBr": "Supino inclinado com halteres",
+      "nameEn": "Incline Dumbbell Bench Press",
+      "primaryMuscle": "Peitoral superior",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "empurrar_inclinado",
+      "substitutionGroup": "peito_press_inclinado",
+      "exerciseDbSearch": "Incline Dumbbell Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-inclinado-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-inclinado-maquina",
+      "namePtBr": "Supino inclinado na máquina",
+      "nameEn": "Incline Machine Chest Press",
+      "primaryMuscle": "Peitoral superior",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "empurrar_inclinado",
+      "substitutionGroup": "peito_press_inclinado",
+      "exerciseDbSearch": "Incline Machine Chest Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-inclinado-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-inclinado-smith",
+      "namePtBr": "Supino inclinado no Smith",
+      "nameEn": "Smith Incline Bench Press",
+      "primaryMuscle": "Peitoral superior",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Smith",
+      "movementPattern": "empurrar_inclinado",
+      "substitutionGroup": "peito_press_inclinado",
+      "exerciseDbSearch": "Smith Incline Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "supino-inclinado-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "supino-inclinado-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "peck-deck",
+      "namePtBr": "Peck deck / crucifixo máquina",
+      "nameEn": "Pec Deck Fly",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "aducao_ombro",
+      "substitutionGroup": "peito_fly",
+      "exerciseDbSearch": "Pec Deck Fly",
+      "alternatives": [
+        {
+          "exerciseId": "crucifixo-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-baixo-cima",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crucifixo-halteres",
+      "namePtBr": "Crucifixo com halteres",
+      "nameEn": "Dumbbell Fly",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "aducao_ombro",
+      "substitutionGroup": "peito_fly",
+      "exerciseDbSearch": "Dumbbell Fly",
+      "alternatives": [
+        {
+          "exerciseId": "peck-deck",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-baixo-cima",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crossover-cabo",
+      "namePtBr": "Crossover no cabo",
+      "nameEn": "Cable Standing Fly",
+      "primaryMuscle": "Peitoral",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "aducao_ombro",
+      "substitutionGroup": "peito_fly",
+      "exerciseDbSearch": "Cable Standing Fly",
+      "alternatives": [
+        {
+          "exerciseId": "peck-deck",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-baixo-cima",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "crossover-baixo-cima",
+      "namePtBr": "Crossover de baixo para cima",
+      "nameEn": "Low To High Cable Fly",
+      "primaryMuscle": "Peitoral superior",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "aducao_ombro",
+      "substitutionGroup": "peito_fly",
+      "exerciseDbSearch": "Low To High Cable Fly",
+      "alternatives": [
+        {
+          "exerciseId": "peck-deck",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crossover-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "barra-fixa-pronada",
+      "namePtBr": "Barra fixa pronada",
+      "nameEn": "Pull-Up",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "puxar_vertical",
+      "substitutionGroup": "costas_puxada_vertical",
+      "exerciseDbSearch": "Pull-Up",
+      "alternatives": [
+        {
+          "exerciseId": "barra-fixa-supinada",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-aberta",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-neutra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-assistida",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "barra-fixa-supinada",
+      "namePtBr": "Barra fixa supinada",
+      "nameEn": "Chin-Up",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "puxar_vertical",
+      "substitutionGroup": "costas_puxada_vertical",
+      "exerciseDbSearch": "Chin-Up",
+      "alternatives": [
+        {
+          "exerciseId": "barra-fixa-pronada",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-aberta",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-neutra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-assistida",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "puxada-frente-aberta",
+      "namePtBr": "Puxada frente pegada aberta",
+      "nameEn": "Wide Grip Lat Pulldown",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "puxar_vertical",
+      "substitutionGroup": "costas_puxada_vertical",
+      "exerciseDbSearch": "Wide Grip Lat Pulldown",
+      "alternatives": [
+        {
+          "exerciseId": "barra-fixa-pronada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-supinada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-neutra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-assistida",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "puxada-frente-neutra",
+      "namePtBr": "Puxada frente pegada neutra",
+      "nameEn": "Neutral Grip Lat Pulldown",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "puxar_vertical",
+      "substitutionGroup": "costas_puxada_vertical",
+      "exerciseDbSearch": "Neutral Grip Lat Pulldown",
+      "alternatives": [
+        {
+          "exerciseId": "barra-fixa-pronada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-supinada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-aberta",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-assistida",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "barra-fixa-assistida",
+      "namePtBr": "Barra fixa assistida",
+      "nameEn": "Assisted Pull-Up",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "puxar_vertical",
+      "substitutionGroup": "costas_puxada_vertical",
+      "exerciseDbSearch": "Assisted Pull-Up",
+      "alternatives": [
+        {
+          "exerciseId": "barra-fixa-pronada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "barra-fixa-supinada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-aberta",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "puxada-frente-neutra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-curvada-barra",
+      "namePtBr": "Remada curvada com barra",
+      "nameEn": "Barbell Bent Over Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "Barbell Bent Over Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-baixa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-apoiada-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-unilateral-halter",
+      "namePtBr": "Remada unilateral com halter",
+      "nameEn": "Dumbbell One Arm Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "Dumbbell One Arm Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-curvada-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-baixa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-apoiada-halteres",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "remada-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-baixa-cabo",
+      "namePtBr": "Remada baixa no cabo",
+      "nameEn": "Seated Cable Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "Seated Cable Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-curvada-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-apoiada-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-apoiada-halteres",
+      "namePtBr": "Remada com peito apoiado",
+      "nameEn": "Chest Supported Dumbbell Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "Chest Supported Dumbbell Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-curvada-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-unilateral-halter",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "remada-baixa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-maquina",
+      "namePtBr": "Remada na máquina",
+      "nameEn": "Machine Seated Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "Machine Seated Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-curvada-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-baixa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-apoiada-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "remada-t",
+      "namePtBr": "Remada T",
+      "nameEn": "T-Bar Row",
+      "primaryMuscle": "Costas",
+      "secondaryMuscles": [
+        "Dorsal",
+        "Bíceps",
+        "Deltoide posterior"
+      ],
+      "equipment": "Barra/Máquina",
+      "movementPattern": "puxar_horizontal",
+      "substitutionGroup": "costas_remada_horizontal",
+      "exerciseDbSearch": "T-Bar Row",
+      "alternatives": [
+        {
+          "exerciseId": "remada-curvada-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-baixa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "remada-apoiada-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "pulldown-bracos-retos",
+      "namePtBr": "Pulldown com braços retos",
+      "nameEn": "Cable Straight Arm Pulldown",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_ombro",
+      "substitutionGroup": "costas_isolamento_dorsal",
+      "exerciseDbSearch": "Cable Straight Arm Pulldown",
+      "alternatives": [
+        {
+          "exerciseId": "pullover-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "pullover-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "pullover-halter",
+      "namePtBr": "Pullover com halter",
+      "nameEn": "Dumbbell Pullover",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "extensao_ombro",
+      "substitutionGroup": "costas_isolamento_dorsal",
+      "exerciseDbSearch": "Dumbbell Pullover",
+      "alternatives": [
+        {
+          "exerciseId": "pulldown-bracos-retos",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "pullover-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "pullover-maquina",
+      "namePtBr": "Pullover na máquina",
+      "nameEn": "Machine Pullover",
+      "primaryMuscle": "Dorsal",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Braquial"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "extensao_ombro",
+      "substitutionGroup": "costas_isolamento_dorsal",
+      "exerciseDbSearch": "Machine Pullover",
+      "alternatives": [
+        {
+          "exerciseId": "pulldown-bracos-retos",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "pullover-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "face-pull",
+      "namePtBr": "Face pull",
+      "nameEn": "Cable Face Pull",
+      "primaryMuscle": "Deltoide posterior",
+      "secondaryMuscles": [
+        "Trapézio",
+        "Romboides"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "abducao_horizontal",
+      "substitutionGroup": "deltoide_posterior",
+      "exerciseDbSearch": "Cable Face Pull",
+      "alternatives": [
+        {
+          "exerciseId": "voador-inverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-cabo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "voador-inverso",
+      "namePtBr": "Voador inverso",
+      "nameEn": "Reverse Pec Deck Fly",
+      "primaryMuscle": "Deltoide posterior",
+      "secondaryMuscles": [
+        "Trapézio",
+        "Romboides"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "abducao_horizontal",
+      "substitutionGroup": "deltoide_posterior",
+      "exerciseDbSearch": "Reverse Pec Deck Fly",
+      "alternatives": [
+        {
+          "exerciseId": "face-pull",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crucifixo-inverso-cabo",
+      "namePtBr": "Crucifixo inverso no cabo",
+      "nameEn": "Cable Reverse Fly",
+      "primaryMuscle": "Deltoide posterior",
+      "secondaryMuscles": [
+        "Trapézio",
+        "Romboides"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "abducao_horizontal",
+      "substitutionGroup": "deltoide_posterior",
+      "exerciseDbSearch": "Cable Reverse Fly",
+      "alternatives": [
+        {
+          "exerciseId": "face-pull",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "voador-inverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crucifixo-inverso-halter",
+      "namePtBr": "Crucifixo inverso com halteres",
+      "nameEn": "Bent Over Dumbbell Reverse Fly",
+      "primaryMuscle": "Deltoide posterior",
+      "secondaryMuscles": [
+        "Trapézio",
+        "Romboides"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "abducao_horizontal",
+      "substitutionGroup": "deltoide_posterior",
+      "exerciseDbSearch": "Bent Over Dumbbell Reverse Fly",
+      "alternatives": [
+        {
+          "exerciseId": "face-pull",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "voador-inverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crucifixo-inverso-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "desenvolvimento-barra",
+      "namePtBr": "Desenvolvimento com barra",
+      "nameEn": "Barbell Overhead Press",
+      "primaryMuscle": "Ombros",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior",
+        "Deltoide lateral"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "empurrar_vertical",
+      "substitutionGroup": "ombro_press",
+      "exerciseDbSearch": "Barbell Overhead Press",
+      "alternatives": [
+        {
+          "exerciseId": "desenvolvimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "arnold-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "desenvolvimento-halteres",
+      "namePtBr": "Desenvolvimento com halteres",
+      "nameEn": "Dumbbell Shoulder Press",
+      "primaryMuscle": "Ombros",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior",
+        "Deltoide lateral"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "empurrar_vertical",
+      "substitutionGroup": "ombro_press",
+      "exerciseDbSearch": "Dumbbell Shoulder Press",
+      "alternatives": [
+        {
+          "exerciseId": "desenvolvimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "arnold-press",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "desenvolvimento-maquina",
+      "namePtBr": "Desenvolvimento na máquina",
+      "nameEn": "Machine Shoulder Press",
+      "primaryMuscle": "Ombros",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior",
+        "Deltoide lateral"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "empurrar_vertical",
+      "substitutionGroup": "ombro_press",
+      "exerciseDbSearch": "Machine Shoulder Press",
+      "alternatives": [
+        {
+          "exerciseId": "desenvolvimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "arnold-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "desenvolvimento-smith",
+      "namePtBr": "Desenvolvimento no Smith",
+      "nameEn": "Smith Shoulder Press",
+      "primaryMuscle": "Ombros",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior",
+        "Deltoide lateral"
+      ],
+      "equipment": "Smith",
+      "movementPattern": "empurrar_vertical",
+      "substitutionGroup": "ombro_press",
+      "exerciseDbSearch": "Smith Shoulder Press",
+      "alternatives": [
+        {
+          "exerciseId": "desenvolvimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "arnold-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "arnold-press",
+      "namePtBr": "Arnold press",
+      "nameEn": "Dumbbell Arnold Press",
+      "primaryMuscle": "Ombros",
+      "secondaryMuscles": [
+        "Tríceps",
+        "Deltoide anterior",
+        "Deltoide lateral"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "empurrar_vertical",
+      "substitutionGroup": "ombro_press",
+      "exerciseDbSearch": "Dumbbell Arnold Press",
+      "alternatives": [
+        {
+          "exerciseId": "desenvolvimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-halteres",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "desenvolvimento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-lateral-halteres",
+      "namePtBr": "Elevação lateral com halteres",
+      "nameEn": "Dumbbell Lateral Raise",
+      "primaryMuscle": "Deltoide lateral",
+      "secondaryMuscles": [
+        "Trapézio"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "abducao_ombro",
+      "substitutionGroup": "ombro_lateral",
+      "exerciseDbSearch": "Dumbbell Lateral Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-lateral-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-inclinada-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-lateral-cabo",
+      "namePtBr": "Elevação lateral no cabo",
+      "nameEn": "Cable Lateral Raise",
+      "primaryMuscle": "Deltoide lateral",
+      "secondaryMuscles": [
+        "Trapézio"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "abducao_ombro",
+      "substitutionGroup": "ombro_lateral",
+      "exerciseDbSearch": "Cable Lateral Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-lateral-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-inclinada-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-lateral-maquina",
+      "namePtBr": "Elevação lateral na máquina",
+      "nameEn": "Machine Lateral Raise",
+      "primaryMuscle": "Deltoide lateral",
+      "secondaryMuscles": [
+        "Trapézio"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "abducao_ombro",
+      "substitutionGroup": "ombro_lateral",
+      "exerciseDbSearch": "Machine Lateral Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-lateral-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-inclinada-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-lateral-inclinada-cabo",
+      "namePtBr": "Elevação lateral inclinada no cabo",
+      "nameEn": "Leaning Cable Lateral Raise",
+      "primaryMuscle": "Deltoide lateral",
+      "secondaryMuscles": [
+        "Trapézio"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "abducao_ombro",
+      "substitutionGroup": "ombro_lateral",
+      "exerciseDbSearch": "Leaning Cable Lateral Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-lateral-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-cabo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "elevacao-lateral-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-frontal-halteres",
+      "namePtBr": "Elevação frontal com halteres",
+      "nameEn": "Dumbbell Front Raise",
+      "primaryMuscle": "Deltoide anterior",
+      "secondaryMuscles": [
+        "Peitoral superior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_ombro",
+      "substitutionGroup": "ombro_anterior",
+      "exerciseDbSearch": "Dumbbell Front Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-frontal-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-frontal-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-frontal-cabo",
+      "namePtBr": "Elevação frontal no cabo",
+      "nameEn": "Cable Front Raise",
+      "primaryMuscle": "Deltoide anterior",
+      "secondaryMuscles": [
+        "Peitoral superior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_ombro",
+      "substitutionGroup": "ombro_anterior",
+      "exerciseDbSearch": "Cable Front Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-frontal-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-frontal-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-frontal-barra",
+      "namePtBr": "Elevação frontal com barra",
+      "nameEn": "Barbell Front Raise",
+      "primaryMuscle": "Deltoide anterior",
+      "secondaryMuscles": [
+        "Peitoral superior"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "flexao_ombro",
+      "substitutionGroup": "ombro_anterior",
+      "exerciseDbSearch": "Barbell Front Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-frontal-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-frontal-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "encolhimento-barra",
+      "namePtBr": "Encolhimento com barra",
+      "nameEn": "Barbell Shrug",
+      "primaryMuscle": "Trapézio",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "elevacao_escapular",
+      "substitutionGroup": "trapezio_encolhimento",
+      "exerciseDbSearch": "Barbell Shrug",
+      "alternatives": [
+        {
+          "exerciseId": "encolhimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-trap-bar",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "encolhimento-halteres",
+      "namePtBr": "Encolhimento com halteres",
+      "nameEn": "Dumbbell Shrug",
+      "primaryMuscle": "Trapézio",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "elevacao_escapular",
+      "substitutionGroup": "trapezio_encolhimento",
+      "exerciseDbSearch": "Dumbbell Shrug",
+      "alternatives": [
+        {
+          "exerciseId": "encolhimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-trap-bar",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "encolhimento-maquina",
+      "namePtBr": "Encolhimento na máquina",
+      "nameEn": "Machine Shrug",
+      "primaryMuscle": "Trapézio",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "elevacao_escapular",
+      "substitutionGroup": "trapezio_encolhimento",
+      "exerciseDbSearch": "Machine Shrug",
+      "alternatives": [
+        {
+          "exerciseId": "encolhimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-trap-bar",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "encolhimento-trap-bar",
+      "namePtBr": "Encolhimento com trap bar",
+      "nameEn": "Trap Bar Shrug",
+      "primaryMuscle": "Trapézio",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Trap bar",
+      "movementPattern": "elevacao_escapular",
+      "substitutionGroup": "trapezio_encolhimento",
+      "exerciseDbSearch": "Trap Bar Shrug",
+      "alternatives": [
+        {
+          "exerciseId": "encolhimento-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "encolhimento-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-direta-barra",
+      "namePtBr": "Rosca direta com barra",
+      "nameEn": "Barbell Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "flexao_cotovelo_supinada",
+      "substitutionGroup": "biceps_rosca_basica",
+      "exerciseDbSearch": "Barbell Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-direta-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-alternada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-direta-ez",
+      "namePtBr": "Rosca direta com barra EZ",
+      "nameEn": "EZ Bar Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Barra EZ",
+      "movementPattern": "flexao_cotovelo_supinada",
+      "substitutionGroup": "biceps_rosca_basica",
+      "exerciseDbSearch": "EZ Bar Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-direta-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-alternada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-alternada",
+      "namePtBr": "Rosca alternada com halteres",
+      "nameEn": "Dumbbell Biceps Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_cotovelo_supinada",
+      "substitutionGroup": "biceps_rosca_basica",
+      "exerciseDbSearch": "Dumbbell Biceps Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-direta-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-direta-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-cabo",
+      "namePtBr": "Rosca direta no cabo",
+      "nameEn": "Cable Biceps Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_cotovelo_supinada",
+      "substitutionGroup": "biceps_rosca_basica",
+      "exerciseDbSearch": "Cable Biceps Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-direta-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-direta-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-alternada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-maquina",
+      "namePtBr": "Rosca bíceps na máquina",
+      "nameEn": "Machine Biceps Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_cotovelo_supinada",
+      "substitutionGroup": "biceps_rosca_basica",
+      "exerciseDbSearch": "Machine Biceps Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-direta-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-direta-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-alternada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-inclinada",
+      "namePtBr": "Rosca inclinada com halteres",
+      "nameEn": "Incline Dumbbell Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_cotovelo_alongado",
+      "substitutionGroup": "biceps_alongado",
+      "exerciseDbSearch": "Incline Dumbbell Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-bayesiana",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-scott",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-bayesiana",
+      "namePtBr": "Rosca bayesiana no cabo",
+      "nameEn": "Bayesian Cable Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_cotovelo_alongado",
+      "substitutionGroup": "biceps_alongado",
+      "exerciseDbSearch": "Bayesian Cable Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-inclinada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-scott",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-scott",
+      "namePtBr": "Rosca Scott",
+      "nameEn": "Preacher Curl",
+      "primaryMuscle": "Bíceps",
+      "secondaryMuscles": [
+        "Braquial",
+        "Antebraço"
+      ],
+      "equipment": "Barra/Halter/Máquina",
+      "movementPattern": "flexao_cotovelo_apoiada",
+      "substitutionGroup": "biceps_alongado",
+      "exerciseDbSearch": "Preacher Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-inclinada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-bayesiana",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-martelo",
+      "namePtBr": "Rosca martelo",
+      "nameEn": "Dumbbell Hammer Curl",
+      "primaryMuscle": "Braquial/Braquiorradial",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_cotovelo_neutra",
+      "substitutionGroup": "biceps_braquial_braquiorradial",
+      "exerciseDbSearch": "Dumbbell Hammer Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-martelo-corda",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-martelo-cruzada",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "rosca-inversa",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-martelo-corda",
+      "namePtBr": "Rosca martelo com corda",
+      "nameEn": "Cable Rope Hammer Curl",
+      "primaryMuscle": "Braquial/Braquiorradial",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Antebraço"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_cotovelo_neutra",
+      "substitutionGroup": "biceps_braquial_braquiorradial",
+      "exerciseDbSearch": "Cable Rope Hammer Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-martelo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-martelo-cruzada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-inversa",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-martelo-cruzada",
+      "namePtBr": "Rosca martelo cruzada",
+      "nameEn": "Cross Body Hammer Curl",
+      "primaryMuscle": "Braquial/Braquiorradial",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_cotovelo_neutra",
+      "substitutionGroup": "biceps_braquial_braquiorradial",
+      "exerciseDbSearch": "Cross Body Hammer Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-martelo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "rosca-martelo-corda",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-inversa",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-inversa",
+      "namePtBr": "Rosca inversa",
+      "nameEn": "Reverse Curl",
+      "primaryMuscle": "Braquiorradial",
+      "secondaryMuscles": [
+        "Bíceps",
+        "Antebraço"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "flexao_cotovelo_pronada",
+      "substitutionGroup": "biceps_braquial_braquiorradial",
+      "exerciseDbSearch": "Reverse Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-martelo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-martelo-corda",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-martelo-cruzada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-barra-cabo",
+      "namePtBr": "Tríceps barra no cabo",
+      "nameEn": "Cable Triceps Pushdown",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_pushdown",
+      "exerciseDbSearch": "Cable Triceps Pushdown",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-corda",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-v-bar",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-unilateral-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-corda",
+      "namePtBr": "Tríceps corda",
+      "nameEn": "Cable Rope Triceps Pushdown",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_pushdown",
+      "exerciseDbSearch": "Cable Rope Triceps Pushdown",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-barra-cabo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-v-bar",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-unilateral-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-v-bar",
+      "namePtBr": "Tríceps V-bar",
+      "nameEn": "Cable V-Bar Pushdown",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_pushdown",
+      "exerciseDbSearch": "Cable V-Bar Pushdown",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-barra-cabo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-corda",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-unilateral-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-unilateral-cabo",
+      "namePtBr": "Tríceps unilateral no cabo",
+      "nameEn": "Single Arm Cable Pushdown",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_pushdown",
+      "exerciseDbSearch": "Single Arm Cable Pushdown",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-barra-cabo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-corda",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-v-bar",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-frances-halter",
+      "namePtBr": "Tríceps francês com halter",
+      "nameEn": "Dumbbell Overhead Triceps Extension",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "extensao_cotovelo_overhead",
+      "substitutionGroup": "triceps_overhead",
+      "exerciseDbSearch": "Dumbbell Overhead Triceps Extension",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-corda-overhead",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-corda-overhead",
+      "namePtBr": "Tríceps corda acima da cabeça",
+      "nameEn": "Cable Rope Overhead Triceps Extension",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo_overhead",
+      "substitutionGroup": "triceps_overhead",
+      "exerciseDbSearch": "Cable Rope Overhead Triceps Extension",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-frances-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-cabo",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-testa-ez",
+      "namePtBr": "Tríceps testa com barra EZ",
+      "nameEn": "EZ Bar Skull Crusher",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Barra EZ",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_overhead",
+      "exerciseDbSearch": "EZ Bar Skull Crusher",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-frances-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-corda-overhead",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "triceps-testa-cabo",
+      "namePtBr": "Tríceps testa no cabo",
+      "nameEn": "Cable Lying Triceps Extension",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_cotovelo",
+      "substitutionGroup": "triceps_overhead",
+      "exerciseDbSearch": "Cable Lying Triceps Extension",
+      "alternatives": [
+        {
+          "exerciseId": "triceps-frances-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "triceps-corda-overhead",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "triceps-testa-ez",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "supino-fechado",
+      "namePtBr": "Supino pegada fechada",
+      "nameEn": "Close Grip Bench Press",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "empurrar_horizontal_fechado",
+      "substitutionGroup": "triceps_composto",
+      "exerciseDbSearch": "Close Grip Bench Press",
+      "alternatives": [
+        {
+          "exerciseId": "mergulho-paralelas",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "mergulho-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao-fechada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "mergulho-paralelas",
+      "namePtBr": "Mergulho nas paralelas",
+      "nameEn": "Bench/Parallel Dips",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "empurrar_vertical_fechado",
+      "substitutionGroup": "triceps_composto",
+      "exerciseDbSearch": "Bench/Parallel Dips",
+      "alternatives": [
+        {
+          "exerciseId": "supino-fechado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "mergulho-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao-fechada",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "mergulho-maquina",
+      "namePtBr": "Mergulho na máquina",
+      "nameEn": "Machine Dip",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "empurrar_vertical_fechado",
+      "substitutionGroup": "triceps_composto",
+      "exerciseDbSearch": "Machine Dip",
+      "alternatives": [
+        {
+          "exerciseId": "supino-fechado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "mergulho-paralelas",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexao-fechada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "flexao-fechada",
+      "namePtBr": "Flexão pegada fechada",
+      "nameEn": "Close Grip Push-Up",
+      "primaryMuscle": "Tríceps",
+      "secondaryMuscles": [
+        "Deltoide anterior"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "empurrar_horizontal_fechado",
+      "substitutionGroup": "triceps_composto",
+      "exerciseDbSearch": "Close Grip Push-Up",
+      "alternatives": [
+        {
+          "exerciseId": "supino-fechado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "mergulho-paralelas",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "mergulho-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "agachamento-livre",
+      "namePtBr": "Agachamento livre",
+      "nameEn": "Barbell Back Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "agachamento",
+      "substitutionGroup": "quadriceps_agachamento",
+      "exerciseDbSearch": "Barbell Back Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-frontal",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "agachamento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hack-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "goblet-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "agachamento-frontal",
+      "namePtBr": "Agachamento frontal",
+      "nameEn": "Barbell Front Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "agachamento",
+      "substitutionGroup": "quadriceps_agachamento",
+      "exerciseDbSearch": "Barbell Front Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-livre",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "agachamento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hack-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "goblet-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "agachamento-smith",
+      "namePtBr": "Agachamento no Smith",
+      "nameEn": "Smith Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Smith",
+      "movementPattern": "agachamento",
+      "substitutionGroup": "quadriceps_agachamento",
+      "exerciseDbSearch": "Smith Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-livre",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "agachamento-frontal",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hack-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "goblet-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "hack-squat",
+      "namePtBr": "Hack squat",
+      "nameEn": "Hack Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "agachamento",
+      "substitutionGroup": "quadriceps_agachamento",
+      "exerciseDbSearch": "Hack Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-livre",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "agachamento-frontal",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "agachamento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "goblet-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "goblet-squat",
+      "namePtBr": "Agachamento goblet",
+      "nameEn": "Dumbbell Goblet Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "agachamento",
+      "substitutionGroup": "quadriceps_agachamento",
+      "exerciseDbSearch": "Dumbbell Goblet Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-livre",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "agachamento-frontal",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "agachamento-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hack-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "leg-press-45",
+      "namePtBr": "Leg press 45°",
+      "nameEn": "45 Degree Leg Press",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "leg_press",
+      "substitutionGroup": "quadriceps_leg_press",
+      "exerciseDbSearch": "45 Degree Leg Press",
+      "alternatives": [
+        {
+          "exerciseId": "leg-press-horizontal",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "pendulum-squat",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "leg-press-horizontal",
+      "namePtBr": "Leg press horizontal",
+      "nameEn": "Horizontal Leg Press",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "leg_press",
+      "substitutionGroup": "quadriceps_leg_press",
+      "exerciseDbSearch": "Horizontal Leg Press",
+      "alternatives": [
+        {
+          "exerciseId": "leg-press-45",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "pendulum-squat",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "pendulum-squat",
+      "namePtBr": "Agachamento pêndulo",
+      "nameEn": "Pendulum Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "agachamento_guiado",
+      "substitutionGroup": "quadriceps_leg_press",
+      "exerciseDbSearch": "Pendulum Squat",
+      "alternatives": [
+        {
+          "exerciseId": "leg-press-45",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "leg-press-horizontal",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "agachamento-bulgaro",
+      "namePtBr": "Agachamento búlgaro",
+      "nameEn": "Bulgarian Split Squat",
+      "primaryMuscle": "Quadríceps/Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa",
+        "Adutores"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "agachamento_unilateral",
+      "substitutionGroup": "quadriceps_unilateral",
+      "exerciseDbSearch": "Bulgarian Split Squat",
+      "alternatives": [
+        {
+          "exerciseId": "afundo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "passada-reversa",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "step-up",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "split-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "afundo",
+      "namePtBr": "Afundo",
+      "nameEn": "Barbell/Dumbbell Lunge",
+      "primaryMuscle": "Quadríceps/Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa",
+        "Adutores"
+      ],
+      "equipment": "Livre",
+      "movementPattern": "agachamento_unilateral",
+      "substitutionGroup": "quadriceps_unilateral",
+      "exerciseDbSearch": "Barbell/Dumbbell Lunge",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-bulgaro",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "passada-reversa",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "step-up",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "split-squat",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "passada-reversa",
+      "namePtBr": "Passada reversa",
+      "nameEn": "Reverse Lunge",
+      "primaryMuscle": "Quadríceps/Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa",
+        "Adutores"
+      ],
+      "equipment": "Livre",
+      "movementPattern": "agachamento_unilateral",
+      "substitutionGroup": "quadriceps_unilateral",
+      "exerciseDbSearch": "Reverse Lunge",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-bulgaro",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "afundo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "step-up",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "split-squat",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "step-up",
+      "namePtBr": "Step-up",
+      "nameEn": "Dumbbell Step Up",
+      "primaryMuscle": "Quadríceps/Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa",
+        "Adutores"
+      ],
+      "equipment": "Banco/Halteres",
+      "movementPattern": "agachamento_unilateral",
+      "substitutionGroup": "quadriceps_unilateral",
+      "exerciseDbSearch": "Dumbbell Step Up",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-bulgaro",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "afundo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "passada-reversa",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "split-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "split-squat",
+      "namePtBr": "Split squat",
+      "nameEn": "Split Squat",
+      "primaryMuscle": "Quadríceps/Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa",
+        "Adutores"
+      ],
+      "equipment": "Livre",
+      "movementPattern": "agachamento_unilateral",
+      "substitutionGroup": "quadriceps_unilateral",
+      "exerciseDbSearch": "Split Squat",
+      "alternatives": [
+        {
+          "exerciseId": "agachamento-bulgaro",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "afundo",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "passada-reversa",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "step-up",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "cadeira-extensora",
+      "namePtBr": "Cadeira extensora",
+      "nameEn": "Leg Extension",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "extensao_joelho",
+      "substitutionGroup": "quadriceps_extensao",
+      "exerciseDbSearch": "Leg Extension",
+      "alternatives": [
+        {
+          "exerciseId": "extensora-unilateral",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "sissy-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "extensora-unilateral",
+      "namePtBr": "Cadeira extensora unilateral",
+      "nameEn": "Single Leg Extension",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "extensao_joelho",
+      "substitutionGroup": "quadriceps_extensao",
+      "exerciseDbSearch": "Single Leg Extension",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-extensora",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "sissy-squat",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "sissy-squat",
+      "namePtBr": "Sissy squat",
+      "nameEn": "Sissy Squat",
+      "primaryMuscle": "Quadríceps",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "extensao_joelho",
+      "substitutionGroup": "quadriceps_extensao",
+      "exerciseDbSearch": "Sissy Squat",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-extensora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "extensora-unilateral",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "stiff-barra",
+      "namePtBr": "Stiff com barra",
+      "nameEn": "Barbell Straight Leg Deadlift",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "hinge",
+      "substitutionGroup": "posterior_hinge",
+      "exerciseDbSearch": "Barbell Straight Leg Deadlift",
+      "alternatives": [
+        {
+          "exerciseId": "terra-romeno-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "terra-romeno-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "good-morning",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "terra-romeno-barra",
+      "namePtBr": "Levantamento terra romeno com barra",
+      "nameEn": "Barbell Romanian Deadlift",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "hinge",
+      "substitutionGroup": "posterior_hinge",
+      "exerciseDbSearch": "Barbell Romanian Deadlift",
+      "alternatives": [
+        {
+          "exerciseId": "stiff-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "terra-romeno-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "good-morning",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "terra-romeno-halteres",
+      "namePtBr": "Levantamento terra romeno com halteres",
+      "nameEn": "Dumbbell Romanian Deadlift",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "hinge",
+      "substitutionGroup": "posterior_hinge",
+      "exerciseDbSearch": "Dumbbell Romanian Deadlift",
+      "alternatives": [
+        {
+          "exerciseId": "stiff-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "terra-romeno-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "good-morning",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "good-morning",
+      "namePtBr": "Good morning",
+      "nameEn": "Barbell Good Morning",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "hinge",
+      "substitutionGroup": "posterior_hinge",
+      "exerciseDbSearch": "Barbell Good Morning",
+      "alternatives": [
+        {
+          "exerciseId": "stiff-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "terra-romeno-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "terra-romeno-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "mesa-flexora",
+      "namePtBr": "Mesa flexora",
+      "nameEn": "Lying Leg Curl",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_joelho",
+      "substitutionGroup": "posterior_flexao_joelho",
+      "exerciseDbSearch": "Lying Leg Curl",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-flexora",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "flexora-em-pe",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "flexora-bola",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "cadeira-flexora",
+      "namePtBr": "Cadeira flexora",
+      "nameEn": "Seated Leg Curl",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_joelho",
+      "substitutionGroup": "posterior_flexao_joelho",
+      "exerciseDbSearch": "Seated Leg Curl",
+      "alternatives": [
+        {
+          "exerciseId": "mesa-flexora",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "flexora-em-pe",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "flexora-bola",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "flexora-em-pe",
+      "namePtBr": "Flexora em pé unilateral",
+      "nameEn": "Standing Leg Curl",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_joelho",
+      "substitutionGroup": "posterior_flexao_joelho",
+      "exerciseDbSearch": "Standing Leg Curl",
+      "alternatives": [
+        {
+          "exerciseId": "mesa-flexora",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "cadeira-flexora",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "flexora-bola",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "flexora-bola",
+      "namePtBr": "Flexão de joelho na bola suíça",
+      "nameEn": "Swiss Ball Leg Curl",
+      "primaryMuscle": "Posterior de coxa",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Eretores da coluna"
+      ],
+      "equipment": "Bola suíça",
+      "movementPattern": "flexao_joelho",
+      "substitutionGroup": "posterior_flexao_joelho",
+      "exerciseDbSearch": "Swiss Ball Leg Curl",
+      "alternatives": [
+        {
+          "exerciseId": "mesa-flexora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "cadeira-flexora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "flexora-em-pe",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "hip-thrust-barra",
+      "namePtBr": "Hip thrust com barra",
+      "nameEn": "Barbell Hip Thrust",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Barra",
+      "movementPattern": "extensao_quadril",
+      "substitutionGroup": "gluteo_hip_thrust",
+      "exerciseDbSearch": "Barbell Hip Thrust",
+      "alternatives": [
+        {
+          "exerciseId": "hip-thrust-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hip-thrust-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "glute-bridge",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "hip-thrust-smith",
+      "namePtBr": "Hip thrust no Smith",
+      "nameEn": "Smith Hip Thrust",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Smith",
+      "movementPattern": "extensao_quadril",
+      "substitutionGroup": "gluteo_hip_thrust",
+      "exerciseDbSearch": "Smith Hip Thrust",
+      "alternatives": [
+        {
+          "exerciseId": "hip-thrust-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hip-thrust-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "glute-bridge",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "hip-thrust-maquina",
+      "namePtBr": "Hip thrust na máquina",
+      "nameEn": "Machine Hip Thrust",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "extensao_quadril",
+      "substitutionGroup": "gluteo_hip_thrust",
+      "exerciseDbSearch": "Machine Hip Thrust",
+      "alternatives": [
+        {
+          "exerciseId": "hip-thrust-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hip-thrust-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "glute-bridge",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "glute-bridge",
+      "namePtBr": "Ponte de glúteos",
+      "nameEn": "Glute Bridge",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "extensao_quadril",
+      "substitutionGroup": "gluteo_hip_thrust",
+      "exerciseDbSearch": "Glute Bridge",
+      "alternatives": [
+        {
+          "exerciseId": "hip-thrust-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hip-thrust-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "hip-thrust-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "coice-cabo",
+      "namePtBr": "Coice no cabo",
+      "nameEn": "Cable Glute Kickback",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_quadril_unilateral",
+      "substitutionGroup": "gluteo_kickback",
+      "exerciseDbSearch": "Cable Glute Kickback",
+      "alternatives": [
+        {
+          "exerciseId": "coice-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "coice-quatro-apoios",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "coice-maquina",
+      "namePtBr": "Coice na máquina",
+      "nameEn": "Machine Glute Kickback",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "extensao_quadril_unilateral",
+      "substitutionGroup": "gluteo_kickback",
+      "exerciseDbSearch": "Machine Glute Kickback",
+      "alternatives": [
+        {
+          "exerciseId": "coice-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "coice-quatro-apoios",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "coice-quatro-apoios",
+      "namePtBr": "Coice em quatro apoios",
+      "nameEn": "Quadruped Hip Extension",
+      "primaryMuscle": "Glúteos",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "extensao_quadril_unilateral",
+      "substitutionGroup": "gluteo_kickback",
+      "exerciseDbSearch": "Quadruped Hip Extension",
+      "alternatives": [
+        {
+          "exerciseId": "coice-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "coice-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "cadeira-abdutora",
+      "namePtBr": "Cadeira abdutora",
+      "nameEn": "Hip Abduction Machine",
+      "primaryMuscle": "Glúteo médio",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "abducao_quadril",
+      "substitutionGroup": "gluteo_abducao",
+      "exerciseDbSearch": "Hip Abduction Machine",
+      "alternatives": [
+        {
+          "exerciseId": "abducao-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "caminhada-lateral-elastico",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abducao-lateral-deitado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "abducao-cabo",
+      "namePtBr": "Abdução de quadril no cabo",
+      "nameEn": "Cable Hip Abduction",
+      "primaryMuscle": "Glúteo médio",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "abducao_quadril",
+      "substitutionGroup": "gluteo_abducao",
+      "exerciseDbSearch": "Cable Hip Abduction",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-abdutora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "caminhada-lateral-elastico",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abducao-lateral-deitado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "caminhada-lateral-elastico",
+      "namePtBr": "Caminhada lateral com elástico",
+      "nameEn": "Lateral Band Walk",
+      "primaryMuscle": "Glúteo médio",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Elástico",
+      "movementPattern": "abducao_quadril",
+      "substitutionGroup": "gluteo_abducao",
+      "exerciseDbSearch": "Lateral Band Walk",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-abdutora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abducao-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abducao-lateral-deitado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "abducao-lateral-deitado",
+      "namePtBr": "Abdução lateral deitado",
+      "nameEn": "Side Lying Hip Abduction",
+      "primaryMuscle": "Glúteo médio",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "abducao_quadril",
+      "substitutionGroup": "gluteo_abducao",
+      "exerciseDbSearch": "Side Lying Hip Abduction",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-abdutora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abducao-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "caminhada-lateral-elastico",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "cadeira-adutora",
+      "namePtBr": "Cadeira adutora",
+      "nameEn": "Hip Adduction Machine",
+      "primaryMuscle": "Adutores",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "aducao_quadril",
+      "substitutionGroup": "adutores",
+      "exerciseDbSearch": "Hip Adduction Machine",
+      "alternatives": [
+        {
+          "exerciseId": "aducao-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "copenhagen-plank",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "aducao-cabo",
+      "namePtBr": "Adução de quadril no cabo",
+      "nameEn": "Cable Hip Adduction",
+      "primaryMuscle": "Adutores",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "aducao_quadril",
+      "substitutionGroup": "adutores",
+      "exerciseDbSearch": "Cable Hip Adduction",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-adutora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "copenhagen-plank",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "copenhagen-plank",
+      "namePtBr": "Copenhagen plank",
+      "nameEn": "Copenhagen Plank",
+      "primaryMuscle": "Adutores/Core",
+      "secondaryMuscles": [
+        "Oblíquos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "aducao_quadril_isometrica",
+      "substitutionGroup": "adutores",
+      "exerciseDbSearch": "Copenhagen Plank",
+      "alternatives": [
+        {
+          "exerciseId": "cadeira-adutora",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "aducao-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-maquina-em-pe",
+      "namePtBr": "Panturrilha em pé na máquina",
+      "nameEn": "Standing Calf Raise",
+      "primaryMuscle": "Panturrilhas",
+      "secondaryMuscles": [],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_plantar",
+      "substitutionGroup": "panturrilha_em_pe",
+      "exerciseDbSearch": "Standing Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-leg-press",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-smith",
+      "namePtBr": "Panturrilha em pé no Smith",
+      "nameEn": "Smith Standing Calf Raise",
+      "primaryMuscle": "Panturrilhas",
+      "secondaryMuscles": [],
+      "equipment": "Smith",
+      "movementPattern": "flexao_plantar",
+      "substitutionGroup": "panturrilha_em_pe",
+      "exerciseDbSearch": "Smith Standing Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-maquina-em-pe",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-leg-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-unilateral-halter",
+      "namePtBr": "Panturrilha unilateral com halter",
+      "nameEn": "Single Leg Dumbbell Calf Raise",
+      "primaryMuscle": "Panturrilhas",
+      "secondaryMuscles": [],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_plantar",
+      "substitutionGroup": "panturrilha_em_pe",
+      "exerciseDbSearch": "Single Leg Dumbbell Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-maquina-em-pe",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-leg-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-leg-press",
+      "namePtBr": "Panturrilha no leg press",
+      "nameEn": "Leg Press Calf Raise",
+      "primaryMuscle": "Panturrilhas",
+      "secondaryMuscles": [],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_plantar",
+      "substitutionGroup": "panturrilha_em_pe",
+      "exerciseDbSearch": "Leg Press Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-maquina-em-pe",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "panturrilha-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "panturrilha-unilateral-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-sentada",
+      "namePtBr": "Panturrilha sentada",
+      "nameEn": "Seated Calf Raise",
+      "primaryMuscle": "Sóleo",
+      "secondaryMuscles": [],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_plantar_joelho_fletido",
+      "substitutionGroup": "panturrilha_sentada",
+      "exerciseDbSearch": "Seated Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-sentada-smith",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "panturrilha-sentada-smith",
+      "namePtBr": "Panturrilha sentada improvisada no Smith",
+      "nameEn": "Seated Smith Calf Raise",
+      "primaryMuscle": "Sóleo",
+      "secondaryMuscles": [],
+      "equipment": "Smith",
+      "movementPattern": "flexao_plantar_joelho_fletido",
+      "substitutionGroup": "panturrilha_sentada",
+      "exerciseDbSearch": "Seated Smith Calf Raise",
+      "alternatives": [
+        {
+          "exerciseId": "panturrilha-sentada",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "tibialis-raise",
+      "namePtBr": "Elevação do tibial anterior",
+      "nameEn": "Tibialis Raise",
+      "primaryMuscle": "Tibial anterior",
+      "secondaryMuscles": [],
+      "equipment": "Peso corporal",
+      "movementPattern": "dorsiflexao",
+      "substitutionGroup": "tibial_anterior",
+      "exerciseDbSearch": "Tibialis Raise",
+      "alternatives": [
+        {
+          "exerciseId": "dorsiflexao-elastico",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "dorsiflexao-elastico",
+      "namePtBr": "Dorsiflexão com elástico",
+      "nameEn": "Band Dorsiflexion",
+      "primaryMuscle": "Tibial anterior",
+      "secondaryMuscles": [],
+      "equipment": "Elástico",
+      "movementPattern": "dorsiflexao",
+      "substitutionGroup": "tibial_anterior",
+      "exerciseDbSearch": "Band Dorsiflexion",
+      "alternatives": [
+        {
+          "exerciseId": "tibialis-raise",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "abdominal-crunch",
+      "namePtBr": "Abdominal crunch",
+      "nameEn": "Crunch",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "flexao_tronco",
+      "substitutionGroup": "core_flexao",
+      "exerciseDbSearch": "Crunch",
+      "alternatives": [
+        {
+          "exerciseId": "crunch-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abdominal-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-declinado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crunch-cabo",
+      "namePtBr": "Crunch no cabo",
+      "nameEn": "Cable Kneeling Crunch",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_tronco",
+      "substitutionGroup": "core_flexao",
+      "exerciseDbSearch": "Cable Kneeling Crunch",
+      "alternatives": [
+        {
+          "exerciseId": "abdominal-crunch",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abdominal-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-declinado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "abdominal-maquina",
+      "namePtBr": "Abdominal na máquina",
+      "nameEn": "Machine Crunch",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Máquina",
+      "movementPattern": "flexao_tronco",
+      "substitutionGroup": "core_flexao",
+      "exerciseDbSearch": "Machine Crunch",
+      "alternatives": [
+        {
+          "exerciseId": "abdominal-crunch",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-declinado",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crunch-declinado",
+      "namePtBr": "Crunch declinado",
+      "nameEn": "Decline Crunch",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Banco",
+      "movementPattern": "flexao_tronco",
+      "substitutionGroup": "core_flexao",
+      "exerciseDbSearch": "Decline Crunch",
+      "alternatives": [
+        {
+          "exerciseId": "abdominal-crunch",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "abdominal-maquina",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "prancha",
+      "namePtBr": "Prancha",
+      "nameEn": "Plank",
+      "primaryMuscle": "Core",
+      "secondaryMuscles": [
+        "Abdômen",
+        "Oblíquos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "anti_extensao",
+      "substitutionGroup": "core_anti_extensao",
+      "exerciseDbSearch": "Plank",
+      "alternatives": [
+        {
+          "exerciseId": "ab-wheel",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "dead-bug",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "body-saw",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "ab-wheel",
+      "namePtBr": "Ab wheel",
+      "nameEn": "Ab Wheel Rollout",
+      "primaryMuscle": "Core",
+      "secondaryMuscles": [
+        "Abdômen",
+        "Oblíquos"
+      ],
+      "equipment": "Roda abdominal",
+      "movementPattern": "anti_extensao",
+      "substitutionGroup": "core_anti_extensao",
+      "exerciseDbSearch": "Ab Wheel Rollout",
+      "alternatives": [
+        {
+          "exerciseId": "prancha",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "dead-bug",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "body-saw",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "dead-bug",
+      "namePtBr": "Dead bug",
+      "nameEn": "Dead Bug",
+      "primaryMuscle": "Core",
+      "secondaryMuscles": [
+        "Abdômen",
+        "Oblíquos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "anti_extensao",
+      "substitutionGroup": "core_anti_extensao",
+      "exerciseDbSearch": "Dead Bug",
+      "alternatives": [
+        {
+          "exerciseId": "prancha",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "ab-wheel",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "body-saw",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "body-saw",
+      "namePtBr": "Body saw",
+      "nameEn": "Body Saw Plank",
+      "primaryMuscle": "Core",
+      "secondaryMuscles": [
+        "Abdômen",
+        "Oblíquos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "anti_extensao",
+      "substitutionGroup": "core_anti_extensao",
+      "exerciseDbSearch": "Body Saw Plank",
+      "alternatives": [
+        {
+          "exerciseId": "prancha",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "ab-wheel",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "dead-bug",
+          "reason": "SAME_MOVEMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-pernas-barra",
+      "namePtBr": "Elevação de pernas na barra",
+      "nameEn": "Hanging Leg Raise",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Barra fixa",
+      "movementPattern": "flexao_quadril_core",
+      "substitutionGroup": "core_elevacao_pernas",
+      "exerciseDbSearch": "Hanging Leg Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-joelhos-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "elevacao-joelhos-paralelas",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-reverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-joelhos-barra",
+      "namePtBr": "Elevação de joelhos na barra",
+      "nameEn": "Hanging Knee Raise",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Barra fixa",
+      "movementPattern": "flexao_quadril_core",
+      "substitutionGroup": "core_elevacao_pernas",
+      "exerciseDbSearch": "Hanging Knee Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-pernas-barra",
+          "reason": "SAME_MOVEMENT"
+        },
+        {
+          "exerciseId": "elevacao-joelhos-paralelas",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-reverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "elevacao-joelhos-paralelas",
+      "namePtBr": "Elevação de joelhos na cadeira romana",
+      "nameEn": "Captain Chair Knee Raise",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Cadeira romana",
+      "movementPattern": "flexao_quadril_core",
+      "substitutionGroup": "core_elevacao_pernas",
+      "exerciseDbSearch": "Captain Chair Knee Raise",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-pernas-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-joelhos-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "crunch-reverso",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "crunch-reverso",
+      "namePtBr": "Crunch reverso",
+      "nameEn": "Reverse Crunch",
+      "primaryMuscle": "Abdômen",
+      "secondaryMuscles": [
+        "Flexores do quadril"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "flexao_quadril_core",
+      "substitutionGroup": "core_elevacao_pernas",
+      "exerciseDbSearch": "Reverse Crunch",
+      "alternatives": [
+        {
+          "exerciseId": "elevacao-pernas-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-joelhos-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "elevacao-joelhos-paralelas",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "woodchop-cabo",
+      "namePtBr": "Woodchop no cabo",
+      "nameEn": "Cable Wood Chop",
+      "primaryMuscle": "Oblíquos",
+      "secondaryMuscles": [
+        "Abdômen"
+      ],
+      "equipment": "Cabo",
+      "movementPattern": "rotacao_tronco",
+      "substitutionGroup": "core_rotacao",
+      "exerciseDbSearch": "Cable Wood Chop",
+      "alternatives": [
+        {
+          "exerciseId": "russian-twist",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "pallof-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "russian-twist",
+      "namePtBr": "Russian twist",
+      "nameEn": "Russian Twist",
+      "primaryMuscle": "Oblíquos",
+      "secondaryMuscles": [
+        "Abdômen"
+      ],
+      "equipment": "Peso corporal/Peso",
+      "movementPattern": "rotacao_tronco",
+      "substitutionGroup": "core_rotacao",
+      "exerciseDbSearch": "Russian Twist",
+      "alternatives": [
+        {
+          "exerciseId": "woodchop-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "pallof-press",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "pallof-press",
+      "namePtBr": "Pallof press",
+      "nameEn": "Pallof Press",
+      "primaryMuscle": "Core",
+      "secondaryMuscles": [
+        "Abdômen",
+        "Oblíquos"
+      ],
+      "equipment": "Cabo/Elástico",
+      "movementPattern": "anti_rotacao",
+      "substitutionGroup": "core_rotacao",
+      "exerciseDbSearch": "Pallof Press",
+      "alternatives": [
+        {
+          "exerciseId": "woodchop-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "russian-twist",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "hiperextensao-45",
+      "namePtBr": "Hiperextensão 45°",
+      "nameEn": "45 Degree Hyperextension",
+      "primaryMuscle": "Eretores da coluna",
+      "secondaryMuscles": [
+        "Glúteos",
+        "Posterior de coxa"
+      ],
+      "equipment": "Banco 45°",
+      "movementPattern": "extensao_coluna_quadril",
+      "substitutionGroup": "lombar_extensao",
+      "exerciseDbSearch": "45 Degree Hyperextension",
+      "alternatives": [
+        {
+          "exerciseId": "reverse-hyper",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "bird-dog",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "reverse-hyper",
+      "namePtBr": "Reverse hyper",
+      "nameEn": "Reverse Hyperextension",
+      "primaryMuscle": "Glúteos/Lombar",
+      "secondaryMuscles": [
+        "Posterior de coxa"
+      ],
+      "equipment": "Máquina/Banco",
+      "movementPattern": "extensao_quadril",
+      "substitutionGroup": "lombar_extensao",
+      "exerciseDbSearch": "Reverse Hyperextension",
+      "alternatives": [
+        {
+          "exerciseId": "hiperextensao-45",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "bird-dog",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "bird-dog",
+      "namePtBr": "Bird dog",
+      "nameEn": "Bird Dog",
+      "primaryMuscle": "Core/Lombar",
+      "secondaryMuscles": [
+        "Glúteos"
+      ],
+      "equipment": "Peso corporal",
+      "movementPattern": "estabilidade_coluna",
+      "substitutionGroup": "lombar_extensao",
+      "exerciseDbSearch": "Bird Dog",
+      "alternatives": [
+        {
+          "exerciseId": "hiperextensao-45",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "reverse-hyper",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-barra",
+      "namePtBr": "Rosca de punho com barra",
+      "nameEn": "Barbell Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Barra",
+      "movementPattern": "flexao_punho",
+      "substitutionGroup": "antebraco_flexores",
+      "exerciseDbSearch": "Barbell Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-halteres",
+      "namePtBr": "Rosca de punho com halteres",
+      "nameEn": "Dumbbell Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Halteres",
+      "movementPattern": "flexao_punho",
+      "substitutionGroup": "antebraco_flexores",
+      "exerciseDbSearch": "Dumbbell Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-cabo",
+      "namePtBr": "Rosca de punho no cabo",
+      "nameEn": "Cable Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Cabo",
+      "movementPattern": "flexao_punho",
+      "substitutionGroup": "antebraco_flexores",
+      "exerciseDbSearch": "Cable Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-halteres",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-inversa-barra",
+      "namePtBr": "Extensão de punho com barra",
+      "nameEn": "Barbell Reverse Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Barra",
+      "movementPattern": "extensao_punho",
+      "substitutionGroup": "antebraco_extensores",
+      "exerciseDbSearch": "Barbell Reverse Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-inversa-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-inversa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-inversa-halter",
+      "namePtBr": "Extensão de punho com halteres",
+      "nameEn": "Dumbbell Reverse Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Halteres",
+      "movementPattern": "extensao_punho",
+      "substitutionGroup": "antebraco_extensores",
+      "exerciseDbSearch": "Dumbbell Reverse Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-inversa-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-inversa-cabo",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "rosca-punho-inversa-cabo",
+      "namePtBr": "Extensão de punho no cabo",
+      "nameEn": "Cable Reverse Wrist Curl",
+      "primaryMuscle": "Antebraço",
+      "secondaryMuscles": [],
+      "equipment": "Cabo",
+      "movementPattern": "extensao_punho",
+      "substitutionGroup": "antebraco_extensores",
+      "exerciseDbSearch": "Cable Reverse Wrist Curl",
+      "alternatives": [
+        {
+          "exerciseId": "rosca-punho-inversa-barra",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "rosca-punho-inversa-halter",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "farmer-walk",
+      "namePtBr": "Farmer's walk",
+      "nameEn": "Farmers Walk",
+      "primaryMuscle": "Pegada/Trapézio",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Halteres",
+      "movementPattern": "carregada",
+      "substitutionGroup": "grip",
+      "exerciseDbSearch": "Farmers Walk",
+      "alternatives": [
+        {
+          "exerciseId": "dead-hang",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "plate-pinch",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "dead-hang",
+      "namePtBr": "Dead hang",
+      "nameEn": "Dead Hang",
+      "primaryMuscle": "Pegada/Dorsal",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Barra fixa",
+      "movementPattern": "suspensao",
+      "substitutionGroup": "grip",
+      "exerciseDbSearch": "Dead Hang",
+      "alternatives": [
+        {
+          "exerciseId": "farmer-walk",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "plate-pinch",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    },
+    {
+      "id": "plate-pinch",
+      "namePtBr": "Plate pinch",
+      "nameEn": "Plate Pinch",
+      "primaryMuscle": "Pegada",
+      "secondaryMuscles": [
+        "Antebraço"
+      ],
+      "equipment": "Anilhas",
+      "movementPattern": "pinch_grip",
+      "substitutionGroup": "grip",
+      "exerciseDbSearch": "Plate Pinch",
+      "alternatives": [
+        {
+          "exerciseId": "farmer-walk",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        },
+        {
+          "exerciseId": "dead-hang",
+          "reason": "SAME_MOVEMENT_DIFFERENT_EQUIPMENT"
+        }
+      ]
+    }
+  ]
+}

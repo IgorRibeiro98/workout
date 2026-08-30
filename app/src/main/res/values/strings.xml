@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">Treino</string>
+    <string name="nav_today">Hoje</string>
+    <string name="nav_workouts">Treinos</string>
+    <string name="nav_exercises">Exercícios</string>
+    <string name="nav_history">Histórico</string>
+    <string name="nav_settings">Ajustes</string>
+
+    <string name="today_summary">Resumo</string>
+    <string name="active_session">SESSÃO EM ANDAMENTO</string>
+    <string name="continue_workout">CONTINUAR TREINO</string>
+    <string name="next_in_sequence">PRÓXIMO DA SEQUÊNCIA</string>
+    <string name="selected_workout">TREINO SELECIONADO</string>
+    <string name="start_workout">INICIAR TREINO</string>
+    <string name="swap_workout">TROCAR</string>
+    <string name="no_active_program">Nenhum programa ativo.</string>
+    <string name="weekly_goal">Meta Semanal</string>
+    <string name="last_workout">Último Treino</string>
+    
+    <string name="tab_calendar">Calendário</string>
+    <string name="tab_all_workouts">Todos os Treinos</string>
+    <string name="tab_muscle_volume">Volume Muscular</string>
+
+    <string name="current_program_badge">PROGRAMA ATUAL</string>
+    <string name="activate_program">ATIVAR PROGRAMA</string>
+    <string name="new_program">Novo Programa</string>
+    <string name="new_template">Novo Treino</string>
+    <string name="add_exercises">Adicionar Exercícios</string>
+    <string name="search_exercise">Buscar exercício…</string>
+    <string name="occupied_machine">Máquina ocupada?</string>
+    <string name="use_today_only">Usar apenas hoje</string>
+    <string name="replace_in_workout">Substituir no treino</string>
+    <string name="watch_explanation">▶ ASSISTIR EXPLICAÇÃO</string>
+</resources>
