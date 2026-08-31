@@ -367,4 +367,12 @@ class IntegrationTest {
         val programs = dao.getAllProgramsSync()
         assertTrue(programs.none { it.externalId == "prog-fail" })
     }
+
+    @Test
+    fun `test MainActivity launches successfully without crashing`() {
+        val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
+        val activity = controller.get()
+        assertNotNull(activity)
+        assertFalse(activity.isFinishing)
+    }
 }
