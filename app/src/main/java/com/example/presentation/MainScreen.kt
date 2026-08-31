@@ -210,6 +210,9 @@ fun MainScreen() {
                         navController.navigate(Screen.Summary.createRoute(sessionId)) {
                             popUpTo(Screen.Today.route) { inclusive = false }
                         }
+                    },
+                    onNavigateToExerciseDetails = { exerciseId, name ->
+                        navController.navigate(Screen.ExerciseDetails.createRoute(exerciseId, name))
                     }
                 )
             }

@@ -306,5 +306,34 @@ class ExecutionViewModel(
     fun clearAlternatives() {
         _alternatives.value = emptyList()
     }
+
+    fun getPremiumInfo(exerciseId: Long): Flow<com.example.presentation.exercises.PremiumExerciseInfo?> = flow {
+        val education = workoutEngine.dao.getExerciseEducation(exerciseId)
+        val media = workoutEngine.dao.getExerciseMedia(exerciseId)
+        val progression = workoutEngine.dao.getExerciseProgression(exerciseId)
+        val safety = workoutEngine.dao.getExerciseSafety(exerciseId)
+        val substitution = workoutEngine.dao.getExerciseSubstitutionPremium(exerciseId)
+        val aiContext = workoutEngine.dao.getExerciseAiContext(exerciseId)
+        val biomechanics = workoutEngine.dao.getExerciseBiomechanics(exerciseId)
+        val execution = workoutEngine.dao.getExerciseExecution(exerciseId)
+
+        if (education == null && media == null && progression == null && safety == null &&
+            substitution == null && aiContext == null && biomechanics == null && execution == null) {
+            emit(null)
+        } else {
+            emit(
+                com.example.presentation.exercises.PremiumExerciseInfo(
+                    education = education,
+                    media = media,
+                    progression = progression,
+                    safety = safety,
+                    substitution = substitution,
+                    aiContext = aiContext,
+                    biomechanics = biomechanics,
+                    execution = execution
+                )
+            )
+        }
+    }
 }
 

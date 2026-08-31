@@ -48,7 +48,16 @@ import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import androidx.activity.compose.BackHandler
-import com.example.ui.components.WeightWheelPicker
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import com.example.components.workout.execution.ExerciseExecutionHeader
+import com.example.components.workout.execution.ExerciseMediaCompact
+import com.example.components.workout.execution.WeightWheelPicker
+import com.example.components.workout.execution.RepWheelPicker
+import com.example.components.workout.execution.RirSelector
+import com.example.components.workout.execution.QuickCoachTip
+import com.example.components.workout.execution.ExerciseQuickInfoSheet
+import com.example.components.workout.execution.WorkoutActionButton
 import com.example.ui.theme.*
 
 sealed interface WorkoutSheet {
@@ -59,6 +68,7 @@ sealed interface WorkoutSheet {
     data object LastWorkout : WorkoutSheet
     data object Instructions : WorkoutSheet
     data object Alternatives : WorkoutSheet
+    data object QuickInfo : WorkoutSheet
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,7 +76,8 @@ sealed interface WorkoutSheet {
 fun ExecutionScreen(
     viewModel: ExecutionViewModel,
     onNavigateBack: () -> Unit,
-    onFinish: (Long) -> Unit
+    onFinish: (Long) -> Unit,
+    onNavigateToExerciseDetails: ((Long, String) -> Unit)? = null
 ) {
     val state by viewModel.state.collectAsState()
     val timerTarget by viewModel.restTimerTarget.collectAsState()
@@ -88,6 +99,11 @@ fun ExecutionScreen(
     var directInputConfig by remember { mutableStateOf<DirectInputConfig?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+
+    val currentExId = state.currentExercise?.exerciseSession?.actualExerciseId ?: state.currentExercise?.exerciseSession?.plannedExerciseId
+    val premiumInfo by remember(currentExId) {
+        if (currentExId != null) viewModel.getPremiumInfo(currentExId) else kotlinx.coroutines.flow.flowOf(null)
+    }.collectAsState(initial = null)
 
     DisposableEffect(keepScreenOn) {
         if (keepScreenOn) {
@@ -252,7 +268,10 @@ fun ExecutionScreen(
                                     activeSet = activeSet,
                                     activeSetIndex = state.activeSetIndex ?: 0,
                                     totalSets = currentEx.sets.size,
+                                    currentExerciseIndex = state.currentExerciseIndex,
+                                    totalExercises = session.exercises.size,
                                     resolvedExercise = state.currentResolvedExercise,
+                                    premiumInfo = premiumInfo,
                                     previousExecutionSets = state.previousExecutionSets,
                                     rirRpeEnabled = rirRpeEnabled,
                                     hapticEnabled = hapticEnabled,
@@ -265,9 +284,20 @@ fun ExecutionScreen(
                                         viewModel.completeSet(it)
                                     },
                                     onOpenDirectInput = { config -> directInputConfig = config },
+                                    onOpenExerciseSelector = { activeSheet = WorkoutSheet.ExercisesList },
+                                    onOpenQuickInfo = { activeSheet = WorkoutSheet.QuickInfo },
+                                    onOpenFullDetails = {
+                                        val exId = currentEx.exerciseSession.actualExerciseId ?: currentEx.exerciseSession.plannedExerciseId
+                                        if (exId != null && onNavigateToExerciseDetails != null) {
+                                            onNavigateToExerciseDetails(exId, currentEx.exerciseSession.exerciseNameSnapshot)
+                                        } else {
+                                            activeSheet = WorkoutSheet.Instructions
+                                        }
+                                    },
+                                    onNextExercise = { viewModel.nextExercise() },
+                                    onPreviousExercise = { viewModel.previousExercise() },
                                     onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
                                     onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
-                                    onViewInstructions = { activeSheet = WorkoutSheet.Instructions },
                                     onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync }
                                 )
                             }
@@ -433,6 +463,22 @@ fun ExecutionScreen(
                     onDismiss = { activeSheet = null }
                 )
             }
+            WorkoutSheet.QuickInfo -> {
+                ExerciseQuickInfoSheet(
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    premiumInfo = premiumInfo,
+                    onOpenFullDetails = {
+                        val exId = currentEx.exerciseSession.actualExerciseId ?: currentEx.exerciseSession.plannedExerciseId
+                        if (exId != null && onNavigateToExerciseDetails != null) {
+                            activeSheet = null
+                            onNavigateToExerciseDetails(exId, currentEx.exerciseSession.exerciseNameSnapshot)
+                        } else {
+                            activeSheet = WorkoutSheet.Instructions
+                        }
+                    },
+                    onDismiss = { activeSheet = null }
+                )
+            }
             WorkoutSheet.Alternatives -> {
                 if (alternatives.isNotEmpty()) {
                     AlternativesBottomSheet(
@@ -543,7 +589,10 @@ fun FocusedActiveSetView(
     activeSet: SetLogEntity,
     activeSetIndex: Int,
     totalSets: Int,
+    currentExerciseIndex: Int,
+    totalExercises: Int,
     resolvedExercise: com.example.domain.model.ResolvedExercise?,
+    premiumInfo: com.example.presentation.exercises.PremiumExerciseInfo?,
     previousExecutionSets: List<SetLogEntity>,
     rirRpeEnabled: Boolean,
     hapticEnabled: Boolean,
@@ -551,14 +600,20 @@ fun FocusedActiveSetView(
     onUpdateSet: (SetLogEntity) -> Unit,
     onCompleteSet: (SetLogEntity) -> Unit,
     onOpenDirectInput: (DirectInputConfig) -> Unit,
+    onOpenExerciseSelector: () -> Unit,
+    onOpenQuickInfo: () -> Unit,
+    onOpenFullDetails: () -> Unit,
+    onNextExercise: () -> Unit,
+    onPreviousExercise: () -> Unit,
     onViewAllSets: () -> Unit,
     onViewLastWorkout: () -> Unit,
-    onViewInstructions: () -> Unit,
     onOpenSyncSheet: () -> Unit
 ) {
     val machineLabel = currentEx.exerciseSession.machineLabelSnapshot
     val primaryMuscle = currentEx.exerciseSession.primaryMuscleSnapshot ?: resolvedExercise?.primaryMuscle
     val mediaUrl = resolvedExercise?.resolvedMedia?.mediaUri
+    val equipment = resolvedExercise?.rawExercise?.equipment ?: currentEx.exerciseSession.machineLabelSnapshot
+    val difficulty = resolvedExercise?.rawExercise?.difficulty
 
     var currentWeight by remember(activeSet.id) { mutableFloatStateOf(activeSet.weight) }
     var currentReps by remember(activeSet.id) { mutableIntStateOf(activeSet.repetitions) }
@@ -570,76 +625,67 @@ fun FocusedActiveSetView(
         currentRir = activeSet.rir
     }
 
+    var touchOffsetX by remember { mutableFloatStateOf(0f) }
+
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (touchOffsetX < -100f) {
+                            onNextExercise()
+                        } else if (touchOffsetX > 100f) {
+                            onPreviousExercise()
+                        }
+                        touchOffsetX = 0f
+                    },
+                    onDragCancel = { touchOffsetX = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        touchOffsetX += dragAmount
+                    }
+                )
+            },
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Exercise Header & Details
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = currentEx.exerciseSession.exerciseNameSnapshot,
-                        color = TextPrimary,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Black,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    
-                    if (!machineLabel.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Build, contentDescription = null, tint = Lime400, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = machineLabel,
-                                color = Lime400,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    } else if (!primaryMuscle.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = primaryMuscle,
-                            color = TextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
+            // Exercise Execution Header
+            ExerciseExecutionHeader(
+                exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                primaryMuscle = primaryMuscle,
+                machineLabel = machineLabel,
+                difficulty = difficulty,
+                currentExerciseIndex = currentExerciseIndex,
+                totalExercises = totalExercises,
+                onOpenExerciseSelector = onOpenExerciseSelector,
+                onOpenQuickInfo = onOpenQuickInfo,
+                onOpenFullDetails = onOpenFullDetails
+            )
 
-                if (!mediaUrl.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(SurfaceDark)
-                            .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
-                            .clickable(onClick = onViewInstructions),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AsyncImage(
-                            model = mediaUrl,
-                            contentDescription = "Mídia de execução",
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
+            // Compact Media
+            ExerciseMediaCompact(
+                mediaUrl = mediaUrl,
+                primaryMuscle = primaryMuscle,
+                equipment = equipment,
+                difficulty = difficulty,
+                onClick = onOpenFullDetails
+            )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            // Quick Coach Tip
+            val coachTip = parseJsonListFirst(premiumInfo?.education?.tips) ?: parseJsonListFirst(premiumInfo?.education?.coachNotes)
+            val warningText = parseJsonListFirst(premiumInfo?.education?.commonMistakes) ?: parseJsonListFirst(premiumInfo?.safety?.attentionPoints)
 
-            // Set Indicator, Sync Action & Last Workout summary
+            QuickCoachTip(
+                coachTip = coachTip,
+                warningText = warningText,
+                onOpenQuickInfoSheet = onOpenQuickInfo
+            )
+
+            // Set badge & sync / history summary
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -653,9 +699,9 @@ fun FocusedActiveSetView(
                     Text(
                         text = "SÉRIE ${activeSetIndex + 1} DE $totalSets",
                         color = Lime400,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
 
@@ -673,19 +719,19 @@ fun FocusedActiveSetView(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Sync,
                                 contentDescription = "Sincronizar exercício",
                                 tint = Lime400,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = stringResource(id = R.string.sync_action_label),
                                 color = TextPrimary,
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -701,7 +747,7 @@ fun FocusedActiveSetView(
                         Text(
                             text = "Último: $summaryText",
                             color = TextSecondary,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable(onClick = onViewLastWorkout)
@@ -714,15 +760,15 @@ fun FocusedActiveSetView(
             }
         }
 
-        // Adjusters (Wheel Pickers for Carga and Repetições)
+        // Wheel Pickers & Adjusters
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val isBodyweight = resolvedExercise?.rawExercise?.isBodyweight == true ||
@@ -739,10 +785,10 @@ fun FocusedActiveSetView(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .height(130.dp)
-                            .clip(RoundedCornerShape(24.dp))
+                            .height(120.dp)
+                            .clip(RoundedCornerShape(20.dp))
                             .background(SurfaceDark)
-                            .border(1.dp, BorderLight, RoundedCornerShape(24.dp))
+                            .border(1.dp, BorderLight, RoundedCornerShape(20.dp))
                             .clickable {
                                 onOpenDirectInput(
                                     DirectInputConfig(
@@ -757,7 +803,7 @@ fun FocusedActiveSetView(
                                     )
                                 )
                             }
-                            .padding(16.dp),
+                            .padding(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
@@ -765,17 +811,16 @@ fun FocusedActiveSetView(
                             imageVector = Icons.Default.AccessibilityNew,
                             contentDescription = null,
                             tint = Lime400,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Peso corporal",
                             color = TextPrimary,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
+                            fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "+ Carga adicional",
                             color = Lime400,
@@ -830,7 +875,7 @@ fun FocusedActiveSetView(
                     }
                 }
 
-                RepsWheelPicker(
+                RepWheelPicker(
                     value = currentReps,
                     step = 1,
                     minReps = 1,
@@ -866,44 +911,49 @@ fun FocusedActiveSetView(
                         currentRir = newRir
                         onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = newRir))
                     },
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }
 
-        // CTA & Actions
+        // CTA Button
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Button(
-                onClick = { onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
-            ) {
-                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(24.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("CONCLUIR SÉRIE", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
+            WorkoutActionButton(
+                onClick = {
+                    onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
+                },
+                text = "CONCLUIR SÉRIE",
+                hapticEnabled = hapticEnabled
+            )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             TextButton(
                 onClick = onViewAllSets,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Ver todas as séries (${currentEx.sets.count { it.completed }}/$totalSets)",
                     color = TextSecondary,
-                    fontSize = 14.sp
+                    fontSize = 13.sp
                 )
             }
         }
+    }
+}
+
+private fun parseJsonListFirst(jsonStr: String?): String? {
+    if (jsonStr.isNullOrBlank()) return null
+    return try {
+        val array = org.json.JSONArray(jsonStr)
+        if (array.length() > 0) array.getString(0) else null
+    } catch (e: Exception) {
+        jsonStr
     }
 }
 
