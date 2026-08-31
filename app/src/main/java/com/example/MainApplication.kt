@@ -20,19 +20,19 @@ import com.example.domain.engine.ManifestImporter
 class MainApplication : Application(), ImageLoaderFactory {
     
     lateinit var database: AppDatabase
-        private set
+        internal set
         
     lateinit var repository: WorkoutRepository
-        private set
+        internal set
         
     lateinit var settingsManager: SettingsManager
-        private set
+        internal set
         
     lateinit var workoutEngine: WorkoutEngine
-        private set
+        internal set
         
     lateinit var notificationManager: WorkoutNotificationManager
-        private set
+        internal set
 
     override fun onCreate() {
         super.onCreate()

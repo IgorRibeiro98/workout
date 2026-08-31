@@ -19,10 +19,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,83 +33,112 @@ import java.util.Locale
 @Composable
 fun TodayScreen(viewModel: TodayViewModel, onNavigateToExecution: () -> Unit) {
     val state by viewModel.state.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     
     var showSwapSheet by remember { mutableStateOf(false) }
+    var showFinishDialog by remember { mutableStateOf(false) }
+    var isFinishing by remember { mutableStateOf(false) }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(BackgroundDark)
-            .padding(horizontal = 24.dp)
-            .verticalScroll(rememberScrollState())
     ) {
-        Spacer(modifier = Modifier.height(32.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Spacer(modifier = Modifier.height(32.dp))
 
-        // Header
-        val today = SimpleDateFormat("EEEE, d MMM", Locale("pt", "BR")).format(Date())
-        Text(
-            text = today.uppercase(),
-            color = TextSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "Resumo",
-            color = TextPrimary,
-            fontSize = 32.sp,
-            fontWeight = FontWeight.Black
-        )
+            // Header
+            val today = SimpleDateFormat("EEEE, d MMM", Locale("pt", "BR")).format(Date())
+            Text(
+                text = today.uppercase(),
+                color = TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Resumo",
+                color = TextPrimary,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Black
+            )
 
-        Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-        // Active session card or Next workout card
-        if (state.activeSession != null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(32.dp))
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(Lime400, Lime500)
+            // Active session card or Next workout card
+            if (state.activeSession != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(32.dp))
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(Lime400, Lime500)
+                            )
                         )
-                    )
-                    .padding(32.dp)
-            ) {
-                Column {
-                    Text(
-                        text = "SESSÃO EM ANDAMENTO",
-                        color = BackgroundDark.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = state.activeSession?.templateNameSnapshot ?: "Treino Livre",
-                        color = BackgroundDark,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Black,
-                        lineHeight = 32.sp
-                    )
-                    Spacer(modifier = Modifier.height(32.dp))
-                    Button(
-                        onClick = onNavigateToExecution,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BackgroundDark,
-                            contentColor = Lime400
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Text("CONTINUAR TREINO", fontWeight = FontWeight.Bold)
+                        .padding(32.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "SESSÃO EM ANDAMENTO",
+                            color = BackgroundDark.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = state.activeSession?.templateNameSnapshot ?: "Treino Livre",
+                            color = BackgroundDark,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Black,
+                            lineHeight = 32.sp
+                        )
+                        Spacer(modifier = Modifier.height(32.dp))
+                        Button(
+                            onClick = onNavigateToExecution,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BackgroundDark,
+                                contentColor = Lime400
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .testTag("today_continue_workout_button"),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("CONTINUAR TREINO", fontWeight = FontWeight.Bold)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        OutlinedButton(
+                            onClick = { showFinishDialog = true },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = BackgroundDark
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.5.dp,
+                                BackgroundDark.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .testTag("today_finish_workout_button"),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("FINALIZAR TREINO", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-            }
-        } else if (state.nextTemplate != null) {
+            } else if (state.nextTemplate != null) {
             val isCustomSwap = state.sequence.find { it.isCurrent }?.template?.id != state.nextTemplate?.id
             
             Box(
@@ -371,10 +402,82 @@ fun TodayScreen(viewModel: TodayViewModel, onNavigateToExecution: () -> Unit) {
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(80.dp))
         }
+        Spacer(modifier = Modifier.height(80.dp))
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp)
+        )
     }
-    
+
+    if (showFinishDialog && state.activeSession != null) {
+        val active = state.activeSession!!
+        AlertDialog(
+            onDismissRequest = {
+                if (!isFinishing) showFinishDialog = false
+            },
+            title = {
+                Text(
+                    text = "Finalizar treino?",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "O treino será marcado como concluído com as séries registradas até agora. As séries que ainda não foram concluídas permanecerão como não realizadas.",
+                    color = TextSecondary,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (!isFinishing) {
+                            isFinishing = true
+                            showFinishDialog = false
+                            viewModel.finishActiveWorkout(active.id)
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Treino finalizado.")
+                            }
+                            isFinishing = false
+                        }
+                    },
+                    modifier = Modifier.testTag("confirm_finish_workout_button")
+                ) {
+                    Text(
+                        text = "FINALIZAR",
+                        color = Lime400,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        if (!isFinishing) {
+                            showFinishDialog = false
+                        }
+                    },
+                    modifier = Modifier.testTag("cancel_finish_workout_button")
+                ) {
+                    Text(
+                        text = "CANCELAR",
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
+
     if (showSwapSheet) {
         ModalBottomSheet(
             onDismissRequest = { showSwapSheet = false },

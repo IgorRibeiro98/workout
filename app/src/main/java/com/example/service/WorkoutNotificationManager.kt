@@ -22,7 +22,7 @@ class WorkoutNotificationManager(private val context: Context) {
     private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val channelId = "workout_channel"
-    private val alertChannelId = "workout_alert_channel"
+    private val alertChannelId = "workout_alert_channel_v2"
 
     init {
         createChannel()
@@ -44,8 +44,9 @@ class WorkoutNotificationManager(private val context: Context) {
                 "Alertas de Fim de Descanso",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Toca som e vibra quando o descanso acaba"
-                enableVibration(true)
+                description = "Notificação visual quando o descanso acaba"
+                setSound(null, null)
+                enableVibration(false)
             }
             notificationManager.createNotificationChannel(alertChannel)
         }

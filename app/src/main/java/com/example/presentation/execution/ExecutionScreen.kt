@@ -224,9 +224,6 @@ fun ExecutionScreen(
                     ExecutionPhase.RESTING -> {
                         FocusedRestView(
                             targetTime = timerTarget ?: System.currentTimeMillis(),
-                            soundEnabled = soundEnabled,
-                            hapticEnabled = hapticEnabled,
-                            preAlertEnabled = preAlertEnabled,
                             onAdd15s = { viewModel.adjustRestTimer(15) },
                             onAdd30s = { viewModel.adjustRestTimer(30) },
                             onSkip = { viewModel.skipRestTimer() },
@@ -954,9 +951,6 @@ fun MetricAdjuster(
 @Composable
 fun FocusedRestView(
     targetTime: Long,
-    soundEnabled: Boolean,
-    hapticEnabled: Boolean,
-    preAlertEnabled: Boolean,
     onAdd15s: () -> Unit,
     onAdd30s: () -> Unit,
     onSkip: () -> Unit,
@@ -971,7 +965,7 @@ fun FocusedRestView(
         while (true) {
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
-                onSkip()
+                timeLeft = 0
                 break
             }
             timeLeft = remaining
