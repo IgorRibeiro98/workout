@@ -31,4 +31,69 @@
     <string name="use_today_only">Usar apenas hoje</string>
     <string name="replace_in_workout">Substituir no treino</string>
     <string name="watch_explanation">▶ ASSISTIR EXPLICAÇÃO</string>
+
+    <string name="rir_failure_short">Falha</string>
+    <string name="rir_failure">Até a falha</string>
+    <string name="rir_failure_full">🔥 Até a falha</string>
+    <string name="rir_failure_chip">🔥 FALHA</string>
+    <string name="rir_failure_accessibility">Até a falha, RIR zero</string>
+    <string name="rir_label">RIR (Reps em Reserva)</string>
+    <string name="rir_effort_label">ESFORÇO (RIR)</string>
+
+    <!-- T7 Sync Exercise Strings -->
+    <string name="sync_exercise_title">Sincronizar exercício</string>
+    <string name="sync_replicate_current_title">Replicar série atual</string>
+    <string name="sync_replicate_current_desc">Aplicar carga e repetições às próximas séries</string>
+    <string name="sync_restore_last_title">Restaurar último treino</string>
+    <string name="sync_restore_last_desc">Recuperar carga e repetições da última execução concluída</string>
+    <string name="sync_no_previous_workout">Nenhum treino anterior encontrado.</string>
+    <string name="sync_no_pending_sets">Nenhuma série pendente para sincronizar.</string>
+    <string name="sync_applied_success">✓ Valores aplicados a %1$d séries.</string>
+    <string name="sync_restored_success">✓ Valores do último treino restaurados em %1$d séries.</string>
+    <string name="sync_button_apply">APLICAR</string>
+    <string name="sync_button_restore">RESTAURAR</string>
+    <string name="sync_action_label">Sincronizar</string>
+    <string name="sync_action_content_desc">Sincronizar exercício</string>
+
+    <!-- T8A Standardized BottomSheet Actions -->
+    <string name="sheet_workout_options">Opções do Treino</string>
+    <string name="sheet_program_options">Opções do Programa</string>
+    <string name="sheet_template_options">Opções do Treino</string>
+    <string name="sheet_exercise_options">Opções do Exercício</string>
+    <string name="sheet_action_instructions">Como executar</string>
+    <string name="sheet_action_swap">Trocar exercício</string>
+    <string name="sheet_action_sync">Sincronizar exercício</string>
+    <string name="sheet_action_all_sets">Ver todas as séries</string>
+    <string name="sheet_action_last_workout">Ver último treino</string>
+    <string name="sheet_action_finish_early">Finalizar treino agora</string>
+    <string name="sheet_action_open_program">Abrir programa</string>
+    <string name="sheet_action_activate_program">Ativar como programa atual</string>
+    <string name="sheet_action_delete_program">Excluir programa</string>
+    <string name="sheet_action_open_template">Abrir treino</string>
+    <string name="sheet_action_edit_template_exercise">Editar configurações</string>
+    <string name="sheet_action_delete_template_exercise">Remover do treino</string>
+    <string name="sheet_action_delete_template">Excluir treino</string>
+
+    <!-- T8B Exercise & History BottomSheet Strings -->
+    <string name="sheet_filter_exercises_title">Filtrar Exercícios</string>
+    <string name="sheet_action_filter">Filtrar</string>
+    <string name="sheet_action_clear_filters">Limpar filtros</string>
+    <string name="sheet_action_apply_filters">APLICAR FILTROS</string>
+    <string name="sheet_action_edit_exercise">Editar informações</string>
+    <string name="sheet_action_set_photo">Definir foto personalizada</string>
+    <string name="sheet_action_remove_photo">Remover foto personalizada</string>
+    <string name="sheet_action_delete_exercise">Excluir exercício</string>
+    <string name="sheet_action_add_to_workout">Adicionar a um treino</string>
+    <string name="sheet_session_options">Opções da Sessão</string>
+    <string name="sheet_action_view_session_details">Ver detalhes da sessão</string>
+    <string name="sheet_action_edit_checkin">Editar check-in / local</string>
+    <string name="sheet_action_delete_session">Excluir do histórico</string>
+    <string name="sheet_select_period_title">Selecionar Período</string>
+    <string name="sheet_filter_history_title">Filtrar Histórico</string>
+    <!-- T8C Settings BottomSheet Strings -->
+    <string name="sheet_rest_between_sets_title">Descanso entre Séries</string>
+    <string name="sheet_rest_between_exercises_title">Descanso entre Exercícios</string>
+    <string name="sheet_weekly_goal_title">Meta Semanal de Treinos</string>
+    <string name="sheet_custom_rest_title">Tempo Personalizado</string>
+    <string name="sheet_reimport_catalog_confirm_title">Reimportar Catálogo Canônico?</string>
 </resources>

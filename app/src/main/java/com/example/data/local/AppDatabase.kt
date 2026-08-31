@@ -25,8 +25,8 @@ import kotlinx.coroutines.launch
         PersonalRecordEntity::class,
         ExerciseUserOverrideEntity::class
     ],
-    version = 15,
-    exportSchema = false
+    version = 17,
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -35,6 +35,22 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+        
+        
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workout_programs ADD COLUMN externalId TEXT")
+                db.execSQL("ALTER TABLE workout_programs ADD COLUMN contentVersion INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_workout_programs_externalId ON workout_programs(externalId)")
+            }
+        }
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                    // Update legacy exercises to ensure they are marked as user created
+                    // This prevents data destruction if they collide with new canonical IDs
+                    db.execSQL("UPDATE exercises SET isUserCreated = 1, slug = 'legacy_' || id WHERE canonicalId IS NULL OR TRIM(canonicalId) = ''")
+            }
+        }
         
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -60,22 +76,17 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN canonicalId TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN slug TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN contentVersion INTEGER NOT NULL DEFAULT 0")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN aliases TEXT")
                     db.execSQL("ALTER TABLE workout_template_exercises ADD COLUMN plannedWeight REAL")
                     db.execSQL("ALTER TABLE workout_template_exercises ADD COLUMN machineLabel TEXT")
-                } catch (e: Exception) {
-                    // Ignore column already exists
-                }
             }
         }
 
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN nameEn TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN secondaryMuscles TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN movementPattern TEXT")
@@ -84,9 +95,6 @@ abstract class AppDatabase : RoomDatabase() {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN externalExerciseId TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN gifUrl TEXT")
                     db.execSQL("ALTER TABLE exercises ADD COLUMN lastVerifiedAt INTEGER")
-                } catch (e: Exception) {
-                    // Ignore column already exists
-                }
                 
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS exercise_alternatives (
@@ -146,48 +154,31 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE workout_templates ADD COLUMN dayOfWeek TEXT")
                     db.execSQL("ALTER TABLE workout_template_exercises ADD COLUMN notes TEXT")
                     db.execSQL("ALTER TABLE exercise_sessions ADD COLUMN machineLabelSnapshot TEXT")
                     db.execSQL("ALTER TABLE exercise_sessions ADD COLUMN primaryMuscleSnapshot TEXT")
-                } catch (e: Exception) {
-                    // Ignore if columns exist
-                }
             }
         }
 
         val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE set_logs ADD COLUMN rpe REAL")
                     db.execSQL("ALTER TABLE set_logs ADD COLUMN rir INTEGER")
-                } catch (e: Exception) {
-                    // Ignore
-                }
             }
         }
 
         val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN isUserCreated INTEGER NOT NULL DEFAULT 0")
-                } catch (e: Exception) { }
-                try {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN customPhotoUri TEXT")
-                } catch (e: Exception) { }
-                try {
                     db.execSQL("DELETE FROM exercise_alternatives WHERE id NOT IN (SELECT MIN(id) FROM exercise_alternatives GROUP BY exerciseId, alternativeExerciseId, type)")
                     db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_exercise_alternatives_exerciseId_alternativeExerciseId_type ON exercise_alternatives(exerciseId, alternativeExerciseId, type)")
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
 
         val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("""
                         CREATE TABLE IF NOT EXISTS exercise_user_overrides (
                             exerciseId INTEGER PRIMARY KEY NOT NULL,
@@ -200,34 +191,19 @@ abstract class AppDatabase : RoomDatabase() {
                         )
                     """.trimIndent())
                     db.execSQL("CREATE INDEX IF NOT EXISTS index_exercise_user_overrides_exerciseId ON exercise_user_overrides(exerciseId)")
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
 
         val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE exercise_sessions ADD COLUMN restDurationSecondsSnapshot INTEGER")
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                try {
                     db.execSQL("UPDATE exercises SET isUserCreated = 0 WHERE canonicalId IS NOT NULL AND TRIM(canonicalId) != ''")
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
 
         val MIGRATION_14_15 = object : Migration(14, 15) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                try {
                     db.execSQL("ALTER TABLE exercises ADD COLUMN mappingStatus TEXT")
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
 
@@ -252,9 +228,10 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
-                    MIGRATION_14_15
+                    MIGRATION_14_15,
+                    MIGRATION_15_16,
+                    MIGRATION_16_17
                 )
-                .fallbackToDestructiveMigration()
                 .addCallback(DatabaseCallback())
                 .build()
                 INSTANCE = instance

@@ -19,7 +19,8 @@ data class HistoryState(
     val sessionsForSelectedDate: List<SessionCalendarSummary> = emptyList(),
     val allCompletedSessions: List<SessionCalendarSummary> = emptyList(),
     val muscleSetsDistribution: Map<String, Int> = emptyMap(),
-    val muscleVolumeDistribution: Map<String, Double> = emptyMap()
+    val muscleVolumeDistribution: Map<String, Double> = emptyMap(),
+    val volumeTimeRange: String = "Esta semana" // "Esta semana", "Este mês", "Tudo"
 )
 
 class HistoryViewModel(
@@ -27,25 +28,46 @@ class HistoryViewModel(
 ) : ViewModel() {
 
     private val _selectedDate = MutableStateFlow(Date())
+    private val _volumeTimeRange = MutableStateFlow("Esta semana")
     private val _summaries = workoutEngine.getCalendarHistoryFlow().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val state: StateFlow<HistoryState> = combine(_selectedDate, _summaries) { selected, summaries ->
+    val state: StateFlow<HistoryState> = combine(_selectedDate, _summaries, _volumeTimeRange) { selected, summaries, timeRange ->
         val filtered = summaries.filter { summary ->
             isSameDay(Date(summary.session.startedAt), selected)
         }
 
         val muscleSets = mutableMapOf<String, Int>()
         val muscleVolume = mutableMapOf<String, Double>()
+        
+        val now = Calendar.getInstance()
+        val rangeStart = Calendar.getInstance().apply {
+            when (timeRange) {
+                "Esta semana" -> {
+                    set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
+                    set(Calendar.HOUR_OF_DAY, 0)
+                }
+                "Este mês" -> {
+                    set(Calendar.DAY_OF_MONTH, 1)
+                    set(Calendar.HOUR_OF_DAY, 0)
+                }
+                else -> set(Calendar.YEAR, 1970) // Tudo
+            }
+        }.timeInMillis
 
-        summaries.forEach { summary ->
+        val summariesInRange = summaries.filter { it.session.startedAt >= rangeStart }
+
+        summariesInRange.forEach { summary ->
             summary.exercises.forEach { ex ->
                 val muscleName = MuscleVisualResolver.getDisplayName(ex.exerciseSession.primaryMuscleSnapshot)
-                val completedSets = ex.sets.filter { it.completed }
+                // STRICTLY EXCLUDE WARMUP
+                val completedSets = ex.sets.filter { it.completed && it.type != com.example.data.local.SetType.WARMUP.name }
                 val setsCount = completedSets.size
                 val vol = completedSets.sumOf { (it.weight * it.repetitions).toDouble() }
 
-                muscleSets[muscleName] = (muscleSets[muscleName] ?: 0) + setsCount
-                muscleVolume[muscleName] = (muscleVolume[muscleName] ?: 0.0) + vol
+                if (setsCount > 0) {
+                    muscleSets[muscleName] = (muscleSets[muscleName] ?: 0) + setsCount
+                    muscleVolume[muscleName] = (muscleVolume[muscleName] ?: 0.0) + vol
+                }
             }
         }
 
@@ -55,12 +77,17 @@ class HistoryViewModel(
             sessionsForSelectedDate = filtered,
             allCompletedSessions = summaries.sortedByDescending { it.session.startedAt },
             muscleSetsDistribution = muscleSets,
-            muscleVolumeDistribution = muscleVolume
+            muscleVolumeDistribution = muscleVolume,
+            volumeTimeRange = timeRange
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HistoryState())
 
     fun selectDate(date: Date) {
         _selectedDate.value = date
+    }
+    
+    fun setVolumeTimeRange(range: String) {
+        _volumeTimeRange.value = range
     }
     
     fun deleteSession(session: WorkoutSessionEntity) {

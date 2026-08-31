@@ -43,12 +43,9 @@ class SettingsManager(private val context: Context) {
     val autoCheckOutFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_OUT] ?: true }
     val showGifsFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_GIFS] ?: true }
     val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
-    val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: (it[DEFAULT_REST_SECONDS] ?: 90) }
+    val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
     val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
-    val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { 
-        val deadline = it[REST_TIMER_DEADLINE] ?: 0L
-        if (deadline > System.currentTimeMillis()) deadline else null
-    }
+    val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_DEADLINE] }
     val restTimerSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_WORKOUT_SESSION_ID] }
     val restTimerExerciseSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_EXERCISE_SESSION_ID] }
     val restTimerTypeFlow: Flow<String?> = context.dataStore.data.map { it[REST_TIMER_TYPE] }
@@ -122,7 +119,16 @@ class SettingsManager(private val context: Context) {
     }
 
     suspend fun setRestTimerDeadline(deadlineMs: Long?) {
-        setRestTimerState(deadlineMs)
+        context.dataStore.edit { prefs ->
+            if (deadlineMs == null) {
+                prefs.remove(REST_TIMER_DEADLINE)
+                prefs.remove(REST_TIMER_WORKOUT_SESSION_ID)
+                prefs.remove(REST_TIMER_EXERCISE_SESSION_ID)
+                prefs.remove(REST_TIMER_TYPE)
+            } else {
+                prefs[REST_TIMER_DEADLINE] = deadlineMs
+            }
+        }
     }
 
     suspend fun setRirRpeEnabled(enabled: Boolean) {
@@ -138,5 +144,9 @@ class SettingsManager(private val context: Context) {
             if (id == null) it.remove(OVERRIDE_TEMPLATE_ID)
             else it[OVERRIDE_TEMPLATE_ID] = id
         }
+    }
+
+    suspend fun clearAll() {
+        context.dataStore.edit { it.clear() }
     }
 }

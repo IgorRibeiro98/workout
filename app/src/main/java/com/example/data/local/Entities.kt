@@ -35,11 +35,14 @@ data class ExerciseEntity(
     val mappingStatus: String? = null
 )
 
-@Entity(tableName = "workout_programs")
+@Entity(tableName = "workout_programs", indices = [androidx.room.Index(value = ["externalId"], unique = true)])
 data class WorkoutProgramEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    val isCurrent: Boolean = false
+    val description: String? = null,
+    val isCurrent: Boolean = false,
+    val externalId: String? = null,
+    val contentVersion: Int = 0
 )
 
 @Entity(

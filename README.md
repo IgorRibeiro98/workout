@@ -5,7 +5,7 @@ Um aplicativo Android nativo e local-first para acompanhamento de treinos de mus
 ## Requisitos
 - **Android Studio**: Ladybug / Jellyfish ou superior
 - **JDK**: Java 17 (OpenJDK)
-- **Android SDK**: Compile SDK 35, Min SDK 26
+- **Android SDK**: Compile SDK 35, Min SDK 24
 
 ## Principais Funcionalidades
 - **Fichas e Programas de Treino**: Criação e execução com controle de séries, repetições, carga, RIR/RPE e substituição de exercícios durante a execução.
@@ -19,15 +19,20 @@ Um aplicativo Android nativo e local-first para acompanhamento de treinos de mus
 
 ### Compilação do App
 ```bash
-gradle assembleDebug
+./gradlew assembleDebug
 ```
 
 ### Execução dos Testes Unitários e Integração
 ```bash
-gradle :app:testDebugUnitTest
+./gradlew test
+```
+
+### Verificação do Linter
+```bash
+./gradlew lint
 ```
 
 ### Verificação Visual (Roborazzi)
 ```bash
-gradle :app:verifyRoborazziDebug
+./gradlew verifyRoborazziDebug
 ```

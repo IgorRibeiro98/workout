@@ -1,46 +1,71 @@
 package com.example.presentation.execution
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import coil.compose.AsyncImage
+import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SetLogEntity
 import com.example.data.local.SetType
 import com.example.domain.engine.MuscleVisualResolver
-import com.example.domain.engine.ProgressionAction
-import com.example.domain.engine.ProgressionEngine
+import com.example.domain.engine.RirFormatter
+import com.example.R
+import com.example.ui.components.DirectNumericInputSheet
+import com.example.ui.components.RepsWheelPicker
+import com.example.ui.components.RirSelector
+import com.example.ui.components.SyncExerciseSheet
+import com.example.ui.components.AppModalBottomSheet
+import com.example.ui.components.ActionBottomSheet
+import com.example.ui.components.ActionItemData
+import androidx.activity.compose.BackHandler
+import com.example.ui.components.WeightWheelPicker
 import com.example.ui.theme.*
+
+sealed interface WorkoutSheet {
+    data object OptionsMenu : WorkoutSheet
+    data object AllSets : WorkoutSheet
+    data object Sync : WorkoutSheet
+    data object ExercisesList : WorkoutSheet
+    data object LastWorkout : WorkoutSheet
+    data object Instructions : WorkoutSheet
+    data object Alternatives : WorkoutSheet
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExecutionScreen(
     viewModel: ExecutionViewModel,
-    onNavigateBack: () -> Unit, 
+    onNavigateBack: () -> Unit,
     onFinish: (Long) -> Unit
 ) {
     val state by viewModel.state.collectAsState()
@@ -50,11 +75,20 @@ fun ExecutionScreen(
     val soundEnabled by viewModel.soundEnabled.collectAsState()
     val preAlertEnabled by viewModel.preAlertEnabled.collectAsState()
     val rirRpeEnabled by viewModel.rirRpeEnabled.collectAsState()
-    
+    val showGifs by viewModel.showGifs.collectAsState()
+
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? androidx.activity.ComponentActivity
-    
-    // Keep Screen On during workout according to user setting
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+
+    // Bottom sheet & Dialog states
+    var activeSheet by remember { mutableStateOf<WorkoutSheet?>(null) }
+    var showCancelDialog by remember { mutableStateOf(false) }
+    var showFinishEarlyDialog by remember { mutableStateOf(false) }
+    var directInputConfig by remember { mutableStateOf<DirectInputConfig?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
     DisposableEffect(keepScreenOn) {
         if (keepScreenOn) {
             activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -65,8 +99,6 @@ fun ExecutionScreen(
             activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
-    
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     if (state.isLoading || state.sessionWithDetails == null) {
         Box(modifier = Modifier.fillMaxSize().background(BackgroundDark), contentAlignment = Alignment.Center) {
@@ -75,707 +107,1480 @@ fun ExecutionScreen(
         return
     }
 
+    val session = state.sessionWithDetails!!
     val currentEx = state.currentExercise
-    
-    Scaffold(
-        containerColor = BackgroundDark,
-        topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        state.sessionWithDetails!!.session.templateNameSnapshot ?: "Treino", 
-                        color = TextPrimary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = TextPrimary)
-                    }
-                },
-                actions = {
-                    Button(
-                        onClick = { 
-                            viewModel.finishSession()
-                            val sessionId = state.sessionWithDetails?.session?.id
-                            if (sessionId != null) onFinish(sessionId) else onNavigateBack()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Emerald500, contentColor = BackgroundDark),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("FINALIZAR", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
-            )
-        },
-        bottomBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { viewModel.previousExercise() },
-                    enabled = !state.isFirstExercise,
-                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark, contentColor = TextPrimary),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f).height(54.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("ANTERIOR")
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Button(
-                    onClick = { viewModel.nextExercise() },
-                    enabled = !state.isLastExercise,
-                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1f).height(54.dp)
-                ) {
-                    Text("PRÓXIMO", fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp))
-                }
+
+    if (currentEx == null) {
+        Scaffold(
+            containerColor = BackgroundDark,
+            topBar = {
+                TopAppBar(
+                    title = { Text("Treino Vazio", color = TextPrimary) },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = TextPrimary)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
+                )
             }
-        }
-    ) { innerPadding ->
-        if (currentEx == null) {
+        ) { innerPadding ->
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.Center) {
                 Text("Nenhum exercício encontrado.", color = TextSecondary)
             }
-            return@Scaffold
         }
-        
-        val group = MuscleVisualResolver.resolveGroup(currentEx.exerciseSession.primaryMuscleSnapshot)
+        return
+    }
 
-        LazyColumn(
+    val totalSetsAcrossWorkout = remember(session) {
+        session.exercises.sumOf { it.sets.size }.coerceAtLeast(1)
+    }
+    val completedSetsCount = remember(session) {
+        session.exercises.sumOf { ex -> ex.sets.count { it.completed } }
+    }
+    val targetProgress = (completedSetsCount.toFloat() / totalSetsAcrossWorkout).coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetProgress,
+        animationSpec = tween(
+            durationMillis = AppMotion.Emphasized,
+            easing = AppMotion.StandardEasing
+        ),
+        label = "workoutProgressBar"
+    )
+
+    Scaffold(
+        containerColor = BackgroundDark,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                TopAppBar(
+                    title = {
+                        Column(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { activeSheet = WorkoutSheet.ExercisesList }
+                                .padding(vertical = 4.dp, horizontal = 8.dp)
+                        ) {
+                            val sessionName = session.session.templateNameSnapshot ?: "Treino"
+                            Text(
+                                text = sessionName.uppercase(),
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Exercício ${state.currentExerciseIndex + 1} de ${session.exercises.size}",
+                                    color = Lime400,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Ver lista de exercícios",
+                                    tint = Lime400,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { showCancelDialog = true }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar / Opções de saída", tint = TextPrimary)
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { activeSheet = WorkoutSheet.OptionsMenu }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu do treino", tint = TextPrimary)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
+                )
+                LinearProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = Lime400,
+                    trackColor = SurfaceDark
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            color = SurfaceHighlight,
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(group.icon, contentDescription = null, tint = group.color, modifier = Modifier.size(14.dp))
-                                Text(
-                                    text = "Exercício ${state.currentExerciseIndex + 1} de ${state.sessionWithDetails!!.exercises.size}",
-                                    color = TextPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+            Crossfade(
+                targetState = state.phase,
+                animationSpec = tween(durationMillis = AppMotion.Normal, easing = AppMotion.StandardEasing),
+                label = "FocusModePhaseTransition"
+            ) { phase ->
+                when (phase) {
+                    ExecutionPhase.RESTING -> {
+                        FocusedRestView(
+                            targetTime = timerTarget ?: System.currentTimeMillis(),
+                            soundEnabled = soundEnabled,
+                            hapticEnabled = hapticEnabled,
+                            preAlertEnabled = preAlertEnabled,
+                            onAdd15s = { viewModel.adjustRestTimer(15) },
+                            onAdd30s = { viewModel.adjustRestTimer(30) },
+                            onSkip = { viewModel.skipRestTimer() },
+                            nextExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                            nextSetIndex = (state.activeSetIndex ?: 0) + 1,
+                            nextSetWeight = state.activeSet?.weight ?: 0f,
+                            nextSetReps = state.activeSet?.repetitions ?: 0
+                        )
+                    }
+                    ExecutionPhase.ACTIVE_SET -> {
+                        val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
+                        if (activeSet != null) {
+                            val activeSetKey = "${currentEx.exerciseSession.id}_${activeSet.id}_${state.activeSetIndex ?: 0}"
+                            AnimatedContent(
+                                targetState = activeSetKey,
+                                transitionSpec = {
+                                    (fadeIn(animationSpec = tween(AppMotion.Normal, easing = AppMotion.StandardEasing)) +
+                                     scaleIn(initialScale = 0.97f, animationSpec = tween(AppMotion.Normal, easing = AppMotion.StandardEasing))) togetherWith
+                                    (fadeOut(animationSpec = tween(AppMotion.Fast, easing = AppMotion.DecelerateEasing)) +
+                                     scaleOut(targetScale = 1.02f, animationSpec = tween(AppMotion.Fast, easing = AppMotion.DecelerateEasing)))
+                                },
+                                label = "ActiveSetTransition"
+                            ) { _ ->
+                                FocusedActiveSetView(
+                                    currentEx = currentEx,
+                                    activeSet = activeSet,
+                                    activeSetIndex = state.activeSetIndex ?: 0,
+                                    totalSets = currentEx.sets.size,
+                                    resolvedExercise = state.currentResolvedExercise,
+                                    previousExecutionSets = state.previousExecutionSets,
+                                    rirRpeEnabled = rirRpeEnabled,
+                                    hapticEnabled = hapticEnabled,
+                                    showGifs = showGifs,
+                                    onUpdateSet = { viewModel.updateSet(it) },
+                                    onCompleteSet = {
+                                        if (hapticEnabled) {
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        }
+                                        viewModel.completeSet(it)
+                                    },
+                                    onOpenDirectInput = { config -> directInputConfig = config },
+                                    onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
+                                    onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
+                                    onViewInstructions = { activeSheet = WorkoutSheet.Instructions },
+                                    onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync }
                                 )
                             }
                         }
                     }
-                    TextButton(onClick = { viewModel.loadAlternatives() }) {
-                        Text("MÁQUINA OCUPADA? TROCAR", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    ExecutionPhase.EXERCISE_TRANSITION -> {
+                        val nextExSession = session.exercises.getOrNull(state.currentExerciseIndex + 1)
+                        FocusedExerciseTransitionView(
+                            completedExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                            completedSetsCount = currentEx.sets.count { it.completed },
+                            totalSetsCount = currentEx.sets.size,
+                            nextExerciseName = nextExSession?.exerciseSession?.exerciseNameSnapshot,
+                            nextMachineLabel = nextExSession?.exerciseSession?.machineLabelSnapshot,
+                            nextPrimaryMuscle = nextExSession?.exerciseSession?.primaryMuscleSnapshot,
+                            onStartNext = { viewModel.nextExercise() }
+                        )
+                    }
+                    ExecutionPhase.WORKOUT_COMPLETE -> {
+                        FocusedWorkoutCompleteView(
+                            sessionName = session.session.templateNameSnapshot ?: "Treino",
+                            totalExercises = session.exercises.size,
+                            totalCompletedSets = session.exercises.sumOf { ex -> ex.sets.count { it.completed } },
+                            onFinishWorkout = {
+                                viewModel.finishSession()
+                                onFinish(session.session.id)
+                            }
+                        )
                     }
                 }
-                
-                Text(
-                    text = currentEx.exerciseSession.exerciseNameSnapshot,
-                    color = TextPrimary,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Black,
-                    lineHeight = 32.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+            }
+        }
 
-                if (!currentEx.exerciseSession.machineLabelSnapshot.isNullOrBlank()) {
-                    Text(
-                        text = "Aparelho: ${currentEx.exerciseSession.machineLabelSnapshot}",
-                        color = Lime400,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
+        val alternatives by viewModel.alternatives.collectAsState()
+
+        // Handle Android Back button to close open sheets before navigating back
+        BackHandler(enabled = activeSheet != null || alternatives.isNotEmpty()) {
+            if (alternatives.isNotEmpty()) {
+                viewModel.clearAlternatives()
+            } else {
+                activeSheet = null
+            }
+        }
+
+        // --- Single Controlled Active Bottom Sheet ---
+        when (activeSheet) {
+            WorkoutSheet.OptionsMenu -> {
+                ActionBottomSheet(
+                    onDismissRequest = { activeSheet = null },
+                    title = stringResource(id = R.string.sheet_workout_options),
+                    actions = listOf(
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_instructions),
+                            icon = Icons.Default.Info,
+                            onClick = { activeSheet = WorkoutSheet.Instructions }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_swap),
+                            icon = Icons.Default.SwapHoriz,
+                            onClick = {
+                                activeSheet = WorkoutSheet.Alternatives
+                                viewModel.loadAlternatives()
+                            }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_sync),
+                            icon = Icons.Default.Sync,
+                            onClick = { activeSheet = WorkoutSheet.Sync }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_all_sets),
+                            icon = Icons.AutoMirrored.Filled.List,
+                            onClick = { activeSheet = WorkoutSheet.AllSets }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_last_workout),
+                            icon = Icons.Default.History,
+                            onClick = { activeSheet = WorkoutSheet.LastWorkout }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_finish_early),
+                            icon = Icons.Default.CheckCircle,
+                            destructive = true,
+                            onClick = {
+                                activeSheet = null
+                                showFinishEarlyDialog = true
+                            }
+                        )
+                    )
+                )
+            }
+            WorkoutSheet.AllSets -> {
+                AllSetsBottomSheet(
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    sets = currentEx.sets,
+                    rirRpeEnabled = rirRpeEnabled,
+                    onDismiss = { activeSheet = null },
+                    onUpdateSet = { viewModel.updateSet(it) },
+                    onToggleComplete = { set ->
+                        if (set.completed) viewModel.uncompleteSet(set) else viewModel.completeSet(set)
+                    },
+                    onAddSet = { viewModel.addSet() },
+                    onRemoveSet = { viewModel.removeSet(it) },
+                    onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync }
+                )
+            }
+            WorkoutSheet.Sync -> {
+                SyncExerciseSheet(
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    activeSet = state.activeSet,
+                    allCurrentSets = currentEx.sets,
+                    previousExecutionSets = state.previousExecutionSets,
+                    onDismissRequest = { activeSheet = null },
+                    onReplicateCurrentSet = {
+                        activeSheet = null
+                        viewModel.replicateCurrentSet { result ->
+                            coroutineScope.launch {
+                                val msg = if (result.updatedCount > 0) {
+                                    context.getString(R.string.sync_applied_success, result.updatedCount)
+                                } else {
+                                    context.getString(R.string.sync_no_pending_sets)
+                                }
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
+                    onRestoreLastWorkout = {
+                        activeSheet = null
+                        viewModel.restoreLastExecutionValues { result ->
+                            coroutineScope.launch {
+                                val msg = if (result.updatedCount > 0) {
+                                    context.getString(R.string.sync_restored_success, result.updatedCount)
+                                } else {
+                                    context.getString(R.string.sync_no_pending_sets)
+                                }
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    }
+                )
+            }
+            WorkoutSheet.ExercisesList -> {
+                WorkoutExercisesBottomSheet(
+                    exercises = session.exercises,
+                    currentIndex = state.currentExerciseIndex,
+                    onDismiss = { activeSheet = null },
+                    onSelectExercise = { index ->
+                        viewModel.selectExercise(index)
+                        activeSheet = null
+                    }
+                )
+            }
+            WorkoutSheet.LastWorkout -> {
+                PreviousExecutionBottomSheet(
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    previousSets = state.previousExecutionSets,
+                    onDismiss = { activeSheet = null }
+                )
+            }
+            WorkoutSheet.Instructions -> {
+                ExerciseInstructionsBottomSheet(
+                    resolvedExercise = state.currentResolvedExercise,
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    onDismiss = { activeSheet = null }
+                )
+            }
+            WorkoutSheet.Alternatives -> {
+                if (alternatives.isNotEmpty()) {
+                    AlternativesBottomSheet(
+                        alternatives = alternatives,
+                        onDismiss = {
+                            viewModel.clearAlternatives()
+                            activeSheet = null
+                        },
+                        onSwap = { altId ->
+                            viewModel.swapCurrentExercise(altId, false)
+                            activeSheet = null
+                        }
                     )
                 }
             }
-            
-            // Progression Recommendation Banner
-            if (state.previousExecutionSets.isNotEmpty()) {
-                val recommendation = ProgressionEngine.evaluateProgression(
-                    currentSets = currentEx.sets,
-                    previousSets = state.previousExecutionSets,
-                    minTargetReps = 8,
-                    maxTargetReps = 12
-                )
-                item {
-                    val bannerBg = when (recommendation.action) {
-                        ProgressionAction.INCREASE -> Emerald500.copy(alpha = 0.15f)
-                        ProgressionAction.DECREASE -> Red500.copy(alpha = 0.15f)
-                        ProgressionAction.MAINTAIN -> SurfaceDark
-                    }
-                    val bannerBorder = when (recommendation.action) {
-                        ProgressionAction.INCREASE -> Emerald500.copy(alpha = 0.4f)
-                        ProgressionAction.DECREASE -> Red500.copy(alpha = 0.4f)
-                        ProgressionAction.MAINTAIN -> BorderLight
-                    }
-                    val bannerColor = when (recommendation.action) {
-                        ProgressionAction.INCREASE -> Emerald500
-                        ProgressionAction.DECREASE -> Red500
-                        ProgressionAction.MAINTAIN -> Lime400
-                    }
+            null -> {
+                if (alternatives.isNotEmpty()) {
+                    AlternativesBottomSheet(
+                        alternatives = alternatives,
+                        onDismiss = { viewModel.clearAlternatives() },
+                        onSwap = { altId -> viewModel.swapCurrentExercise(altId, false) }
+                    )
+                }
+            }
+        }
 
+        // --- Dialogs ---
+        if (showCancelDialog) {
+            AlertDialog(
+                onDismissRequest = { showCancelDialog = false },
+                containerColor = SurfaceDark,
+                title = { Text("Sair do Treino?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = { Text("O treino continuará em andamento em segundo plano. Deseja sair ou cancelar?", color = TextSecondary) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showCancelDialog = false
+                        onNavigateBack()
+                    }) {
+                        Text("Sair e Manter", color = Lime400, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showCancelDialog = false
+                        viewModel.cancelSession()
+                        onNavigateBack()
+                    }) {
+                        Text("Cancelar Treino", color = Color.Red.copy(alpha = 0.8f))
+                    }
+                }
+            )
+        }
+
+        if (showFinishEarlyDialog) {
+            AlertDialog(
+                onDismissRequest = { showFinishEarlyDialog = false },
+                containerColor = SurfaceDark,
+                title = { Text("Finalizar Treino?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = { Text("Deseja concluir a sessão de treino agora?", color = TextSecondary) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showFinishEarlyDialog = false
+                            viewModel.finishSession()
+                            onFinish(session.session.id)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+                    ) {
+                        Text("Sim, Finalizar", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showFinishEarlyDialog = false }) {
+                        Text("Continuar Treinando", color = TextSecondary)
+                    }
+                }
+            )
+        }
+
+        if (directInputConfig != null) {
+            val config = directInputConfig!!
+            DirectNumericInputSheet(
+                title = config.title,
+                initialValue = config.initialValue,
+                isDecimal = config.isDecimal,
+                unitLabel = config.unitLabel,
+                onConfirm = { newValue ->
+                    config.onConfirm(newValue)
+                    directInputConfig = null
+                },
+                onDismiss = { directInputConfig = null }
+            )
+        }
+    }
+}
+
+data class DirectInputConfig(
+    val title: String,
+    val initialValue: String,
+    val isDecimal: Boolean,
+    val unitLabel: String,
+    val onConfirm: (Float) -> Unit
+)
+
+@Composable
+fun FocusedActiveSetView(
+    currentEx: ExerciseSessionWithSets,
+    activeSet: SetLogEntity,
+    activeSetIndex: Int,
+    totalSets: Int,
+    resolvedExercise: com.example.domain.model.ResolvedExercise?,
+    previousExecutionSets: List<SetLogEntity>,
+    rirRpeEnabled: Boolean,
+    hapticEnabled: Boolean,
+    showGifs: Boolean,
+    onUpdateSet: (SetLogEntity) -> Unit,
+    onCompleteSet: (SetLogEntity) -> Unit,
+    onOpenDirectInput: (DirectInputConfig) -> Unit,
+    onViewAllSets: () -> Unit,
+    onViewLastWorkout: () -> Unit,
+    onViewInstructions: () -> Unit,
+    onOpenSyncSheet: () -> Unit
+) {
+    val machineLabel = currentEx.exerciseSession.machineLabelSnapshot
+    val primaryMuscle = currentEx.exerciseSession.primaryMuscleSnapshot ?: resolvedExercise?.primaryMuscle
+    val mediaUrl = if (showGifs) resolvedExercise?.resolvedMedia?.mediaUri else null
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.SpaceBetween,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Exercise Header & Details
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = currentEx.exerciseSession.exerciseNameSnapshot,
+                        color = TextPrimary,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    
+                    if (!machineLabel.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Build, contentDescription = null, tint = Lime400, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = machineLabel,
+                                color = Lime400,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else if (!primaryMuscle.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = primaryMuscle,
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+
+                if (!mediaUrl.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.width(12.dp))
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(bannerBg)
-                            .border(1.dp, bannerBorder, RoundedCornerShape(16.dp))
-                            .padding(14.dp)
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceDark)
+                            .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
+                            .clickable(onClick = onViewInstructions),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Info, contentDescription = null, tint = bannerColor, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = when (recommendation.action) {
-                                        ProgressionAction.INCREASE -> "SUGESTÃO: SUBIR CARGA (+${recommendation.suggestedWeightDelta}kg)"
-                                        ProgressionAction.DECREASE -> "SUGESTÃO: REDUZIR CARGA (${recommendation.suggestedWeightDelta}kg)"
-                                        ProgressionAction.MAINTAIN -> "SUGESTÃO: MANTER CARGA"
-                                    },
-                                    color = bannerColor,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+                        AsyncImage(
+                            model = mediaUrl,
+                            contentDescription = "Mídia de execução",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Set Indicator, Sync Action & Last Workout summary
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = Lime400.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, Lime400.copy(alpha = 0.3f))
+                ) {
+                    Text(
+                        text = "SÉRIE ${activeSetIndex + 1} DE $totalSets",
+                        color = Lime400,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, Lime400.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable(onClick = onOpenSyncSheet)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = "Sincronizar exercício",
+                                tint = Lime400,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(id = R.string.sync_action_label),
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (previousExecutionSets.isNotEmpty()) {
+                        val summaryText = previousExecutionSets.take(3).joinToString(" · ") { setLog ->
+                            val weightStr = if (setLog.weight % 1f == 0f) setLog.weight.toInt().toString() else setLog.weight.toString()
+                            val rirTag = RirFormatter.formatRir(setLog.rir)
+                            val rirPart = if (rirTag != null) " $rirTag" else ""
+                            "${weightStr}kg×${setLog.repetitions}$rirPart"
+                        }
+                        Text(
+                            text = "Último: $summaryText",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onViewLastWorkout)
+                                .padding(4.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+
+        // Adjusters (Wheel Pickers for Carga and Repetições)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val isBodyweight = resolvedExercise?.rawExercise?.isBodyweight == true ||
+                    resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("body") == true ||
+                    resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("corporal") == true ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("flexão") ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("barra fixa") ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("paralelas") ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("abdominal") ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
+                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
+
+                if (isBodyweight && activeSet.weight == 0f) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(130.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(SurfaceDark)
+                            .border(1.dp, BorderLight, RoundedCornerShape(24.dp))
+                            .clickable {
+                                onOpenDirectInput(
+                                    DirectInputConfig(
+                                        title = "Carga Adicional (kg)",
+                                        initialValue = "0",
+                                        isDecimal = true,
+                                        unitLabel = "kg",
+                                        onConfirm = { newWeight ->
+                                            onUpdateSet(activeSet.copy(weight = newWeight))
+                                        }
+                                    )
                                 )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(recommendation.reason, color = TextSecondary, fontSize = 12.sp)
-                            
-                            Spacer(modifier = Modifier.height(6.dp))
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccessibilityNew,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Peso corporal",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "+ Carga adicional",
+                            color = Lime400,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    Column(modifier = Modifier.weight(1f)) {
+                        WeightWheelPicker(
+                            value = activeSet.weight,
+                            step = 0.5f,
+                            minWeight = 0f,
+                            maxWeight = 500f,
+                            hapticEnabled = hapticEnabled,
+                            label = if (isBodyweight) "Carga adicional" else "Carga",
+                            onValueSettled = { newWeight ->
+                                onUpdateSet(activeSet.copy(weight = newWeight))
+                            },
+                            onDirectInputRequest = {
+                                onOpenDirectInput(
+                                    DirectInputConfig(
+                                        title = if (isBodyweight) "Carga Adicional (kg)" else "Ajustar Carga (kg)",
+                                        initialValue = if (activeSet.weight % 1f == 0f) activeSet.weight.toInt().toString() else activeSet.weight.toString(),
+                                        isDecimal = true,
+                                        unitLabel = "kg",
+                                        onConfirm = { newWeight ->
+                                            onUpdateSet(activeSet.copy(weight = newWeight))
+                                        }
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (isBodyweight && activeSet.weight > 0f) {
                             Text(
-                                text = "Último treino: " + state.previousExecutionSets.joinToString(" | ") { "${it.weight}kg × ${it.repetitions}" },
-                                color = TextTertiary,
-                                fontSize = 11.sp
+                                text = "Limpar carga",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .clickable { onUpdateSet(activeSet.copy(weight = 0f)) }
+                                    .padding(top = 2.dp)
                             )
                         }
                     }
                 }
-            }
 
-            item {
-                Text(
-                    text = "Séries de Hoje:",
-                    color = TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            items(currentEx.sets, key = { it.id }) { setLog ->
-                SetItem(
-                    setLog = setLog,
-                    rirRpeEnabled = rirRpeEnabled,
-                    onUpdate = { viewModel.updateSet(it) },
-                    onComplete = { 
-                        if (hapticEnabled) {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        }
-                        viewModel.completeSet(it) 
+                RepsWheelPicker(
+                    value = activeSet.repetitions,
+                    step = 1,
+                    minReps = 1,
+                    maxReps = 100,
+                    hapticEnabled = hapticEnabled,
+                    onValueSettled = { newReps ->
+                        onUpdateSet(activeSet.copy(repetitions = newReps))
                     },
-                    onUncomplete = { viewModel.uncompleteSet(it) },
-                    onRemove = { viewModel.removeSet(it) }
+                    onDirectInputRequest = {
+                        onOpenDirectInput(
+                            DirectInputConfig(
+                                title = "Ajustar Repetições",
+                                initialValue = activeSet.repetitions.toString(),
+                                isDecimal = false,
+                                unitLabel = "reps",
+                                onConfirm = { newReps ->
+                                    onUpdateSet(activeSet.copy(repetitions = newReps.toInt().coerceAtLeast(1)))
+                                }
+                            )
+                        )
+                    },
+                    modifier = Modifier.weight(1f)
                 )
             }
-            
-            item {
-                TextButton(
-                    onClick = { viewModel.addSet() },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Adicionar", tint = Lime400)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("ADICIONAR SÉRIE", color = Lime400, fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.height(100.dp))
+
+            if (rirRpeEnabled) {
+                RirSelector(
+                    currentRir = activeSet.rir,
+                    onRirSelected = { newRir ->
+                        onUpdateSet(activeSet.copy(rir = newRir))
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
             }
         }
-        
-        // Timer Overlay
-        if (timerTarget != null) {
-            TimerOverlay(
-                targetTime = timerTarget!!,
-                soundEnabled = soundEnabled,
-                hapticEnabled = hapticEnabled,
-                preAlertEnabled = preAlertEnabled,
-                onAdd15s = { viewModel.adjustRestTimer(15) },
-                onAdd30s = { viewModel.adjustRestTimer(30) },
-                onSkip = { viewModel.skipRestTimer() }
-            )
-        }
-        
-        // Alternatives Bottom Sheet
-        val alternatives by viewModel.alternatives.collectAsState()
-        if (alternatives.isNotEmpty()) {
-            ModalBottomSheet(
-                onDismissRequest = { viewModel.clearAlternatives() },
-                containerColor = SurfaceDark,
-                dragHandle = { BottomSheetDefaults.DragHandle(color = TextSecondary) }
+
+        // CTA & Actions
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Button(
+                onClick = { onCompleteSet(activeSet) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.7f)
-                        .padding(horizontal = 16.dp)
-                ) {
-                    Text("Máquina ocupada?", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("Escolha um exercício alternativo:", color = TextSecondary, fontSize = 13.sp)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(alternatives, key = { it.id }) { alt ->
-                            var showOptions by remember { mutableStateOf(false) }
-                            val altGroup = MuscleVisualResolver.resolveGroup(alt.primaryMuscle)
-                            
-                            Surface(
-                                color = BackgroundDark,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { showOptions = !showOptions },
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                            Icon(altGroup.icon, contentDescription = null, tint = altGroup.color, modifier = Modifier.size(20.dp))
-                                            Spacer(modifier = Modifier.width(10.dp))
-                                            Column {
-                                                Text(alt.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                                if (alt.primaryMuscle != null) {
-                                                    Text(alt.primaryMuscle, color = TextSecondary, fontSize = 12.sp)
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            text = if (showOptions) "Fechar" else "Substituir",
-                                            color = Lime400,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    
-                                    AnimatedVisibility(visible = showOptions) {
-                                        Column {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            HorizontalDivider(color = BorderLight)
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                Button(
-                                                    onClick = { viewModel.swapCurrentExercise(alt.id, permanent = false) },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark, contentColor = TextPrimary),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text("SUBSTITUIR HOJE", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                                Button(
-                                                    onClick = { viewModel.swapCurrentExercise(alt.id, permanent = true) },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text("SEMPRE NA FICHA", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("CONCLUIR SÉRIE", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            TextButton(
+                onClick = onViewAllSets,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Ver todas as séries (${currentEx.sets.count { it.completed }}/$totalSets)",
+                    color = TextSecondary,
+                    fontSize = 14.sp
+                )
             }
         }
     }
 }
 
 @Composable
-fun TimerOverlay(
+fun MetricAdjuster(
+    label: String,
+    value: String,
+    unit: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = label.uppercase(), color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            IconButton(
+                onClick = onDecrease,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(SurfaceDark)
+            ) {
+                Icon(Icons.Default.Remove, contentDescription = "Diminuir", tint = TextPrimary)
+            }
+
+            Spacer(modifier = Modifier.width(20.dp))
+
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = value,
+                    color = TextPrimary,
+                    fontSize = 42.sp,
+                    fontWeight = FontWeight.Black
+                )
+                if (unit.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = unit,
+                        color = TextSecondary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(20.dp))
+
+            IconButton(
+                onClick = onIncrease,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(SurfaceDark)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Aumentar", tint = TextPrimary)
+            }
+        }
+    }
+}
+
+@Composable
+fun FocusedRestView(
     targetTime: Long,
-    soundEnabled: Boolean = true,
-    hapticEnabled: Boolean = true,
-    preAlertEnabled: Boolean = true,
+    soundEnabled: Boolean,
+    hapticEnabled: Boolean,
+    preAlertEnabled: Boolean,
     onAdd15s: () -> Unit,
     onAdd30s: () -> Unit,
-    onSkip: () -> Unit
+    onSkip: () -> Unit,
+    nextExerciseName: String,
+    nextSetIndex: Int,
+    nextSetWeight: Float,
+    nextSetReps: Int
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var preAlertPlayed by remember { mutableStateOf(false) }
-    
+
     LaunchedEffect(targetTime) {
-        preAlertPlayed = false
-        while(true) {
+        while (true) {
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
-                // Final alert
-                try {
-                    if (soundEnabled) {
-                        val toneGen = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 100)
-                        toneGen.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 400)
-                    }
-                    if (hapticEnabled) {
-                        val vibrator = context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            vibrator?.vibrate(android.os.VibrationEffect.createOneShot(500, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                        } else {
-                            @Suppress("DEPRECATION")
-                            vibrator?.vibrate(500)
-                        }
-                    }
-                } catch (_: Exception) {}
-                
                 onSkip()
                 break
             }
-
-            if (remaining == 10L && preAlertEnabled && !preAlertPlayed) {
-                preAlertPlayed = true
-                try {
-                    if (soundEnabled) {
-                        val toneGen = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 70)
-                        toneGen.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 150)
-                    }
-                } catch (_: Exception) {}
-            }
-
             timeLeft = remaining
             kotlinx.coroutines.delay(1000)
         }
     }
 
-    Box(
+    Column(
         modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.BottomCenter
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("TEMPO DE DESCANSO", color = Lime400, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = String.format("%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60),
+                color = TextPrimary,
+                fontSize = 72.sp,
+                fontWeight = FontWeight.Black
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = onAdd15s,
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark, contentColor = TextPrimary),
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("+15s") }
+
+                Button(
+                    onClick = onAdd30s,
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark, contentColor = TextPrimary),
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("+30s") }
+
+                Button(
+                    onClick = onSkip,
+                    colors = ButtonDefaults.buttonColors(containerColor = Emerald500.copy(alpha = 0.2f), contentColor = Emerald500),
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("PULAR", fontWeight = FontWeight.Bold) }
+            }
+        }
+
+        // Next set card
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceDark)
+                .border(1.dp, BorderLight, RoundedCornerShape(16.dp))
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("PRÓXIMA SÉRIE", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(nextExerciseName, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Série $nextSetIndex", color = Lime400, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                if (nextSetWeight > 0f || nextSetReps > 0) {
+                    Text(" · ${if (nextSetWeight % 1f == 0f) nextSetWeight.toInt() else nextSetWeight}kg × $nextSetReps reps", color = TextSecondary, fontSize = 14.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FocusedExerciseTransitionView(
+    completedExerciseName: String,
+    completedSetsCount: Int,
+    totalSetsCount: Int,
+    nextExerciseName: String?,
+    nextMachineLabel: String?,
+    nextPrimaryMuscle: String?,
+    onStartNext: () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.5f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium),
+        label = "exCompleteScale"
+    )
+    val opacity by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = AppMotion.Emphasized, easing = AppMotion.StandardEasing),
+        label = "exCompleteOpacity"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(top = 24.dp)
+        ) {
+            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Emerald500, modifier = Modifier.size(72.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("✓ EXERCÍCIO CONCLUÍDO!", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Black)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "$completedExerciseName ($completedSetsCount/$totalSetsCount séries)",
+                color = TextSecondary,
+                fontSize = 15.sp
+            )
+        }
+
+        if (nextExerciseName != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(SurfaceDark)
+                    .border(1.dp, Lime400.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("PRÓXIMO EXERCÍCIO", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = nextExerciseName,
+                    color = TextPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                if (!nextMachineLabel.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = nextMachineLabel, color = Lime400, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                } else if (!nextPrimaryMuscle.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = nextPrimaryMuscle, color = TextSecondary, fontSize = 13.sp)
+                }
+            }
+
+            Button(
+                onClick = onStartNext,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+            ) {
+                Text("COMEÇAR PRÓXIMO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(Icons.Default.ArrowForward, contentDescription = null)
+            }
+        }
+    }
+}
+
+@Composable
+fun FocusedWorkoutCompleteView(
+    sessionName: String,
+    totalExercises: Int,
+    totalCompletedSets: Int,
+    onFinishWorkout: () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.4f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow),
+        label = "workoutCompleteScale"
+    )
+    val opacity by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = AppMotion.Emphasized, easing = AppMotion.StandardEasing),
+        label = "workoutCompleteOpacity"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(top = 40.dp)
+        ) {
+            Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Lime400, modifier = Modifier.size(88.dp))
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("TREINO CONCLUÍDO!", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(sessionName, color = Lime400, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Surface(
+                color = SurfaceDark,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, BorderLight),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("$totalExercises", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        Text("Exercícios", color = TextSecondary, fontSize = 12.sp)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("$totalCompletedSets", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        Text("Séries", color = TextSecondary, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = onFinishWorkout,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+        ) {
+            Text("FINALIZAR TREINO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+fun SecondaryOptionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    textColor: Color = TextPrimary,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = textColor, modifier = Modifier.size(24.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(text, color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AllSetsBottomSheet(
+    exerciseName: String,
+    sets: List<SetLogEntity>,
+    rirRpeEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onUpdateSet: (SetLogEntity) -> Unit,
+    onToggleComplete: (SetLogEntity) -> Unit,
+    onAddSet: () -> Unit,
+    onRemoveSet: (SetLogEntity) -> Unit,
+    onOpenSyncSheet: () -> Unit
+) {
+    AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "Todas as Séries",
+        subtitle = exerciseName,
+        headerRightContent = {
+            IconButton(onClick = onOpenSyncSheet) {
+                Icon(
+                    imageVector = Icons.Default.Sync,
+                    contentDescription = "Sincronizar exercício",
+                    tint = Lime400
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Button(
+                onClick = onAddSet,
+                colors = ButtonDefaults.buttonColors(containerColor = Lime400.copy(alpha = 0.2f), contentColor = Lime400),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Adicionar Série", fontSize = 13.sp)
+            }
+        }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 80.dp, start = 16.dp, end = 16.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(SurfaceDark)
-                .border(2.dp, Lime400, RoundedCornerShape(24.dp))
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxHeight(0.7f)
         ) {
-            Text("TEMPO DE DESCANSO", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = String.format("%02d:%02d", timeLeft / 60, timeLeft % 60),
-                color = TextPrimary,
-                fontSize = 44.sp,
-                fontWeight = FontWeight.Black
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Button(
-                    onClick = onAdd15s,
-                    colors = ButtonDefaults.buttonColors(containerColor = BorderLight, contentColor = TextPrimary),
-                    shape = RoundedCornerShape(10.dp)
-                ) { Text("+15s") }
-                
-                Button(
-                    onClick = onAdd30s,
-                    colors = ButtonDefaults.buttonColors(containerColor = BorderLight, contentColor = TextPrimary),
-                    shape = RoundedCornerShape(10.dp)
-                ) { Text("+30s") }
-                
-                Button(
-                    onClick = onSkip,
-                    colors = ButtonDefaults.buttonColors(containerColor = Emerald500.copy(alpha=0.2f), contentColor = Emerald500),
-                    shape = RoundedCornerShape(10.dp)
-                ) { Text("PULAR", fontWeight = FontWeight.Bold) }
+                itemsIndexed(sets) { index, setLog ->
+                    Surface(
+                        color = BackgroundDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (setLog.completed) Emerald500.copy(alpha = 0.5f) else BorderLight)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { onToggleComplete(setLog) }) {
+                                Icon(
+                                    if (setLog.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                    contentDescription = "Concluir série",
+                                    tint = if (setLog.completed) Emerald500 else TextSecondary
+                                )
+                            }
+
+                            Text(
+                                text = "${index + 1}",
+                                color = TextPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(24.dp)
+                            )
+
+                            // Carga
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onUpdateSet(setLog.copy(weight = (setLog.weight - 1f).coerceAtLeast(0f))) }) {
+                                    Icon(Icons.Default.Remove, contentDescription = "Menos carga", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                                Text("${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight}kg", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { onUpdateSet(setLog.copy(weight = setLog.weight + 1f)) }) {
+                                    Icon(Icons.Default.Add, contentDescription = "Mais carga", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+
+                            Text("×", color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp))
+
+                            // Reps
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { onUpdateSet(setLog.copy(repetitions = (setLog.repetitions - 1).coerceAtLeast(0))) }) {
+                                    Icon(Icons.Default.Remove, contentDescription = "Menos reps", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                                Text("${setLog.repetitions}", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { onUpdateSet(setLog.copy(repetitions = setLog.repetitions + 1)) }) {
+                                    Icon(Icons.Default.Add, contentDescription = "Mais reps", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+
+                            if (rirRpeEnabled) {
+                                val rirText = RirFormatter.formatRir(setLog.rir)
+                                val rirLabel = if (rirText != null) "· $rirText" else "· RIR -"
+                                Surface(
+                                    color = if (setLog.rir == 0) Color(0xFFFF9800).copy(alpha = 0.2f) else BackgroundDark,
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, if (setLog.rir == 0) Color(0xFFFF9800) else BorderLight),
+                                    modifier = Modifier
+                                        .padding(start = 4.dp)
+                                        .clickable {
+                                            val nextRir = when (setLog.rir) {
+                                                null -> 4
+                                                4 -> 3
+                                                3 -> 2
+                                                2 -> 1
+                                                1 -> 0
+                                                else -> null
+                                            }
+                                            onUpdateSet(setLog.copy(rir = nextRir))
+                                        }
+                                ) {
+                                    Text(
+                                        text = rirLabel,
+                                        color = if (setLog.rir == 0) Color(0xFFFFB74D) else TextSecondary,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (setLog.rir == 0) FontWeight.Bold else FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            if (sets.size > 1) {
+                                IconButton(onClick = { onRemoveSet(setLog) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Excluir série", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    }
+                }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetItem(
-    setLog: SetLogEntity,
-    rirRpeEnabled: Boolean = true,
-    onUpdate: (SetLogEntity) -> Unit,
-    onComplete: (SetLogEntity) -> Unit,
-    onUncomplete: (SetLogEntity) -> Unit,
-    onRemove: (SetLogEntity) -> Unit
+fun WorkoutExercisesBottomSheet(
+    exercises: List<ExerciseSessionWithSets>,
+    currentIndex: Int,
+    onDismiss: () -> Unit,
+    onSelectExercise: (Int) -> Unit
 ) {
-    var isEditing by remember { mutableStateOf(false) }
-
-    val bgColor = if (setLog.completed) Emerald500.copy(alpha = 0.15f) else SurfaceDark
-    val borderColor = if (setLog.completed) Emerald500.copy(alpha = 0.5f) else Color.Transparent
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
-            .padding(12.dp)
+    AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "Exercícios do Treino"
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.6f)
         ) {
-            // Set Number & Type badge
-            Column(
-                modifier = Modifier.clickable { isEditing = !isEditing },
-                horizontalAlignment = Alignment.CenterHorizontally
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(if (setLog.completed) Emerald500 else BorderLight),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("${setLog.setNumber}", color = if (setLog.completed) BackgroundDark else TextPrimary, fontWeight = FontWeight.Bold)
-                }
-                if (setLog.type != SetType.NORMAL.name) {
-                    Text(
-                        text = when (setLog.type) {
-                            SetType.WARMUP.name -> "AQUEC"
-                            SetType.DROP_SET.name -> "DROP"
-                            SetType.FAILURE.name -> "FALHA"
-                            else -> setLog.type.take(5)
-                        },
-                        color = Lime400,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.width(10.dp))
-            
-            // Weight
-            Column(
-                modifier = Modifier.weight(1f).clickable { isEditing = !isEditing },
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("kg", color = TextSecondary, fontSize = 11.sp)
-                Text(
-                    text = "${if (setLog.weight % 1.0f == 0.0f) setLog.weight.toInt() else setLog.weight}", 
-                    color = TextPrimary, 
-                    fontSize = 24.sp, 
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            
-            Text("×", color = TextSecondary, fontSize = 18.sp)
-            
-            // Reps
-            Column(
-                modifier = Modifier.weight(1f).clickable { isEditing = !isEditing },
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("reps", color = TextSecondary, fontSize = 11.sp)
-                Text(
-                    text = "${setLog.repetitions}", 
-                    color = TextPrimary, 
-                    fontSize = 24.sp, 
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                itemsIndexed(exercises) { idx, ex ->
+                    val isSelected = idx == currentIndex
+                    val completedCount = ex.sets.count { it.completed }
+                    val totalSets = ex.sets.size
+                    val isAllCompleted = totalSets > 0 && completedCount == totalSets
 
-            // RPE / RIR indicator if present
-            if (setLog.rpe != null || setLog.rir != null) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { isEditing = !isEditing }) {
-                    setLog.rpe?.let { Text("@$it", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-                    setLog.rir?.let { Text("RIR $it", color = TextSecondary, fontSize = 10.sp) }
-                }
-            }
-            
-            Spacer(modifier = Modifier.width(10.dp))
-            
-            // Check Button
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (setLog.completed) Emerald500 else Lime400)
-                    .clickable {
-                        if (setLog.completed) onUncomplete(setLog) else onComplete(setLog)
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check, 
-                    contentDescription = "Concluir", 
-                    tint = BackgroundDark,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-        }
-        
-        // Inline Expansion for adjustments, set types, and RPE/RIR
-        AnimatedVisibility(visible = isEditing) {
-            Column(modifier = Modifier.padding(top = 12.dp)) {
-                HorizontalDivider(color = BorderLight)
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // Weight quick adjust
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Carga:", color = TextSecondary, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        QuickAdjustButton("-5") { onUpdate(setLog.copy(weight = (setLog.weight - 5f).coerceAtLeast(0f))) }
-                        QuickAdjustButton("-1") { onUpdate(setLog.copy(weight = (setLog.weight - 1f).coerceAtLeast(0f))) }
-                        QuickAdjustButton("+1") { onUpdate(setLog.copy(weight = setLog.weight + 1f)) }
-                        QuickAdjustButton("+5") { onUpdate(setLog.copy(weight = setLog.weight + 5f)) }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Reps quick adjust
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Reps:", color = TextSecondary, fontSize = 12.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        QuickAdjustButton("-1") { onUpdate(setLog.copy(repetitions = (setLog.repetitions - 1).coerceAtLeast(0))) }
-                        QuickAdjustButton("+1") { onUpdate(setLog.copy(repetitions = setLog.repetitions + 1)) }
-                        IconButton(onClick = { onRemove(setLog) }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remover", tint = Red500)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Set Type Selector chips
-                Text("Tipo de Série:", color = TextSecondary, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(4.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val types = listOf(
-                        SetType.NORMAL.name to "Normal",
-                        SetType.WARMUP.name to "Aquecimento",
-                        SetType.DROP_SET.name to "Drop-set",
-                        SetType.BACKOFF.name to "Backoff",
-                        SetType.FAILURE.name to "Até a Falha"
-                    )
-                    items(types) { (key, label) ->
-                        val isSelected = setLog.type == key
-                        Surface(
-                            color = if (isSelected) Lime400 else BackgroundDark,
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.clickable { onUpdate(setLog.copy(type = key)) }
+                    Surface(
+                        color = if (isSelected) Lime400.copy(alpha = 0.15f) else BackgroundDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (isSelected) Lime400 else BorderLight),
+                        modifier = Modifier.fillMaxWidth().clickable { onSelectExercise(idx) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Text("${idx + 1}.", color = if (isSelected) Lime400 else TextSecondary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(ex.exerciseSession.exerciseNameSnapshot, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                if (!ex.exerciseSession.machineLabelSnapshot.isNullOrBlank()) {
+                                    Text(ex.exerciseSession.machineLabelSnapshot!!, color = Lime400, fontSize = 12.sp)
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = label,
-                                color = if (isSelected) BackgroundDark else TextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                text = "$completedCount/$totalSets",
+                                color = if (isAllCompleted) Emerald500 else TextSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                 }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
 
-                // RPE & RIR Row if enabled in settings
-                if (rirRpeEnabled) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text("Esforço Percebido (RPE / RIR):", color = TextSecondary, fontSize = 12.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // RPE selector
-                        val rpeOptions = listOf(null, 6.0f, 7.0f, 8.0f, 8.5f, 9.0f, 9.5f, 10.0f)
-                        LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(rpeOptions) { rpeVal ->
-                                val isSelected = setLog.rpe == rpeVal
-                                Surface(
-                                    color = if (isSelected) Lime400 else BackgroundDark,
-                                    shape = RoundedCornerShape(6.dp),
-                                    modifier = Modifier.clickable { onUpdate(setLog.copy(rpe = rpeVal)) }
-                                ) {
-                                    Text(
-                                        text = if (rpeVal == null) "RPE: -" else "@$rpeVal",
-                                        color = if (isSelected) BackgroundDark else TextSecondary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                    )
-                                }
-                            }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PreviousExecutionBottomSheet(
+    exerciseName: String,
+    previousSets: List<SetLogEntity>,
+    onDismiss: () -> Unit
+) {
+    AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "Última Execução",
+        subtitle = exerciseName
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (previousSets.isEmpty()) {
+                Text("Nenhum registro anterior encontrado para este exercício.", color = TextSecondary, fontSize = 14.sp)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    previousSets.forEach { setLog ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(BackgroundDark)
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Série ${setLog.setNumber}", color = TextSecondary, fontSize = 14.sp)
+                            val rirTag = RirFormatter.formatRir(setLog.rir)
+                            val rirSuffix = if (rirTag != null) " · $rirTag" else ""
+                            Text(
+                                text = "${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight} kg  ×  ${setLog.repetitions} reps$rirSuffix",
+                                color = TextPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
 
-                        // RIR selector
-                        val rirOptions = listOf(null, 0, 1, 2, 3, 4)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(rirOptions) { rirVal ->
-                                val isSelected = setLog.rir == rirVal
-                                Surface(
-                                    color = if (isSelected) Amber500 else BackgroundDark,
-                                    shape = RoundedCornerShape(6.dp),
-                                    modifier = Modifier.clickable { onUpdate(setLog.copy(rir = rirVal)) }
-                                ) {
-                                    Text(
-                                        text = if (rirVal == null) "RIR: -" else "RIR $rirVal",
-                                        color = if (isSelected) BackgroundDark else TextSecondary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                                    )
-                                }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExerciseInstructionsBottomSheet(
+    resolvedExercise: com.example.domain.model.ResolvedExercise?,
+    exerciseName: String,
+    onDismiss: () -> Unit
+) {
+    AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "Como Executar",
+        subtitle = exerciseName
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.7f)
+        ) {
+            val mediaUrl = resolvedExercise?.resolvedMedia?.mediaUri
+            if (!mediaUrl.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BackgroundDark),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = mediaUrl,
+                        contentDescription = "Instrução do Exercício",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            if (!resolvedExercise?.notes.isNullOrBlank()) {
+                Text("Instruções / Notas:", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(resolvedExercise!!.notes!!, color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+            } else {
+                Text("Informações do Exercício:", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Músculo Principal: ${resolvedExercise?.primaryMuscle ?: "N/I"}", color = TextSecondary, fontSize = 14.sp)
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlternativesBottomSheet(
+    alternatives: List<com.example.domain.model.ResolvedExercise>,
+    onDismiss: () -> Unit,
+    onSwap: (Long) -> Unit
+) {
+    AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+        title = "Máquina Ocupada / Alternativa",
+        subtitle = "Escolha um exercício alternativo:"
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.6f)
+        ) {
+
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(alternatives, key = { it.id }) { alt ->
+                    val altGroup = MuscleVisualResolver.resolveGroup(alt.primaryMuscle ?: "")
+                    Surface(
+                        color = BackgroundDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BorderLight),
+                        modifier = Modifier.fillMaxWidth().clickable { onSwap(alt.id) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(altGroup.icon, contentDescription = null, tint = altGroup.color, modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(alt.displayName, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Text(alt.primaryMuscle ?: "", color = TextSecondary, fontSize = 13.sp)
                             }
                         }
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
-@Composable
-fun QuickAdjustButton(text: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(BackgroundDark)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}

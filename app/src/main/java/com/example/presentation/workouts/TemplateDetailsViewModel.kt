@@ -10,6 +10,14 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+import com.example.domain.engine.ExerciseResolver
+import kotlinx.coroutines.flow.combine
+
+data class ResolvedTemplateExercise(
+    val templateExercise: com.example.data.local.WorkoutTemplateExerciseEntity,
+    val resolvedExercise: com.example.domain.model.ResolvedExercise
+)
+
 class TemplateDetailsViewModel(
     private val repository: WorkoutRepository
 ) : ViewModel() {
@@ -28,13 +36,26 @@ class TemplateDetailsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val exercises: StateFlow<List<TemplateExerciseWithDetails>> = _templateId
+    val exercises: StateFlow<List<ResolvedTemplateExercise>> = _templateId
         .flatMapLatest { id ->
-            if (id != -1L) repository.getTemplateExercises(id) else flowOf(emptyList())
+            if (id != -1L) {
+                combine(
+                    repository.getTemplateExercises(id),
+                    repository.allOverridesFlow
+                ) { templateExs, overrides ->
+                    val overrideMap = overrides.associateBy { it.exerciseId }
+                    templateExs.map { te ->
+                        ResolvedTemplateExercise(
+                            templateExercise = te.templateExercise,
+                            resolvedExercise = ExerciseResolver.resolve(te.exercise, overrideMap[te.exercise.id])
+                        )
+                    }
+                }
+            } else flowOf(emptyList())
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val allExercises = repository.activeExercises
+    val allExercises = repository.activeResolvedExercises
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun addExerciseToTemplate(exerciseId: Long) {

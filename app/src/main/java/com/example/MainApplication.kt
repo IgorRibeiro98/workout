@@ -37,10 +37,19 @@ class MainApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         database = AppDatabase.getDatabase(this)
-        repository = WorkoutRepository(database.workoutDao())
         settingsManager = SettingsManager(this)
+        repository = WorkoutRepository(database.workoutDao(), settingsManager = settingsManager)
         workoutEngine = WorkoutEngine(database.workoutDao(), settingsManager)
         notificationManager = WorkoutNotificationManager(this)
+
+        CoroutineScope(Dispatchers.Main).launch {
+            workoutEngine.restTimerTarget.collect { target ->
+                if (target == null) {
+                    notificationManager.cancelNotification()
+                }
+            }
+        }
+
 
         CoroutineScope(Dispatchers.IO).launch {
             try {

@@ -39,7 +39,7 @@ fun SummaryScreen(
         bottomBar = {
             Button(
                 onClick = onClose,
-                modifier = Modifier.fillMaxWidth().padding(16.dp).height(56.dp),
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp).height(56.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
             ) {

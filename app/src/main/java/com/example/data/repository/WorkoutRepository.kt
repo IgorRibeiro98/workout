@@ -11,9 +11,25 @@ import com.example.data.remote.NetworkExerciseRemoteDataSource
 
 class WorkoutRepository(
     val dao: WorkoutDao,
-    private val remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource()
+    private val remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource(),
+    val settingsManager: com.example.data.datastore.SettingsManager? = null
 ) {
     val activeExercises: Flow<List<ExerciseEntity>> = dao.getActiveExercises()
+    
+    val activeResolvedExercises: Flow<List<com.example.domain.model.ResolvedExercise>> = 
+        if (settingsManager != null) {
+            kotlinx.coroutines.flow.combine(
+                dao.getActiveExercises(), 
+                dao.getAllOverridesFlow(),
+                settingsManager.showGifsFlow
+            ) { exercises, overrides, showGifs ->
+                com.example.domain.engine.ExerciseResolver.resolveAll(exercises, overrides.associateBy { it.exerciseId }, showGifs)
+            }
+        } else {
+            kotlinx.coroutines.flow.combine(dao.getActiveExercises(), dao.getAllOverridesFlow()) { exercises, overrides ->
+                com.example.domain.engine.ExerciseResolver.resolveAll(exercises, overrides.associateBy { it.exerciseId })
+            }
+        }
     val allPrograms: Flow<List<WorkoutProgramEntity>> = dao.getAllPrograms()
     val currentProgram: Flow<WorkoutProgramEntity?> = dao.getCurrentProgram()
 
@@ -73,6 +89,7 @@ class WorkoutRepository(
     fun getWeeklyCompletedSessionsCount(startOfWeek: Long) = dao.getWeeklyCompletedSessionsCount(startOfWeek)
 
     fun getTemplateExercises(templateId: Long) = dao.getTemplateExercisesWithDetailsFlow(templateId)
+    val allOverridesFlow = dao.getAllOverridesFlow()
 
     suspend fun getTemplate(templateId: Long) = dao.getTemplateById(templateId)
 

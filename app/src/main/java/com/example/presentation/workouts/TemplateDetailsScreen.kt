@@ -1,4 +1,5 @@
 package com.example.presentation.workouts
+import com.example.presentation.workouts.ResolvedTemplateExercise
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -26,8 +27,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
-import com.example.data.local.TemplateExerciseWithDetails
 import com.example.domain.engine.MuscleVisualResolver
+import com.example.ui.components.SwipeAction
+import com.example.ui.components.SwipeActionRow
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.res.stringResource
+import com.example.R
+import com.example.ui.components.AppModalBottomSheet
+import com.example.ui.components.ActionBottomSheet
+import com.example.ui.components.ActionItemData
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,9 +46,14 @@ fun TemplateDetailsScreen(
     val template by viewModel.template.collectAsState()
     val exercises by viewModel.exercises.collectAsState()
     val allExercises by viewModel.allExercises.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
+    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
     
     var showAddPickerSheet by remember { mutableStateOf(false) }
-    var exerciseToEdit by remember { mutableStateOf<TemplateExerciseWithDetails?>(null) }
+    var exerciseToEdit by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
+    var activeExerciseActionSheet by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
+    var exerciseToDelete by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -90,44 +103,26 @@ fun TemplateDetailsScreen(
             }
             
             items(exercises, key = { it.templateExercise.id }) { templateExerciseDetails ->
-                val dismissState = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { dismissValue ->
-                        if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                            viewModel.removeExercise(templateExerciseDetails.templateExercise)
-                            true
-                        } else false
-                    }
+                val endAction = SwipeAction(
+                    icon = Icons.Default.Delete,
+                    label = "Excluir",
+                    backgroundColor = Color.Red.copy(alpha = 0.8f),
+                    contentColor = Color.White,
+                    onTrigger = { exerciseToDelete = templateExerciseDetails }
                 )
 
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    backgroundContent = {
-                        val color by animateColorAsState(
-                            when (dismissState.targetValue) {
-                                SwipeToDismissBoxValue.EndToStart -> Color.Red.copy(alpha = 0.8f)
-                                else -> Color.Transparent
-                            }
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(color)
-                                .padding(end = 24.dp),
-                            contentAlignment = Alignment.CenterEnd
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remover", tint = Color.White)
-                        }
-                    }
+                SwipeActionRow(
+                    endAction = endAction,
+                    hapticEnabled = hapticEnabled,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                 ) {
-                    val group = MuscleVisualResolver.resolveGroup(templateExerciseDetails.exercise.primaryMuscle)
+                    val group = MuscleVisualResolver.resolveGroup(templateExerciseDetails.resolvedExercise.primaryMuscle)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(SurfaceDark)
-                            .clickable { exerciseToEdit = templateExerciseDetails }
+                            .clickable { activeExerciseActionSheet = templateExerciseDetails }
                             .padding(16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -149,7 +144,7 @@ fun TemplateDetailsScreen(
                         Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = templateExerciseDetails.exercise.name,
+                                text = templateExerciseDetails.resolvedExercise.displayName,
                                 color = TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp
@@ -172,7 +167,9 @@ fun TemplateDetailsScreen(
                                 )
                             }
                         }
-                        Icon(Icons.Default.Edit, contentDescription = "Editar", tint = TextSecondary)
+                        IconButton(onClick = { activeExerciseActionSheet = templateExerciseDetails }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Opções do exercício", tint = TextSecondary)
+                        }
                     }
                 }
             }
@@ -190,7 +187,7 @@ fun TemplateDetailsScreen(
 
         val filteredCatalog = allExercises.filter { ex ->
             val matchesSearch = searchQuery.isBlank() || 
-                ex.name.contains(searchQuery, ignoreCase = true) ||
+                ex.displayName.contains(searchQuery, ignoreCase = true) ||
                 (ex.nameEn?.contains(searchQuery, ignoreCase = true) == true) ||
                 (ex.equipment?.contains(searchQuery, ignoreCase = true) == true)
             
@@ -210,6 +207,7 @@ fun TemplateDetailsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.85f)
+                    .imePadding()
                     .padding(horizontal = 16.dp)
             ) {
                 Row(
@@ -311,7 +309,7 @@ fun TemplateDetailsScreen(
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(ex.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text(ex.displayName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                                     Row {
                                         if (!ex.primaryMuscle.isNullOrBlank()) {
                                             Text(ex.primaryMuscle, color = TextSecondary, fontSize = 11.sp)
@@ -369,7 +367,55 @@ fun TemplateDetailsScreen(
         }
     }
 
-    // Exercise Configuration Dialog
+    // Exercise Action Sheet
+    if (activeExerciseActionSheet != null) {
+        val selectedItem = activeExerciseActionSheet!!
+        ActionBottomSheet(
+            onDismissRequest = { activeExerciseActionSheet = null },
+            title = stringResource(id = R.string.sheet_exercise_options),
+            subtitle = selectedItem.resolvedExercise.displayName,
+            actions = listOf(
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_edit_template_exercise),
+                    icon = Icons.Default.Edit,
+                    onClick = {
+                        exerciseToEdit = selectedItem
+                        activeExerciseActionSheet = null
+                    }
+                ),
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_delete_template_exercise),
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    onClick = {
+                        exerciseToDelete = selectedItem
+                        activeExerciseActionSheet = null
+                    }
+                )
+            )
+        )
+    }
+
+    if (exerciseToDelete != null) {
+        val item = exerciseToDelete!!
+        AlertDialog(
+            onDismissRequest = { exerciseToDelete = null },
+            title = { Text("Remover Exercício", color = TextPrimary) },
+            text = { Text("Deseja realmente remover o exercício '${item.resolvedExercise.displayName}' deste treino?", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.removeExercise(item.templateExercise)
+                    exerciseToDelete = null
+                }) { Text("Remover", color = Color.Red, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { exerciseToDelete = null }) { Text("Cancelar", color = TextSecondary) }
+            },
+            containerColor = SurfaceDark
+        )
+    }
+
+    // Exercise Configuration Bottom Sheet
     if (exerciseToEdit != null) {
         var sets by remember { mutableStateOf(exerciseToEdit!!.templateExercise.targetSets.toString()) }
         var minReps by remember { mutableStateOf(exerciseToEdit!!.templateExercise.minReps.toString()) }
@@ -378,83 +424,92 @@ fun TemplateDetailsScreen(
         var machine by remember { mutableStateOf(exerciseToEdit!!.templateExercise.machineLabel ?: "") }
         var restSeconds by remember { mutableStateOf(exerciseToEdit!!.templateExercise.restDurationSeconds.toString()) }
         var notes by remember { mutableStateOf(exerciseToEdit!!.templateExercise.notes ?: "") }
-        
-        AlertDialog(
+
+        AppModalBottomSheet(
             onDismissRequest = { exerciseToEdit = null },
-            title = { Text(exerciseToEdit!!.exercise.name, color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = sets, 
-                            onValueChange = { sets = it }, 
-                            label = { Text("Séries") }, 
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = restSeconds, 
-                            onValueChange = { restSeconds = it }, 
-                            label = { Text("Descanso (s)") }, 
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = minReps, 
-                            onValueChange = { minReps = it }, 
-                            label = { Text("Min Reps") }, 
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                        OutlinedTextField(
-                            value = maxReps, 
-                            onValueChange = { maxReps = it }, 
-                            label = { Text("Max Reps") }, 
-                            modifier = Modifier.weight(1f),
-                            singleLine = true
-                        )
-                    }
+            title = "Configurações do Exercício",
+            subtitle = exerciseToEdit!!.resolvedExercise.displayName
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = plannedWeight, 
-                        onValueChange = { plannedWeight = it }, 
-                        label = { Text("Carga Planejada (kg - opcional)") },
+                        value = sets,
+                        onValueChange = { sets = it },
+                        label = { Text("Séries") },
+                        modifier = Modifier.weight(1f),
                         singleLine = true
                     )
                     OutlinedTextField(
-                        value = machine, 
-                        onValueChange = { machine = it }, 
-                        label = { Text("Máquina/Aparelho (ex: Máquina 21)") },
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = notes, 
-                        onValueChange = { notes = it }, 
-                        label = { Text("Observações do exercício") },
+                        value = restSeconds,
+                        onValueChange = { restSeconds = it },
+                        label = { Text("Descanso (s)") },
+                        modifier = Modifier.weight(1f),
                         singleLine = true
                     )
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val updated = exerciseToEdit!!.templateExercise.copy(
-                        targetSets = sets.toIntOrNull() ?: 3,
-                        minReps = minReps.toIntOrNull() ?: 8,
-                        maxReps = maxReps.toIntOrNull() ?: 12,
-                        restDurationSeconds = restSeconds.toIntOrNull() ?: 90,
-                        plannedWeight = plannedWeight.toFloatOrNull(),
-                        machineLabel = machine.takeIf { it.isNotBlank() },
-                        notes = notes.takeIf { it.isNotBlank() }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = minReps,
+                        onValueChange = { minReps = it },
+                        label = { Text("Min Reps") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
                     )
-                    viewModel.updateExercise(updated)
-                    exerciseToEdit = null
-                }) { Text("Salvar", color = Lime400, fontWeight = FontWeight.Bold) }
-            },
-            dismissButton = {
-                TextButton(onClick = { exerciseToEdit = null }) { Text("Cancelar", color = TextSecondary) }
-            },
-            containerColor = SurfaceDark
-        )
+                    OutlinedTextField(
+                        value = maxReps,
+                        onValueChange = { maxReps = it },
+                        label = { Text("Max Reps") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+                OutlinedTextField(
+                    value = plannedWeight,
+                    onValueChange = { plannedWeight = it },
+                    label = { Text("Carga Planejada (kg - opcional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = machine,
+                    onValueChange = { machine = it },
+                    label = { Text("Máquina/Aparelho (ex: Máquina 21)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Observações do exercício") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        val updated = exerciseToEdit!!.templateExercise.copy(
+                            targetSets = sets.toIntOrNull() ?: 3,
+                            minReps = minReps.toIntOrNull() ?: 8,
+                            maxReps = maxReps.toIntOrNull() ?: 12,
+                            restDurationSeconds = restSeconds.toIntOrNull() ?: 90,
+                            plannedWeight = plannedWeight.toFloatOrNull(),
+                            machineLabel = machine.takeIf { it.isNotBlank() },
+                            notes = notes.takeIf { it.isNotBlank() }
+                        )
+                        viewModel.updateExercise(updated)
+                        exerciseToEdit = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Text("SALVAR CONFIGURAÇÕES", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+            }
+        }
     }
 }

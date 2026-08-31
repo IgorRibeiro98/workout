@@ -24,6 +24,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.WorkoutTemplateEntity
 import com.example.ui.theme.*
+import com.example.ui.components.SwipeAction
+import com.example.ui.components.SwipeActionRow
+
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.res.stringResource
+import com.example.R
+import com.example.ui.components.ActionBottomSheet
+import com.example.ui.components.ActionItemData
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,9 +42,13 @@ fun ProgramDetailsScreen(
 ) {
     val program by viewModel.program.collectAsState()
     val templates by viewModel.templates.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
+    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
     
     var showAddTemplateDialog by remember { mutableStateOf(false) }
     var templateToDelete by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
+    var activeTemplateForSheet by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -116,36 +128,18 @@ fun ProgramDetailsScreen(
                     }
                 } else {
                     items(templates, key = { it.id }) { template ->
-                        val dismissState = rememberSwipeToDismissBoxState(
-                            confirmValueChange = { dismissValue ->
-                                if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                                    templateToDelete = template
-                                    false
-                                } else false
-                            }
+                        val endAction = SwipeAction(
+                            icon = Icons.Default.Delete,
+                            label = "Excluir",
+                            backgroundColor = Color.Red.copy(alpha = 0.8f),
+                            contentColor = Color.White,
+                            onTrigger = { templateToDelete = template }
                         )
 
-                        SwipeToDismissBox(
-                            state = dismissState,
-                            enableDismissFromStartToEnd = false,
-                            backgroundContent = {
-                                val color by animateColorAsState(
-                                    when (dismissState.targetValue) {
-                                        SwipeToDismissBoxValue.EndToStart -> Color.Red.copy(alpha = 0.8f)
-                                        else -> Color.Transparent
-                                    }
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(color)
-                                        .padding(end = 24.dp),
-                                    contentAlignment = Alignment.CenterEnd
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Excluir", tint = Color.White)
-                                }
-                            }
+                        SwipeActionRow(
+                            endAction = endAction,
+                            hapticEnabled = hapticEnabled,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                         ) {
                             Row(
                                 modifier = Modifier
@@ -178,7 +172,12 @@ fun ProgramDetailsScreen(
                                         Text(text = template.dayOfWeek!!, color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                 }
-                                Icon(Icons.Default.ChevronRight, contentDescription = "Abrir", tint = TextSecondary)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { activeTemplateForSheet = template }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "Opções do treino", tint = TextSecondary)
+                                    }
+                                    Icon(Icons.Default.ChevronRight, contentDescription = "Abrir", tint = TextSecondary)
+                                }
                             }
                         }
                     }
@@ -187,6 +186,28 @@ fun ProgramDetailsScreen(
                 item { Spacer(modifier = Modifier.height(80.dp)) }
             }
         }
+    }
+
+    if (activeTemplateForSheet != null) {
+        val template = activeTemplateForSheet!!
+        ActionBottomSheet(
+            onDismissRequest = { activeTemplateForSheet = null },
+            title = stringResource(id = R.string.sheet_template_options),
+            subtitle = template.name,
+            actions = listOf(
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_open_template),
+                    icon = Icons.Default.ChevronRight,
+                    onClick = { onTemplateClick(template.id) }
+                ),
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_delete_template),
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    onClick = { templateToDelete = template }
+                )
+            )
+        )
     }
 
     if (templateToDelete != null) {

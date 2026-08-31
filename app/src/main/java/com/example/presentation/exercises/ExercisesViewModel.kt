@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 
 class ExercisesViewModel(private val repository: WorkoutRepository) : ViewModel() {
     
-    val exercises: StateFlow<List<ExerciseEntity>> = repository.activeExercises
+    val exercises: StateFlow<List<com.example.domain.model.ResolvedExercise>> = repository.activeResolvedExercises
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
     fun addExercise(name: String, muscle: String, equipment: String? = null) {

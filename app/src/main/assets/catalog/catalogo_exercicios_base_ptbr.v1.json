@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "contentVersion": 1,
   "locale": "pt-BR",
   "description": "Catálogo canônico inicial para app de treino. Mídia pode ser enriquecida via ExerciseDB V1; alternativas são relações locais e não dependem da API.",
   "externalMediaProvider": {

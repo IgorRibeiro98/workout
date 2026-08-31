@@ -1,48 +1,55 @@
 package com.example.presentation
 import androidx.compose.runtime.LaunchedEffect
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.dp
-import com.example.ui.theme.Lime400
-import com.example.ui.theme.LimeTransparent
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.BorderLight
-import com.example.ui.theme.BackgroundDark
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.HorizontalDivider
+import com.example.MainApplication
+import com.example.presentation.MainViewModelFactory
+import com.example.presentation.execution.ExecutionScreen
+import com.example.presentation.execution.ExecutionViewModel
 import com.example.presentation.exercises.ExercisesScreen
 import com.example.presentation.history.HistoryScreen
 import com.example.presentation.navigation.Screen
 import com.example.presentation.settings.SettingsScreen
 import com.example.presentation.today.TodayScreen
 import com.example.presentation.workouts.WorkoutsScreen
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.ui.platform.LocalContext
-import com.example.MainApplication
-import com.example.presentation.MainViewModelFactory
-
-import com.example.presentation.execution.ExecutionScreen
-import com.example.presentation.execution.ExecutionViewModel
+import com.example.ui.theme.BackgroundDark
+import com.example.ui.theme.BorderLight
+import com.example.ui.theme.Lime400
+import com.example.ui.theme.LimeTransparent
+import com.example.ui.theme.TextSecondary
 import androidx.compose.animation.AnimatedVisibility
 
 @Composable
@@ -70,15 +77,33 @@ fun MainScreen() {
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val showBottomBar = currentRoute != Screen.Execution.route
+    val showBottomBar = currentRoute != Screen.Execution.route && currentRoute != Screen.Summary.route
+
+    val topLevelDestinationMap = mapOf(
+        Screen.Today.route to Screen.Today.route,
+        Screen.Summary.route to Screen.Today.route,
+        Screen.Workouts.route to Screen.Workouts.route,
+        Screen.ProgramDetails.route to Screen.Workouts.route,
+        Screen.TemplateDetails.route to Screen.Workouts.route,
+        Screen.Exercises.route to Screen.Exercises.route,
+        Screen.ExerciseDetails.route to Screen.Exercises.route,
+        Screen.History.route to Screen.History.route,
+        Screen.Settings.route to Screen.Settings.route
+    )
+
+    val isRouteSelected = { tabRoute: String ->
+        currentRoute != null && topLevelDestinationMap[currentRoute] == tabRoute
+    }
 
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
-                androidx.compose.foundation.layout.Column {
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier.background(BackgroundDark).windowInsetsPadding(WindowInsets.navigationBars)
+                ) {
                     HorizontalDivider(color = BorderLight)
                     NavigationBar(
-                        containerColor = BackgroundDark,
+                        containerColor = Color.Transparent,
                         tonalElevation = 0.dp,
                         windowInsets = WindowInsets(0, 0, 0, 0)
                     ) {
@@ -92,7 +117,7 @@ fun MainScreen() {
                                         fontWeight = FontWeight.Bold,
                                     ) 
                                 },
-                                selected = currentRoute == screen.route,
+                                selected = isRouteSelected(screen.route),
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Lime400,
                                     selectedTextColor = Lime400,
@@ -119,7 +144,7 @@ fun MainScreen() {
         NavHost(
             navController = navController,
             startDestination = Screen.Today.route,
-            modifier = Modifier.padding(innerPadding)
+            modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
         ) {
             composable(Screen.Today.route) { 
                 TodayScreen(

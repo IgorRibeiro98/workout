@@ -31,10 +31,18 @@ interface WorkoutDao {
     suspend fun getAllExercisesSync(): List<ExerciseEntity>
 
     // Programs
-    @Query("SELECT * FROM workout_programs ORDER BY id DESC")
-    fun getAllPrograms(): Flow<List<WorkoutProgramEntity>>
+
+    @Query("SELECT * FROM workout_programs WHERE externalId = :externalId LIMIT 1")
+    suspend fun getProgramByExternalId(externalId: String): WorkoutProgramEntity?
 
     @Query("SELECT * FROM workout_programs ORDER BY id DESC")
+
+    fun getAllPrograms(): Flow<List<WorkoutProgramEntity>>
+
+
+
+    @Query("SELECT * FROM workout_programs ORDER BY id DESC")
+
     suspend fun getAllProgramsSync(): List<WorkoutProgramEntity>
 
     @Query("SELECT * FROM workout_programs WHERE isCurrent = 1 LIMIT 1")
@@ -99,25 +107,26 @@ interface WorkoutDao {
 
     @Query("""
         SELECT sl.* FROM set_logs sl
-        INNER JOIN exercise_sessions es ON sl.exerciseSessionId = es.id
-        INNER JOIN workout_sessions ws ON es.sessionId = ws.id
-        WHERE (es.actualExerciseId = :exerciseId OR es.plannedExerciseId = :exerciseId)
-          AND ws.status = 'COMPLETED'
-          AND sl.completed = 1
-          AND ws.id = (
-              SELECT ws2.id FROM workout_sessions ws2
-              INNER JOIN exercise_sessions es2 ON es2.sessionId = ws2.id
-              WHERE ws2.status = 'COMPLETED'
-                AND (es2.actualExerciseId = :exerciseId OR es2.plannedExerciseId = :exerciseId)
-              ORDER BY ws2.finishedAt DESC, ws2.startedAt DESC
-              LIMIT 1
-          )
+        WHERE sl.completed = 1 AND sl.exerciseSessionId = (
+            SELECT es.id FROM exercise_sessions es
+            INNER JOIN workout_sessions ws ON es.sessionId = ws.id
+            WHERE ws.status = 'COMPLETED'
+              AND (es.actualExerciseId = :exerciseId OR es.plannedExerciseId = :exerciseId)
+            ORDER BY ws.finishedAt DESC, es.sortOrder DESC, es.id DESC
+            LIMIT 1
+        )
         ORDER BY sl.setNumber ASC
     """)
     suspend fun getLastExecutionSetsForExercise(exerciseId: Long): List<SetLogEntity>
 
+    @Query("SELECT * FROM set_logs WHERE exerciseSessionId = :exerciseSessionId ORDER BY setNumber ASC")
+    suspend fun getSetLogsForExerciseSession(exerciseSessionId: Long): List<SetLogEntity>
+
     @Update
     suspend fun updateSetLog(setLog: SetLogEntity)
+
+    @Update
+    suspend fun updateSetLogs(setLogs: List<SetLogEntity>)
 
     @Delete
     suspend fun deleteSetLog(setLog: SetLogEntity)
@@ -278,6 +287,15 @@ interface WorkoutDao {
 
     @Update
     suspend fun updateTemplateExerciseFull(templateExercise: WorkoutTemplateExerciseEntity)
+
+    @Query("SELECT * FROM workout_templates")
+    suspend fun getAllTemplatesSync(): List<WorkoutTemplateEntity>
+
+    @Query("SELECT * FROM workout_sessions WHERE id = :id LIMIT 1")
+    suspend fun getSessionById(id: Long): WorkoutSessionEntity?
+
+    @Query("SELECT * FROM exercise_sessions WHERE sessionId = :sessionId")
+    suspend fun getExerciseSessionsForSession(sessionId: Long): List<ExerciseSessionEntity>
 
     @Delete
     suspend fun deleteTemplateExercise(templateExercise: WorkoutTemplateExerciseEntity)

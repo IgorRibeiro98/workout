@@ -6,9 +6,20 @@ import android.net.Uri
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.res.stringResource
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import com.example.R
+import com.example.ui.components.ActionBottomSheet
+import com.example.ui.components.ActionItemData
+import com.example.ui.components.AppModalBottomSheet
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.engine.RirFormatter
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -51,46 +63,50 @@ fun ExerciseDetailsScreen(
     onNavigateToAlternative: ((Long, String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val exerciseInfo by viewModel.getExerciseInfo(exerciseId).collectAsState(initial = null)
-    val overrideInfo by viewModel.getUserOverride(exerciseId).collectAsState(initial = null)
+    val resolvedExercise by viewModel.getResolvedExercise(exerciseId).collectAsState(initial = null)
+    val exerciseInfo = resolvedExercise?.rawExercise
+    val overrideInfo = resolvedExercise?.override
+    
     val showGifs by viewModel.showGifs.collectAsState()
     val alternatives by viewModel.getAlternatives(exerciseId).collectAsState(initial = emptyList())
     val personalRecords by viewModel.getPersonalRecords(exerciseId).collectAsState(initial = emptyList())
     val history by viewModel.getExerciseHistory(exerciseId).collectAsState(initial = emptyList())
-    val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
+    val dateFormat = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+    val photoPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+    ) { uri: android.net.Uri? ->
         if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {}
-            val current = overrideInfo ?: ExerciseUserOverrideEntity(exerciseId = exerciseId)
-            viewModel.saveUserOverride(current.copy(customPhotoUri = uri.toString(), updatedAt = System.currentTimeMillis()))
+            context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val currentOverride = overrideInfo ?: com.example.data.local.ExerciseUserOverrideEntity(exerciseId = exerciseId)
+            viewModel.saveUserOverride(currentOverride.copy(customPhotoUri = uri.toString()))
         }
     }
+    var showActionSheet by remember { mutableStateOf(false) }
+    var showEditOverrideSheet by remember { mutableStateOf(false) }
 
-    var showEditOverrideDialog by remember { mutableStateOf(false) }
+    val resolvedName = resolvedExercise?.displayName ?: exerciseName
+    val resolvedNotes = resolvedExercise?.notes
+    val resolvedMedia = resolvedExercise?.resolvedMedia
+    
+    val nameEn = resolvedExercise?.nameEn
+    val primaryMuscle = resolvedExercise?.primaryMuscle
+    val secondaryMuscles = resolvedExercise?.secondaryMuscles ?: emptyList()
+    val equipment = resolvedExercise?.equipment
+    val movementPattern = resolvedExercise?.movementPattern?.replace("_", " ")
+    val substitutionGroup = resolvedExercise?.substitutionGroup
 
-    val resolvedName = ExerciseMediaResolver.resolveDisplayName(exerciseInfo, overrideInfo, exerciseName)
-    val resolvedNotes = ExerciseMediaResolver.resolveNotes(exerciseInfo, overrideInfo)
-    val resolvedMedia = ExerciseMediaResolver.resolveMedia(exerciseInfo, overrideInfo, showGifs)
-
-    val nameEn = exerciseInfo?.nameEn
-    val primaryMuscle = exerciseInfo?.primaryMuscle
-    val secondaryMuscles = exerciseInfo?.secondaryMuscles?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
-    val equipment = exerciseInfo?.equipment
-    val movementPattern = exerciseInfo?.movementPattern?.replace("_", " ")
-    val substitutionGroup = exerciseInfo?.substitutionGroup
 
     val muscleGroup = MuscleVisualResolver.resolveGroup(primaryMuscle)
     val curatedVideo = ExerciseVideoRegistry.getVideoForExercise(context, exerciseInfo?.canonicalId, exerciseInfo?.slug, resolvedName)
 
     var showInlineVideo by remember { mutableStateOf(false) }
+
+    if (showActionSheet || showEditOverrideSheet) {
+        BackHandler {
+            showActionSheet = false
+            showEditOverrideSheet = false
+        }
+    }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -110,8 +126,8 @@ fun ExerciseDetailsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showEditOverrideDialog = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Editar Personalização", tint = Lime400)
+                    IconButton(onClick = { showActionSheet = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(id = R.string.sheet_exercise_options), tint = TextPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
@@ -133,10 +149,10 @@ fun ExerciseDetailsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column {
-                        if (!resolvedMedia.mediaUri.isNullOrBlank()) {
+                        if (!resolvedMedia?.mediaUri.isNullOrBlank()) {
                             AsyncImage(
                                 model = ImageRequest.Builder(context)
-                                    .data(resolvedMedia.mediaUri)
+                                    .data(resolvedMedia?.mediaUri)
                                     .crossfade(true)
                                     .build(),
                                 contentDescription = "Mídia de demonstração para $resolvedName",
@@ -171,17 +187,17 @@ fun ExerciseDetailsScreen(
                         ) {
                             Text(
                                 text = when {
-                                    resolvedMedia.isCustomPhoto -> "Foto personalizada ativa"
-                                    resolvedMedia.isGif -> "GIF animado ativo"
+                                    resolvedMedia?.isCustomPhoto == true -> "Foto personalizada ativa"
+                                    resolvedMedia?.isGif == true -> "GIF animado ativo"
                                     else -> "Mídia padrão"
                                 },
-                                color = if (resolvedMedia.isCustomPhoto) Lime400 else TextSecondary,
+                                color = if (resolvedMedia?.isCustomPhoto == true) Lime400 else TextSecondary,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
 
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (resolvedMedia.isCustomPhoto) {
+                                if (resolvedMedia?.isCustomPhoto == true) {
                                     IconButton(
                                         onClick = { viewModel.removeCustomPhoto(exerciseId) },
                                         modifier = Modifier.size(32.dp)
@@ -201,7 +217,7 @@ fun ExerciseDetailsScreen(
                                 ) {
                                     Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp), tint = Lime400)
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (resolvedMedia.isCustomPhoto) "Trocar Foto" else "Adicionar Foto", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(if (resolvedMedia?.isCustomPhoto == true) "Trocar Foto" else "Adicionar Foto", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -425,10 +441,26 @@ fun ExerciseDetailsScreen(
             // Personal Records (PRs)
             if (personalRecords.isNotEmpty()) {
                 item {
+                    val prVisible = remember { mutableStateOf(false) }
+                    LaunchedEffect(personalRecords) {
+                        if (personalRecords.isNotEmpty()) prVisible.value = true
+                    }
+                    val prScale by animateFloatAsState(
+                        targetValue = if (prVisible.value) 1f else 0.95f,
+                        animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium),
+                        label = "prCardScale"
+                    )
+                    val prAlpha by animateFloatAsState(
+                        targetValue = if (prVisible.value) 1f else 0f,
+                        animationSpec = tween(durationMillis = AppMotion.Normal, easing = AppMotion.StandardEasing),
+                        label = "prCardAlpha"
+                    )
                     Card(
                         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                         shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer(scaleX = prScale, scaleY = prScale, alpha = prAlpha)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
@@ -500,7 +532,7 @@ fun ExerciseDetailsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                onNavigateToAlternative?.invoke(alt.id, alt.name)
+                                onNavigateToAlternative?.invoke(alt.id, alt.displayName)
                             }
                     ) {
                         Row(
@@ -514,7 +546,7 @@ fun ExerciseDetailsScreen(
                                 Icon(altMuscle.icon, contentDescription = null, tint = altMuscle.color, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text(alt.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text(alt.displayName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                                     if (!alt.nameEn.isNullOrEmpty()) {
                                         Text(alt.nameEn, color = TextSecondary, fontSize = 12.sp)
                                     }
@@ -583,7 +615,10 @@ fun ExerciseDetailsScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text("Série ${index + 1} (${setLog.type})", color = TextSecondary, fontSize = 13.sp)
-                                    Text("${setLog.weight}kg × ${setLog.repetitions}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    val weightStr = if (setLog.weight % 1f == 0f) setLog.weight.toInt().toString() else setLog.weight.toString()
+                                    val rirTag = RirFormatter.formatRir(setLog.rir)
+                                    val rirSuffix = if (rirTag != null) " · $rirTag" else ""
+                                    Text("$weightStr kg × ${setLog.repetitions}$rirSuffix", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                             }
                         }
@@ -595,59 +630,105 @@ fun ExerciseDetailsScreen(
         }
     }
 
-    // Edit Custom Override Dialog
-    if (showEditOverrideDialog) {
+    // Contextual Options ActionBottomSheet
+    if (showActionSheet) {
+        val actions = mutableListOf<ActionItemData>()
+
+        actions.add(
+            ActionItemData(
+                title = stringResource(id = R.string.sheet_action_edit_exercise),
+                subtitle = "Personalizar nome, notas e descanso",
+                icon = Icons.Default.Edit,
+                onClick = { showEditOverrideSheet = true }
+            )
+        )
+
+        actions.add(
+            ActionItemData(
+                title = stringResource(id = R.string.sheet_action_set_photo),
+                subtitle = if (resolvedMedia?.isCustomPhoto == true) "Alterar foto ativa" else "Adicionar foto da galeria",
+                icon = Icons.Default.AddPhotoAlternate,
+                onClick = {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
+            )
+        )
+
+        if (resolvedMedia?.isCustomPhoto == true) {
+            actions.add(
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_remove_photo),
+                    subtitle = "Voltar para imagem padrão",
+                    icon = Icons.Default.Delete,
+                    onClick = { viewModel.removeCustomPhoto(exerciseId) }
+                )
+            )
+        }
+
+        ActionBottomSheet(
+            onDismissRequest = { showActionSheet = false },
+            title = stringResource(id = R.string.sheet_exercise_options),
+            subtitle = resolvedName,
+            actions = actions
+        )
+    }
+
+    // Edit Custom Override Bottom Sheet
+    if (showEditOverrideSheet) {
         var editName by remember { mutableStateOf(overrideInfo?.displayName ?: "") }
         var editNotes by remember { mutableStateOf(overrideInfo?.notes ?: "") }
         var editRestSeconds by remember { mutableStateOf(overrideInfo?.defaultRestSeconds?.toString() ?: "") }
 
-        AlertDialog(
-            onDismissRequest = { showEditOverrideDialog = false },
-            title = { Text("Personalizar Exercício", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = editName,
-                        onValueChange = { editName = it },
-                        label = { Text("Nome Personalizado") },
-                        placeholder = { Text(exerciseInfo?.name ?: "") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Lime400,
-                            unfocusedBorderColor = BorderLight,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = editNotes,
-                        onValueChange = { editNotes = it },
-                        label = { Text("Notas / Configuração do Aparelho") },
-                        placeholder = { Text("Ex: Banco na inclinação 3, pino 4") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Lime400,
-                            unfocusedBorderColor = BorderLight,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = editRestSeconds,
-                        onValueChange = { editRestSeconds = it.filter { ch -> ch.isDigit() } },
-                        label = { Text("Descanso Padrão (segundos)") },
-                        placeholder = { Text("90") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Lime400,
-                            unfocusedBorderColor = BorderLight,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
+        AppModalBottomSheet(
+            onDismissRequest = { showEditOverrideSheet = false },
+            title = "Personalizar Exercício",
+            subtitle = resolvedName
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = editName,
+                    onValueChange = { editName = it },
+                    label = { Text("Nome Personalizado") },
+                    placeholder = { Text(exerciseInfo?.name ?: "") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lime400,
+                        unfocusedBorderColor = BorderLight,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = editNotes,
+                    onValueChange = { editNotes = it },
+                    label = { Text("Notas / Configuração do Aparelho") },
+                    placeholder = { Text("Ex: Banco na inclinação 3, pino 4") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lime400,
+                        unfocusedBorderColor = BorderLight,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = editRestSeconds,
+                    onValueChange = { editRestSeconds = it.filter { ch -> ch.isDigit() } },
+                    label = { Text("Descanso Padrão (segundos)") },
+                    placeholder = { Text("90") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lime400,
+                        unfocusedBorderColor = BorderLight,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Button(
                     onClick = {
                         val current = overrideInfo ?: ExerciseUserOverrideEntity(exerciseId = exerciseId)
@@ -660,19 +741,17 @@ fun ExerciseDetailsScreen(
                                 updatedAt = System.currentTimeMillis()
                             )
                         )
-                        showEditOverrideDialog = false
+                        showEditOverrideSheet = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
                 ) {
-                    Text("Salvar", fontWeight = FontWeight.Bold)
+                    Text("SALVAR ALTERAÇÕES", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEditOverrideDialog = false }) {
-                    Text("Cancelar", color = TextSecondary)
-                }
-            },
-            containerColor = SurfaceDark
-        )
+            }
+        }
     }
 }

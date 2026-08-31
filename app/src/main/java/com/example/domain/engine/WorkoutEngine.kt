@@ -10,8 +10,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
+data class SyncResult(
+    val updatedCount: Int,
+    val skippedCompletedCount: Int = 0,
+    val skippedDifferentTypeCount: Int = 0,
+    val message: String = ""
+)
+
 class WorkoutEngine(
-    private val dao: WorkoutDao,
+    val dao: WorkoutDao,
     private val settingsManager: SettingsManager,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO)
 ) {
@@ -22,23 +29,69 @@ class WorkoutEngine(
 
     private val _restTimerTarget = MutableStateFlow<Long?>(null)
     val restTimerTarget: Flow<Long?> = _restTimerTarget
+    
+    val activeResolvedExercises: Flow<List<com.example.domain.model.ResolvedExercise>> = 
+        kotlinx.coroutines.flow.combine(
+            dao.getActiveExercises(), 
+            dao.getAllOverridesFlow(),
+            settingsManager.showGifsFlow
+        ) { exercises, overrides, showGifs ->
+            com.example.domain.engine.ExerciseResolver.resolveAll(exercises, overrides.associateBy { it.exerciseId }, showGifs)
+        }
 
     init {
         // Process restoration check: restore timer if valid active session and deadline in future
         coroutineScope.launch {
             try {
-                val deadline = settingsManager.restTimerDeadlineFlow.firstOrNull()
-                val activeSession = dao.getActiveSession()
-                val now = System.currentTimeMillis()
-                if (deadline != null && deadline > now && activeSession != null) {
-                    _restTimerTarget.value = deadline
-                } else if (deadline != null && deadline <= now) {
-                    skipRestTimer()
+                val hasSavedDeadline = settingsManager.restTimerDeadlineFlow.firstOrNull() != null
+                if (hasSavedDeadline) {
+                    restoreTimerState()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
+    }
+
+    suspend fun restoreTimerState(): Boolean {
+        val deadline = settingsManager.restTimerDeadlineFlow.firstOrNull()
+        val savedSessionId = settingsManager.restTimerSessionIdFlow.firstOrNull()
+        val savedExerciseSessionId = settingsManager.restTimerExerciseSessionIdFlow.firstOrNull()
+        val savedTimerType = settingsManager.restTimerTypeFlow.firstOrNull()
+
+        val activeSession = dao.getActiveSession()
+        val now = System.currentTimeMillis()
+
+        val validTimerTypes = setOf("REST_SET", "REST_EXERCISE", "CUSTOM")
+        val isTimerTypeValid = savedTimerType != null && savedTimerType in validTimerTypes
+
+        val isExerciseSessionValid = if (savedExerciseSessionId != null && activeSession != null) {
+            val exSession = dao.getExerciseSessionById(savedExerciseSessionId)
+            exSession != null && exSession.sessionId == activeSession.id
+        } else {
+            false
+        }
+
+        val isSessionValid = activeSession != null &&
+                activeSession.status == SessionStatus.IN_PROGRESS.name &&
+                savedSessionId != null &&
+                savedSessionId == activeSession.id
+
+        val isDeadlineValid = deadline != null && deadline > now
+
+        return if (isSessionValid && isExerciseSessionValid && isTimerTypeValid && isDeadlineValid) {
+            _restTimerTarget.value = deadline
+            true
+        } else {
+            skipRestTimer()
+            false
+        }
+    }
+
+    suspend fun getActiveExerciseNameForTimer(): String? {
+        val savedExerciseSessionId = settingsManager.restTimerExerciseSessionIdFlow.firstOrNull() ?: return null
+        val exSession = dao.getExerciseSessionById(savedExerciseSessionId) ?: return null
+        return exSession.exerciseNameSnapshot
     }
 
     suspend fun manualCheckIn(gymName: String? = null) {
@@ -71,11 +124,12 @@ class WorkoutEngine(
         )
     }
 
-    suspend fun adjustRestTimer(secondsToAdd: Int) {
+    suspend fun adjustRestTimer(secondsToAdd: Int): Long {
         val currentTarget = _restTimerTarget.value ?: System.currentTimeMillis()
         val newTarget = (currentTarget + (secondsToAdd * 1000L)).coerceAtLeast(System.currentTimeMillis())
         _restTimerTarget.value = newTarget
         settingsManager.setRestTimerDeadline(newTarget)
+        return newTarget
     }
 
     suspend fun skipRestTimer() {
@@ -85,6 +139,86 @@ class WorkoutEngine(
 
     suspend fun getLastExecutionSetsForExercise(exerciseId: Long): List<SetLogEntity> {
         return dao.getLastExecutionSetsForExercise(exerciseId)
+    }
+
+    /**
+     * Replicates the current set's weight and reps to subsequent pending sets of the same SetType.
+     * Does NOT touch completed sets, different SetTypes, or RIR/RPE values.
+     */
+    suspend fun replicateCurrentSet(exerciseSessionId: Long, currentSet: SetLogEntity): SyncResult {
+        val allSets = dao.getSetLogsForExerciseSession(exerciseSessionId)
+        val eligibleSets = mutableListOf<SetLogEntity>()
+        var skippedCompleted = 0
+        var skippedType = 0
+
+        for (set in allSets) {
+            if (set.setNumber > currentSet.setNumber) {
+                if (set.completed) {
+                    skippedCompleted++
+                } else if (set.type != currentSet.type) {
+                    skippedType++
+                } else {
+                    eligibleSets.add(set.copy(weight = currentSet.weight, repetitions = currentSet.repetitions))
+                }
+            }
+        }
+
+        if (eligibleSets.isNotEmpty()) {
+            dao.updateSetLogs(eligibleSets)
+        }
+
+        return SyncResult(
+            updatedCount = eligibleSets.size,
+            skippedCompletedCount = skippedCompleted,
+            skippedDifferentTypeCount = skippedType
+        )
+    }
+
+    /**
+     * Restores weight and reps from the last completed execution of this exercise onto pending current sets.
+     * Maps sets by SetType and position order. Does NOT touch completed sets.
+     */
+    suspend fun restoreLastExecutionSets(exerciseSessionId: Long, actualExerciseId: Long?): SyncResult {
+        val exerciseId = actualExerciseId ?: return SyncResult(updatedCount = 0)
+        val prevSets = dao.getLastExecutionSetsForExercise(exerciseId)
+        if (prevSets.isEmpty()) {
+            return SyncResult(updatedCount = 0)
+        }
+
+        val currentSets = dao.getSetLogsForExerciseSession(exerciseSessionId)
+        if (currentSets.isEmpty()) {
+            return SyncResult(updatedCount = 0)
+        }
+
+        val prevByType = prevSets.groupBy { it.type }
+        val currentByType = currentSets.groupBy { it.type }
+        val eligibleSets = mutableListOf<SetLogEntity>()
+        var skippedCompleted = 0
+
+        for ((type, currentGroup) in currentByType) {
+            val prevGroup = prevByType[type] ?: emptyList()
+            if (prevGroup.isEmpty()) continue
+
+            for ((index, set) in currentGroup.withIndex()) {
+                if (set.completed) {
+                    skippedCompleted++
+                    continue
+                }
+                val sourceSet = prevGroup.getOrNull(index) ?: prevGroup.lastOrNull()
+                if (sourceSet != null) {
+                    eligibleSets.add(set.copy(weight = sourceSet.weight, repetitions = sourceSet.repetitions))
+                }
+            }
+        }
+
+        if (eligibleSets.isNotEmpty()) {
+            dao.updateSetLogs(eligibleSets)
+        }
+
+        return SyncResult(
+            updatedCount = eligibleSets.size,
+            skippedCompletedCount = skippedCompleted
+        )
     }
 
     /**
@@ -172,12 +306,14 @@ class WorkoutEngine(
         templateId: Long?
     ) {
         val newExercise = dao.getExerciseById(newExerciseId) ?: return
+        val exerciseOverride = dao.getOverrideForExercise(newExerciseId)
+        val resolvedExercise = com.example.domain.engine.ExerciseResolver.resolve(newExercise, exerciseOverride)
         
         // Always swap in the current session
         dao.updateExerciseSessionActualExercise(
             exerciseSessionId = exerciseSessionId,
             newExerciseId = newExerciseId,
-            newName = newExercise.name,
+            newName = resolvedExercise.displayName,
             reason = if (permanent) "PERMANENT_SWAP" else "TEMPORARY_SWAP"
         )
         
@@ -227,12 +363,14 @@ class WorkoutEngine(
 
         // 3. Create ExerciseSessions and SetLogs with robust preload & snapshots
         plannedExercises.forEach { plannedWithDetails ->
+            val exerciseOverride = dao.getOverrideForExercise(plannedWithDetails.exercise.id)
+            val resolvedExercise = com.example.domain.engine.ExerciseResolver.resolve(plannedWithDetails.exercise, exerciseOverride)
             val exSessionId = dao.insertExerciseSession(
                 ExerciseSessionEntity(
                     sessionId = sessionId,
                     plannedExerciseId = plannedWithDetails.exercise.id,
                     actualExerciseId = plannedWithDetails.exercise.id,
-                    exerciseNameSnapshot = plannedWithDetails.exercise.name, // Historic snapshot
+                    exerciseNameSnapshot = resolvedExercise.displayName, // Historic snapshot uses resolved name
                     sortOrder = plannedWithDetails.templateExercise.sortOrder,
                     machineLabelSnapshot = plannedWithDetails.templateExercise.machineLabel,
                     primaryMuscleSnapshot = plannedWithDetails.exercise.primaryMuscle,
@@ -240,17 +378,18 @@ class WorkoutEngine(
                 )
             )
 
-            val previousSets = dao.getLastExecutionSetsForExercise(plannedWithDetails.exercise.id)
+            val allPreviousSets = dao.getLastExecutionSetsForExercise(plannedWithDetails.exercise.id)
+            val previousWorkingSets = allPreviousSets.filter { it.type != SetType.WARMUP.name }
             val setsToCreate = mutableListOf<SetLogEntity>()
             
             val targetSets = if (plannedWithDetails.templateExercise.targetSets > 0) plannedWithDetails.templateExercise.targetSets else 3
             val plannedWeight = plannedWithDetails.templateExercise.plannedWeight ?: 0f
             
-            if (previousSets.isNotEmpty()) {
-                val lastWorkingSet = previousSets.lastOrNull { it.type != SetType.WARMUP.name } ?: previousSets.last()
+            if (previousWorkingSets.isNotEmpty()) {
+                val lastWorkingSet = previousWorkingSets.last()
                 
                 for (i in 0 until targetSets) {
-                    val prevSet = previousSets.getOrNull(i) ?: lastWorkingSet
+                    val prevSet = previousWorkingSets.getOrNull(i) ?: lastWorkingSet
                     val setWeight = if (prevSet.weight > 0f) prevSet.weight else (plannedWithDetails.templateExercise.plannedWeight ?: 0f)
                     val setReps = if (prevSet.repetitions > 0) prevSet.repetitions else plannedWithDetails.templateExercise.minReps
                     

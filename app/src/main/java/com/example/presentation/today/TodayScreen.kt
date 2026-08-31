@@ -383,6 +383,7 @@ fun TodayScreen(viewModel: TodayViewModel, onNavigateToExecution: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .imePadding()
                     .padding(16.dp)
             ) {
                 Text("Escolher outro treino para hoje", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)

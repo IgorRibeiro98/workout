@@ -23,7 +23,8 @@ data class ImportResult(
     val alternativesAdded: Int = 0,
     val alternativesExisting: Int = 0,
     val errors: List<String> = emptyList(),
-    val isSkippedSameVersion: Boolean = false
+    val isSkippedSameVersion: Boolean = false,
+    val warnings: List<String> = emptyList()
 )
 
 data class CatalogValidationResult(
@@ -32,7 +33,8 @@ data class CatalogValidationResult(
     val alternativeCount: Int,
     val localePtBr: Boolean,
     val contentVersion: Int,
-    val validationErrors: List<String>
+    val validationErrors: List<String>,
+    val validationWarnings: List<String>
 )
 
 class ManifestImporter(
@@ -72,38 +74,89 @@ class ManifestImporter(
 
     fun validateCatalog(jsonString: String): CatalogValidationResult {
         val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
         var exerciseCount = 0
         var altCount = 0
-        var hasPtBr = true
-        var contentVersion = 1
+        var hasPtBr = false
+        var contentVersion = 0
 
         try {
             val trimmed = jsonString.trim()
             if (trimmed.isEmpty()) {
                 errors.add("Conteúdo JSON está vazio.")
-                return CatalogValidationResult(false, 0, 0, false, 0, errors)
+                return CatalogValidationResult(false, 0, 0, false, 0, errors, warnings)
             }
 
-            val jsonArray: JSONArray = if (trimmed.startsWith("[")) {
-                JSONArray(trimmed)
+            val jsonArray: JSONArray
+            if (trimmed.startsWith("[")) {
+                jsonArray = JSONArray(trimmed)
+                errors.add("Catálogo oficial deve conter objeto raiz com metadados (schemaVersion, contentVersion, locale).")
             } else {
                 val obj = JSONObject(trimmed)
-                if (obj.has("contentVersion")) {
-                    contentVersion = obj.getInt("contentVersion")
-                }
-                if (obj.has("locale")) {
-                    val loc = obj.getString("locale")
-                    if (!loc.equals("pt-BR", ignoreCase = true) && !loc.equals("pt_BR", ignoreCase = true)) {
-                        hasPtBr = false
+                if (!obj.has("schemaVersion")) {
+                    errors.add("schemaVersion é obrigatório.")
+                } else {
+                    val schemaVersion = obj.getInt("schemaVersion")
+                    if (schemaVersion != 1) {
+                        errors.add("Schema version $schemaVersion não suportado.")
                     }
                 }
-                if (obj.has("exercises")) obj.getJSONArray("exercises") else JSONArray().put(obj)
+
+                if (!obj.has("contentVersion")) {
+                    errors.add("contentVersion é obrigatório.")
+                } else {
+                    contentVersion = obj.getInt("contentVersion")
+                    if (contentVersion <= 0) {
+                        errors.add("contentVersion deve ser maior que zero.")
+                    }
+                }
+
+                if (!obj.has("locale")) {
+                    errors.add("locale é obrigatório.")
+                } else {
+                    val loc = obj.getString("locale")
+                    if (loc.equals("pt-BR", ignoreCase = true) || loc.equals("pt_BR", ignoreCase = true)) {
+                        hasPtBr = true
+                    } else {
+                        errors.add("Locale incompatível: $loc. Esperado: pt-BR.")
+                    }
+                }
+
+                if (!obj.has("exercises")) {
+                    errors.add("Objeto raiz deve conter o array 'exercises'.")
+                    jsonArray = JSONArray()
+                } else {
+                    jsonArray = obj.getJSONArray("exercises")
+                }
+                
+                if (!obj.has("exerciseCount")) {
+                    errors.add("exerciseCount é obrigatório.")
+                } else {
+                    val count = obj.getInt("exerciseCount")
+                    if (count != jsonArray.length()) {
+                        errors.add("exerciseCount ($count) não corresponde ao tamanho do array exercises (${jsonArray.length()}).")
+                    }
+                }
             }
 
             exerciseCount = jsonArray.length()
-            if (exerciseCount == 0) {
+            if (exerciseCount == 0 && errors.isEmpty()) {
                 errors.add("Manifesto não contém exercícios.")
             }
+
+            val idSet = mutableSetOf<String>()
+            val alternativeRefs = mutableListOf<Pair<String, String>>() // Pair(exerciseId, alternativeId)
+            val validReasons = setOf(
+                "SAME_MOVEMENT",
+                "SAME_MOVEMENT_DIFFERENT_EQUIPMENT",
+                "SAME_MUSCLE",
+                "EQUIPMENT_CHANGE",
+                "EQUIPMENT_SWAP",
+                "EASIER",
+                "HARDER",
+                "VARIATION",
+                "INJURY_FRIENDLY"
+            )
 
             for (i in 0 until jsonArray.length()) {
                 val item = jsonArray.getJSONObject(i)
@@ -111,17 +164,47 @@ class ManifestImporter(
                 val id = exObj.optString("id")
                 if (id.isNullOrBlank()) {
                     errors.add("Exercício na posição $i não possui 'id' canônico.")
+                    continue
                 }
+                if (!idSet.add(id)) {
+                    errors.add("ID duplicado detectado: $id")
+                }
+                
                 val identity = exObj.optJSONObject("identity")
                 val namePtBr = identity?.optString("namePtBr") ?: exObj.optString("namePtBr")
                 if (namePtBr.isNullOrBlank()) {
                     errors.add("Exercício '$id' não possui 'namePtBr'.")
                 }
+                
                 val alts = exObj.optJSONArray("alternatives")
                 if (alts != null) {
+                    for (j in 0 until alts.length()) {
+                        val altObj = alts.getJSONObject(j)
+                        val altId = altObj.optString("exerciseId").takeIf { it.isNotBlank() } ?: altObj.optString("id")
+                        if (altId.isBlank()) {
+                            warnings.add("Exercício '$id' tem alternativa sem ID.")
+                            continue
+                        }
+                        if (altId == id) {
+                            warnings.add("Exercício '$id' lista a si mesmo como alternativa.")
+                        }
+                        val reason = altObj.optString("reason")
+                        if (reason.isNotBlank() && reason !in validReasons) {
+                            warnings.add("Exercício '$id' tem alternativa '$altId' com reason não reconhecido: $reason")
+                        }
+                        alternativeRefs.add(Pair(id, altId))
+                    }
                     altCount += alts.length()
                 }
             }
+            
+            // Validate alternative references exist
+            for ((exId, altId) in alternativeRefs) {
+                if (altId !in idSet && altId != exId) {
+                    warnings.add("Exercício '$exId' referencia alternativa inexistente no catálogo: '$altId'.")
+                }
+            }
+
         } catch (e: JSONException) {
             errors.add("Sintaxe JSON inválida: ${e.message}")
         } catch (e: Exception) {
@@ -134,7 +217,8 @@ class ManifestImporter(
             alternativeCount = altCount,
             localePtBr = hasPtBr,
             contentVersion = contentVersion,
-            validationErrors = errors
+            validationErrors = errors,
+            validationWarnings = warnings
         )
     }
 
@@ -293,7 +377,7 @@ class ManifestImporter(
                     if (altsArr != null) {
                         for (j in 0 until altsArr.length()) {
                             val altObj = altsArr.getJSONObject(j)
-                            val altId = altObj.optString("exerciseId")
+                            val altId = altObj.optString("exerciseId").takeIf { it.isNotBlank() } ?: altObj.optString("id")
                             val reason = altObj.optString("reason", "SAME_MUSCLE")
 
                             if (altId.equals(canonicalId, ignoreCase = true)) {

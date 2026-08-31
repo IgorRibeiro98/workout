@@ -23,13 +23,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.WorkoutProgramEntity
 import com.example.ui.theme.*
+import com.example.ui.components.SwipeAction
+import com.example.ui.components.SwipeActionRow
+
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.res.stringResource
+import com.example.R
+import com.example.ui.components.ActionBottomSheet
+import com.example.ui.components.ActionItemData
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutsScreen(viewModel: WorkoutsViewModel, onProgramClick: (Long) -> Unit) {
     val programs by viewModel.programs.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
+    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
+
     var showAddProgramDialog by remember { mutableStateOf(false) }
     var programToDelete by remember { mutableStateOf<WorkoutProgramEntity?>(null) }
+    var activeProgramForSheet by remember { mutableStateOf<WorkoutProgramEntity?>(null) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -68,36 +82,18 @@ fun WorkoutsScreen(viewModel: WorkoutsViewModel, onProgramClick: (Long) -> Unit)
             
             items(programs, key = { it.id }) { program ->
                 val isCurrent = program.isCurrent
-                val dismissState = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { dismissValue ->
-                        if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                            programToDelete = program
-                            false
-                        } else false
-                    }
+                val endAction = SwipeAction(
+                    icon = Icons.Default.Delete,
+                    label = "Excluir",
+                    backgroundColor = Color.Red.copy(alpha = 0.8f),
+                    contentColor = Color.White,
+                    onTrigger = { programToDelete = program }
                 )
 
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    backgroundContent = {
-                        val color by animateColorAsState(
-                            when (dismissState.targetValue) {
-                                SwipeToDismissBoxValue.EndToStart -> Color.Red.copy(alpha = 0.8f)
-                                else -> Color.Transparent
-                            }
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(color)
-                                .padding(end = 24.dp),
-                            contentAlignment = Alignment.CenterEnd
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Excluir", tint = Color.White)
-                        }
-                    }
+                SwipeActionRow(
+                    endAction = endAction,
+                    hapticEnabled = hapticEnabled,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
                 ) {
                     Row(
                         modifier = Modifier
@@ -131,12 +127,45 @@ fun WorkoutsScreen(viewModel: WorkoutsViewModel, onProgramClick: (Long) -> Unit)
                                 )
                             }
                         }
-                        Icon(Icons.Default.ChevronRight, contentDescription = "Abrir", tint = TextSecondary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { activeProgramForSheet = program }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "Opções do programa", tint = TextSecondary)
+                            }
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Abrir", tint = TextSecondary)
+                        }
                     }
                 }
             }
             item { Spacer(modifier = Modifier.height(80.dp)) }
         }
+    }
+
+    if (activeProgramForSheet != null) {
+        val program = activeProgramForSheet!!
+        ActionBottomSheet(
+            onDismissRequest = { activeProgramForSheet = null },
+            title = stringResource(id = R.string.sheet_program_options),
+            subtitle = program.name,
+            actions = listOf(
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_open_program),
+                    icon = Icons.Default.ChevronRight,
+                    onClick = { onProgramClick(program.id) }
+                ),
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_activate_program),
+                    icon = Icons.Default.CheckCircle,
+                    enabled = !program.isCurrent,
+                    onClick = { viewModel.setCurrentProgram(program.id) }
+                ),
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_delete_program),
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    onClick = { programToDelete = program }
+                )
+            )
+        )
     }
 
     if (programToDelete != null) {

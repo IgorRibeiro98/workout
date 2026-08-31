@@ -25,6 +25,17 @@ class ExerciseDetailsViewModel(
         emit(workoutDao.getExerciseById(exerciseId))
     }
 
+    fun getResolvedExercise(exerciseId: Long): Flow<com.example.domain.model.ResolvedExercise?> {
+        return combine(
+            getExerciseInfo(exerciseId),
+            getUserOverride(exerciseId),
+            showGifs
+        ) { exercise, override, showGifs ->
+            if (exercise == null) null
+            else com.example.domain.engine.ExerciseResolver.resolve(exercise, override, showGifs)
+        }
+    }
+
     fun getUserOverride(exerciseId: Long): Flow<ExerciseUserOverrideEntity?> {
         return workoutDao.getOverrideForExerciseFlow(exerciseId)
     }
@@ -32,13 +43,7 @@ class ExerciseDetailsViewModel(
     fun saveUserOverride(override: ExerciseUserOverrideEntity) {
         viewModelScope.launch {
             workoutDao.insertOrUpdateOverride(override)
-            // Also keep exercise entity customPhotoUri in sync if changed
-            if (override.customPhotoUri != null) {
-                val ex = workoutDao.getExerciseById(override.exerciseId)
-                if (ex != null) {
-                    workoutDao.updateExercise(ex.copy(customPhotoUri = override.customPhotoUri))
-                }
-            }
+
         }
     }
 
@@ -55,10 +60,17 @@ class ExerciseDetailsViewModel(
         }
     }
 
-    fun getAlternatives(exerciseId: Long): Flow<List<ExerciseEntity>> = flow {
-        val alts = workoutDao.getAlternativesForExercise(exerciseId)
-        val exList = alts.mapNotNull { workoutDao.getExerciseById(it.alternativeExerciseId) }
-        emit(exList)
+    fun getAlternatives(exerciseId: Long): Flow<List<com.example.domain.model.ResolvedExercise>> = combine(
+        flow {
+            val alts = workoutDao.getAlternativesForExercise(exerciseId)
+            val exList = alts.mapNotNull { workoutDao.getExerciseById(it.alternativeExerciseId) }
+            emit(exList)
+        },
+        workoutDao.getAllOverridesFlow(),
+        showGifs
+    ) { exList, overrides, showGifsEnabled ->
+        val overrideMap = overrides.associateBy { it.exerciseId }
+        exList.map { com.example.domain.engine.ExerciseResolver.resolve(it, overrideMap[it.id], showGifsEnabled) }
     }
 
     fun getPersonalRecords(exerciseId: Long): Flow<List<PersonalRecordEntity>> {

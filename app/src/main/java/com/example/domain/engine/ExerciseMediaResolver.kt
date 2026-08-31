@@ -13,7 +13,7 @@ object ExerciseMediaResolver {
         showGifs: Boolean = true
     ): ResolvedMedia {
         // Priority 1: User custom photo URI (from override or exercise entity)
-        val customPhoto = override?.customPhotoUri ?: exercise?.customPhotoUri
+        val customPhoto = override?.customPhotoUri
         if (!customPhoto.isNullOrBlank()) {
             return ResolvedMedia(
                 mediaUri = customPhoto,

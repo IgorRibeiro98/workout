@@ -16,6 +16,7 @@ data class ProgramImportResult(
     val workoutsCount: Int = 0,
     val exercisesCount: Int = 0,
     val missingExercises: Int = 0,
+    val isSkippedSameVersion: Boolean = false,
     val error: String? = null
 )
 
@@ -52,13 +53,16 @@ class ProgramImporter(
             val programObj = root.optJSONObject("program") 
                 ?: return@withContext ProgramImportResult(false, error = "JSON inválido: objeto 'program' não encontrado")
 
+            val schemaVersion = root.optInt("schemaVersion", 1)
+            val locale = root.optString("locale").takeIf { it.isNotBlank() }
+            val rootContentVersion = if (root.has("contentVersion")) root.getInt("contentVersion") else null
+
             val pName = programObj.optString("name", "Programa Importado").trim()
             if (pName.isBlank()) {
                 return@withContext ProgramImportResult(false, error = "Nome do programa não pode ser vazio")
             }
 
-            val programCanonicalId = programObj.optString("id").takeIf { it.isNotBlank() }
-                ?: programObj.optString("canonicalId").takeIf { it.isNotBlank() }
+            val pDescription = programObj.optString("description").takeIf { it.isNotBlank() }
 
             val workoutsArr = programObj.optJSONArray("workouts")
             if (workoutsArr == null || workoutsArr.length() == 0) {
@@ -69,22 +73,54 @@ class ProgramImporter(
             var exercisesCount = 0
             var missingExercises = 0
 
+            // Support program.id, externalId, canonicalId
+            val programExternalId = programObj.optString("id").takeIf { it.isNotBlank() }
+                ?: programObj.optString("externalId").takeIf { it.isNotBlank() }
+                ?: programObj.optString("canonicalId").takeIf { it.isNotBlank() }
+
+            val programContentVersion = if (programObj.has("contentVersion")) {
+                programObj.getInt("contentVersion")
+            } else {
+                rootContentVersion ?: 0
+            }
+
+            var isSkipped = false
+
             database.withTransaction {
-                // Idempotent program insertion: check if program with canonicalId or name already exists
-                val existingProgram = if (programCanonicalId != null) {
-                    dao.getAllProgramsSync().firstOrNull { it.name == pName }
+                val existingProgram = if (programExternalId != null) {
+                    dao.getProgramByExternalId(programExternalId)
                 } else {
-                    dao.getAllProgramsSync().firstOrNull { it.name == pName }
+                    null
                 }
 
-                val programId = existingProgram?.id ?: dao.insertProgram(
-                    WorkoutProgramEntity(name = pName, isCurrent = false)
-                )
-
-                if (existingProgram != null) {
-                    // Update existing program name
-                    dao.updateProgram(existingProgram.copy(name = pName))
+                val programId = if (existingProgram != null) {
+                    // Check version: same externalId + higher version -> update; same version -> idempotent
+                    if (programContentVersion > existingProgram.contentVersion) {
+                        dao.updateProgram(
+                            existingProgram.copy(
+                                name = pName,
+                                description = pDescription ?: existingProgram.description,
+                                contentVersion = programContentVersion
+                            )
+                        )
+                        existingProgram.id
+                    } else {
+                        // Idempotent, ignore
+                        isSkipped = true
+                        return@withTransaction
+                    }
+                } else {
+                    dao.insertProgram(
+                        WorkoutProgramEntity(
+                            name = pName,
+                            description = pDescription,
+                            isCurrent = false,
+                            externalId = programExternalId,
+                            contentVersion = programContentVersion
+                        )
+                    )
                 }
+
 
                 for (i in 0 until workoutsArr.length()) {
                     val wObj = workoutsArr.getJSONObject(i)
@@ -118,13 +154,13 @@ class ProgramImporter(
                     if (exArr != null) {
                         for (j in 0 until exArr.length()) {
                             val weObj = exArr.getJSONObject(j)
-                            val canonicalId = weObj.optString("exerciseId")
-                            val exName = weObj.optString("name")
+                            val externalId = weObj.optString("externalId").takeIf { it.isNotBlank() }
+                            val canonicalId = weObj.optString("exerciseId").takeIf { it.isNotBlank() } ?: weObj.optString("canonicalId").takeIf { it.isNotBlank() }
 
-                            val exEntity = if (canonicalId.isNotBlank()) {
-                                dao.getExerciseByCanonicalId(canonicalId)
-                            } else if (exName.isNotBlank()) {
-                                dao.getExerciseByName(exName)
+                            val targetId = externalId ?: canonicalId
+                            
+                            val exEntity = if (targetId != null) {
+                                dao.getExerciseByCanonicalId(targetId)
                             } else null
 
                             if (exEntity != null) {
@@ -151,7 +187,14 @@ class ProgramImporter(
                 }
             }
 
-            ProgramImportResult(true, pName, workoutsCount, exercisesCount, missingExercises)
+            ProgramImportResult(
+                success = true,
+                programName = pName,
+                workoutsCount = workoutsCount,
+                exercisesCount = exercisesCount,
+                missingExercises = missingExercises,
+                isSkippedSameVersion = isSkipped
+            )
         } catch (e: JSONException) {
             ProgramImportResult(false, error = "JSON malformatado: ${e.message}")
         } catch (e: Exception) {

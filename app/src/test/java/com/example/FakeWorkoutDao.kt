@@ -2,28 +2,35 @@ package com.example
 
 import com.example.data.local.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 
 class FakeWorkoutDao : WorkoutDao {
-    val exercises = mutableListOf<ExerciseEntity>()
-    val overrides = mutableListOf<ExerciseUserOverrideEntity>()
-    val programs = mutableListOf<WorkoutProgramEntity>()
-    val templates = mutableListOf<WorkoutTemplateEntity>()
-    val templateExercises = mutableListOf<WorkoutTemplateExerciseEntity>()
-    val alternatives = mutableListOf<ExerciseAlternativeEntity>()
-    val sessions = mutableListOf<WorkoutSessionEntity>()
-    val exerciseSessions = mutableListOf<ExerciseSessionEntity>()
-    val setLogs = mutableListOf<SetLogEntity>()
-    val prs = mutableListOf<PersonalRecordEntity>()
+    private val exercises = mutableListOf<ExerciseEntity>()
+    private val programs = mutableListOf<WorkoutProgramEntity>()
+    private val programsFlow = MutableStateFlow<List<WorkoutProgramEntity>>(emptyList())
+    private val templates = mutableListOf<WorkoutTemplateEntity>()
+    private val templateExercises = mutableListOf<WorkoutTemplateExerciseEntity>()
+    private val sessions = mutableListOf<WorkoutSessionEntity>()
+    private val exerciseSessions = mutableListOf<ExerciseSessionEntity>()
+    private val setLogs = mutableListOf<SetLogEntity>()
+    private val prs = mutableListOf<PersonalRecordEntity>()
+    private val checkIns = mutableListOf<CheckInEntity>()
+    private val alternatives = mutableListOf<ExerciseAlternativeEntity>()
+    private val overrides = mutableListOf<ExerciseUserOverrideEntity>()
 
-    override fun getActiveExercises(): Flow<List<ExerciseEntity>> = flowOf(exercises.filter { it.active })
-    override suspend fun getAllExercisesList(): List<ExerciseEntity> = exercises.filter { it.active }
+    override fun getActiveExercises(): Flow<List<ExerciseEntity>> = flowOf(exercises)
+    override suspend fun getAllExercisesSync(): List<ExerciseEntity> = exercises
     override suspend fun insertExercise(exercise: ExerciseEntity): Long {
         val id = (exercises.maxOfOrNull { it.id } ?: 0L) + 1L
-        val newEx = exercise.copy(id = id)
-        exercises.add(newEx)
+        exercises.add(exercise.copy(id = id))
         return id
     }
+
+    override suspend fun getAllExercisesList(): List<ExerciseEntity> = exercises
+    override suspend fun getExerciseByCanonicalId(canonicalId: String): ExerciseEntity? = exercises.firstOrNull { it.canonicalId == canonicalId }
+    override suspend fun getExerciseByName(name: String): ExerciseEntity? = exercises.firstOrNull { it.name == name }
+
     override suspend fun updateExercise(exercise: ExerciseEntity) {
         val idx = exercises.indexOfFirst { it.id == exercise.id }
         if (idx >= 0) exercises[idx] = exercise
@@ -31,31 +38,35 @@ class FakeWorkoutDao : WorkoutDao {
     override suspend fun deleteExercise(exercise: ExerciseEntity) {
         exercises.removeAll { it.id == exercise.id }
     }
-    override suspend fun getExerciseByCanonicalId(canonicalId: String): ExerciseEntity? =
-        exercises.firstOrNull { it.canonicalId == canonicalId }
-    override suspend fun getExerciseByName(name: String): ExerciseEntity? =
-        exercises.firstOrNull { it.name.equals(name, ignoreCase = true) }
-    override suspend fun getAllExercisesSync(): List<ExerciseEntity> = exercises.toList()
+    
+    override suspend fun getProgramByExternalId(externalId: String): WorkoutProgramEntity? {
+        return programs.firstOrNull { it.externalId == externalId }
+    }
 
-    override fun getAllPrograms(): Flow<List<WorkoutProgramEntity>> = flowOf(programs)
-    override suspend fun getAllProgramsSync(): List<WorkoutProgramEntity> = programs.toList()
-    override fun getCurrentProgram(): Flow<WorkoutProgramEntity?> = flowOf(programs.firstOrNull { it.isCurrent })
+    override fun getAllPrograms(): Flow<List<WorkoutProgramEntity>> = programsFlow
+    override suspend fun getAllProgramsSync(): List<WorkoutProgramEntity> = programs
+    override fun getCurrentProgram(): Flow<WorkoutProgramEntity?> =
+        flowOf(programs.firstOrNull { it.isCurrent })
     override suspend fun insertProgram(program: WorkoutProgramEntity): Long {
         val id = (programs.maxOfOrNull { it.id } ?: 0L) + 1L
         programs.add(program.copy(id = id))
+        programsFlow.value = programs
         return id
     }
     override suspend fun updateProgram(program: WorkoutProgramEntity) {
         val idx = programs.indexOfFirst { it.id == program.id }
         if (idx >= 0) programs[idx] = program
+        programsFlow.value = programs
     }
     override suspend fun clearCurrentProgram() {
         programs.indices.forEach { programs[it] = programs[it].copy(isCurrent = false) }
+        programsFlow.value = programs
     }
     override suspend fun setCurrentProgram(id: Long) {
         clearCurrentProgram()
         val idx = programs.indexOfFirst { it.id == id }
         if (idx >= 0) programs[idx] = programs[idx].copy(isCurrent = true)
+        programsFlow.value = programs
     }
 
     override fun getTemplatesForProgram(programId: Long): Flow<List<WorkoutTemplateEntity>> =
@@ -109,18 +120,28 @@ class FakeWorkoutDao : WorkoutDao {
         val idx = setLogs.indexOfFirst { it.id == setLog.id }
         if (idx >= 0) setLogs[idx] = setLog
     }
+    override suspend fun getSetLogsForExerciseSession(exerciseSessionId: Long): List<SetLogEntity> =
+        setLogs.filter { it.exerciseSessionId == exerciseSessionId }
+
+    override suspend fun updateSetLogs(setLogs: List<SetLogEntity>) {
+        setLogs.forEach { updated ->
+            val idx = this.setLogs.indexOfFirst { it.id == updated.id }
+            if (idx >= 0) this.setLogs[idx] = updated
+        }
+    }
+
     override suspend fun deleteSetLog(setLog: SetLogEntity) {
         setLogs.removeAll { it.id == setLog.id }
     }
     override suspend fun deleteProgram(program: WorkoutProgramEntity) {
         programs.removeAll { it.id == program.id }
+        programsFlow.value = programs
     }
     override suspend fun deleteTemplate(template: WorkoutTemplateEntity) {
         templates.removeAll { it.id == template.id }
     }
     override suspend fun getTemplateById(templateId: Long): WorkoutTemplateEntity? =
         templates.firstOrNull { it.id == templateId }
-
     override suspend fun insertPersonalRecord(pr: PersonalRecordEntity) {
         prs.add(pr)
     }
@@ -129,31 +150,28 @@ class FakeWorkoutDao : WorkoutDao {
     override fun getPRsForExerciseFlow(exerciseId: Long): Flow<List<PersonalRecordEntity>> =
         flowOf(prs.filter { it.exerciseId == exerciseId })
     override fun getRecentPRsFlow(): Flow<List<PersonalRecordEntity>> = flowOf(prs)
-
+    
     override suspend fun insertCheckIn(checkIn: CheckInEntity): Long = 1L
     override suspend fun updateCheckIn(checkIn: CheckInEntity) {}
     override suspend fun deleteCheckIn(checkIn: CheckInEntity) {}
     override suspend fun getActiveCheckIn(): CheckInEntity? = null
     override fun getActiveCheckInFlow(): Flow<CheckInEntity?> = flowOf(null)
     override suspend fun getCheckInForSession(sessionId: Long): CheckInEntity? = null
+    
     override fun getAllCompletedSessionsWithDetailsFlow(): Flow<List<SessionCalendarSummary>> = flowOf(emptyList())
     override suspend fun getAllCompletedSessionsWithDetails(): List<SessionCalendarSummary> = emptyList()
     override suspend fun deleteWorkoutSession(session: WorkoutSessionEntity) {
         sessions.removeAll { it.id == session.id }
     }
-
     override suspend fun getAlternativesForExercise(exerciseId: Long): List<ExerciseAlternativeEntity> =
         alternatives.filter { it.exerciseId == exerciseId }
     override suspend fun insertAlternative(alt: ExerciseAlternativeEntity): Long {
-        if (alternatives.any { it.exerciseId == alt.exerciseId && it.alternativeExerciseId == alt.alternativeExerciseId }) {
-            return -1L
-        }
         val id = (alternatives.maxOfOrNull { it.id } ?: 0L) + 1L
         alternatives.add(alt.copy(id = id))
         return id
     }
     override suspend fun getExerciseById(id: Long): ExerciseEntity? = exercises.firstOrNull { it.id == id }
-
+    
     override fun getOverrideForExerciseFlow(exerciseId: Long): Flow<ExerciseUserOverrideEntity?> =
         flowOf(overrides.firstOrNull { it.exerciseId == exerciseId })
     override suspend fun getOverrideForExercise(exerciseId: Long): ExerciseUserOverrideEntity? =
@@ -171,7 +189,7 @@ class FakeWorkoutDao : WorkoutDao {
     override suspend fun getCanonicalExercisesCount(): Int = exercises.count { !it.canonicalId.isNullOrBlank() }
     override suspend fun getExerciseSessionById(id: Long): ExerciseSessionEntity? =
         exerciseSessions.firstOrNull { it.id == id }
-
+        
     override suspend fun getExplicitAlternatives(exerciseId: Long): List<ExerciseEntity> = emptyList()
     override suspend fun getAlternativesBySubstitutionGroup(exerciseId: Long): List<ExerciseEntity> = emptyList()
     override suspend fun getAlternativesByMovementPattern(exerciseId: Long): List<ExerciseEntity> = emptyList()
@@ -184,5 +202,8 @@ class FakeWorkoutDao : WorkoutDao {
         templateExercises.add(templateExercise)
     }
     override suspend fun updateTemplateExerciseFull(templateExercise: WorkoutTemplateExerciseEntity) {}
+    override suspend fun getAllTemplatesSync(): List<WorkoutTemplateEntity> = templates
+    override suspend fun getSessionById(id: Long): WorkoutSessionEntity? = sessions.firstOrNull { it.id == id }
+    override suspend fun getExerciseSessionsForSession(sessionId: Long): List<ExerciseSessionEntity> = exerciseSessions.filter { it.sessionId == sessionId }
     override suspend fun deleteTemplateExercise(templateExercise: WorkoutTemplateExerciseEntity) {}
 }
