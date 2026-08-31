@@ -1,108 +1,25 @@
-package com.example.domain.engine
+import re
 
-import android.content.Context
-import androidx.room.withTransaction
-import com.example.data.datastore.SettingsManager
-import com.example.data.local.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
+with open('app/src/main/java/com/example/domain/engine/PremiumManifestImporter.kt', 'r') as f:
+    content = f.read()
 
-class PremiumManifestImporter(
-    private val database: AppDatabase,
-    private val context: Context,
-    private val settingsManager: SettingsManager = SettingsManager(context)
-) {
-    private val dao = database.workoutDao()
+# We need to support reading the new v2 arrays as JSON Strings to store in DB.
+# For example, `identity` arrays are `aliases`, etc.
+# In v2, classification has `primaryMuscles`, `secondaryMuscles`, `equipment` as arrays. We can join them.
+# `bodyRegion`, `trainingGoals` need to be parsed.
+# `execution.setup` is an object. We can store it as string (JSON).
+# `education.tips`, `commonMistakes`, `coachNote` (string instead of array of strings).
+# `progression.method`, `repRange` (object), `setsRecommendation`, `progressionRule`, `increment` (object).
+# `safety.riskLevel`, `attentionPoints`, `commonDiscomforts`.
+# `media.gif`, `images`, `videos`.
 
-    suspend fun importFromAssets(
-        assetPath: String = "catalog/exercise-content-manifest.v1.json",
-        force: Boolean = false
-    ): ImportResult = withContext(Dispatchers.IO) {
-        val errors = mutableListOf<String>()
-        var added = 0
-        var updated = 0
-        var ignored = 0
-
-        try {
-            val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
-            val root = JSONObject(jsonString)
-            
-            // Validate schemaVersion
-            if (root.has("schemaVersion") && root.getInt("schemaVersion") < 1) {
-                errors.add("Versão de schema inválida.")
-                return@withContext ImportResult(errors = errors)
-            }
-            
-            val contentVersion = root.optInt("contentVersion", 1)
-            
-            if (!force) {
-                val currentVersion = settingsManager.installedCatalogContentVersionFlow.first()
-                if (currentVersion >= contentVersion) {
-                    return@withContext ImportResult(ignored = root.optJSONArray("exercises")?.length() ?: 0, unchanged = root.optJSONArray("exercises")?.length() ?: 0)
-                }
-            }
-            
-            val exercisesArray = if (root.has("exercises")) root.getJSONArray("exercises") else JSONArray().put(root)
-            
-            // Validation step
-            for (i in 0 until exercisesArray.length()) {
-                val exObj = exercisesArray.getJSONObject(i)
-                val id = exObj.optString("id")
-                if (id.isEmpty()) {
-                    errors.add("Exercício no índice $i: campo id ausente.")
-                    continue
-                }
-                
-                val identity = exObj.optJSONObject("identity")
-                if (identity == null) {
-                    errors.add("Exercício: $id Problema: campo identity ausente.")
-                    continue
-                }
-                val namePtBr = identity.optString("namePtBr")
-                if (namePtBr.isEmpty()) {
-                    errors.add("Exercício: $id Problema: campo identity.namePtBr ausente.")
-                    continue
-                }
-                val nameEn = identity.optString("nameEn")
-                if (nameEn.isEmpty()) {
-                    errors.add("Exercício: $id Problema: campo identity.nameEn ausente.")
-                    continue
-                }
-                
-                val classification = exObj.optJSONObject("classification")
-                if (classification == null) {
-                    errors.add("Exercício: $id Problema: campo classification ausente.")
-                    continue
-                }
-                
-                val execution = exObj.optJSONObject("execution")
-                if (execution == null) {
-                    errors.add("Exercício: $id Problema: campo execution ausente.")
-                    continue
-                }
-            }
-            
-            if (errors.isNotEmpty()) {
-                return@withContext ImportResult(errors = errors)
-            }
-            
-            database.withTransaction {
-                for (i in 0 until exercisesArray.length()) {
-                    val exObj = exercisesArray.getJSONObject(i)
-                    val id = exObj.optString("id")
-                    
-                    var existing = dao.getExerciseByCanonicalId(id)
-                    var exerciseId: Long = 0
-
-
+# Replace the parsing logic.
+new_parsing = """
                     // Support both v1 and v2 based on schemaVersion
-                    val schemaVersion = root.optInt("schemaVersion", 1)
+                    val schemaVersion = manifestObj.optInt("schemaVersion", 1)
 
                     val identity = exObj.optJSONObject("identity")
-                    val namePtBr = identity?.optString("namePtBr") ?: continue
+                    val namePtBr = identity?.optString("namePtBr") ?: return@forEach
                     val nameEn = identity?.optString("nameEn")
                     val shortDescription = identity?.optString("shortDescription")
                     val aliases = identity?.optJSONArray("aliases")?.let { arr -> 
@@ -318,17 +235,12 @@ class PremiumManifestImporter(
                         )
                         dao.insertExerciseAiContext(entity)
                     }
-                }
-            }
-            
-            if (contentVersion > 0) {
-                settingsManager.setInstalledCatalogContentVersion(contentVersion)
-            }
-            
-        } catch (e: Exception) {
-            errors.add("Erro ao importar manifesto premium: ${e.message}")
-        }
+"""
 
-        return@withContext ImportResult(added = added, updated = updated, ignored = ignored, errors = errors)
-    }
-}
+start_idx = content.find("                    val aliases = identity")
+end_idx = content.find("                }\n            }\n            \n            if (contentVersion > 0)")
+if start_idx != -1 and end_idx != -1:
+    content = content[:content.rfind("                    val identity = exObj.optJSONObject(\"identity\")")] + new_parsing + content[end_idx:]
+
+with open('app/src/main/java/com/example/domain/engine/PremiumManifestImporter.kt', 'w') as f:
+    f.write(content)

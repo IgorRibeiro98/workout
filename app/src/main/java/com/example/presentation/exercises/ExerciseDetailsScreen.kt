@@ -51,6 +51,8 @@ import com.example.domain.engine.ExerciseMediaResolver
 import com.example.domain.engine.ExerciseVideoRegistry
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.theme.*
+import com.example.presentation.exercises.components.premium.*
+
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -145,215 +147,86 @@ fun ExerciseDetailsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Photo / GIF / Media Banner
+
+            // HERO SECTION
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        if (!resolvedMedia?.mediaUri.isNullOrBlank()) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(context)
-                                    .data(resolvedMedia?.mediaUri)
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = "Mídia de demonstração para $resolvedName",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp)
-                                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(140.dp)
-                                    .background(SurfaceHighlight),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(muscleGroup.icon, contentDescription = null, tint = muscleGroup.color, modifier = Modifier.size(48.dp))
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text("Sem imagem ou GIF cadastrado", color = TextSecondary, fontSize = 12.sp)
-                                }
-                            }
-                        }
-
-                        // Photo Actions (Add/Change Custom Photo)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = when {
-                                    resolvedMedia?.isCustomPhoto == true -> "Foto personalizada ativa"
-                                    resolvedMedia?.isGif == true -> "GIF animado ativo"
-                                    else -> "Mídia padrão"
-                                },
-                                color = if (resolvedMedia?.isCustomPhoto == true) Lime400 else TextSecondary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (resolvedMedia?.isCustomPhoto == true) {
-                                    IconButton(
-                                        onClick = { viewModel.removeCustomPhoto(exerciseId) },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Remover foto", tint = Red500, modifier = Modifier.size(18.dp))
-                                    }
-                                }
-                                Button(
-                                    onClick = {
-                                        photoPickerLauncher.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                        )
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceHighlight, contentColor = TextPrimary),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp), tint = Lime400)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(if (resolvedMedia?.isCustomPhoto == true) "Trocar Foto" else "Adicionar Foto", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
+                ExerciseHeroCard(
+                    title = exerciseInfo?.name ?: "",
+                    primaryMuscle = primaryMuscle,
+                    equipment = equipment,
+                    difficulty = exerciseInfo?.difficulty,
+                    mediaUrl = resolvedMedia?.mediaUri
+                )
             }
-
-
-            // PREMIUM CONTENT & OVERVIEW
+            
+            // ABOUT
             item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    val premium = premiumInfo
-
-                    // Section: Sobre
-                    Text("Sobre", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(top = 16.dp))
-                    HorizontalDivider(color = SurfaceHighlight)
-                    if (!resolvedNotes.isNullOrBlank() || exerciseInfo?.shortDescription != null) {
-                        Text(
-                            text = resolvedNotes ?: exerciseInfo?.shortDescription ?: "",
-                            color = TextSecondary,
-                            fontSize = 14.sp
+                ExerciseAboutCard(
+                    description = resolvedNotes ?: exerciseInfo?.shortDescription,
+                    primaryMuscles = primaryMuscle,
+                    secondaryMuscles = secondaryMuscles.joinToString(", "),
+                    equipment = equipment,
+                    difficulty = exerciseInfo?.difficulty
+                )
+            }
+            
+            // PREMIUM CONTENT
+            if (premiumInfo != null) {
+                val premium = premiumInfo!!
+                
+                if (premium.execution != null) {
+                    item {
+                        ExerciseExecutionCard(
+                            setupJson = premium.execution.setup,
+                            stepsJson = premium.execution.steps,
+                            breathingJson = premium.execution.breathing
                         )
                     }
-                    if (!primaryMuscle.isNullOrEmpty()) {
-                        Text("Músculos: ${primaryMuscle}" + if (secondaryMuscles.isNotEmpty()) ", ${secondaryMuscles.joinToString(", ")}" else "", color = TextSecondary, fontSize = 14.sp)
+                }
+                
+                if (premium.education != null) {
+                    if (!premium.education.tips.isNullOrEmpty()) {
+                        item { ExerciseTipsCard(premium.education.tips) }
                     }
-                    if (!equipment.isNullOrEmpty()) {
-                        Text("Equipamento: $equipment", color = TextSecondary, fontSize = 14.sp)
+                    if (!premium.education.commonMistakes.isNullOrEmpty()) {
+                        item { ExerciseMistakesCard(premium.education.commonMistakes) }
                     }
-                    exerciseInfo?.difficulty?.let { Text("Dificuldade: $it", color = TextSecondary, fontSize = 14.sp) }
-
-                    // Section: Como executar
-                    if (premium?.execution != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Como executar", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        
-                        premium.execution.setup?.let { Text("Preparação: $it", color = TextSecondary, fontSize = 14.sp) }
-                        
-                        premium.execution.steps?.let { steps ->
-                            val stepsList = try {
-                                val arr = org.json.JSONArray(steps)
-                                (0 until arr.length()).map { arr.getString(it) }
-                            } catch(e: Exception) { emptyList<String>() }
-                            
-                            if (stepsList.isNotEmpty()) {
-                                stepsList.forEachIndexed { i, step ->
-                                    Text("${i+1}. $step", color = TextSecondary, fontSize = 14.sp)
-                                }
-                            }
-                        }
-                        
-                        premium.execution.breathing?.let { Text("Respiração: $it", color = TextSecondary, fontSize = 14.sp) }
+                }
+                
+                if (premium.progression != null) {
+                    item {
+                        ExerciseProgressionCard(
+                            method = premium.progression.progressionMethod,
+                            repRange = premium.progression.repRange,
+                            rule = premium.progression.increaseRule,
+                            sets = premium.progression.standardSets,
+                            incUpper = premium.progression.incrementUpper,
+                            incLower = premium.progression.incrementLower
+                        )
                     }
-
-                    // Section: Dicas
-                    if (premium?.education?.tips != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Dicas", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        val tipsList = try { val arr = org.json.JSONArray(premium.education.tips!!); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                        tipsList.forEach { tip ->
-                            Text("• $tip", color = TextSecondary, fontSize = 14.sp)
-                        }
+                }
+                
+                if (premium.substitution != null) {
+                    item {
+                        ExerciseSubstitutionCard(
+                            sameMovement = premium.substitution.sameMovement,
+                            sameMuscle = premium.substitution.sameMuscle,
+                            notRecommended = premium.substitution.notRecommended
+                        )
                     }
-
-                    // Section: Erros comuns
-                    if (premium?.education?.commonMistakes != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Erros comuns", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        val mistakesList = try { val arr = org.json.JSONArray(premium.education.commonMistakes!!); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                        mistakesList.forEach { mistake ->
-                            Text("• $mistake", color = TextSecondary, fontSize = 14.sp)
-                        }
-                    }
-
-                    // Section: Progressão
-                    if (premium?.progression != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Progressão", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        premium.progression.repRange?.let { Text("Faixa recomendada: $it", color = TextSecondary, fontSize = 14.sp) }
-                        premium.progression.increaseRule?.let { Text("Regra de evolução: $it", color = TextSecondary, fontSize = 14.sp) }
-                    }
-                    
-                    // Section: Alternativas
-                    if (premium?.substitution != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Alternativas", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        premium.substitution.sameMovement?.let { sm ->
-                            val smList = try { val arr = org.json.JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                            if (smList.isNotEmpty()) {
-                                Text("Mesmo movimento: ${smList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
-                            }
-                        }
-                        premium.substitution.sameMuscle?.let { sm ->
-                            val smList = try { val arr = org.json.JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                            if (smList.isNotEmpty()) {
-                                Text("Mesmo grupo muscular: ${smList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
-                            }
-                        }
-                    }
-
-                    // Section: Cuidados
-                    if (premium?.safety != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Cuidados", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        HorizontalDivider(color = SurfaceHighlight)
-                        premium.safety.riskLevel?.let { Text("Nível de risco: $it", color = TextSecondary, fontSize = 14.sp) }
-                        premium.safety.attentionPoints?.let { points ->
-                            val pointsList = try { val arr = org.json.JSONArray(points); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                            pointsList.forEach { p ->
-                                Text("• $p", color = TextSecondary, fontSize = 14.sp)
-                            }
-                        }
-                        premium.safety.commonDiscomforts?.let { points ->
-                            val pointsList = try { val arr = org.json.JSONArray(points); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                            if (pointsList.isNotEmpty()) {
-                                Text("Desconfortos comuns: ${pointsList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
-                            }
-                        }
+                }
+                
+                if (premium.safety != null) {
+                    item {
+                        ExerciseSafetyCard(
+                            riskLevel = premium.safety.riskLevel,
+                            attentionPointsJson = premium.safety.attentionPoints,
+                            discomfortsJson = premium.safety.commonDiscomforts
+                        )
                     }
                 }
             }
-
+            
             // Video Guide Card - ONLY shown if curated video mapping exists
             if (curatedVideo != null) {
                 item {

@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
         ExerciseBiomechanicsEntity::class,
         ExerciseExecutionEntity::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -41,7 +41,21 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
     
     companion object {
-        val MIGRATION_18_19 = object : Migration(18, 19) {
+        
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN bodyRegion TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN trainingGoals TEXT")
+                db.execSQL("ALTER TABLE exercise_progression ADD COLUMN repRangeMin INTEGER")
+                db.execSQL("ALTER TABLE exercise_progression ADD COLUMN repRangeMax INTEGER")
+                db.execSQL("ALTER TABLE exercise_progression ADD COLUMN incrementUpper REAL")
+                db.execSQL("ALTER TABLE exercise_progression ADD COLUMN incrementLower REAL")
+                db.execSQL("ALTER TABLE exercise_media ADD COLUMN gifSource TEXT")
+                db.execSQL("ALTER TABLE exercise_media ADD COLUMN videos TEXT")
+            }
+        }
+
+val MIGRATION_18_19 = object : Migration(18, 19) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE exercises ADD COLUMN shortDescription TEXT")
                 db.execSQL("ALTER TABLE exercises ADD COLUMN category TEXT")
@@ -278,7 +292,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()

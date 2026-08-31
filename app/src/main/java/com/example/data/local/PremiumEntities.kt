@@ -41,7 +41,9 @@ data class ExerciseMediaEntity(
     val exerciseDbId: String? = null,
     val youtubeVideoIds: String? = null, // JSON list
     val gifUrl: String? = null,
-    val imageUrls: String? = null // JSON list
+    val imageUrls: String? = null, // JSON list
+    val gifSource: String? = null,
+    val videos: String? = null
 )
 
 @Entity(
@@ -61,7 +63,11 @@ data class ExerciseProgressionEntity(
     val repRange: String? = null,
     val standardSets: Int? = null,
     val progressionMethod: String? = null,
-    val increaseRule: String? = null
+    val increaseRule: String? = null,
+    val repRangeMin: Int? = null,
+    val repRangeMax: Int? = null,
+    val incrementUpper: Double? = null,
+    val incrementLower: Double? = null
 )
 
 @Entity(

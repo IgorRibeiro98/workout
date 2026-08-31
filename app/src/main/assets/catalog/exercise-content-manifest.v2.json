@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 2,
+  "contentVersion": 2,
+  "exercises": [
+    {
+      "id": "supino-reto-barra",
+      "identity": {
+        "namePtBr": "Supino reto com barra",
+        "nameEn": "Barbell Bench Press",
+        "aliases": ["Supino plano", "Bench press"],
+        "shortDescription": "Exercício base para desenvolvimento de força e volume do peitoral."
+      },
+      "classification": {
+        "difficulty": "intermediário",
+        "exerciseType": "compound",
+        "movementPattern": "horizontal_push",
+        "primaryMuscles": ["Peitoral Maior"],
+        "secondaryMuscles": ["Tríceps", "Deltoide Anterior"],
+        "equipment": ["Barra", "Banco", "Anilhas"],
+        "bodyRegion": "upper_body",
+        "trainingGoals": ["hipertrofia", "força"]
+      },
+      "execution": {
+        "setup": {
+          "title": "Posição inicial",
+          "description": "Deite no banco com os olhos alinhados à barra. Pés firmes no chão, glúteos contraídos e escápulas retraídas."
+        },
+        "steps": [
+          {
+            "order": 1,
+            "title": "Retirada",
+            "description": "Retire a barra do suporte mantendo os ombros encaixados."
+          },
+          {
+            "order": 2,
+            "title": "Fase Excêntrica",
+            "description": "Desça a barra controladamente até encostar levemente no peito, na linha dos mamilos."
+          },
+          {
+            "order": 3,
+            "title": "Fase Concêntrica",
+            "description": "Empurre a barra de volta à posição inicial com explosão."
+          }
+        ],
+        "breathing": {
+          "eccentric": "Inspire durante a descida",
+          "concentric": "Expire ao empurrar"
+        }
+      },
+      "education": {
+        "tips": [
+          {
+            "title": "Controle de escápulas",
+            "description": "Mantenha as escápulas retraídas o tempo todo para proteger os ombros."
+          },
+          {
+            "title": "Posição dos pés",
+            "description": "Pés inteiros no chão ajudam a estabilizar e gerar mais força (leg drive)."
+          }
+        ],
+        "commonMistakes": [
+          {
+            "mistake": "Abrir demais os cotovelos",
+            "why": "Aumenta drasticamente o estresse na articulação do ombro.",
+            "correction": "Mantenha os cotovelos a um ângulo de aproximadamente 45 a 60 graus em relação ao tronco."
+          },
+          {
+            "mistake": "Quicar a barra no peito",
+            "why": "Tira a tensão do músculo alvo e pode causar lesão nas costelas.",
+            "correction": "Toque levemente a barra no peito antes de subir."
+          }
+        ],
+        "coachNote": "O supino é excelente para força, mas não tenha pressa em progredir a carga se a técnica não estiver perfeita."
+      },
+      "progression": {
+        "method": "double_progression",
+        "repRange": {
+          "min": 8,
+          "max": 12
+        },
+        "setsRecommendation": 3,
+        "progressionRule": "Quando atingir 12 repetições em todas as séries, aumente o peso.",
+        "increment": {
+          "upperBody": 2.5,
+          "lowerBody": 5.0
+        }
+      },
+      "media": {
+        "gif": {
+          "url": "https://example.com/supino.gif",
+          "source": "CustomDB"
+        },
+        "images": [],
+        "videos": [
+          {
+            "type": "execution",
+            "platform": "youtube",
+            "id": "rT7DgCr-3pg"
+          }
+        ]
+      },
+      "substitutions": {
+        "sameMovement": ["Supino com halteres", "Supino na máquina articulada"],
+        "sameMuscle": ["Crucifixo", "Crossover"],
+        "notRecommended": []
+      },
+      "safety": {
+        "riskLevel": "high",
+        "attentionPoints": [
+          {
+            "title": "Risco de esmagamento",
+            "description": "Se treinar sozinho perto da falha, não use presilhas ou use barras de segurança."
+          }
+        ],
+        "commonDiscomforts": [
+          {
+            "location": "Ombros anterior",
+            "possibleCause": "Cotovelos muito abertos ou descida muito profunda para sua mobilidade.",
+            "adjustment": "Feche mais os cotovelos e retraia as escápulas."
+          }
+        ]
+      },
+      "aiContext": {
+        "keywords": ["supino", "peito", "barra", "bench press", "peitoral"],
+        "recommendedGoals": ["força", "hipertrofia peitoral", "powerlifting"],
+        "decisionRules": ["Se o usuário tiver dor no ombro, sugerir trocar por supino halteres neutro"]
+      }
+    }
+  ]
+}
