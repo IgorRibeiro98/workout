@@ -31,6 +31,8 @@ class SettingsManager(private val context: Context) {
         val RIR_RPE_ENABLED = booleanPreferencesKey("rir_rpe_enabled")
         val AUTO_REST_TIMER_ON_SET = booleanPreferencesKey("auto_rest_timer_on_set")
         val INSTALLED_CATALOG_CONTENT_VERSION = intPreferencesKey("installed_catalog_content_version")
+        val LAST_MEDIA_SYNC_AT = longPreferencesKey("last_media_sync_at")
+        val MEDIA_SYNC_CONTENT_VERSION = intPreferencesKey("media_sync_content_version")
     }
 
     val weeklyGoalFlow: Flow<Int> = context.dataStore.data.map { it[WEEKLY_GOAL] ?: 5 }
@@ -45,6 +47,8 @@ class SettingsManager(private val context: Context) {
     val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
     val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
     val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
+    val lastMediaSyncAtFlow: Flow<Long?> = context.dataStore.data.map { it[LAST_MEDIA_SYNC_AT] }
+    val mediaSyncContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[MEDIA_SYNC_CONTENT_VERSION] ?: 0 }
     val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_DEADLINE] }
     val restTimerSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_WORKOUT_SESSION_ID] }
     val restTimerExerciseSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_EXERCISE_SESSION_ID] }
@@ -95,6 +99,14 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setInstalledCatalogContentVersion(version: Int) {
         context.dataStore.edit { it[INSTALLED_CATALOG_CONTENT_VERSION] = version }
+    }
+
+    suspend fun setLastMediaSyncAt(timestamp: Long) {
+        context.dataStore.edit { it[LAST_MEDIA_SYNC_AT] = timestamp }
+    }
+
+    suspend fun setMediaSyncContentVersion(version: Int) {
+        context.dataStore.edit { it[MEDIA_SYNC_CONTENT_VERSION] = version }
     }
 
     suspend fun setRestTimerState(

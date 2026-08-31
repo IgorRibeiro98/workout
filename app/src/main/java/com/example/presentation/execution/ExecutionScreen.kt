@@ -558,7 +558,17 @@ fun FocusedActiveSetView(
 ) {
     val machineLabel = currentEx.exerciseSession.machineLabelSnapshot
     val primaryMuscle = currentEx.exerciseSession.primaryMuscleSnapshot ?: resolvedExercise?.primaryMuscle
-    val mediaUrl = if (showGifs) resolvedExercise?.resolvedMedia?.mediaUri else null
+    val mediaUrl = resolvedExercise?.resolvedMedia?.mediaUri
+
+    var currentWeight by remember(activeSet.id) { mutableFloatStateOf(activeSet.weight) }
+    var currentReps by remember(activeSet.id) { mutableIntStateOf(activeSet.repetitions) }
+    var currentRir by remember(activeSet.id) { mutableStateOf(activeSet.rir) }
+
+    LaunchedEffect(activeSet.id, activeSet.weight, activeSet.repetitions, activeSet.rir) {
+        currentWeight = activeSet.weight
+        currentReps = activeSet.repetitions
+        currentRir = activeSet.rir
+    }
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -725,7 +735,7 @@ fun FocusedActiveSetView(
                     currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
                     currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
 
-                if (isBodyweight && activeSet.weight == 0f) {
+                if (isBodyweight && currentWeight == 0f) {
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -741,7 +751,8 @@ fun FocusedActiveSetView(
                                         isDecimal = true,
                                         unitLabel = "kg",
                                         onConfirm = { newWeight ->
-                                            onUpdateSet(activeSet.copy(weight = newWeight))
+                                            currentWeight = newWeight
+                                            onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
                                         }
                                     )
                                 )
@@ -776,38 +787,43 @@ fun FocusedActiveSetView(
                 } else {
                     Column(modifier = Modifier.weight(1f)) {
                         WeightWheelPicker(
-                            value = activeSet.weight,
+                            value = currentWeight,
                             step = 0.5f,
                             minWeight = 0f,
                             maxWeight = 500f,
                             hapticEnabled = hapticEnabled,
                             label = if (isBodyweight) "Carga adicional" else "Carga",
                             onValueSettled = { newWeight ->
-                                onUpdateSet(activeSet.copy(weight = newWeight))
+                                currentWeight = newWeight
+                                onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
                             },
                             onDirectInputRequest = {
                                 onOpenDirectInput(
                                     DirectInputConfig(
                                         title = if (isBodyweight) "Carga Adicional (kg)" else "Ajustar Carga (kg)",
-                                        initialValue = if (activeSet.weight % 1f == 0f) activeSet.weight.toInt().toString() else activeSet.weight.toString(),
+                                        initialValue = if (currentWeight % 1f == 0f) currentWeight.toInt().toString() else currentWeight.toString(),
                                         isDecimal = true,
                                         unitLabel = "kg",
                                         onConfirm = { newWeight ->
-                                            onUpdateSet(activeSet.copy(weight = newWeight))
+                                            currentWeight = newWeight
+                                            onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
                                         }
                                     )
                                 )
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
-                        if (isBodyweight && activeSet.weight > 0f) {
+                        if (isBodyweight && currentWeight > 0f) {
                             Text(
                                 text = "Limpar carga",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 modifier = Modifier
                                     .align(Alignment.CenterHorizontally)
-                                    .clickable { onUpdateSet(activeSet.copy(weight = 0f)) }
+                                    .clickable {
+                                        currentWeight = 0f
+                                        onUpdateSet(activeSet.copy(weight = 0f, repetitions = currentReps, rir = currentRir))
+                                    }
                                     .padding(top = 2.dp)
                             )
                         }
@@ -815,23 +831,26 @@ fun FocusedActiveSetView(
                 }
 
                 RepsWheelPicker(
-                    value = activeSet.repetitions,
+                    value = currentReps,
                     step = 1,
                     minReps = 1,
                     maxReps = 100,
                     hapticEnabled = hapticEnabled,
                     onValueSettled = { newReps ->
-                        onUpdateSet(activeSet.copy(repetitions = newReps))
+                        currentReps = newReps
+                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newReps, rir = currentRir))
                     },
                     onDirectInputRequest = {
                         onOpenDirectInput(
                             DirectInputConfig(
                                 title = "Ajustar Repetições",
-                                initialValue = activeSet.repetitions.toString(),
+                                initialValue = currentReps.toString(),
                                 isDecimal = false,
                                 unitLabel = "reps",
                                 onConfirm = { newReps ->
-                                    onUpdateSet(activeSet.copy(repetitions = newReps.toInt().coerceAtLeast(1)))
+                                    val r = newReps.toInt().coerceAtLeast(1)
+                                    currentReps = r
+                                    onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = r, rir = currentRir))
                                 }
                             )
                         )
@@ -842,9 +861,10 @@ fun FocusedActiveSetView(
 
             if (rirRpeEnabled) {
                 RirSelector(
-                    currentRir = activeSet.rir,
+                    currentRir = currentRir,
                     onRirSelected = { newRir ->
-                        onUpdateSet(activeSet.copy(rir = newRir))
+                        currentRir = newRir
+                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = newRir))
                     },
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 )
@@ -857,7 +877,7 @@ fun FocusedActiveSetView(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Button(
-                onClick = { onCompleteSet(activeSet) },
+                onClick = { onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir)) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(60.dp),

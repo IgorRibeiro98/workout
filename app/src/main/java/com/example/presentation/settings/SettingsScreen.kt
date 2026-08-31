@@ -244,12 +244,30 @@ fun SettingsScreen() {
                             val result = mediaEngine.syncExerciseGifs { cur, tot ->
                                 syncProgress = "Verificando exercício $cur de $tot..."
                             }
+                            if (!result.isOffline && result.errors.isEmpty()) {
+                                settingsManager.setLastMediaSyncAt(System.currentTimeMillis())
+                                settingsManager.setMediaSyncContentVersion(1)
+                            }
+                            val diag = mediaEngine.getLibraryDiagnostic()
                             isSyncingMedia = false
                             dialogTitle = "Sincronização de Demonstrações"
                             dialogMessage = if (result.isOffline) {
                                 "Não foi possível conectar ao ExerciseDB.\n\nVerifique a conexão de internet. Todo o treino continua funcionando 100% offline."
                             } else {
-                                "Demonstrações atualizadas com sucesso!\n\nMapeados: ${result.matched}\nAmbíguos: ${result.ambiguous}\nNão encontrados: ${result.notFound}"
+                                buildString {
+                                    append("Resultado da Sincronização:\n")
+                                    append("• Mapeados: ${result.matched}\n")
+                                    append("• Ambíguos: ${result.ambiguous}\n")
+                                    append("• Não encontrados: ${result.notFound}\n")
+                                    append("• Já atualizados: ${result.alreadyUpToDate}\n")
+                                    append("• Erros: ${if (result.errors.isEmpty()) "Nenhum" else result.errors.size.toString()}\n\n")
+                                    append("Cobertura da Biblioteca:\n")
+                                    append("• Total de exercícios: ${diag.totalExercises}\n")
+                                    append("• GIFs disponíveis: ${diag.gifsCount}\n")
+                                    append("• Fotos personalizadas: ${diag.customPhotosCount}\n")
+                                    append("• Vídeos curados: ${diag.curatedVideosCount}\n")
+                                    append("• Sem mídia: ${diag.noMediaCount}")
+                                }
                             }
                             showDialog = true
                         }

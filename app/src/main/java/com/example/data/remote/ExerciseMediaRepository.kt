@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.example.data.local.ExerciseEntity
 import com.example.data.local.WorkoutDao
+import com.example.domain.engine.ExerciseDbNormalizer
 import com.example.domain.engine.ExerciseMatchStatus
 import com.example.domain.engine.MatchEvaluation
 import com.example.domain.engine.MediaSyncResult
@@ -35,6 +36,7 @@ class ExerciseMediaRepository(
         var matchedCount = 0
         var ambiguousCount = 0
         var notFoundCount = 0
+        var alreadyUpToDateCount = 0
         val errors = mutableListOf<String>()
 
         if (!isOnline()) {
@@ -67,26 +69,27 @@ class ExerciseMediaRepository(
         for ((index, exercise) in exercises.withIndex()) {
             onProgress(index + 1, total)
 
-            // If exercise already has custom photo, skip remote lookup
+            // If exercise already has custom photo, skip remote lookup without overwriting
             if (!exercise.customPhotoUri.isNullOrBlank()) {
                 continue
             }
 
-            // 1. Direct lookup by known external ID if present
-            if (!exercise.externalExerciseId.isNullOrBlank()) {
+            // 1. Direct lookup by known external ID if already matched
+            if (!exercise.externalExerciseId.isNullOrBlank() && 
+                exercise.mappingStatus == ExerciseMatchStatus.MATCHED.name && 
+                !exercise.gifUrl.isNullOrBlank()) {
                 when (val result = remoteDataSource.getExerciseById(exercise.externalExerciseId)) {
                     is NetworkResult.Success -> {
                         val dto = result.data
-                        if (!dto.gifUrl.isNullOrBlank()) {
-                            val updatedEntity = exercise.copy(
-                                gifUrl = dto.gifUrl,
-                                lastVerifiedAt = System.currentTimeMillis(),
-                                mappingStatus = ExerciseMatchStatus.MATCHED.name
-                            )
-                            workoutDao.updateExercise(updatedEntity)
-                            matchedCount++
-                            continue
-                        }
+                        val newGifUrl = dto.gifUrl ?: exercise.gifUrl
+                        val updatedEntity = exercise.copy(
+                            gifUrl = newGifUrl,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            mappingStatus = ExerciseMatchStatus.MATCHED.name
+                        )
+                        workoutDao.updateExercise(updatedEntity)
+                        alreadyUpToDateCount++
+                        continue
                     }
                     is NetworkResult.Offline -> {
                         return@withContext MediaSyncResult(
@@ -94,12 +97,14 @@ class ExerciseMediaRepository(
                             errors = listOf("Conecte-se à internet para atualizar as demonstrações.")
                         )
                     }
-                    else -> { /* Fallback to search if lookup fails */ }
+                    else -> {
+                        // Fallback to name search if direct ID lookup fails
+                    }
                 }
             }
 
-            val searchQuery = exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.canonicalId?.replace("-", " ")
-            if (searchQuery.isNullOrBlank()) {
+            val searchQuery = exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.canonicalId?.replace("-", " ") ?: exercise.name
+            if (searchQuery.isBlank()) {
                 notFoundCount++
                 continue
             }
@@ -120,6 +125,7 @@ class ExerciseMediaRepository(
                             matchedCount++
                         }
                         ExerciseMatchStatus.AMBIGUOUS -> {
+                            // Do not overwrite an existing valid gifUrl
                             val updatedEntity = exercise.copy(
                                 mappingStatus = ExerciseMatchStatus.AMBIGUOUS.name
                             )
@@ -150,6 +156,10 @@ class ExerciseMediaRepository(
                     notFoundCount++
                 }
                 is NetworkResult.NotFound -> {
+                    val updatedEntity = exercise.copy(
+                        mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
+                    )
+                    workoutDao.updateExercise(updatedEntity)
                     notFoundCount++
                 }
             }
@@ -159,6 +169,7 @@ class ExerciseMediaRepository(
             matched = matchedCount,
             ambiguous = ambiguousCount,
             notFound = notFoundCount,
+            alreadyUpToDate = alreadyUpToDateCount,
             isOffline = false,
             errors = errors
         )
@@ -172,64 +183,93 @@ class ExerciseMediaRepository(
             return MatchEvaluation(null, 0, ExerciseMatchStatus.NOT_FOUND)
         }
 
-        val targetName = (exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.name).trim().lowercase()
-        val expectedEquipment = exercise.equipment?.trim()?.lowercase()
-        val expectedMuscle = exercise.primaryMuscle?.trim()?.lowercase()
+        val targetNameRaw = exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.canonicalId?.replace("-", " ") ?: exercise.name
+        val targetName = ExerciseDbNormalizer.normalize(targetNameRaw)
+
+        data class CandidateScore(
+            val candidate: ExternalExerciseDto,
+            val nameScore: Int,
+            val equipScore: Int,
+            val muscleScore: Int,
+            val totalScore: Int,
+            val isExactName: Boolean
+        )
 
         val scoredList = candidates.map { candidate ->
-            val candName = candidate.name.trim().lowercase()
-            var score = 0
+            val candName = ExerciseDbNormalizer.normalize(candidate.name)
+            val isExactName = candName == targetName && targetName.isNotEmpty()
 
             // 1. Name Scoring
-            if (candName == targetName) {
-                score += 100
-            } else if (candName.contains(targetName) || targetName.contains(candName)) {
-                score += 60
-            } else {
-                val targetWords = targetName.split(" ").filter { it.length > 2 }
-                val candWords = candName.split(" ").filter { it.length > 2 }
-                val overlap = targetWords.count { candWords.contains(it) }
-                if (overlap > 0) {
-                    score += (overlap * 20).coerceAtMost(40)
+            val nameScore = when {
+                isExactName -> 100
+                candName.contains(targetName) || targetName.contains(candName) -> 60
+                else -> {
+                    val targetWords = targetName.split(" ").filter { it.length > 2 }
+                    val candWords = candName.split(" ").filter { it.length > 2 }
+                    val overlap = targetWords.count { candWords.contains(it) }
+                    if (overlap > 0) (overlap * 20).coerceAtMost(40) else 0
                 }
             }
 
             // 2. Equipment Scoring
-            if (!expectedEquipment.isNullOrBlank()) {
-                val candEquipments = candidate.realEquipments.map { it.lowercase() }
-                if (candEquipments.any { it.contains(expectedEquipment) || expectedEquipment.contains(it) }) {
-                    score += 20
-                } else if (candEquipments.isNotEmpty()) {
-                    score -= 20
-                }
-            }
+            val equipScore = ExerciseDbNormalizer.evaluateEquipmentScore(exercise.equipment, candidate.realEquipments)
 
             // 3. Muscle Scoring
-            if (!expectedMuscle.isNullOrBlank()) {
-                val candMuscles = (candidate.realTargetMuscles + candidate.realBodyParts).map { it.lowercase() }
-                if (candMuscles.any { it.contains(expectedMuscle) || expectedMuscle.contains(it) }) {
-                    score += 20
-                } else if (candMuscles.isNotEmpty()) {
-                    score -= 20
-                }
+            val candMuscles = candidate.realTargetMuscles + candidate.realBodyParts
+            val muscleScore = ExerciseDbNormalizer.evaluateMuscleScore(exercise.primaryMuscle, candMuscles)
+
+            val totalScore = nameScore + equipScore + muscleScore
+
+            CandidateScore(
+                candidate = candidate,
+                nameScore = nameScore,
+                equipScore = equipScore,
+                muscleScore = muscleScore,
+                totalScore = totalScore,
+                isExactName = isExactName
+            )
+        }.sortedWith(
+            compareByDescending<CandidateScore> { it.totalScore }
+                .thenByDescending { it.nameScore }
+                .thenByDescending { it.equipScore + it.muscleScore }
+        )
+
+        val top = scoredList.first()
+        val topScore = top.totalScore
+
+        // Rule 5: EXACT MATCH PRIORITY
+        if (top.isExactName) {
+            if (scoredList.size == 1) {
+                return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.MATCHED)
             }
+            val runnerUp = scoredList[1]
+            if (runnerUp.isExactName) {
+                val diff = topScore - runnerUp.totalScore
+                if (diff > 15) {
+                    return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.MATCHED)
+                } else {
+                    return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.AMBIGUOUS)
+                }
+            } else {
+                return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.MATCHED)
+            }
+        }
 
-            Pair(candidate, score)
-        }.sortedByDescending { it.second }
-
-        val topScore = scoredList.first().second
-        if (topScore < 70) {
+        // For non-exact matches:
+        if (topScore < 60) {
             return MatchEvaluation(null, topScore, ExerciseMatchStatus.NOT_FOUND)
         }
 
-        // Check for ambiguous candidates (if runner-up score is close to top score)
+        // Check for ambiguous candidates
         if (scoredList.size > 1) {
-            val secondScore = scoredList[1].second
-            if (secondScore >= 60 && (topScore - secondScore) <= 15) {
-                return MatchEvaluation(scoredList.first().first, topScore, ExerciseMatchStatus.AMBIGUOUS)
+            val second = scoredList[1]
+            val diff = topScore - second.totalScore
+            if (second.totalScore >= 60 && diff <= 15) {
+                return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.AMBIGUOUS)
             }
         }
 
-        return MatchEvaluation(scoredList.first().first, topScore, ExerciseMatchStatus.MATCHED)
+        return MatchEvaluation(top.candidate, topScore, ExerciseMatchStatus.MATCHED)
     }
 }
+

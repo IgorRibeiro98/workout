@@ -93,38 +93,48 @@ fun NumberWheelPicker(
         ((range.endInclusive - range.start) / step).roundToInt() + 1
     }
 
-    val lazyListState = rememberLazyListState()
-    val snapFlingBehavior = rememberSnapFlingBehavior(lazyListState = lazyListState)
-
     // Current target index based on incoming value prop
     val targetIndex = remember(value, range, step, totalItems) {
         WheelPickerDefaults.valueToIndex(value, range.start, step, totalItems)
     }
 
-    // Direct scroll to initial / updated position without animation delay
-    LaunchedEffect(targetIndex) {
-        val layoutInfo = lazyListState.layoutInfo
-        val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-        val currentCenterIndex = layoutInfo.visibleItemsInfo.minByOrNull { item ->
-            abs((item.offset + item.size / 2) - viewportCenter)
-        }?.index
+    val lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = targetIndex)
+    val snapFlingBehavior = rememberSnapFlingBehavior(lazyListState = lazyListState)
 
-        if (currentCenterIndex != targetIndex && !lazyListState.isScrollInProgress) {
-            lazyListState.scrollToItem(targetIndex)
+    val currentCenterItemIndex by remember {
+        derivedStateOf {
+            val layoutInfo = lazyListState.layoutInfo
+            if (layoutInfo.visibleItemsInfo.isEmpty()) {
+                targetIndex
+            } else {
+                val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+                layoutInfo.visibleItemsInfo.minByOrNull { item ->
+                    abs((item.offset + item.size / 2) - viewportCenter)
+                }?.index ?: targetIndex
+            }
+        }
+    }
+
+    // Direct scroll to initial / updated position when value changes externally
+    LaunchedEffect(targetIndex) {
+        if (!lazyListState.isScrollInProgress) {
+            val layoutInfo = lazyListState.layoutInfo
+            val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+            val currentCenterIndex = layoutInfo.visibleItemsInfo.minByOrNull { item ->
+                abs((item.offset + item.size / 2) - viewportCenter)
+            }?.index
+
+            if (currentCenterIndex != targetIndex) {
+                lazyListState.scrollToItem(targetIndex)
+            }
         }
     }
 
     // Haptic feedback tick on center item change during scroll
     var lastHapticIndex by remember { mutableIntStateOf(targetIndex) }
     LaunchedEffect(lazyListState, hapticEnabled) {
-        snapshotFlow {
-            val layoutInfo = lazyListState.layoutInfo
-            val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-            layoutInfo.visibleItemsInfo.minByOrNull { item ->
-                abs((item.offset + item.size / 2) - viewportCenter)
-            }?.index
-        }.collect { index ->
-            if (index != null && index != lastHapticIndex) {
+        snapshotFlow { currentCenterItemIndex }.collect { index ->
+            if (index != lastHapticIndex) {
                 if (lastHapticIndex != -1 && hapticEnabled) {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 }
@@ -133,22 +143,19 @@ fun NumberWheelPicker(
         }
     }
 
-    // Settled persistence: trigger onValueSettled only when scroll stops
+    // Settled persistence: trigger onValueSettled only when actual scroll stops
+    var hasScrolled by remember { mutableStateOf(false) }
     LaunchedEffect(lazyListState) {
         snapshotFlow { lazyListState.isScrollInProgress }
             .distinctUntilChanged()
             .collect { isScrolling ->
-                if (!isScrolling) {
-                    val layoutInfo = lazyListState.layoutInfo
-                    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-                    val centerItem = layoutInfo.visibleItemsInfo.minByOrNull { item ->
-                        abs((item.offset + item.size / 2) - viewportCenter)
-                    }
-                    if (centerItem != null) {
-                        val settledVal = WheelPickerDefaults.indexToValue(centerItem.index, range.start, step)
-                        if (abs(settledVal - value) > (step / 4f)) {
-                            onValueSettled(settledVal)
-                        }
+                if (isScrolling) {
+                    hasScrolled = true
+                } else if (hasScrolled) {
+                    val settledIndex = currentCenterItemIndex
+                    val settledVal = WheelPickerDefaults.indexToValue(settledIndex, range.start, step)
+                    if (abs(settledVal - value) > (step / 4f)) {
+                        onValueSettled(settledVal)
                     }
                 }
             }
@@ -227,14 +234,7 @@ fun NumberWheelPicker(
             ) {
                 items(totalItems) { index ->
                     val itemVal = WheelPickerDefaults.indexToValue(index, range.start, step)
-                    val isSelected = remember(lazyListState.firstVisibleItemIndex, lazyListState.firstVisibleItemScrollOffset) {
-                        val layoutInfo = lazyListState.layoutInfo
-                        val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-                        val centerItem = layoutInfo.visibleItemsInfo.minByOrNull { item ->
-                            abs((item.offset + item.size / 2) - viewportCenter)
-                        }
-                        centerItem?.index == index
-                    }
+                    val isSelected = currentCenterItemIndex == index
 
                     Box(
                         modifier = Modifier

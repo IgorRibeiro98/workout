@@ -54,6 +54,8 @@ class MainApplication : Application(), ImageLoaderFactory {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 ManifestImporter(database, this@MainApplication).importFromAssets()
+                val mediaEngine = com.example.domain.engine.ExerciseMediaEngine(database.workoutDao(), context = this@MainApplication)
+                mediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 1)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
