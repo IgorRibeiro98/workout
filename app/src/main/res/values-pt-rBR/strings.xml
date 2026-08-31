@@ -1,8 +1,0 @@
-<resources>
-    <string name="app_name">Treino</string>
-    <string name="nav_today">Hoje</string>
-    <string name="nav_workouts">Treinos</string>
-    <string name="nav_exercises">Exercícios</string>
-    <string name="nav_history">Histórico</string>
-    <string name="nav_settings">Configurações</string>
-</resources>

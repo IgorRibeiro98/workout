@@ -35,6 +35,24 @@ class ExerciseDetailsViewModel(
         }
     }
 
+    
+    fun getPremiumInfo(exerciseId: Long): Flow<PremiumExerciseInfo?> = flow {
+        val education = workoutDao.getExerciseEducation(exerciseId)
+        val media = workoutDao.getExerciseMedia(exerciseId)
+        val progression = workoutDao.getExerciseProgression(exerciseId)
+        val safety = workoutDao.getExerciseSafety(exerciseId)
+        val substitution = workoutDao.getExerciseSubstitutionPremium(exerciseId)
+        val aiContext = workoutDao.getExerciseAiContext(exerciseId)
+        val biomechanics = workoutDao.getExerciseBiomechanics(exerciseId)
+        val execution = workoutDao.getExerciseExecution(exerciseId)
+        
+        if (education != null || media != null || progression != null || safety != null || substitution != null || aiContext != null || biomechanics != null || execution != null) {
+            emit(PremiumExerciseInfo(education, media, progression, safety, substitution, aiContext, biomechanics, execution))
+        } else {
+            emit(null)
+        }
+    }
+
     fun getUserOverride(exerciseId: Long): Flow<ExerciseUserOverrideEntity?> {
         return workoutDao.getOverrideForExerciseFlow(exerciseId)
     }

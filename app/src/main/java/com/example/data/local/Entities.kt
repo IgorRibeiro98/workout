@@ -33,7 +33,11 @@ data class ExerciseEntity(
     val lastVerifiedAt: Long? = null,
     val isUserCreated: Boolean = false,
     val customPhotoUri: String? = null,
-    val mappingStatus: String? = null
+    val mappingStatus: String? = null,
+    val shortDescription: String? = null,
+    val category: String? = null,
+    val difficulty: String? = null,
+    val exerciseType: String? = null
 )
 
 @Entity(tableName = "workout_programs", indices = [androidx.room.Index(value = ["externalId"], unique = true)])

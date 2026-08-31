@@ -36,6 +36,7 @@ import com.example.MainApplication
 import com.example.R
 import com.example.domain.engine.ExerciseMediaEngine
 import com.example.domain.engine.ManifestImporter
+import com.example.domain.engine.PremiumManifestImporter
 import com.example.domain.engine.ProgramImporter
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.BottomSheetActionItem
@@ -64,6 +65,8 @@ fun SettingsScreen() {
     val exportEngine = com.example.domain.engine.ExportEngine(db.workoutDao(), context)
     val manifestImporter = ManifestImporter(db, context)
     val programImporter = ProgramImporter(db, context)
+    val premiumImporter = PremiumManifestImporter(db, context)
+
     val mediaEngine = ExerciseMediaEngine(db.workoutDao(), context = context)
 
     var activeSheet by remember { mutableStateOf<SettingsSheetType?>(null) }

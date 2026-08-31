@@ -1,75 +1,38 @@
-import re
-
-with open("app/src/main/java/com/example/presentation/settings/SettingsScreen.kt", "r") as f:
+with open('app/src/main/java/com/example/presentation/settings/SettingsScreen.kt', 'r') as f:
     content = f.read()
 
-# Add state variables
-state_vars = """
-    var activeSheet by remember { mutableStateOf<SettingsSheetType?>(null) }
-    var auditReport by remember { mutableStateOf<String?>(null) }
-"""
-content = re.sub(r"var activeSheet by remember \{ mutableStateOf<SettingsSheetType\?>\(null\) \}", state_vars.strip(), content)
+import_statement = "import com.example.domain.engine.PremiumManifestImporter\n"
+if "PremiumManifestImporter" not in content:
+    content = content.replace("import com.example.domain.engine.ProgramImporter", import_statement + "import com.example.domain.engine.ProgramImporter")
 
-# Add Audit action item
-action_item = """
-                        BottomSheetActionItem(
-                            title = "Auditoria ExerciseDB",
-                            selected = false,
-                            onClick = {
-                                activeSheet = null
-                                coroutineScope.launch {
-                                    val exercises = viewModel.getAllExercises()
-                                    val canonicals = exercises.filter { it.isCanonical() }
-                                    val total = canonicals.size
-                                    val withSearch = canonicals.count { !it.exerciseDbSearch.isNullOrBlank() }
-                                    val withoutSearch = total - withSearch
-                                    val matched = canonicals.count { it.mappingStatus == com.example.domain.model.ExerciseMatchStatus.MATCHED.name }
-                                    val ambiguous = canonicals.count { it.mappingStatus == com.example.domain.model.ExerciseMatchStatus.AMBIGUOUS.name }
-                                    val notFound = canonicals.count { it.mappingStatus == com.example.domain.model.ExerciseMatchStatus.NOT_FOUND.name }
-                                    
-                                    val withoutSearchList = canonicals.filter { it.exerciseDbSearch.isNullOrBlank() }.take(10).joinToString("\\n") { "• ${it.name}" }
-                                    
-                                    val report = \"\"\"
-                                        Total exercícios (canônicos): $total
-                                        
-                                        Com exerciseDbSearch: $withSearch
-                                        Sem exerciseDbSearch: $withoutSearch
-                                        
-                                        Mapeados (MATCHED): $matched
-                                        Ambíguos: $ambiguous
-                                        Não encontrados: $notFound
-                                        
-                                        Sem termo de busca (Exemplos):
-                                        $withoutSearchList
-                                    \"\"\".trimIndent()
-                                    auditReport = report
-                                }
-                            }
-                        )
-                        
-                        BottomSheetActionItem(
-                            title = "Reimportar Catálogo Canônico (144 exercícios)",
-"""
-content = content.replace("BottomSheetActionItem(\n                            title = \"Reimportar Catálogo Canônico (144 exercícios)\",", action_item.strip())
+init_statement = "val premiumImporter = PremiumManifestImporter(db, context)\n"
+if "val premiumImporter" not in content:
+    content = content.replace("val programImporter = ProgramImporter(db, context)", "val programImporter = ProgramImporter(db, context)\n    " + init_statement)
 
-# Add Audit Dialog
-dialog = """
-    if (auditReport != null) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { auditReport = null },
-            title = { Text("Auditoria ExerciseDB") },
-            text = { Text(auditReport ?: "") },
-            confirmButton = {
-                TextButton(onClick = { auditReport = null }) {
-                    Text("Fechar")
+button_code = """
+        SettingsItem(
+            title = "Importar Exercícios Premium",
+            subtitle = "Sincronizar exercise-content-manifest.v1.json",
+            onClick = {
+                coroutineScope.launch {
+                    val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v1.json")
+                    val message = buildString {
+                        if (result.added > 0) append("${result.added} adicionados. ")
+                        if (result.updated > 0) append("${result.updated} atualizados. ")
+                        if (result.errors.isNotEmpty()) append("Erros: ${result.errors.joinToString()}.")
+                        if (isEmpty()) append("Nenhuma alteração feita.")
+                    }
+                    dialogTitle = "Importação Premium"
+                    dialogMessage = message
+                    showDialog = true
                 }
             }
         )
-    }
-
-    if (activeSheet != null) {
 """
-content = content.replace("if (activeSheet != null) {", dialog.strip())
+content = content.replace(
+    'Text("Dados e Importação", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)\n        Spacer(modifier = Modifier.height(16.dp))',
+    'Text("Dados e Importação", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)\n        Spacer(modifier = Modifier.height(16.dp))' + button_code
+)
 
-with open("app/src/main/java/com/example/presentation/settings/SettingsScreen.kt", "w") as f:
+with open('app/src/main/java/com/example/presentation/settings/SettingsScreen.kt', 'w') as f:
     f.write(content)

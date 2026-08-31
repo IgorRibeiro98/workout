@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": 1,
+  "exercises": [
+    {
+      "id": "supino-reto-barra",
+      "identity": {
+        "namePtBr": "Supino Reto com Barra",
+        "nameEn": "Barbell Bench Press",
+        "shortDescription": "Exercício composto para o peitoral.",
+        "aliases": ["Supino", "Bench Press"]
+      },
+      "classification": {
+        "category": "Força",
+        "difficulty": "Intermediário",
+        "movementPattern": "Empurrar Horizontal",
+        "exerciseType": "Composto",
+        "primaryMuscles": ["Peitoral Maior"],
+        "secondaryMuscles": ["Tríceps", "Deltoide Anterior"],
+        "equipment": "Barra e Banco Reto"
+      },
+      "biomechanics": {
+        "jointActions": ["Flexão de ombro", "Extensão de cotovelo"],
+        "rangeOfMotion": "Completo",
+        "stabilityDemand": "Alta",
+        "targetFeeling": "Peitoral contraindo"
+      },
+      "execution": {
+        "setup": "Deite-se no banco reto com os olhos alinhados sob a barra.",
+        "steps": [
+          "Segure a barra com uma pegada um pouco mais larga que a largura dos ombros.",
+          "Retire a barra do suporte e mantenha os braços esticados.",
+          "Desça a barra controladamente até encostar levemente no meio do peito.",
+          "Empurre a barra de volta à posição inicial com força."
+        ],
+        "breathing": "Inspire na descida, expire na subida."
+      },
+      "education": {
+        "tips": ["Mantenha os pés firmes no chão.", "Aduza as escápulas."],
+        "commonMistakes": ["Tirar o quadril do banco.", "Descer a barra no pescoço."],
+        "coachNotes": ["Evite abrir demais os cotovelos para proteger os ombros."]
+      },
+      "media": {
+        "exerciseDbId": "0025",
+        "youtubeVideoIds": ["rT7DgCr-3pg"],
+        "gifUrl": "https://example.com/supino.gif",
+        "imageUrls": ["https://example.com/supino1.jpg"]
+      },
+      "progression": {
+        "repRange": "8-12",
+        "standardSets": 3,
+        "progressionMethod": "Sobrecarga Progressiva",
+        "increaseRule": "Adicionar 2kg quando completar 12 repetições em todas as séries."
+      },
+      "substitutions": {
+        "sameMovement": ["supino-reto-halteres", "flexao-braco"],
+        "sameMuscle": ["crucifixo-halteres"],
+        "notRecommended": []
+      },
+      "safety": {
+        "riskLevel": "Médio",
+        "attentionPoints": ["Cuidado com o manguito rotador se descer muito com os cotovelos abertos."],
+        "commonDiscomforts": ["Dor no ombro anterior."]
+      },
+      "aiContext": {
+        "objectives": ["Hipertrofia", "Força base"],
+        "keywords": ["peito", "empurrar", "bench", "press"],
+        "decisionRules": ["Priorizar se objetivo for hipertrofia de peitoral", "Substituir por halteres se relatar dor no ombro"]
+      }
+    }
+  ]
+}
