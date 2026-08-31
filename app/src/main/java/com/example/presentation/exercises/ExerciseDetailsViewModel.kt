@@ -21,9 +21,8 @@ class ExerciseDetailsViewModel(
     val showGifs = settingsManager.showGifsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    fun getExerciseInfo(exerciseId: Long): Flow<ExerciseEntity?> = flow {
-        emit(workoutDao.getExerciseById(exerciseId))
-    }
+    fun getExerciseInfo(exerciseId: Long): Flow<ExerciseEntity?> = 
+        workoutDao.getExerciseByIdFlow(exerciseId)
 
     fun getResolvedExercise(exerciseId: Long): Flow<com.example.domain.model.ResolvedExercise?> {
         return combine(

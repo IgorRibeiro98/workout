@@ -193,6 +193,9 @@ interface WorkoutDao {
     @Query("SELECT * FROM exercises WHERE id = :id LIMIT 1")
     suspend fun getExerciseById(id: Long): ExerciseEntity?
 
+    @Query("SELECT * FROM exercises WHERE id = :id LIMIT 1")
+    fun getExerciseByIdFlow(id: Long): Flow<ExerciseEntity?>
+
     // Exercise User Overrides
     @Query("SELECT * FROM exercise_user_overrides WHERE exerciseId = :exerciseId LIMIT 1")
     fun getOverrideForExerciseFlow(exerciseId: Long): Flow<ExerciseUserOverrideEntity?>

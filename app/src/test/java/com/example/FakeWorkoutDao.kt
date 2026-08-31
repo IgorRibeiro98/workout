@@ -171,6 +171,7 @@ class FakeWorkoutDao : WorkoutDao {
         return id
     }
     override suspend fun getExerciseById(id: Long): ExerciseEntity? = exercises.firstOrNull { it.id == id }
+    override fun getExerciseByIdFlow(id: Long): Flow<ExerciseEntity?> = flowOf(exercises.firstOrNull { it.id == id })
     
     override fun getOverrideForExerciseFlow(exerciseId: Long): Flow<ExerciseUserOverrideEntity?> =
         flowOf(overrides.firstOrNull { it.exerciseId == exerciseId })

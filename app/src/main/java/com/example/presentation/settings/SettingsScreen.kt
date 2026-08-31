@@ -83,6 +83,7 @@ fun SettingsScreen() {
     var dialogMessage by remember { mutableStateOf("") }
     var isSyncingMedia by remember { mutableStateOf(false) }
     var syncProgress by remember { mutableStateOf("") }
+    var isTestingApi by remember { mutableStateOf(false) }
 
     if (activeSheet != null) {
         BackHandler {
@@ -267,6 +268,49 @@ fun SettingsScreen() {
                                     append("• Fotos personalizadas: ${diag.customPhotosCount}\n")
                                     append("• Vídeos curados: ${diag.curatedVideosCount}\n")
                                     append("• Sem mídia: ${diag.noMediaCount}")
+                                }
+                            }
+                            showDialog = true
+                        }
+                    }
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SettingsActionItem(
+                title = "TESTAR CONEXÃO EXERCISEDB",
+                icon = Icons.Default.Refresh,
+                isLoading = isTestingApi,
+                loadingText = "Testando conexão com ExerciseDB...",
+                onClick = {
+                    if (!isTestingApi) {
+                        isTestingApi = true
+                        coroutineScope.launch {
+                            val testRes = mediaEngine.testConnection("bench press")
+                            isTestingApi = false
+                            when (testRes) {
+                                is com.example.data.remote.NetworkTestResult.Success -> {
+                                    dialogTitle = "API Conectada com Sucesso"
+                                    dialogMessage = buildString {
+                                        append("Status: Conexão ativa com ExerciseDB\n\n")
+                                        append("Consulta de teste: '${testRes.query}'\n")
+                                        append("Exercício retornado: ${testRes.foundName}\n")
+                                        append("ID remoto: ${testRes.exerciseId}\n")
+                                        append("GIF URL: ${testRes.gifUrl ?: "Não retornado"}\n")
+                                        append("Resultados encontrados: ${testRes.totalResults}")
+                                    }
+                                }
+                                is com.example.data.remote.NetworkTestResult.Failure -> {
+                                    dialogTitle = "Falha ExerciseDB"
+                                    dialogMessage = buildString {
+                                        if (testRes.httpCode != null) {
+                                            append("HTTP: ${testRes.httpCode}\n")
+                                        }
+                                        if (testRes.url != null) {
+                                            append("URL: ${testRes.url}\n\n")
+                                        }
+                                        append("Mensagem: ${testRes.errorMessage}")
+                                    }
                                 }
                             }
                             showDialog = true

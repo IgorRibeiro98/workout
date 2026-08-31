@@ -246,6 +246,66 @@ class ExerciseDbTest {
     }
 
     @Test
+    fun `test real ExerciseDB envelope list parsing from search response`() {
+        val listAdapter = moshi.adapter(com.example.data.remote.ExerciseDbEnvelopeList::class.java)
+        val jsonFixture = """
+            {
+                "success": true,
+                "data": [
+                    {
+                        "exerciseId": "EIeI8Vf",
+                        "name": "barbell bench press",
+                        "gifUrl": "https://static.exercisedb.dev/media/EIeI8Vf.gif"
+                    },
+                    {
+                        "exerciseId": "SpYC0Kp",
+                        "name": "dumbbell bench press",
+                        "gifUrl": "https://static.exercisedb.dev/media/SpYC0Kp.gif"
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val envelope = listAdapter.fromJson(jsonFixture)
+        assertNotNull(envelope)
+        assertTrue(envelope?.success == true)
+        assertEquals(2, envelope?.data?.size)
+        assertEquals("EIeI8Vf", envelope?.data?.get(0)?.realId)
+        assertEquals("barbell bench press", envelope?.data?.get(0)?.name)
+        assertEquals("https://static.exercisedb.dev/media/EIeI8Vf.gif", envelope?.data?.get(0)?.gifUrl)
+    }
+
+    @Test
+    fun `test real ExerciseDB envelope item parsing from getById response`() {
+        val itemAdapter = moshi.adapter(com.example.data.remote.ExerciseDbEnvelopeItem::class.java)
+        val jsonFixture = """
+            {
+                "success": true,
+                "data": {
+                    "exerciseId": "my33uHU",
+                    "name": "lever leg extension",
+                    "gifUrl": "https://static.exercisedb.dev/media/my33uHU.gif",
+                    "targetMuscles": ["quads"],
+                    "bodyParts": ["upper legs"],
+                    "equipments": ["leverage machine"],
+                    "secondaryMuscles": ["calves"],
+                    "instructions": ["Sit on the machine", "Extend legs", "Lower slowly"]
+                }
+            }
+        """.trimIndent()
+
+        val envelope = itemAdapter.fromJson(jsonFixture)
+        assertNotNull(envelope)
+        assertTrue(envelope?.success == true)
+        assertNotNull(envelope?.data)
+        assertEquals("my33uHU", envelope?.data?.realId)
+        assertEquals("lever leg extension", envelope?.data?.name)
+        assertEquals("https://static.exercisedb.dev/media/my33uHU.gif", envelope?.data?.gifUrl)
+        assertEquals(listOf("quads"), envelope?.data?.realTargetMuscles)
+        assertEquals(listOf("leverage machine"), envelope?.data?.realEquipments)
+    }
+
+    @Test
     fun `test custom photo priority in ExerciseResolver regardless of showGifs`() {
         val baseExercise = ExerciseEntity(
             id = 10,

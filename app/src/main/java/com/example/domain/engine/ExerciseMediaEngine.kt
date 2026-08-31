@@ -58,6 +58,9 @@ class ExerciseMediaEngine(
         onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }
     ): MediaSyncResult = repository.syncExerciseGifs(onProgress)
 
+    suspend fun testConnection(query: String = "bench press"): com.example.data.remote.NetworkTestResult = 
+        repository.testConnection(query)
+
     suspend fun syncOpportunistic(
         settingsManager: SettingsManager,
         currentCatalogVersion: Int = 1
