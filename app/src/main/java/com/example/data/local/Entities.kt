@@ -27,6 +27,7 @@ data class ExerciseEntity(
     val movementPattern: String? = null,
     val substitutionGroup: String? = null,
     val exerciseDbSearch: String? = null,
+    val exerciseDbAliases: String? = null,
     val externalExerciseId: String? = null,
     val gifUrl: String? = null,
     val lastVerifiedAt: Long? = null,

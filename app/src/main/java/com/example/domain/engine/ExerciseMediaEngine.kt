@@ -34,6 +34,8 @@ data class MediaSyncResult(
 
 data class MediaLibraryDiagnostic(
     val totalExercises: Int = 0,
+    val withExerciseDbSearch: Int = 0,
+    val withoutExerciseDbSearch: Int = 0,
     val matchedCount: Int = 0,
     val ambiguousCount: Int = 0,
     val notFoundCount: Int = 0,
@@ -85,12 +87,15 @@ class ExerciseMediaEngine(
                 false
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             false
         }
     }
 
     suspend fun getLibraryDiagnostic(): MediaLibraryDiagnostic {
         val exercises = dao?.getAllExercisesSync() ?: emptyList()
+        var withSearch = 0
+        var withoutSearch = 0
         val overrides = dao?.getAllOverrides()?.associateBy { it.exerciseId } ?: emptyMap()
 
         var matched = 0
@@ -120,10 +125,13 @@ class ExerciseMediaEngine(
             if (!hasCustomPhoto && !hasGif && !hasVideo) {
                 noMedia++
             }
+            if (ex.exerciseDbSearch.isNullOrBlank()) withoutSearch++ else withSearch++
         }
 
         return MediaLibraryDiagnostic(
             totalExercises = exercises.size,
+            withExerciseDbSearch = withSearch,
+            withoutExerciseDbSearch = withoutSearch,
             matchedCount = matched,
             ambiguousCount = ambiguous,
             notFoundCount = notFound,
@@ -136,6 +144,7 @@ class ExerciseMediaEngine(
 
     fun evaluateCandidates(
         exercise: ExerciseEntity,
-        candidates: List<ExternalExerciseDto>
-    ): MatchEvaluation = repository.evaluateCandidates(exercise, candidates)
+        candidates: List<ExternalExerciseDto>,
+        targetQuery: String? = null
+    ): MatchEvaluation = repository.evaluateCandidates(exercise, candidates, targetQuery)
 }

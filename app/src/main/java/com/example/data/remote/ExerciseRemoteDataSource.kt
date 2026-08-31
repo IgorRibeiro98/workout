@@ -18,6 +18,7 @@ import retrofit2.http.Query
 import java.io.IOException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 
 sealed class NetworkResult<out T> {
     data class Success<T>(val data: T) : NetworkResult<T>()
@@ -241,6 +242,8 @@ class NetworkExerciseRemoteDataSource(
                 url = "${effectiveBaseUrl}exercises/search?search=$cleanQuery",
                 errorMessage = "Erro HTTP ${e.code()}: ${e.message()}"
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             NetworkTestResult.Failure(
                 errorMessage = "Erro inesperado: ${e.javaClass.simpleName} - ${e.message}"
@@ -257,6 +260,8 @@ class NetworkExerciseRemoteDataSource(
         for (attempt in 1..maxRetries) {
             try {
                 return NetworkResult.Success(apiCall())
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: UnknownHostException) {
                 return NetworkResult.Offline
             } catch (e: HttpException) {
@@ -286,6 +291,7 @@ class NetworkExerciseRemoteDataSource(
                 Log.e("ExerciseDB_PARSER", "Moshi parsing failed", e)
                 return NetworkResult.ParserError(e, e.message)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Log.e("ExerciseDB_ERROR", "API call exception", e)
                 return NetworkResult.ParserError(e, e.message)
             }

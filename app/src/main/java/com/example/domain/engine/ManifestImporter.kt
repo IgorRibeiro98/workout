@@ -288,7 +288,16 @@ class ManifestImporter(
                             aliasesList.add(aliasesArr.getString(j))
                         }
                     }
-                    val aliasesStr = if (aliasesList.isNotEmpty()) aliasesList.joinToString(",") else null
+                                        val aliasesStr = if (aliasesList.isNotEmpty()) aliasesList.joinToString(",") else null
+
+                    val exDbAliasesArr = exObj.optJSONArray("exerciseDbAliases")
+                    val exDbAliasesList = mutableListOf<String>()
+                    if (exDbAliasesArr != null) {
+                        for (j in 0 until exDbAliasesArr.length()) {
+                            exDbAliasesList.add(exDbAliasesArr.getString(j))
+                        }
+                    }
+                    val exDbAliasesStr = if (exDbAliasesList.isNotEmpty()) exDbAliasesList.joinToString(",") else null
 
                     val classification = exObj.optJSONObject("classification")
                     val primaryMuscleObj = exObj.optJSONObject("muscles")?.optJSONArray("primary")?.optJSONObject(0)
@@ -335,6 +344,7 @@ class ManifestImporter(
                                 movementPattern = movementPattern ?: existing.movementPattern,
                                 substitutionGroup = substitutionGroup ?: existing.substitutionGroup,
                                 exerciseDbSearch = exerciseDbSearch ?: existing.exerciseDbSearch,
+                                exerciseDbAliases = exDbAliasesStr ?: existing.exerciseDbAliases,
                                 gifUrl = gifUrl ?: existing.gifUrl
                             )
                             dao.updateExercise(updatedEx)
@@ -354,6 +364,7 @@ class ManifestImporter(
                             movementPattern = movementPattern,
                             substitutionGroup = substitutionGroup,
                             exerciseDbSearch = exerciseDbSearch,
+                            exerciseDbAliases = exDbAliasesStr,
                             gifUrl = gifUrl,
                             active = true,
                             isUserCreated = false

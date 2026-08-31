@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
         PersonalRecordEntity::class,
         ExerciseUserOverrideEntity::class
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -37,6 +37,12 @@ abstract class AppDatabase : RoomDatabase() {
         private var INSTANCE: AppDatabase? = null
         
         
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN exerciseDbAliases TEXT")
+            }
+        }
+
         val MIGRATION_16_17 = object : Migration(16, 17) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE workout_programs ADD COLUMN externalId TEXT")
@@ -230,9 +236,11 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
-                    MIGRATION_16_17
+                    MIGRATION_16_17,
+                    MIGRATION_17_18
                 )
                 .addCallback(DatabaseCallback())
+                .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
                 instance

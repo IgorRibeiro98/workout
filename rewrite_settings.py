@@ -1,11 +1,11 @@
-package com.example.presentation.settings
+with open("app/src/main/java/com/example/presentation/settings/SettingsScreen.kt", "w") as f:
+    f.write("""package com.example.presentation.settings
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -14,7 +14,6 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.*
@@ -53,7 +52,6 @@ private sealed class SettingsSheetType {
     object ConfirmReimportCatalog : SettingsSheetType()
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen() {
     val context = LocalContext.current
@@ -68,12 +66,12 @@ fun SettingsScreen() {
 
     var activeSheet by remember { mutableStateOf<SettingsSheetType?>(null) }
     
-    val preAlertEnabled by settingsManager.preAlertEnabledFlow.collectAsState(initial = false)
-    val rirRpeEnabled by settingsManager.rirRpeEnabledFlow.collectAsState(initial = false)
-    val showGifs by settingsManager.showGifsFlow.collectAsState(initial = true)
+    val preAlertEnabled by settingsManager.preAlertEnabled.collectAsState(initial = false)
+    val rirRpeEnabled by settingsManager.rirRpeEnabled.collectAsState(initial = false)
+    val showGifs by settingsManager.showGifs.collectAsState(initial = true)
     
-    val defaultRestSecs by settingsManager.defaultRestSecondsFlow.collectAsState(initial = 60)
-    val defaultExerciseRestSecs by settingsManager.defaultExerciseRestSecondsFlow.collectAsState(initial = 120)
+    val defaultRestSecs by settingsManager.defaultRestSeconds.collectAsState(initial = 60)
+    val defaultExerciseRestSecs by settingsManager.defaultExerciseRestSeconds.collectAsState(initial = 120)
     
     var isSyncingMedia by remember { mutableStateOf(false) }
     var syncProgress by remember { mutableStateOf("") }
@@ -91,7 +89,7 @@ fun SettingsScreen() {
                     val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
                     val result = manifestImporter.importFromJsonString(json)
                     dialogTitle = "Importação de Catálogo"
-                    dialogMessage = "Importação concluída!\n\nAdicionados: ${result.added}\nAtualizados: ${result.updated}\nInalterados: ${result.unchanged}\nAlternativas vinculadas: ${result.alternativesAdded}\nIgnorados/Erros: ${result.ignored}"
+                    dialogMessage = "Importação concluída!\\n\\nAdicionados: ${result.added}\\nAtualizados: ${result.updated}\\nInalterados: ${result.unchanged}\\nAlternativas vinculadas: ${result.alternativesAdded}\\nIgnorados/Erros: ${result.ignored}"
                 } catch (e: Exception) {
                     dialogTitle = "Erro"
                     dialogMessage = "Erro ao importar: ${e.message}"
@@ -106,9 +104,9 @@ fun SettingsScreen() {
             coroutineScope.launch {
                 try {
                     val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
-                    val result = programImporter.importProgramFromJson(json)
+                    val result = programImporter.importFromJsonString(json)
                     dialogTitle = "Importação de Programa"
-                    dialogMessage = "Programa '${result.programName}' importado com sucesso!\n\nTreinos: ${result.workoutsCount}\nExercícios mapeados: ${result.exercisesCount}\nExercícios não encontrados (ignorados): ${result.missingExercises}"
+                    dialogMessage = "Programa '${result.programName}' importado com sucesso!\\n\\nTreinos: ${result.workoutsCount}\\nExercícios mapeados: ${result.exercisesCount}\\nExercícios não encontrados (ignorados): ${result.missingExercises}"
                 } catch (e: Exception) {
                     dialogTitle = "Erro"
                     dialogMessage = "Erro ao importar: ${e.message}"
@@ -121,7 +119,7 @@ fun SettingsScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(com.example.ui.theme.BackgroundDark)
+            .background(BackgroundDark)
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
@@ -186,25 +184,22 @@ fun SettingsScreen() {
                         isSyncingMedia = false
                         dialogTitle = "Sincronização de Demonstrações"
                         dialogMessage = if (result.isOffline) {
-                            "Não foi possível conectar ao ExerciseDB.\n\nVerifique a conexão de internet. Todo o treino continua funcionando 100% offline."
+                            "Não foi possível conectar ao ExerciseDB.\\n\\nVerifique a conexão de internet. Todo o treino continua funcionando 100% offline."
                         } else {
                             buildString {
-                                append("Cobertura de demonstrações\n\n")
-                                append("GIF: ${diag.gifsCount}\n")
-                                append("Fotos: ${diag.customPhotosCount}\n")
-                                append("Vídeos YouTube: ${diag.curatedVideosCount}\n")
-                                append("Sem mídia: ${diag.noMediaCount}\n\n")
+                                append("Cobertura de demonstrações\\n\\n")
+                                append("GIF: ${diag.gifCount}\\n")
+                                append("Fotos: ${diag.customPhotoCount}\\n")
+                                append("Vídeos YouTube: ${diag.youtubeCount}\\n")
+                                append("Sem mídia: ${diag.noMediaCount}\\n\\n")
                                 
-                                append("Resultado da Sincronização:\n")
-                                append("• Mapeados: ${result.matched}\n")
-                                append("• Ambíguos: ${result.ambiguous}\n")
-                                append("• Já atualizados: ${result.alreadyUpToDate}\n")
-                                append("• Não encontrados: ${result.notFound}\n")
+                                append("Resultado da Sincronização:\\n")
+                                append("• Mapeados: ${result.matched}\\n")
+                                append("• Ambíguos: ${result.ambiguous}\\n")
+                                append("• Já atualizados: ${result.alreadyUpToDate}\\n")
+                                append("• Não encontrados: ${result.notFound}\\n")
                                 if (result.errors.isNotEmpty()) {
-                                    append("\nErros encontrados:\n")
-                                    result.errors.forEach { err ->
-                                        append("• $err\n")
-                                    }
+                                    append("\\n(Total de erros: ${result.errors.size})")
                                 }
                             }
                         }
@@ -232,24 +227,24 @@ fun SettingsScreen() {
                             is com.example.data.remote.NetworkTestResult.Success -> {
                                 dialogTitle = "API Conectada com Sucesso"
                                 dialogMessage = buildString {
-                                    append("Status: Conexão ativa com ExerciseDB\n\n")
-                                    append("Consulta de teste: '${testRes.query}'\n")
-                                    append("Exercício retornado: ${testRes.foundName}\n")
-                                    append("ID remoto: ${testRes.exerciseId}\n")
-                                    append("GIF URL: ${testRes.gifUrl ?: "Não retornado"}\n")
-                                    append("Resultados encontrados: ${testRes.totalResults}\n")
+                                    append("Status: Conexão ativa com ExerciseDB\\n\\n")
+                                    append("Consulta de teste: '${testRes.query}'\\n")
+                                    append("Exercício retornado: ${testRes.foundName}\\n")
+                                    append("ID remoto: ${testRes.exerciseId}\\n")
+                                    append("GIF URL: ${testRes.gifUrl ?: "Não retornado"}\\n")
+                                    append("Resultados encontrados: ${testRes.totalResults}\\n")
                                 }
                             }
                             is com.example.data.remote.NetworkTestResult.Failure -> {
                                 dialogTitle = "Falha ExerciseDB"
                                 dialogMessage = buildString {
                                     if (testRes.httpCode != null) {
-                                        append("HTTP: ${testRes.httpCode}\n")
+                                        append("HTTP: ${testRes.httpCode}\\n")
                                     }
                                     if (testRes.url != null) {
-                                        append("URL: ${testRes.url}\n\n")
+                                        append("URL: ${testRes.url}\\n\\n")
                                     }
-                                    append("Mensagem: ${testRes.errorMessage}\n")
+                                    append("Mensagem: ${testRes.errorMessage}\\n")
                                 }
                             }
                         }
@@ -273,7 +268,7 @@ fun SettingsScreen() {
         Spacer(modifier = Modifier.height(48.dp))
     }
     
-        when (activeSheet) {
+    when (activeSheet) {
         is SettingsSheetType.RestBetweenSets -> {
             SelectionBottomSheet(
                 title = "Descanso entre séries",
@@ -286,13 +281,13 @@ fun SettingsScreen() {
                     "120 segundos (2 min)" to 120,
                     "180 segundos (3 min)" to 180
                 ),
-                selectedOption = listOf("Desativado" to 0, "30 segundos" to 30, "45 segundos" to 45, "60 segundos (1 min)" to 60, "90 segundos (1.5 min)" to 90, "120 segundos (2 min)" to 120, "180 segundos (3 min)" to 180).find { it.second == defaultRestSecs },
-                optionTitle = { it.first },
-                onOptionSelected = { 
-                    coroutineScope.launch { settingsManager.setDefaultRestSeconds(it.second) }
+                selectedValue = defaultRestSecs,
+                onSelect = { 
+                    coroutineScope.launch { settingsManager.setDefaultRestSeconds(it) }
                     activeSheet = null
                 },
-                onDismissRequest = { activeSheet = null }
+                onDismissRequest = { activeSheet = null },
+                onCustomOptionSelect = { activeSheet = SettingsSheetType.CustomRestBetweenSets }
             )
         }
         is SettingsSheetType.RestBetweenExercises -> {
@@ -307,13 +302,13 @@ fun SettingsScreen() {
                     "180 segundos (3 min)" to 180,
                     "240 segundos (4 min)" to 240
                 ),
-                selectedOption = listOf("Desativado" to 0, "60 segundos (1 min)" to 60, "90 segundos (1.5 min)" to 90, "120 segundos (2 min)" to 120, "150 segundos (2.5 min)" to 150, "180 segundos (3 min)" to 180, "240 segundos (4 min)" to 240).find { it.second == defaultExerciseRestSecs },
-                optionTitle = { it.first },
-                onOptionSelected = { 
-                    coroutineScope.launch { settingsManager.setDefaultExerciseRestSeconds(it.second) }
+                selectedValue = defaultExerciseRestSecs,
+                onSelect = { 
+                    coroutineScope.launch { settingsManager.setDefaultExerciseRestSeconds(it) }
                     activeSheet = null
                 },
-                onDismissRequest = { activeSheet = null }
+                onDismissRequest = { activeSheet = null },
+                onCustomOptionSelect = { activeSheet = SettingsSheetType.CustomRestBetweenExercises }
             )
         }
         is SettingsSheetType.ManageData -> {
@@ -322,27 +317,6 @@ fun SettingsScreen() {
                 title = "Gerenciar Dados"
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BottomSheetActionItem(
-                        icon = Icons.Default.Analytics,
-                        title = "Auditoria ExerciseDB",
-                        subtitle = "Verificar cobertura do catálogo",
-                        onClick = {
-                            activeSheet = null
-                            coroutineScope.launch {
-                                val diag = mediaEngine.getLibraryDiagnostic()
-                                dialogTitle = "Auditoria ExerciseDB"
-                                dialogMessage = "Total exercícios:\n${diag.totalExercises}\n\n" +
-                                        "Com exerciseDbSearch:\n${diag.withExerciseDbSearch}\n\n" +
-                                        "Sem exerciseDbSearch:\n${diag.withoutExerciseDbSearch}\n\n" +
-                                        "Mapeados:\n${diag.matchedCount}\n\n" +
-                                        "Ambíguos:\n${diag.ambiguousCount}\n\n" +
-                                        "Não encontrados:\n${diag.notFoundCount}\n\n" +
-                                        "Sem mídia:\n${diag.noMediaCount}"
-                                showDialog = true
-                            }
-                        }
-                    )
-
                     BottomSheetActionItem(
                         icon = Icons.Default.Refresh,
                         title = "Reimportar Catálogo Canônico",
@@ -402,10 +376,10 @@ fun SettingsScreen() {
                                     val result = manifestImporter.importFromJsonString(json, force = true)
                                     if (result.errors.isNotEmpty()) {
                                         dialogTitle = "Avisos/Erros no Catálogo"
-                                        dialogMessage = result.errors.joinToString("\n")
+                                        dialogMessage = result.errors.joinToString("\\n")
                                     } else {
                                         dialogTitle = "Catálogo Canônico"
-                                        dialogMessage = "Catálogo canônico sincronizado com sucesso!\n\n144 exercícios processados de forma transacional.\n\nNovos adicionados: ${result.added}\nAtualizados: ${result.updated}\nInalterados: ${result.unchanged}\nAlternativas vinculadas: ${result.alternativesAdded}"
+                                        dialogMessage = "Catálogo canônico sincronizado com sucesso!\\n\\n144 exercícios processados de forma transacional.\\n\\nNovos adicionados: ${result.added}\\nAtualizados: ${result.updated}\\nInalterados: ${result.unchanged}\\nAlternativas vinculadas: ${result.alternativesAdded}"
                                     }
                                 } catch (e: Exception) {
                                     dialogTitle = "Erro"
@@ -414,7 +388,7 @@ fun SettingsScreen() {
                                 showDialog = true
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = com.example.ui.theme.BackgroundDark),
+                        colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
@@ -431,7 +405,6 @@ fun SettingsScreen() {
         }
         else -> {}
     }
-    
     
     if (showDialog) {
         AlertDialog(
@@ -619,3 +592,4 @@ private fun SettingsActionItem(
         }
     }
 }
+""")

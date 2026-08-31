@@ -56,6 +56,7 @@ class ExerciseMediaRepository(
         val exercises = try {
             workoutDao.getAllExercisesSync()
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("ExerciseDB_SYNC", "[ExerciseDB_SYNC] Database error: ${e.message}", e)
             return@withContext MediaSyncResult(errors = listOf("Erro ao consultar banco de dados: ${e.message}"))
         }
@@ -86,6 +87,19 @@ class ExerciseMediaRepository(
                 if (idResult is NetworkResult.HttpError && (idResult.code == 429 || idResult.code in 500..504)) {
                     delay(1500)
                     idResult = remoteDataSource.getExerciseById(exercise.externalExerciseId)
+                }
+                
+                if (idResult is NetworkResult.HttpError && idResult.code == 429) {
+                    Log.e("ExerciseDB_SYNC", "Rate limit exceeded (429) on ID lookup. Aborting sync.")
+                    errors.add("Limite da API ExerciseDB atingido (429).")
+                    return@withContext MediaSyncResult(
+                        matched = matchedCount,
+                        ambiguous = ambiguousCount,
+                        notFound = notFoundCount,
+                        alreadyUpToDate = alreadyUpToDateCount,
+                        isOffline = false,
+                        errors = errors
+                    )
                 }
 
                 when (idResult) {
@@ -122,8 +136,14 @@ class ExerciseMediaRepository(
                 }
             }
 
-            val searchQuery = exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.canonicalId?.replace("-", " ") ?: exercise.name
-            if (searchQuery.isBlank()) {
+            val searchQueries = mutableListOf<String>()
+            exercise.exerciseDbSearch?.takeIf { it.isNotBlank() }?.let { searchQueries.add(it) }
+            exercise.exerciseDbAliases?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.let { searchQueries.addAll(it) }
+            exercise.nameEn?.takeIf { it.isNotBlank() }?.let { searchQueries.add(it) }
+            val normalName = exercise.canonicalId?.replace("-", " ") ?: exercise.name
+            if (normalName.isNotBlank()) searchQueries.add(normalName)
+
+            if (searchQueries.isEmpty()) {
                 notFoundCount++
                 Log.d("ExerciseDB_SYNC", """
                     [ExerciseDB_SYNC]
@@ -135,127 +155,82 @@ class ExerciseMediaRepository(
                 continue
             }
 
-            var searchResult = remoteDataSource.searchExercises(searchQuery)
-            if (searchResult is NetworkResult.HttpError && (searchResult.code == 429 || searchResult.code in 500..504)) {
-                // Backoff on rate limit / transient server overload
-                Log.w("ExerciseDB_SYNC", "[ExerciseDB_SYNC] Transient HTTP ${searchResult.code} for '${exercise.name}'. Backing off 2000ms...")
-                delay(2000)
-                searchResult = remoteDataSource.searchExercises(searchQuery)
-            }
+            var matched = false
+            var matchLog = StringBuilder()
+            matchLog.appendLine("Tentativas:")
 
-            when (searchResult) {
-                is NetworkResult.Success -> {
-                    val candidates = searchResult.data
-                    val evaluation = evaluateCandidates(exercise, candidates)
-                    when (evaluation.status) {
-                        ExerciseMatchStatus.MATCHED -> {
-                            val best = evaluation.candidate!!
-                            val updatedEntity = exercise.copy(
-                                externalExerciseId = best.realId,
-                                gifUrl = best.gifUrl,
-                                lastVerifiedAt = System.currentTimeMillis(),
-                                mappingStatus = ExerciseMatchStatus.MATCHED.name
-                            )
-                            workoutDao.updateExercise(updatedEntity)
-                            matchedCount++
-                            Log.d("ExerciseDB_SYNC", """
-                                [ExerciseDB_SYNC]
-                                Exercise: ${exercise.name}
-                                Search: $searchQuery
-                                Request: GET /exercises/search?search=$searchQuery
-                                Response: HTTP 200 (${candidates.size} candidates)
-                                Result: SUCCESS (MATCHED -> ID: ${best.realId}, Score: ${evaluation.score}, GIF: ${best.gifUrl})
-                            """.trimIndent())
-                        }
-                        ExerciseMatchStatus.AMBIGUOUS -> {
-                            val updatedEntity = exercise.copy(
-                                mappingStatus = ExerciseMatchStatus.AMBIGUOUS.name
-                            )
-                            workoutDao.updateExercise(updatedEntity)
-                            ambiguousCount++
-                            Log.d("ExerciseDB_SYNC", """
-                                [ExerciseDB_SYNC]
-                                Exercise: ${exercise.name}
-                                Search: $searchQuery
-                                Request: GET /exercises/search?search=$searchQuery
-                                Response: HTTP 200 (${candidates.size} candidates)
-                                Result: AMBIGUOUS (Score: ${evaluation.score})
-                            """.trimIndent())
-                        }
-                        else -> {
-                            val updatedEntity = exercise.copy(
-                                mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
-                            )
-                            workoutDao.updateExercise(updatedEntity)
-                            notFoundCount++
-                            Log.d("ExerciseDB_SYNC", """
-                                [ExerciseDB_SYNC]
-                                Exercise: ${exercise.name}
-                                Search: $searchQuery
-                                Request: GET /exercises/search?search=$searchQuery
-                                Response: HTTP 200 (${candidates.size} candidates)
-                                Result: NOT_FOUND (Score: ${evaluation.score} < 60)
-                            """.trimIndent())
-                        }
-                    }
+            for ((attemptIdx, query) in searchQueries.distinct().withIndex()) {
+                matchLog.appendLine("${attemptIdx + 1} - $query")
+                
+                var searchResult = remoteDataSource.searchExercises(query)
+                if (searchResult is NetworkResult.HttpError && (searchResult.code == 429 || searchResult.code in 500..504)) {
+                    delay(2000)
+                    searchResult = remoteDataSource.searchExercises(query)
                 }
-                is NetworkResult.Offline -> {
-                    Log.d("ExerciseDB_SYNC", "[ExerciseDB_SYNC] Network became offline during sync")
+
+                if (searchResult is NetworkResult.HttpError && searchResult.code == 429) {
+                    Log.e("ExerciseDB_SYNC", "Rate limit exceeded (429). Aborting sync.")
+                    errors.add("Limite da API ExerciseDB atingido (429).")
+                    return@withContext MediaSyncResult(
+                        matched = matchedCount,
+                        ambiguous = ambiguousCount,
+                        notFound = notFoundCount,
+                        alreadyUpToDate = alreadyUpToDateCount,
+                        isOffline = false,
+                        errors = errors
+                    )
+                }
+
+                if (searchResult is NetworkResult.Success) {
+                    val candidates = searchResult.data
+                    val evaluation = evaluateCandidates(exercise, candidates, targetQuery = query)
+                    if (evaluation.status == ExerciseMatchStatus.MATCHED) {
+                        val best = evaluation.candidate!!
+                        val updatedEntity = exercise.copy(
+                            externalExerciseId = best.realId,
+                            gifUrl = best.gifUrl,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            mappingStatus = ExerciseMatchStatus.MATCHED.name
+                        )
+                        workoutDao.updateExercise(updatedEntity)
+                        matchedCount++
+                        
+                        matchLog.appendLine("Resultado: MATCHED")
+                        matchLog.appendLine("ID: ${best.realId}")
+                        matchLog.appendLine("GIF: FOUND")
+                        
+                        Log.d("ExerciseDB_SYNC", """
+                            [ExerciseDB_SYNC]
+                            Exercise: ${exercise.name}
+                            $matchLog
+                        """.trimIndent())
+                        matched = true
+                        break
+                    }
+                } else if (searchResult is NetworkResult.Offline) {
                     return@withContext MediaSyncResult(
                         isOffline = true,
                         errors = listOf("Conecte-se à internet para atualizar as demonstrações.")
                     )
                 }
-                is NetworkResult.HttpError -> {
-                    val statusDesc = when (searchResult.code) {
-                        503 -> "Servidor temporariamente sobrecarregado (HTTP 503)"
-                        429 -> "Limite de requisições atingido (HTTP 429)"
-                        else -> searchResult.message ?: "Erro HTTP ${searchResult.code}"
-                    }
-                    val errMsg = "HTTP ${searchResult.code} ($statusDesc) ao buscar '${exercise.name}' [query: $searchQuery]"
-                    Log.e("ExerciseDB_SYNC", """
-                        [ExerciseDB_SYNC]
-                        Exercise: ${exercise.name}
-                        Search: $searchQuery
-                        Request: GET /exercises/search?search=$searchQuery
-                        Response: HTTP ${searchResult.code}
-                        Result: ERROR
-                        Reason: $statusDesc
-                    """.trimIndent())
-                    errors.add(errMsg)
-                    notFoundCount++
-                }
-                is NetworkResult.ParserError -> {
-                    val errMsg = "Erro de parser para '${exercise.name}': ${searchResult.rawMessage ?: searchResult.throwable.message}"
-                    Log.e("ExerciseDB_SYNC", """
-                        [ExerciseDB_SYNC]
-                        Exercise: ${exercise.name}
-                        Search: $searchQuery
-                        Request: GET /exercises/search?search=$searchQuery
-                        Result: ERROR
-                        Reason: Parser error - ${searchResult.throwable.message}
-                    """.trimIndent(), searchResult.throwable)
-                    errors.add(errMsg)
-                    notFoundCount++
-                }
-                is NetworkResult.NotFound -> {
-                    val updatedEntity = exercise.copy(
-                        mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
-                    )
-                    workoutDao.updateExercise(updatedEntity)
-                    notFoundCount++
-                    Log.d("ExerciseDB_SYNC", """
-                        [ExerciseDB_SYNC]
-                        Exercise: ${exercise.name}
-                        Search: $searchQuery
-                        Request: GET /exercises/search?search=$searchQuery
-                        Response: HTTP 404
-                        Result: NOT_FOUND
-                    """.trimIndent())
-                }
+                delay(280) // rate limit between query attempts
             }
 
-            // Respect rate-limiting
+            if (!matched) {
+                matchLog.appendLine("Resultado: NOT_FOUND")
+                val updatedEntity = exercise.copy(
+                    mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
+                )
+                workoutDao.updateExercise(updatedEntity)
+                notFoundCount++
+                Log.d("ExerciseDB_SYNC", """
+                    [ExerciseDB_SYNC]
+                    Exercise: ${exercise.name}
+                    $matchLog
+                """.trimIndent())
+            }
+
+            // Respect rate-limiting before moving to the next exercise
             delay(280)
         }
 
@@ -280,13 +255,18 @@ class ExerciseMediaRepository(
 
     fun evaluateCandidates(
         exercise: ExerciseEntity,
-        candidates: List<ExternalExerciseDto>
+        candidates: List<ExternalExerciseDto>,
+        targetQuery: String? = null
     ): MatchEvaluation {
         if (candidates.isEmpty()) {
             return MatchEvaluation(null, 0, ExerciseMatchStatus.NOT_FOUND)
         }
 
-        val targetNameRaw = exercise.exerciseDbSearch ?: exercise.nameEn ?: exercise.canonicalId?.replace("-", " ") ?: exercise.name
+        val targetNameRaw = targetQuery?.takeIf { it.isNotBlank() }
+            ?: exercise.exerciseDbSearch
+            ?: exercise.nameEn
+            ?: exercise.canonicalId?.replace("-", " ")
+            ?: exercise.name
         val targetName = ExerciseDbNormalizer.normalize(targetNameRaw)
 
         data class CandidateScore(
