@@ -229,290 +229,130 @@ fun ExerciseDetailsScreen(
                 }
             }
 
-            // Exercise Overview Card
+
+            // PREMIUM CONTENT & OVERVIEW
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(muscleGroup.icon, contentDescription = null, tint = muscleGroup.color, modifier = Modifier.size(20.dp))
-                                Text(
-                                    text = "Ficha Técnica",
-                                    color = TextPrimary,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            if (exerciseInfo?.isUserCreated == true || overrideInfo?.displayName != null) {
-                                Surface(
-                                    color = Lime400.copy(alpha = 0.2f),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text(
-                                        text = "Personalizado",
-                                        color = Lime400,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
+                    val premium = premiumInfo
+
+                    // Section: Sobre
+                    Text("Sobre", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(top = 16.dp))
+                    HorizontalDivider(color = SurfaceHighlight)
+                    if (!resolvedNotes.isNullOrBlank() || exerciseInfo?.shortDescription != null) {
+                        Text(
+                            text = resolvedNotes ?: exerciseInfo?.shortDescription ?: "",
+                            color = TextSecondary,
+                            fontSize = 14.sp
+                        )
+                    }
+                    if (!primaryMuscle.isNullOrEmpty()) {
+                        Text("Músculos: ${primaryMuscle}" + if (secondaryMuscles.isNotEmpty()) ", ${secondaryMuscles.joinToString(", ")}" else "", color = TextSecondary, fontSize = 14.sp)
+                    }
+                    if (!equipment.isNullOrEmpty()) {
+                        Text("Equipamento: $equipment", color = TextSecondary, fontSize = 14.sp)
+                    }
+                    exerciseInfo?.difficulty?.let { Text("Dificuldade: $it", color = TextSecondary, fontSize = 14.sp) }
+
+                    // Section: Como executar
+                    if (premium?.execution != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Como executar", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        
+                        premium.execution.setup?.let { Text("Preparação: $it", color = TextSecondary, fontSize = 14.sp) }
+                        
+                        premium.execution.steps?.let { steps ->
+                            val stepsList = try {
+                                val arr = org.json.JSONArray(steps)
+                                (0 until arr.length()).map { arr.getString(it) }
+                            } catch(e: Exception) { emptyList<String>() }
+                            
+                            if (stepsList.isNotEmpty()) {
+                                stepsList.forEachIndexed { i, step ->
+                                    Text("${i+1}. $step", color = TextSecondary, fontSize = 14.sp)
                                 }
                             }
                         }
-                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        premium.execution.breathing?.let { Text("Respiração: $it", color = TextSecondary, fontSize = 14.sp) }
+                    }
 
-                        // Chips row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (!primaryMuscle.isNullOrEmpty()) {
-                                Surface(
-                                    color = muscleGroup.color.copy(alpha = 0.15f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, muscleGroup.color.copy(alpha = 0.4f))
-                                ) {
-                                    Text(
-                                        text = primaryMuscle,
-                                        color = muscleGroup.color,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                            if (!equipment.isNullOrEmpty()) {
-                                Surface(
-                                    color = SurfaceHighlight,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text(
-                                        text = equipment,
-                                        color = TextPrimary,
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                            if (!movementPattern.isNullOrEmpty()) {
-                                Surface(
-                                    color = SurfaceHighlight,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text(
-                                        text = movementPattern.replaceFirstChar { it.uppercase() },
-                                        color = TextSecondary,
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        if (!resolvedNotes.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = "Notas / Instruções: $resolvedNotes",
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-
-                        if (secondaryMuscles.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Músculos secundários: ${secondaryMuscles.joinToString(", ")}",
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-
-                        if (!substitutionGroup.isNullOrEmpty()) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Grupo de substituição: ${substitutionGroup.replace("_", " ")}",
-                                color = TextSecondary.copy(alpha = 0.7f),
-                                fontSize = 12.sp
-                            )
+                    // Section: Dicas
+                    if (premium?.education?.tips != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Dicas", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        val tipsList = try { val arr = org.json.JSONArray(premium.education.tips!!); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                        tipsList.forEach { tip ->
+                            Text("• $tip", color = TextSecondary, fontSize = 14.sp)
                         }
                     }
-                }
-            }
 
-
-            
-            // PREMIUM CONTENT
-            if (premiumInfo != null) {
-                val premium = premiumInfo!!
-                item {
-                    Text("Conteúdo Premium", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
-                }
-                
-                // Sobre o exercício
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text("Sobre o exercício", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                            Spacer(Modifier.height(8.dp))
-                            exerciseInfo?.shortDescription?.let { desc ->
-                                Text(desc, color = TextSecondary, fontSize = 14.sp)
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            Text("Músculos: ${exerciseInfo?.primaryMuscle ?: ""}", color = TextSecondary, fontSize = 14.sp)
-                            Text("Equipamento: ${exerciseInfo?.equipment ?: ""}", color = TextSecondary, fontSize = 14.sp)
-                            exerciseInfo?.difficulty?.let { Text("Dificuldade: $it", color = TextSecondary, fontSize = 14.sp) }
+                    // Section: Erros comuns
+                    if (premium?.education?.commonMistakes != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Erros comuns", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        val mistakesList = try { val arr = org.json.JSONArray(premium.education.commonMistakes!!); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                        mistakesList.forEach { mistake ->
+                            Text("• $mistake", color = TextSecondary, fontSize = 14.sp)
                         }
                     }
-                }
 
-                // Como executar
-                if (premium.execution != null) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Como executar", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(8.dp))
-                                premium.execution.setup?.let { Text("Preparação: $it", color = TextSecondary, fontSize = 14.sp); Spacer(Modifier.height(4.dp)) }
-                                premium.execution.steps?.let { steps ->
-                                    val stepsList = remember(steps) {
-                                        try {
-                                            val arr = JSONArray(steps)
-                                            (0 until arr.length()).map { arr.getString(it) }
-                                        } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (stepsList.isNotEmpty()) {
-                                        Text("Passo a passo:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        stepsList.forEachIndexed { i, step ->
-                                            Text("${i+1}. $step", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                    }
-                                }
-                                premium.execution.breathing?.let { Text("Respiração: $it", color = TextSecondary, fontSize = 14.sp) }
+                    // Section: Progressão
+                    if (premium?.progression != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Progressão", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        premium.progression.repRange?.let { Text("Faixa recomendada: $it", color = TextSecondary, fontSize = 14.sp) }
+                        premium.progression.increaseRule?.let { Text("Regra de evolução: $it", color = TextSecondary, fontSize = 14.sp) }
+                    }
+                    
+                    // Section: Alternativas
+                    if (premium?.substitution != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Alternativas", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        premium.substitution.sameMovement?.let { sm ->
+                            val smList = try { val arr = org.json.JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                            if (smList.isNotEmpty()) {
+                                Text("Mesmo movimento: ${smList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
+                            }
+                        }
+                        premium.substitution.sameMuscle?.let { sm ->
+                            val smList = try { val arr = org.json.JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                            if (smList.isNotEmpty()) {
+                                Text("Mesmo grupo muscular: ${smList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
                             }
                         }
                     }
-                }
 
-                // Dicas do treinador
-                if (premium.education != null) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Dicas do treinador", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(8.dp))
-                                premium.education.tips?.let { tips ->
-                                    val tipsList = remember(tips) {
-                                        try { val arr = JSONArray(tips); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (tipsList.isNotEmpty()) {
-                                        Text("Dicas:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        tipsList.forEach { tip ->
-                                            Text("• $tip", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                    }
-                                }
-                                premium.education.commonMistakes?.let { mistakes ->
-                                    val mistakesList = remember(mistakes) {
-                                        try { val arr = JSONArray(mistakes); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (mistakesList.isNotEmpty()) {
-                                        Text("Erros comuns:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        mistakesList.forEach { mistake ->
-                                            Text("• $mistake", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                    }
-                                }
+                    // Section: Cuidados
+                    if (premium?.safety != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Cuidados", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        HorizontalDivider(color = SurfaceHighlight)
+                        premium.safety.riskLevel?.let { Text("Nível de risco: $it", color = TextSecondary, fontSize = 14.sp) }
+                        premium.safety.attentionPoints?.let { points ->
+                            val pointsList = try { val arr = org.json.JSONArray(points); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                            pointsList.forEach { p ->
+                                Text("• $p", color = TextSecondary, fontSize = 14.sp)
                             }
                         }
-                    }
-                }
-
-                // Progressão
-                if (premium.progression != null) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Progressão", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(8.dp))
-                                premium.progression.repRange?.let { Text("Faixa recomendada: $it", color = TextSecondary, fontSize = 14.sp); Spacer(Modifier.height(4.dp)) }
-                                premium.progression.increaseRule?.let { Text("Regra de evolução: $it", color = TextSecondary, fontSize = 14.sp) }
-                            }
-                        }
-                    }
-                }
-
-                // Substituições
-                if (premium.substitution != null) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Substituições", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(8.dp))
-                                premium.substitution.sameMovement?.let { sm ->
-                                    val smList = remember(sm) {
-                                        try { val arr = JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (smList.isNotEmpty()) {
-                                        Text("Mesmo movimento:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        smList.forEach { text ->
-                                            Text("• $text", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                    }
-                                }
-                                premium.substitution.sameMuscle?.let { sm ->
-                                    val smList = remember(sm) {
-                                        try { val arr = JSONArray(sm); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (smList.isNotEmpty()) {
-                                        Text("Mesmo grupo muscular:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        smList.forEach { text ->
-                                            Text("• $text", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                        Spacer(Modifier.height(4.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Segurança
-                if (premium.safety != null) {
-                    item {
-                        Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Segurança", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(8.dp))
-                                premium.safety.attentionPoints?.let { points ->
-                                    val pointsList = remember(points) {
-                                        try { val arr = JSONArray(points); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
-                                    }
-                                    if (pointsList.isNotEmpty()) {
-                                        Text("Pontos de atenção:", color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                        pointsList.forEach { point ->
-                                            Text("• $point", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
-                                        }
-                                    }
-                                }
+                        premium.safety.commonDiscomforts?.let { points ->
+                            val pointsList = try { val arr = org.json.JSONArray(points); (0 until arr.length()).map { arr.getString(it) } } catch(e: Exception) { emptyList<String>() }
+                            if (pointsList.isNotEmpty()) {
+                                Text("Desconfortos comuns: ${pointsList.joinToString(", ")}", color = TextSecondary, fontSize = 14.sp)
                             }
                         }
                     }
                 }
             }
-
 
             // Video Guide Card - ONLY shown if curated video mapping exists
             if (curatedVideo != null) {
