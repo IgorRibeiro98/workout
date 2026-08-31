@@ -2,22 +2,29 @@ package com.example.domain.engine
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.example.data.datastore.SettingsManager
 import com.example.data.local.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
 class PremiumManifestImporter(
     private val database: AppDatabase,
-    private val context: Context
+    private val context: Context,
+    private val settingsManager: SettingsManager = SettingsManager(context)
 ) {
     private val dao = database.workoutDao()
 
-    suspend fun importFromAssets(assetPath: String = "catalog/exercise-content-manifest.v1.json"): ImportResult = withContext(Dispatchers.IO) {
+    suspend fun importFromAssets(
+        assetPath: String = "catalog/exercise-content-manifest.v1.json",
+        force: Boolean = false
+    ): ImportResult = withContext(Dispatchers.IO) {
         val errors = mutableListOf<String>()
         var added = 0
         var updated = 0
+        var ignored = 0
 
         try {
             val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
@@ -26,20 +33,67 @@ class PremiumManifestImporter(
             // Validate schemaVersion
             if (root.has("schemaVersion") && root.getInt("schemaVersion") < 1) {
                 errors.add("Versão de schema inválida.")
+                return@withContext ImportResult(errors = errors)
+            }
+            
+            val contentVersion = root.optInt("contentVersion", 1)
+            
+            if (!force) {
+                val currentVersion = settingsManager.installedCatalogContentVersionFlow.first()
+                if (currentVersion >= contentVersion) {
+                    return@withContext ImportResult(ignored = root.optJSONArray("exercises")?.length() ?: 0, unchanged = root.optJSONArray("exercises")?.length() ?: 0)
+                }
             }
             
             val exercisesArray = if (root.has("exercises")) root.getJSONArray("exercises") else JSONArray().put(root)
+            
+            // Validation step
+            for (i in 0 until exercisesArray.length()) {
+                val exObj = exercisesArray.getJSONObject(i)
+                val id = exObj.optString("id")
+                if (id.isEmpty()) {
+                    errors.add("Exercício no índice $i: campo id ausente.")
+                    continue
+                }
+                
+                val identity = exObj.optJSONObject("identity")
+                if (identity == null) {
+                    errors.add("Exercício: $id Problema: campo identity ausente.")
+                    continue
+                }
+                val namePtBr = identity.optString("namePtBr")
+                if (namePtBr.isEmpty()) {
+                    errors.add("Exercício: $id Problema: campo identity.namePtBr ausente.")
+                    continue
+                }
+                val nameEn = identity.optString("nameEn")
+                if (nameEn.isEmpty()) {
+                    errors.add("Exercício: $id Problema: campo identity.nameEn ausente.")
+                    continue
+                }
+                
+                val classification = exObj.optJSONObject("classification")
+                if (classification == null) {
+                    errors.add("Exercício: $id Problema: campo classification ausente.")
+                    continue
+                }
+                
+                val execution = exObj.optJSONObject("execution")
+                if (execution == null) {
+                    errors.add("Exercício: $id Problema: campo execution ausente.")
+                    continue
+                }
+            }
+            
+            if (errors.isNotEmpty()) {
+                return@withContext ImportResult(errors = errors)
+            }
             
             database.withTransaction {
                 for (i in 0 until exercisesArray.length()) {
                     val exObj = exercisesArray.getJSONObject(i)
                     val id = exObj.optString("id")
-                    if (id.isEmpty()) {
-                        errors.add("Exercício sem ID encontrado no índice $i.")
-                        continue
-                    }
-
-                    // Look for existing exercise by canonicalId
+                    
                     var existing = dao.getExerciseByCanonicalId(id)
                     var exerciseId: Long = 0
 
@@ -76,7 +130,8 @@ class PremiumManifestImporter(
                             exerciseType = exerciseType ?: existing.exerciseType,
                             primaryMuscle = primaryMuscle ?: existing.primaryMuscle,
                             secondaryMuscles = secondaryMuscles ?: existing.secondaryMuscles,
-                            equipment = equipment ?: existing.equipment
+                            equipment = equipment ?: existing.equipment,
+                            contentVersion = contentVersion
                         )
                         dao.updateExercise(updatedEx)
                         exerciseId = existing.id
@@ -95,7 +150,8 @@ class PremiumManifestImporter(
                             primaryMuscle = primaryMuscle,
                             secondaryMuscles = secondaryMuscles,
                             equipment = equipment,
-                            active = true
+                            active = true,
+                            contentVersion = contentVersion
                         )
                         exerciseId = dao.insertExercise(newEx)
                         added++
@@ -193,10 +249,15 @@ class PremiumManifestImporter(
                     }
                 }
             }
+            
+            if (contentVersion > 0) {
+                settingsManager.setInstalledCatalogContentVersion(contentVersion)
+            }
+            
         } catch (e: Exception) {
             errors.add("Erro ao importar manifesto premium: ${e.message}")
         }
 
-        return@withContext ImportResult(added = added, updated = updated, errors = errors)
+        return@withContext ImportResult(added = added, updated = updated, ignored = ignored, errors = errors)
     }
 }

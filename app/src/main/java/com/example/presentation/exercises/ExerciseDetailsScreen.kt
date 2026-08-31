@@ -370,6 +370,7 @@ fun ExerciseDetailsScreen(
                             }
                             Text("Músculos: ${exerciseInfo?.primaryMuscle ?: ""}", color = TextSecondary, fontSize = 14.sp)
                             Text("Equipamento: ${exerciseInfo?.equipment ?: ""}", color = TextSecondary, fontSize = 14.sp)
+                            exerciseInfo?.difficulty?.let { Text("Dificuldade: $it", color = TextSecondary, fontSize = 14.sp) }
                         }
                     }
                 }
