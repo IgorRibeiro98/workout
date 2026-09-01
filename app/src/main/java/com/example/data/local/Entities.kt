@@ -39,7 +39,19 @@ data class ExerciseEntity(
     val difficulty: String? = null,
     val exerciseType: String? = null,
     val bodyRegion: String? = null,
-    val trainingGoals: String? = null
+    val trainingGoals: String? = null,
+    val normalizedName: String? = null,
+    val muscleGroups: String? = null,
+    val primaryMuscles: String? = null,
+    val instructions: String? = null,
+    val executionTips: String? = null,
+    val commonMistakes: String? = null,
+    val alternatives: String? = null,
+    val youtubeUrl: String? = null,
+    val source: String? = null,
+    val externalReferences: String? = null,
+    val origin: String? = "SYSTEM",
+    val isCurated: Boolean = false
 )
 
 @Entity(tableName = "workout_programs", indices = [androidx.room.Index(value = ["externalId"], unique = true)])

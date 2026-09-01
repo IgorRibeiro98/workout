@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
         ExerciseSyncCheckpointEntity::class,
         BodyMeasurementEntity::class
     ],
-    version = 23,
+    version = 24,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -44,6 +44,23 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bodyMeasurementDao(): BodyMeasurementDao
     
     companion object {
+
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN normalizedName TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN muscleGroups TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN primaryMuscles TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN instructions TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN executionTips TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN commonMistakes TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN alternatives TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN youtubeUrl TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN source TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN externalReferences TEXT")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN origin TEXT DEFAULT 'SYSTEM'")
+                db.execSQL("ALTER TABLE exercises ADD COLUMN isCurated INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         val MIGRATION_22_23 = object : Migration(22, 23) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -345,7 +362,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()
