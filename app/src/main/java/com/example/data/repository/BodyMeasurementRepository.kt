@@ -20,6 +20,10 @@ class BodyMeasurementRepository(
         dao.insertMeasurement(measurement)
     }
 
+    suspend fun updateMeasurement(measurement: BodyMeasurementEntity) = withContext(Dispatchers.IO) {
+        dao.updateMeasurement(measurement)
+    }
+
     suspend fun deleteMeasurement(measurement: BodyMeasurementEntity) = withContext(Dispatchers.IO) {
         dao.deleteMeasurement(measurement)
     }

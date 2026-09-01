@@ -17,7 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.TrendingDown
+import androidx.compose.material.icons.filled.TrendingFlat
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -26,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,6 +39,8 @@ import com.example.data.local.BodyMeasurementEntity
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
+import com.example.ui.theme.Orange400
+import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -46,16 +53,17 @@ import java.util.Locale
 fun EvolutionSummaryCard(
     measurement: BodyMeasurementEntity,
     modifier: Modifier = Modifier,
+    weightVariationFromStart: Float? = null,
+    waistVariationFromStart: Float? = null,
     onClick: (() -> Unit)? = null
 ) {
     val dateFormatter = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
     val formattedDate = dateFormatter.format(Date(measurement.date))
 
     val secondaryItems = buildList {
-        measurement.waistCm?.let { add(Triple("Cintura", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
-        measurement.bodyFatPercentage?.let { add(Triple("Gordura", String.format(Locale.getDefault(), "%.1f", it), "%")) }
         measurement.abdomenCm?.let { add(Triple("Abdômen", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.chestCm?.let { add(Triple("Peito", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
+        measurement.bodyFatPercentage?.let { add(Triple("Gordura", String.format(Locale.getDefault(), "%.1f", it), "%")) }
         measurement.rightArmCm?.let { add(Triple("Braço D.", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.leftArmCm?.let { add(Triple("Braço E.", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.rightThighCm?.let { add(Triple("Coxa D.", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
@@ -67,7 +75,7 @@ fun EvolutionSummaryCard(
     Surface(
         color = SurfaceDark,
         shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Lime400.copy(alpha = 0.3f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Lime400.copy(alpha = 0.35f)),
         modifier = modifier
             .fillMaxWidth()
             .testTag("evolution_summary_card")
@@ -76,8 +84,9 @@ fun EvolutionSummaryCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(18.dp)
+                .padding(20.dp)
         ) {
+            // Header: Title & Date
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -111,135 +120,205 @@ fun EvolutionSummaryCard(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BorderLight.copy(alpha = 0.4f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
+                    Icon(
+                        imageVector = Icons.Default.CalendarToday,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(12.dp)
+                    )
                     Text(
                         text = formattedDate,
                         color = TextSecondary,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
+                        fontSize = 12.sp,
+                        modifier = Modifier.testTag("summary_latest_date")
                     )
                     if (onClick != null) {
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
                             contentDescription = null,
                             tint = TextSecondary,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            // Primary Highlight: Peso (or Waist if no weight)
+            // Primary Highlight: Peso
             if (measurement.weightKg != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    Column {
+                Column {
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         Text(
-                            text = "Peso",
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
+                            text = String.format(Locale.getDefault(), "%.1f", measurement.weightKg).replace('.', ','),
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 36.sp,
+                            modifier = Modifier.testTag("summary_weight_value")
                         )
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = String.format(Locale.getDefault(), "%.1f", measurement.weightKg),
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 32.sp
+                        Text(
+                            text = "kg",
+                            color = Lime400,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    }
+
+                    // Weight variation since the start (if multiple entries)
+                    if (weightVariationFromStart != null) {
+                        val isNegative = weightVariationFromStart < -0.05f
+                        val isPositive = weightVariationFromStart > 0.05f
+                        val sign = if (isPositive) "+" else ""
+                        val formattedDiff = "$sign${String.format(Locale.getDefault(), "%.1f", weightVariationFromStart).replace('.', ',')} kg desde o início"
+
+                        val diffColor = if (isNegative) Lime400 else if (isPositive) Orange400 else TextSecondary
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isNegative) Icons.Default.TrendingDown else if (isPositive) Icons.Default.TrendingUp else Icons.Default.TrendingFlat,
+                                contentDescription = null,
+                                tint = diffColor,
+                                modifier = Modifier.size(14.dp)
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "kg",
-                                color = Lime400,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                modifier = Modifier.padding(bottom = 4.dp)
+                                text = formattedDiff,
+                                color = diffColor,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 13.sp,
+                                modifier = Modifier.testTag("summary_weight_variation")
                             )
                         }
                     }
+                }
+            }
 
-                    if (measurement.waistCm != null) {
-                        Column(horizontalAlignment = Alignment.End) {
+            // Cintura Section (if present)
+            if (measurement.waistCm != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(BorderLight.copy(alpha = 0.3f))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
                             Text(
                                 text = "Cintura",
                                 color = TextSecondary,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )
-                            Row(verticalAlignment = Alignment.Bottom) {
+                            Row(
+                                verticalAlignment = Alignment.Bottom,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 Text(
-                                    text = String.format(Locale.getDefault(), "%.1f", measurement.waistCm),
+                                    text = String.format(Locale.getDefault(), "%.1f", measurement.waistCm).replace('.', ','),
                                     color = TextPrimary,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 24.sp
+                                    fontSize = 20.sp,
+                                    modifier = Modifier.testTag("summary_waist_value")
                                 )
-                                Spacer(modifier = Modifier.width(3.dp))
                                 Text(
                                     text = "cm",
                                     color = Lime400,
                                     fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
+                                    fontSize = 13.sp,
                                     modifier = Modifier.padding(bottom = 2.dp)
                                 )
                             }
                         }
-                    }
-                }
-            } else if (secondaryItems.isNotEmpty()) {
-                val first = secondaryItems.first()
-                Column {
-                    Text(
-                        text = first.first,
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = first.second,
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 32.sp
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = first.third,
-                            color = Lime400,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
+
+                        if (waistVariationFromStart != null) {
+                            val isNegative = waistVariationFromStart < -0.05f
+                            val isPositive = waistVariationFromStart > 0.05f
+                            val sign = if (isPositive) "+" else ""
+                            val formattedDiff = "$sign${String.format(Locale.getDefault(), "%.1f", waistVariationFromStart).replace('.', ',')} cm"
+                            val diffColor = if (isNegative) Lime400 else if (isPositive) Orange400 else TextSecondary
+
+                            Text(
+                                text = "$formattedDiff desde o início",
+                                color = diffColor,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }
 
-            // Other measurements as chips/badges if present
-            val remainingItems = if (measurement.weightKg != null && measurement.waistCm != null) {
-                secondaryItems.filter { it.first != "Cintura" }
-            } else if (measurement.weightKg != null) {
-                secondaryItems
-            } else {
-                secondaryItems.drop(1)
-            }
-
-            if (remainingItems.isNotEmpty()) {
+            // Other secondary measurements (e.g. Peito, Braço, Abdômen)
+            if (secondaryItems.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    remainingItems.forEach { (label, value, unit) ->
-                        MeasurementBadge(label = label, value = value, unit = unit)
+                    secondaryItems.forEach { (label, value, unit) ->
+                        SummaryMiniBadge(label = label, value = value, unit = unit)
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SummaryMiniBadge(
+    label: String,
+    value: String,
+    unit: String
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(BorderLight.copy(alpha = 0.35f))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "$label:",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = value.replace('.', ','),
+                color = TextPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = unit,
+                color = Lime400,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

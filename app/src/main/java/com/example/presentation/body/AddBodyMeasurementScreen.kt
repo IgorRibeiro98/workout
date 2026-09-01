@@ -28,28 +28,27 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.body.BodyMetricsCalculator
+import com.example.ui.components.body.BodyMetricCard
 import com.example.ui.components.body.MeasurementField
+import com.example.ui.components.body.ValidationMessage
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -70,10 +69,6 @@ fun AddBodyMeasurementScreen(
 ) {
     val formState by viewModel.formState.collectAsState()
     val context = LocalContext.current
-
-    LaunchedEffect(Unit) {
-        viewModel.resetForm()
-    }
 
     val dateFormatter = remember { SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()) }
     val formattedDate = dateFormatter.format(Date(formState.selectedDateMillis))
@@ -99,13 +94,18 @@ fun AddBodyMeasurementScreen(
         )
     }
 
+    // Dynamic IMC preview in form if weight & height are valid
+    val currentWeight = formState.weightKg.replace(',', '.').toFloatOrNull()
+    val currentHeight = formState.heightCm.replace(',', '.').toFloatOrNull()
+    val liveBmi = BodyMetricsCalculator.calculateBmi(currentWeight, currentHeight)
+
     Scaffold(
         containerColor = BackgroundDark,
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = "Nova Medição",
+                        text = if (formState.isEditMode) "Editar Medição" else "Nova Medição",
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
@@ -135,7 +135,7 @@ fun AddBodyMeasurementScreen(
                 Box(modifier = Modifier.padding(16.dp)) {
                     Button(
                         onClick = {
-                            val saved = viewModel.saveMeasurement(onSuccess = onNavigateBack)
+                            viewModel.saveMeasurement(onSuccess = onNavigateBack)
                         },
                         enabled = !formState.isSaving,
                         colors = ButtonDefaults.buttonColors(
@@ -152,8 +152,8 @@ fun AddBodyMeasurementScreen(
                     ) {
                         if (formState.isSaving) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
                                 color = BackgroundDark,
+                                modifier = Modifier.size(22.dp),
                                 strokeWidth = 2.dp
                             )
                         } else {
@@ -164,9 +164,10 @@ fun AddBodyMeasurementScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "SALVAR MEDIÇÃO",
-                                fontWeight = FontWeight.Black,
-                                fontSize = 14.sp
+                                text = if (formState.isEditMode) "SALVAR ALTERAÇÕES" else "SALVAR MEDIÇÃO",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                letterSpacing = 0.5.sp
                             )
                         }
                     }
@@ -179,31 +180,21 @@ fun AddBodyMeasurementScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // General error banner if present
-            formState.errors["general"]?.let { error ->
-                Surface(
-                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth().testTag("general_error_banner")
-                ) {
-                    Text(
-                        text = error,
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
+            // General error message banner if present
+            formState.errors["general"]?.let { generalError ->
+                ValidationMessage(
+                    message = generalError,
+                    testTag = "general_error_message"
+                )
             }
 
-            // Section: Data (Obrigatório)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Date Picker Section
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Data da medição",
+                    text = "Data da Medição",
                     color = TextPrimary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
@@ -214,11 +205,14 @@ fun AddBodyMeasurementScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, BorderLight),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("date_picker_button")
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { datePickerDialog.show() }
+                        .testTag("date_picker_field")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -226,7 +220,8 @@ fun AddBodyMeasurementScreen(
                             text = formattedDate,
                             color = TextPrimary,
                             fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.testTag("selected_date_text")
                         )
                         Icon(
                             imageVector = Icons.Default.CalendarMonth,
@@ -238,127 +233,158 @@ fun AddBodyMeasurementScreen(
                 }
             }
 
-            // Section: Peso e Composição
-            FormSection(title = "Composição Geral") {
+            // Section 1: Composição Corporal
+            FormSection(title = "Composição Corporal") {
                 MeasurementField(
-                    label = "Peso corporal",
+                    label = "Peso",
                     value = formState.weightKg,
                     onValueChange = { viewModel.updateWeight(it) },
                     unit = "kg",
                     placeholder = "Ex: 88.4",
                     errorMessage = formState.errors["weight"],
-                    testTag = "weight_input"
+                    testTag = "input_weight"
                 )
+
                 MeasurementField(
-                    label = "Gordura corporal",
-                    value = formState.bodyFatPercentage,
-                    onValueChange = { viewModel.updateBodyFat(it) },
-                    unit = "%",
-                    placeholder = "Ex: 15.2",
-                    errorMessage = formState.errors["bodyFat"],
-                    testTag = "body_fat_input"
-                )
-                MeasurementField(
-                    label = "Altura (opcional)",
+                    label = "Altura",
                     value = formState.heightCm,
                     onValueChange = { viewModel.updateHeight(it) },
                     unit = "cm",
-                    placeholder = "Ex: 178",
+                    placeholder = "Ex: 171",
                     errorMessage = formState.errors["height"],
-                    testTag = "height_input"
+                    testTag = "input_height"
                 )
+
+                MeasurementField(
+                    label = "Percentual de Gordura",
+                    value = formState.bodyFatPercentage,
+                    onValueChange = { viewModel.updateBodyFat(it) },
+                    unit = "%",
+                    placeholder = "Ex: 15.5",
+                    errorMessage = formState.errors["bodyFat"],
+                    testTag = "input_body_fat"
+                )
+
+                // Live dynamic IMC card inside form when both valid
+                if (liveBmi != null) {
+                    BodyMetricCard(bmiResult = liveBmi)
+                }
             }
 
-            // Section: Tronco & Membros Superiores
-            FormSection(title = "Tronco & Membros Superiores") {
+            // Section 2: Tronco
+            FormSection(title = "Tronco") {
                 MeasurementField(
                     label = "Cintura",
                     value = formState.waistCm,
                     onValueChange = { viewModel.updateWaist(it) },
                     unit = "cm",
-                    placeholder = "Ex: 91.0",
+                    placeholder = "Ex: 91",
                     errorMessage = formState.errors["waist"],
-                    testTag = "waist_input"
+                    testTag = "input_waist"
                 )
+
                 MeasurementField(
                     label = "Abdômen",
                     value = formState.abdomenCm,
                     onValueChange = { viewModel.updateAbdomen(it) },
                     unit = "cm",
-                    placeholder = "Ex: 94.5",
+                    placeholder = "Ex: 94",
                     errorMessage = formState.errors["abdomen"],
-                    testTag = "abdomen_input"
+                    testTag = "input_abdomen"
                 )
+
                 MeasurementField(
-                    label = "Peito / Tórax",
+                    label = "Peito",
                     value = formState.chestCm,
                     onValueChange = { viewModel.updateChest(it) },
                     unit = "cm",
-                    placeholder = "Ex: 104.0",
+                    placeholder = "Ex: 105",
                     errorMessage = formState.errors["chest"],
-                    testTag = "chest_input"
+                    testTag = "input_chest"
                 )
-                MeasurementField(
-                    label = "Braço direito",
-                    value = formState.rightArmCm,
-                    onValueChange = { viewModel.updateRightArm(it) },
-                    unit = "cm",
-                    placeholder = "Ex: 38.0",
-                    errorMessage = formState.errors["rightArm"],
-                    testTag = "right_arm_input"
-                )
-                MeasurementField(
-                    label = "Braço esquerdo",
-                    value = formState.leftArmCm,
-                    onValueChange = { viewModel.updateLeftArm(it) },
-                    unit = "cm",
-                    placeholder = "Ex: 37.5",
-                    errorMessage = formState.errors["leftArm"],
-                    testTag = "left_arm_input"
-                )
-            }
 
-            // Section: Membros Inferiores
-            FormSection(title = "Membros Inferiores") {
                 MeasurementField(
                     label = "Quadril",
                     value = formState.hipCm,
                     onValueChange = { viewModel.updateHip(it) },
                     unit = "cm",
-                    placeholder = "Ex: 102.0",
+                    placeholder = "Ex: 101",
                     errorMessage = formState.errors["hip"],
-                    testTag = "hip_input"
+                    testTag = "input_hip"
                 )
-                MeasurementField(
-                    label = "Coxa direita",
-                    value = formState.rightThighCm,
-                    onValueChange = { viewModel.updateRightThigh(it) },
-                    unit = "cm",
-                    placeholder = "Ex: 60.0",
-                    errorMessage = formState.errors["rightThigh"],
-                    testTag = "right_thigh_input"
-                )
-                MeasurementField(
-                    label = "Coxa esquerda",
-                    value = formState.leftThighCm,
-                    onValueChange = { viewModel.updateLeftThigh(it) },
-                    unit = "cm",
-                    placeholder = "Ex: 59.5",
-                    errorMessage = formState.errors["leftThigh"],
-                    testTag = "left_thigh_input"
-                )
+            }
+
+            // Section 3: Membros Superiores
+            FormSection(title = "Membros Superiores") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    MeasurementField(
+                        label = "Braço Direito",
+                        value = formState.rightArmCm,
+                        onValueChange = { viewModel.updateRightArm(it) },
+                        unit = "cm",
+                        placeholder = "Ex: 38",
+                        errorMessage = formState.errors["rightArm"],
+                        modifier = Modifier.weight(1f),
+                        testTag = "input_right_arm"
+                    )
+
+                    MeasurementField(
+                        label = "Braço Esquerdo",
+                        value = formState.leftArmCm,
+                        onValueChange = { viewModel.updateLeftArm(it) },
+                        unit = "cm",
+                        placeholder = "Ex: 37.5",
+                        errorMessage = formState.errors["leftArm"],
+                        modifier = Modifier.weight(1f),
+                        testTag = "input_left_arm"
+                    )
+                }
+            }
+
+            // Section 4: Membros Inferiores
+            FormSection(title = "Membros Inferiores") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    MeasurementField(
+                        label = "Coxa Direita",
+                        value = formState.rightThighCm,
+                        onValueChange = { viewModel.updateRightThigh(it) },
+                        unit = "cm",
+                        placeholder = "Ex: 60",
+                        errorMessage = formState.errors["rightThigh"],
+                        modifier = Modifier.weight(1f),
+                        testTag = "input_right_thigh"
+                    )
+
+                    MeasurementField(
+                        label = "Coxa Esquerda",
+                        value = formState.leftThighCm,
+                        onValueChange = { viewModel.updateLeftThigh(it) },
+                        unit = "cm",
+                        placeholder = "Ex: 59.5",
+                        errorMessage = formState.errors["leftThigh"],
+                        modifier = Modifier.weight(1f),
+                        testTag = "input_left_thigh"
+                    )
+                }
+
                 MeasurementField(
                     label = "Panturrilha",
                     value = formState.calfCm,
                     onValueChange = { viewModel.updateCalf(it) },
                     unit = "cm",
-                    placeholder = "Ex: 39.0",
+                    placeholder = "Ex: 39",
                     errorMessage = formState.errors["calf"],
-                    testTag = "calf_input"
+                    testTag = "input_calf"
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -376,8 +402,23 @@ private fun FormSection(
             text = title,
             color = Lime400,
             fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.3.sp
         )
-        content()
+        Surface(
+            color = SurfaceDark,
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, BorderLight),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                content()
+            }
+        }
     }
 }

@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.components.body.BodyMetricCard
 import com.example.ui.components.body.EvolutionSummaryCard
 import com.example.ui.components.body.MeasurementCard
 import com.example.ui.components.body.MeasurementHistoryItem
@@ -110,7 +111,10 @@ fun BodyEvolutionScreen(
                 actions = {
                     if (uiState.allMeasurements.isNotEmpty()) {
                         IconButton(
-                            onClick = onNavigateToAddMeasurement,
+                            onClick = {
+                                viewModel.initNewMeasurement()
+                                onNavigateToAddMeasurement()
+                            },
                             modifier = Modifier.testTag("add_measurement_top_button")
                         ) {
                             Icon(
@@ -127,7 +131,10 @@ fun BodyEvolutionScreen(
         floatingActionButton = {
             if (uiState.allMeasurements.isNotEmpty()) {
                 FloatingActionButton(
-                    onClick = onNavigateToAddMeasurement,
+                    onClick = {
+                        viewModel.initNewMeasurement()
+                        onNavigateToAddMeasurement()
+                    },
                     containerColor = Lime400,
                     contentColor = BackgroundDark,
                     shape = CircleShape,
@@ -154,7 +161,10 @@ fun BodyEvolutionScreen(
             }
             uiState.allMeasurements.isEmpty() -> {
                 EmptyEvolutionState(
-                    onAddClick = onNavigateToAddMeasurement,
+                    onAddClick = {
+                        viewModel.initNewMeasurement()
+                        onNavigateToAddMeasurement()
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -173,7 +183,7 @@ fun BodyEvolutionScreen(
                     uiState.latestMeasurement?.let { latest ->
                         item {
                             Text(
-                                text = "Última medição",
+                                text = "Última evolução",
                                 color = TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp,
@@ -181,13 +191,23 @@ fun BodyEvolutionScreen(
                             )
                             EvolutionSummaryCard(
                                 measurement = latest,
+                                weightVariationFromStart = uiState.weightVariationFromStart,
+                                waistVariationFromStart = uiState.waistVariationFromStart,
                                 onClick = { viewModel.selectMeasurementForDetails(latest) }
                             )
+                        }
+
+                        // IMC/BMI Card if both weight and height are available on latest
+                        uiState.latestBmiResult?.let { bmi ->
+                            item {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                BodyMetricCard(bmiResult = bmi)
+                            }
                         }
                     }
 
                     item {
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "Histórico",
                             color = TextPrimary,
@@ -231,6 +251,11 @@ fun BodyEvolutionScreen(
                 )
                 MeasurementCard(
                     measurement = selected,
+                    onEditClick = {
+                        viewModel.selectMeasurementForDetails(null)
+                        viewModel.loadForEdit(selected)
+                        onNavigateToAddMeasurement()
+                    },
                     onDeleteClick = {
                         viewModel.requestDeleteMeasurement(selected)
                     }

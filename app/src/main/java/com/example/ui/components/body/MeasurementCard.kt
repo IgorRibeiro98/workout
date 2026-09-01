@@ -18,9 +18,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.BodyMeasurementEntity
+import com.example.domain.body.BodyMetricsCalculator
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
@@ -48,6 +53,7 @@ import java.util.Locale
 fun MeasurementCard(
     measurement: BodyMeasurementEntity,
     modifier: Modifier = Modifier,
+    onEditClick: (() -> Unit)? = null,
     onDeleteClick: (() -> Unit)? = null
 ) {
     val dateFormatter = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
@@ -55,6 +61,7 @@ fun MeasurementCard(
 
     val items = buildList {
         measurement.weightKg?.let { add(Triple("Peso", String.format(Locale.getDefault(), "%.1f", it), "kg")) }
+        measurement.heightCm?.let { add(Triple("Altura", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.bodyFatPercentage?.let { add(Triple("Gordura", String.format(Locale.getDefault(), "%.1f", it), "%")) }
         measurement.waistCm?.let { add(Triple("Cintura", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.abdomenCm?.let { add(Triple("Abdômen", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
@@ -65,8 +72,12 @@ fun MeasurementCard(
         measurement.leftThighCm?.let { add(Triple("Coxa E.", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.calfCm?.let { add(Triple("Panturrilha", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
         measurement.hipCm?.let { add(Triple("Quadril", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
-        measurement.heightCm?.let { add(Triple("Altura", String.format(Locale.getDefault(), "%.1f", it), "cm")) }
     }
+
+    val bmiResult = BodyMetricsCalculator.calculateBmi(
+        weightKg = measurement.weightKg,
+        heightCm = measurement.heightCm
+    )
 
     Surface(
         color = SurfaceDark,
@@ -77,7 +88,7 @@ fun MeasurementCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(18.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -86,7 +97,7 @@ fun MeasurementCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Box(
                         modifier = Modifier
@@ -117,18 +128,44 @@ fun MeasurementCard(
                     }
                 }
 
-                if (onDeleteClick != null) {
-                    IconButton(
-                        onClick = onDeleteClick,
-                        modifier = Modifier.testTag("delete_measurement_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DeleteOutline,
-                            contentDescription = "Excluir medição",
-                            tint = MaterialTheme.colorScheme.error
-                        )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (onEditClick != null) {
+                        IconButton(
+                            onClick = onEditClick,
+                            modifier = Modifier.testTag("edit_measurement_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Editar medição",
+                                tint = Lime400,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    if (onDeleteClick != null) {
+                        IconButton(
+                            onClick = onDeleteClick,
+                            modifier = Modifier.testTag("delete_measurement_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Excluir medição",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
+            }
+
+            // BMI card if available for this specific measurement
+            if (bmiResult != null) {
+                Spacer(modifier = Modifier.height(14.dp))
+                BodyMetricCard(bmiResult = bmiResult)
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -142,47 +179,34 @@ fun MeasurementCard(
                     MeasurementBadge(label = label, value = value, unit = unit)
                 }
             }
-        }
-    }
-}
 
-@Composable
-fun MeasurementBadge(
-    label: String,
-    value: String,
-    unit: String,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(com.example.ui.theme.BackgroundDark)
-            .border(1.dp, BorderLight, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Column {
-            Text(
-                text = label,
-                color = TextSecondary,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = value,
-                    color = Lime400,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                    text = unit,
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(bottom = 1.dp)
-                )
+            // Actions bar (Edit button prominent)
+            if (onEditClick != null) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = onEditClick,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Lime400,
+                        contentColor = com.example.ui.theme.BackgroundDark
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("edit_measurement_full_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Editar medição",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
             }
         }
     }

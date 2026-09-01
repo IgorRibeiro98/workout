@@ -23,7 +23,8 @@ class MainViewModelFactory(
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
-            val bodyRepo = bodyMeasurementRepository ?: BodyMeasurementRepository(repository.dao as? com.example.data.local.BodyMeasurementDao ?: throw IllegalStateException("BodyMeasurementDao not available"))
+            val bodyRepo = bodyMeasurementRepository
+                ?: throw IllegalStateException("BodyMeasurementRepository must be provided to create BodyEvolutionViewModel")
             @Suppress("UNCHECKED_CAST")
             return BodyEvolutionViewModel(bodyRepo) as T
         }

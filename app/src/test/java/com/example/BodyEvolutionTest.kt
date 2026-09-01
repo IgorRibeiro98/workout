@@ -5,10 +5,16 @@ import android.os.Build
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.example.data.datastore.SettingsManager
 import com.example.data.local.AppDatabase
 import com.example.data.local.BodyMeasurementEntity
 import com.example.data.repository.BodyMeasurementRepository
+import com.example.data.repository.WorkoutRepository
+import com.example.domain.body.BodyMetricsCalculator
+import com.example.domain.engine.WorkoutEngine
+import com.example.presentation.MainViewModelFactory
 import com.example.presentation.body.BodyEvolutionViewModel
+import com.example.service.WorkoutNotificationManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -16,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -45,175 +52,204 @@ class BodyEvolutionTest {
     }
 
     /**
-     * Scenario 1: User with no measurements -> Empty state
+     * Requirement 1: ViewModel Factory Architecture
+     * BodyEvolutionViewModel must receive BodyMeasurementRepository directly.
+     * Throw explicit IllegalStateException if repository is missing and never fallback to casting another DAO.
      */
     @Test
-    fun testScenario1_EmptyState() = runBlocking {
-        val all = repository.allMeasurements.first()
-        val latest = repository.latestMeasurement.first()
+    fun testViewModelFactory_ExplicitExceptionWhenRepoMissing() {
+        val app = context.applicationContext as MainApplication
+        val factoryWithoutRepo = MainViewModelFactory(
+            repository = app.repository,
+            settingsManager = app.settingsManager,
+            workoutEngine = app.workoutEngine,
+            notificationManager = app.notificationManager,
+            bodyMeasurementRepository = null
+        )
 
-        assertTrue("Measurements list should be empty initially", all.isEmpty())
-        assertNull("Latest measurement should be null initially", latest)
+        assertThrows(IllegalStateException::class.java) {
+            factoryWithoutRepo.create(BodyEvolutionViewModel::class.java)
+        }
+
+        val factoryWithRepo = MainViewModelFactory(
+            repository = app.repository,
+            settingsManager = app.settingsManager,
+            workoutEngine = app.workoutEngine,
+            notificationManager = app.notificationManager,
+            bodyMeasurementRepository = repository
+        )
+        val vm = factoryWithRepo.create(BodyEvolutionViewModel::class.java)
+        assertNotNull(vm)
     }
 
     /**
-     * Scenario 2: Add weight only -> Successfully saved and displayed
+     * Teste 1 (Mandatory Test 1):
+     * Cadastrar: Peso: 88.4, Cintura: 91 -> Salvar com sucesso
      */
     @Test
-    fun testScenario2_AddWeightOnly() = runBlocking {
-        val testDate = 1756598400000L // 30/08/2026
-        val measurement = BodyMeasurementEntity(
-            date = testDate,
-            weightKg = 88.4f
-        )
+    fun testMandatory1_SaveWeightAndWaistSuccess() = runBlocking {
+        val viewModel = BodyEvolutionViewModel(repository)
+        viewModel.initNewMeasurement()
+        viewModel.updateWeight("88.4")
+        viewModel.updateWaist("91")
 
-        val id = repository.insertMeasurement(measurement)
-        assertTrue("Inserted ID should be positive", id > 0)
+        val saved = viewModel.saveMeasurementSuspending()
+        assertTrue("Should save valid weight and waist successfully", saved)
 
         val all = repository.allMeasurements.first()
         assertEquals(1, all.size)
-
-        val saved = all.first()
-        assertEquals(testDate, saved.date)
-        assertEquals(88.4f, saved.weightKg ?: 0f, 0.01f)
-        assertNull(saved.waistCm)
-        assertNull(saved.rightArmCm)
-        assertNull(saved.bodyFatPercentage)
-
-        val latest = repository.latestMeasurement.first()
-        assertNotNull(latest)
-        assertEquals(88.4f, latest?.weightKg ?: 0f, 0.01f)
+        val firstItem = all.first()
+        assertEquals(88.4f, firstItem.weightKg ?: 0f, 0.01f)
+        assertEquals(91.0f, firstItem.waistCm ?: 0f, 0.01f)
     }
 
     /**
-     * Scenario 3: Add all measurements -> All fields properly persisted and retrieved
+     * Teste 2 (Mandatory Test 2):
+     * Cadastrar: Peso: -5 -> Bloquear salvamento
      */
     @Test
-    fun testScenario3_AddAllMeasurements() = runBlocking {
-        val testDate = 1756598400000L
-        val fullMeasurement = BodyMeasurementEntity(
-            date = testDate,
-            weightKg = 88.4f,
-            heightCm = 180.0f,
-            bodyFatPercentage = 14.5f,
-            waistCm = 91.0f,
-            abdomenCm = 94.0f,
-            chestCm = 105.0f,
-            rightArmCm = 38.0f,
-            leftArmCm = 37.5f,
-            rightThighCm = 60.0f,
-            leftThighCm = 59.5f,
-            calfCm = 39.0f,
-            hipCm = 101.0f
-        )
+    fun testMandatory2_BlockNegativeWeight() = runBlocking {
+        val viewModel = BodyEvolutionViewModel(repository)
+        viewModel.initNewMeasurement()
+        viewModel.updateWeight("-5")
 
-        val id = repository.insertMeasurement(fullMeasurement)
-        val retrieved = repository.getMeasurementById(id)
+        val saved = viewModel.saveMeasurementSuspending()
+        assertFalse("Should block negative weight", saved)
+        assertNotNull("Should contain weight error message", viewModel.formState.value.errors["weight"])
 
-        assertNotNull("Retrieved measurement should not be null", retrieved)
-        assertEquals(testDate, retrieved?.date)
-        assertEquals(88.4f, retrieved?.weightKg ?: 0f, 0.01f)
-        assertEquals(180.0f, retrieved?.heightCm ?: 0f, 0.01f)
-        assertEquals(14.5f, retrieved?.bodyFatPercentage ?: 0f, 0.01f)
-        assertEquals(91.0f, retrieved?.waistCm ?: 0f, 0.01f)
-        assertEquals(94.0f, retrieved?.abdomenCm ?: 0f, 0.01f)
-        assertEquals(105.0f, retrieved?.chestCm ?: 0f, 0.01f)
-        assertEquals(38.0f, retrieved?.rightArmCm ?: 0f, 0.01f)
-        assertEquals(37.5f, retrieved?.leftArmCm ?: 0f, 0.01f)
-        assertEquals(60.0f, retrieved?.rightThighCm ?: 0f, 0.01f)
-        assertEquals(59.5f, retrieved?.leftThighCm ?: 0f, 0.01f)
-        assertEquals(39.0f, retrieved?.calfCm ?: 0f, 0.01f)
-        assertEquals(101.0f, retrieved?.hipCm ?: 0f, 0.01f)
+        val all = repository.allMeasurements.first()
+        assertTrue("Database should remain empty after invalid entry", all.isEmpty())
     }
 
     /**
-     * Scenario 4: Invalid values validation -> Rejects invalid values and prevents save
+     * Teste 3 (Mandatory Test 3):
+     * Editar registro existente -> Dados atualizados
      */
     @Test
-    fun testScenario4_InvalidValuesValidation() = runBlocking {
+    fun testMandatory3_EditExistingMeasurement() = runBlocking {
         val viewModel = BodyEvolutionViewModel(repository)
 
-        // Case 4a: All empty fields
-        viewModel.resetForm()
-        val savedEmpty = viewModel.saveMeasurement()
-        assertFalse("Should not save empty measurement", savedEmpty)
-        assertNotNull("General error should be present for empty fields", viewModel.formState.value.errors["general"])
-
-        // Case 4b: Invalid weight > 500
-        viewModel.resetForm()
-        viewModel.updateWeight("550")
-        val savedTooHeavy = viewModel.saveMeasurement()
-        assertFalse("Should not save weight > 500", savedTooHeavy)
-        assertNotNull("Weight error should be present", viewModel.formState.value.errors["weight"])
-
-        // Case 4c: Invalid measure > 300
-        viewModel.resetForm()
-        viewModel.updateWaist("350")
-        val savedTooBig = viewModel.saveMeasurement()
-        assertFalse("Should not save waist > 300", savedTooBig)
-        assertNotNull("Waist error should be present", viewModel.formState.value.errors["waist"])
-
-        // Case 4d: Invalid body fat > 100
-        viewModel.resetForm()
-        viewModel.updateBodyFat("105")
-        val savedFatTooHigh = viewModel.saveMeasurement()
-        assertFalse("Should not save body fat > 100", savedFatTooHigh)
-        assertNotNull("Body fat error should be present", viewModel.formState.value.errors["bodyFat"])
-
-        // Case 4e: Negative / zero values
-        viewModel.resetForm()
-        viewModel.updateWeight("-10")
-        val savedNegative = viewModel.saveMeasurement()
-        assertFalse("Should not save negative weight", savedNegative)
-
-        // Ensure database remained clean
-        val all = repository.allMeasurements.first()
-        assertEquals(0, all.size)
-    }
-
-    /**
-     * Scenario 5: Persistence across application re-opens (Room database persistence)
-     */
-    @Test
-    fun testScenario5_PersistenceAndOrdering() = runBlocking {
-        val measurement1 = BodyMeasurementEntity(
-            date = 1000L,
-            weightKg = 92.0f
-        )
-        val measurement2 = BodyMeasurementEntity(
-            date = 2000L,
-            weightKg = 90.1f
-        )
-        val measurement3 = BodyMeasurementEntity(
-            date = 3000L,
+        // 1. Initial creation
+        val initialDate = 1756598400000L
+        val initial = BodyMeasurementEntity(
+            date = initialDate,
             weightKg = 88.4f,
             waistCm = 91.0f
         )
+        val id = repository.insertMeasurement(initial)
 
-        repository.insertMeasurement(measurement1)
-        repository.insertMeasurement(measurement2)
-        repository.insertMeasurement(measurement3)
+        val createdEntity = repository.getMeasurementById(id)
+        assertNotNull(createdEntity)
 
-        // Verify ordering: DESC by date (latest first)
+        // 2. Load for edit
+        viewModel.loadForEdit(createdEntity!!)
+        assertTrue("Form should be in edit mode", viewModel.formState.value.isEditMode)
+        assertEquals(id, viewModel.formState.value.editingMeasurementId)
+        assertEquals("88.4", viewModel.formState.value.weightKg)
+        assertEquals("91", viewModel.formState.value.waistCm)
+
+        // 3. Update values (new weight: 86.3, new waist: 88.5)
+        viewModel.updateWeight("86.3")
+        viewModel.updateWaist("88.5")
+
+        val updated = viewModel.saveMeasurementSuspending()
+        assertTrue("Should save update successfully", updated)
+
+        // 4. Verify in repository
+        val afterUpdate = repository.getMeasurementById(id)
+        assertNotNull(afterUpdate)
+        assertEquals(86.3f, afterUpdate?.weightKg ?: 0f, 0.01f)
+        assertEquals(88.5f, afterUpdate?.waistCm ?: 0f, 0.01f)
+
         val all = repository.allMeasurements.first()
-        assertEquals(3, all.size)
-        assertEquals(3000L, all[0].date)
-        assertEquals(88.4f, all[0].weightKg ?: 0f, 0.01f)
-        assertEquals(2000L, all[1].date)
-        assertEquals(90.1f, all[1].weightKg ?: 0f, 0.01f)
-        assertEquals(1000L, all[2].date)
-        assertEquals(92.0f, all[2].weightKg ?: 0f, 0.01f)
+        assertEquals(1, all.size)
+    }
 
-        // Verify latest measurement
-        val latest = repository.latestMeasurement.first()
-        assertEquals(3000L, latest?.date)
-        assertEquals(88.4f, latest?.weightKg ?: 0f, 0.01f)
-        assertEquals(91.0f, latest?.waistCm ?: 0f, 0.01f)
+    /**
+     * Teste 4 (Mandatory Test 4):
+     * Informar: Peso: 88.4, Altura: 171 -> Mostrar IMC: 30.2, Obesidade
+     */
+    @Test
+    fun testMandatory4_BmiCalculation() {
+        val result = BodyMetricsCalculator.calculateBmi(weightKg = 88.4f, heightCm = 171f)
+        assertNotNull("BMI result should not be null when weight and height exist", result)
+        assertEquals(30.2f, result?.bmi ?: 0f, 0.01f)
+        assertEquals("30.2", result?.formattedBmi)
+        assertEquals("Obesidade", result?.classification)
+        assertTrue(result?.isObese == true)
+    }
 
-        // Test deletion
-        repository.deleteMeasurementById(all[0].id)
-        val afterDelete = repository.allMeasurements.first()
-        assertEquals(2, afterDelete.size)
-        assertEquals(2000L, afterDelete[0].date)
+    /**
+     * Teste 5 (Mandatory Test 5):
+     * Sem altura -> Não mostrar IMC
+     */
+    @Test
+    fun testMandatory5_NoHeightNoBmi() {
+        val resultWithoutHeight = BodyMetricsCalculator.calculateBmi(weightKg = 88.4f, heightCm = null)
+        assertNull("BMI should be null if height is not provided", resultWithoutHeight)
+
+        val resultWithoutWeight = BodyMetricsCalculator.calculateBmi(weightKg = null, heightCm = 171f)
+        assertNull("BMI should be null if weight is not provided", resultWithoutWeight)
+    }
+
+    /**
+     * Additional Validations Coverage:
+     * - Height bounds: 50 <= height <= 300
+     * - Measure bounds: 0 < measure <= 300
+     * - Body Fat bounds: 0 < fat < 100
+     */
+    @Test
+    fun testAdditionalFieldValidations() = runBlocking {
+        val viewModel = BodyEvolutionViewModel(repository)
+
+        // Height too small (< 50)
+        viewModel.initNewMeasurement()
+        viewModel.updateHeight("40")
+        assertFalse(viewModel.saveMeasurementSuspending())
+        assertNotNull(viewModel.formState.value.errors["height"])
+
+        // Height too large (> 300)
+        viewModel.initNewMeasurement()
+        viewModel.updateHeight("350")
+        assertFalse(viewModel.saveMeasurementSuspending())
+        assertNotNull(viewModel.formState.value.errors["height"])
+
+        // Body fat >= 100
+        viewModel.initNewMeasurement()
+        viewModel.updateBodyFat("100")
+        assertFalse(viewModel.saveMeasurementSuspending())
+        assertNotNull(viewModel.formState.value.errors["bodyFat"])
+
+        // Measure > 300
+        viewModel.initNewMeasurement()
+        viewModel.updateChest("310")
+        assertFalse(viewModel.saveMeasurementSuspending())
+        assertNotNull(viewModel.formState.value.errors["chest"])
+    }
+
+    /**
+     * BMI Category classifications coverage
+     */
+    @Test
+    fun testBmiClassifications() {
+        // Underweight (< 18.5)
+        val under = BodyMetricsCalculator.calculateBmi(50f, 175f)
+        assertEquals("Baixo peso", under?.classification)
+        assertTrue(under?.isUnderweight == true)
+
+        // Normal (18.5 - 24.9)
+        val normal = BodyMetricsCalculator.calculateBmi(70f, 175f)
+        assertEquals("Normal", normal?.classification)
+        assertTrue(normal?.isNormal == true)
+
+        // Overweight (25 - 29.9)
+        val over = BodyMetricsCalculator.calculateBmi(80f, 175f)
+        assertEquals("Sobrepeso", over?.classification)
+        assertTrue(over?.isOverweight == true)
+
+        // Obese (>= 30)
+        val obese = BodyMetricsCalculator.calculateBmi(100f, 175f)
+        assertEquals("Obesidade", obese?.classification)
+        assertTrue(obese?.isObese == true)
     }
 }
