@@ -61,7 +61,7 @@ fun EvolutionScreen(
     performanceViewModel: PerformanceViewModel,
     consistencyViewModel: ConsistencyViewModel,
     achievementsViewModel: AchievementsViewModel,
-    timelineViewModel: TimelineViewModel? = null,
+    timelineViewModel: TimelineViewModel,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBodyEvolution: (() -> Unit)? = null
@@ -241,12 +241,10 @@ fun EvolutionScreen(
                         }
 
                         // 8. Seção de Linha do Tempo (Minha Jornada)
-                        if (timelineViewModel != null) {
-                            item {
-                                TimelineSection(
-                                    viewModel = timelineViewModel
-                                )
-                            }
+                        item {
+                            TimelineSection(
+                                viewModel = timelineViewModel
+                            )
                         }
 
                         item {

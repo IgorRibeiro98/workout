@@ -1,29 +1,19 @@
 package com.example.domain.evolution.calculator
 
-import com.example.domain.evolution.model.BodyEvolutionSummary
-import com.example.domain.evolution.model.BodyMeasurement
-import com.example.domain.evolution.model.EvolutionSummary
-import com.example.domain.evolution.model.achievement.Achievement
-import com.example.domain.evolution.model.consistency.WorkoutConsistencySummary
-import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
-import com.example.domain.evolution.model.performance.PersonalRecord
-import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
+import com.example.domain.evolution.model.EvolutionSnapshot
 import com.example.domain.evolution.model.timeline.EvolutionTimelineEvent
 import com.example.domain.evolution.model.timeline.TimelineEventCategory
 
 object TimelineCalculator {
 
     fun calculateTimelineEvents(
-        summary: EvolutionSummary?,
-        performanceSummary: WorkoutPerformanceSummary?,
-        exerciseEvolutions: List<ExercisePerformanceEvolution> = emptyList(),
-        personalRecords: List<PersonalRecord> = emptyList(),
-        consistencySummary: WorkoutConsistencySummary?,
-        achievements: List<Achievement> = emptyList(),
-        bodySummary: BodyEvolutionSummary?,
-        measurements: List<BodyMeasurement> = emptyList()
+        snapshot: EvolutionSnapshot
     ): List<EvolutionTimelineEvent> {
         val events = mutableListOf<EvolutionTimelineEvent>()
+
+        val summary = snapshot.summary
+        val consistencySummary = snapshot.consistencySummary
+        val performanceSummary = snapshot.performanceSummary
 
         val totalSessions = summary?.totalWorkoutSessions
             ?: consistencySummary?.totalSessions
@@ -34,12 +24,12 @@ object TimelineCalculator {
             ?: summary?.generatedAt
             ?: System.currentTimeMillis()
 
-        // 1. Training Events
+        // 1. Training Events with Real Milestone Dates
         if (totalSessions >= 1) {
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_first_workout",
-                    date = baseDate,
+                    date = snapshot.firstWorkoutDate ?: baseDate,
                     title = "Primeiro treino",
                     description = "Você completou seu primeiro treino e iniciou sua jornada.",
                     icon = "🏋️",
@@ -52,7 +42,7 @@ object TimelineCalculator {
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_10_workouts",
-                    date = baseDate,
+                    date = snapshot.tenthWorkoutDate ?: baseDate,
                     title = "10 treinos realizados",
                     description = "Você alcançou a marca de 10 treinos!",
                     icon = "🏋️",
@@ -65,7 +55,7 @@ object TimelineCalculator {
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_50_workouts",
-                    date = baseDate,
+                    date = snapshot.fiftiethWorkoutDate ?: baseDate,
                     title = "50 treinos realizados",
                     description = "Você alcançou a marca de 50 treinos!",
                     icon = "🏋️",
@@ -78,7 +68,7 @@ object TimelineCalculator {
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_100_workouts",
-                    date = baseDate,
+                    date = snapshot.hundredthWorkoutDate ?: baseDate,
                     title = "100 treinos realizados",
                     description = "Marca incrível de 100 treinos concluídos!",
                     icon = "🏋️",
@@ -88,7 +78,7 @@ object TimelineCalculator {
         }
 
         // 2. Personal Records
-        personalRecords.forEachIndexed { index, pr ->
+        snapshot.personalRecords.forEachIndexed { index, pr ->
             val titleText = if (index == 0) "Primeiro recorde pessoal" else "Novo recorde pessoal"
             events.add(
                 EvolutionTimelineEvent(
@@ -103,7 +93,7 @@ object TimelineCalculator {
         }
 
         // 3. Unlocked Achievements
-        achievements.filter { it.unlockedAt != null }.forEach { achievement ->
+        snapshot.achievements.filter { it.unlockedAt != null }.forEach { achievement ->
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_achievement_${achievement.id}",
@@ -117,6 +107,7 @@ object TimelineCalculator {
         }
 
         // 4. Body Evolution & Measurements
+        val bodySummary = snapshot.bodySummary
         val variation = bodySummary?.weightVariation
         val initialWeight = bodySummary?.initialWeight
         val currentWeight = bodySummary?.currentWeight
@@ -135,7 +126,7 @@ object TimelineCalculator {
             )
         }
 
-        measurements.forEach { m ->
+        snapshot.measurements.forEach { m ->
             val descLines = mutableListOf<String>()
             m.weightKg?.let { descLines.add("Peso: ${it.toInt()}kg") }
             m.waistCm?.let { descLines.add("Cintura: ${it.toInt()}cm") }

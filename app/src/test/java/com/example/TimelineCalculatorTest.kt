@@ -1,7 +1,7 @@
 package com.example
 
 import com.example.domain.evolution.calculator.TimelineCalculator
-import com.example.domain.evolution.model.BodyEvolutionSummary
+import com.example.domain.evolution.model.EvolutionSnapshot
 import com.example.domain.evolution.model.EvolutionSummary
 import com.example.domain.evolution.model.achievement.Achievement
 import com.example.domain.evolution.model.achievement.AchievementCategory
@@ -15,12 +15,11 @@ import org.junit.Test
 class TimelineCalculatorTest {
 
     /**
-     * Teste 1 — Primeiro treino
-     * Entrada: totalSessions = 1
-     * Esperado: Evento "Primeiro treino" criado
+     * Teste 1 — Primeiro treino com data real
      */
     @Test
-    fun testFirstWorkoutEventCreated() {
+    fun testFirstWorkoutEventCreatedWithRealDate() {
+        val firstWorkoutTime = 1690000000000L
         val summary = EvolutionSummary(
             currentWeight = 80f,
             initialWeight = 80f,
@@ -32,23 +31,25 @@ class TimelineCalculatorTest {
             generatedAt = System.currentTimeMillis()
         )
 
-        val events = TimelineCalculator.calculateTimelineEvents(
+        val snapshot = EvolutionSnapshot(
             summary = summary,
             performanceSummary = null,
             consistencySummary = null,
-            bodySummary = null
+            bodySummary = null,
+            firstWorkoutDate = firstWorkoutTime
         )
+
+        val events = TimelineCalculator.calculateTimelineEvents(snapshot)
 
         val firstWorkoutEvent = events.find { it.id == "event_first_workout" }
         assertNotNull(firstWorkoutEvent)
         assertEquals("Primeiro treino", firstWorkoutEvent?.title)
+        assertEquals(firstWorkoutTime, firstWorkoutEvent?.date)
         assertEquals(TimelineEventCategory.TRAINING, firstWorkoutEvent?.category)
     }
 
     /**
      * Teste 2 — PR (Recorde Pessoal)
-     * Entrada: PersonalRecord Supino 70kg
-     * Esperado: Evento de PR criado
      */
     @Test
     fun testPersonalRecordEventCreated() {
@@ -60,13 +61,15 @@ class TimelineCalculatorTest {
             achievedAt = 1700000000000L
         )
 
-        val events = TimelineCalculator.calculateTimelineEvents(
+        val snapshot = EvolutionSnapshot(
             summary = null,
             performanceSummary = null,
             personalRecords = listOf(pr),
             consistencySummary = null,
             bodySummary = null
         )
+
+        val events = TimelineCalculator.calculateTimelineEvents(snapshot)
 
         val prEvent = events.find { it.id.startsWith("event_pr_") }
         assertNotNull(prEvent)
@@ -78,8 +81,6 @@ class TimelineCalculatorTest {
 
     /**
      * Teste 3 — Conquista desbloqueada
-     * Entrada: Achievement com unlockedAt != null
-     * Esperado: Evento correspondente criado
      */
     @Test
     fun testUnlockedAchievementEventCreated() {
@@ -95,13 +96,15 @@ class TimelineCalculatorTest {
             targetProgress = 1
         )
 
-        val events = TimelineCalculator.calculateTimelineEvents(
+        val snapshot = EvolutionSnapshot(
             summary = null,
             performanceSummary = null,
             achievements = listOf(achievement),
             consistencySummary = null,
             bodySummary = null
         )
+
+        val events = TimelineCalculator.calculateTimelineEvents(snapshot)
 
         val achievementEvent = events.find { it.id == "event_achievement_first_workout" }
         assertNotNull(achievementEvent)
@@ -112,27 +115,27 @@ class TimelineCalculatorTest {
     }
 
     /**
-     * Teste 4 — Ordenação
-     * Entrada: Eventos com datas 01/08, 30/08, 15/08
-     * Esperado: Ordenação decrescente (30/08, 15/08, 01/08)
+     * Teste 4 — Ordenação decrescente
      */
     @Test
     fun testEventsOrderingDescending() {
-        val t1 = 1700000000000L // Ex: 01/08
-        val t2 = 1700002000000L // Ex: 15/08
-        val t3 = 1700005000000L // Ex: 30/08
+        val t1 = 1700000000000L // 01/08
+        val t2 = 1700002000000L // 15/08
+        val t3 = 1700005000000L // 30/08
 
         val pr1 = PersonalRecord("ex1", "Exercício 1", 50f, 10, t1)
         val pr2 = PersonalRecord("ex2", "Exercício 2", 60f, 10, t2)
         val pr3 = PersonalRecord("ex3", "Exercício 3", 70f, 10, t3)
 
-        val events = TimelineCalculator.calculateTimelineEvents(
+        val snapshot = EvolutionSnapshot(
             summary = null,
             performanceSummary = null,
             personalRecords = listOf(pr1, pr2, pr3),
             consistencySummary = null,
             bodySummary = null
         )
+
+        val events = TimelineCalculator.calculateTimelineEvents(snapshot)
 
         assertEquals(3, events.size)
         assertEquals(t3, events[0].date)
@@ -141,18 +144,18 @@ class TimelineCalculatorTest {
     }
 
     /**
-     * Teste 5 — Usuário novo
-     * Entrada: Sem dados
-     * Esperado: Lista de eventos vazia
+     * Teste 5 — Usuário novo (Sem dados)
      */
     @Test
     fun testNewUserEmptyTimeline() {
-        val events = TimelineCalculator.calculateTimelineEvents(
+        val snapshot = EvolutionSnapshot(
             summary = null,
             performanceSummary = null,
             consistencySummary = null,
             bodySummary = null
         )
+
+        val events = TimelineCalculator.calculateTimelineEvents(snapshot)
 
         assertTrue(events.isEmpty())
     }

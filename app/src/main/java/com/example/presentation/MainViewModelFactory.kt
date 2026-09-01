@@ -51,19 +51,35 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.timeline.TimelineViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
+            val summaryUseCase = getEvolutionSummaryUseCase
+                ?: throw IllegalStateException("GetEvolutionSummaryUseCase not provided")
+            val perfRepo = performanceRepository
+                ?: throw IllegalStateException("PerformanceRepository not provided")
+            val consRepo = consistencyRepository
+                ?: throw IllegalStateException("ConsistencyRepository not provided")
+            val bodyRepo = bodyMeasurementRepository
+                ?: throw IllegalStateException("BodyMeasurementRepository not provided")
+
             val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
                 evolutionRepository = evolutionRepository,
-                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
-                performanceRepository = performanceRepository,
-                consistencyRepository = consistencyRepository,
-                bodyMeasurementRepository = bodyMeasurementRepository
+                getEvolutionSummaryUseCase = summaryUseCase,
+                performanceRepository = perfRepo,
+                consistencyRepository = consRepo,
+                bodyMeasurementRepository = bodyRepo
+            )
+            val milestoneProvider = com.example.data.provider.WorkoutMilestoneProviderImpl(
+                consistencyRepository = consRepo
+            )
+            val snapshotRepo = com.example.data.repository.EvolutionSnapshotRepositoryImpl(
+                getEvolutionSummaryUseCase = summaryUseCase,
+                performanceRepository = perfRepo,
+                consistencyRepository = consRepo,
+                bodyMeasurementRepository = bodyRepo,
+                achievementRepository = achievementRepo,
+                workoutMilestoneProvider = milestoneProvider
             )
             val timelineRepo = com.example.data.repository.TimelineRepositoryImpl(
-                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
-                performanceRepository = performanceRepository,
-                consistencyRepository = consistencyRepository,
-                bodyMeasurementRepository = bodyMeasurementRepository,
-                achievementRepository = achievementRepo
+                evolutionSnapshotRepository = snapshotRepo
             )
             return com.example.feature.evolution.timeline.TimelineViewModel(timelineRepo) as T
         }
