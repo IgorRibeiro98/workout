@@ -32,7 +32,7 @@ import com.example.ui.theme.LimeTransparent
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 
-data class MeasuredComparisonItem(
+data class MetricComparisonData(
     val label: String,
     val initialValue: Float?,
     val currentValue: Float,
@@ -45,81 +45,80 @@ fun BodyComparisonCard(
     modifier: Modifier = Modifier
 ) {
     val sorted = measurements.sortedBy { it.date }
-    val latest = sorted.lastOrNull()
-    if (latest == null) return
+    val latest = sorted.lastOrNull() ?: return
 
-    val items = mutableListOf<MeasuredComparisonItem>()
+    val items = mutableListOf<MetricComparisonData>()
 
     // Peso
     if (latest.weightKg != null && latest.weightKg > 0f) {
         val initial = sorted.firstOrNull { it.weightKg != null && it.weightKg > 0f }?.weightKg
-        items.add(MeasuredComparisonItem("Peso", initial, latest.weightKg, unit = "kg"))
+        items.add(MetricComparisonData("Peso", initial, latest.weightKg, unit = "kg"))
     }
 
     // Cintura
     if (latest.waistCm != null && latest.waistCm > 0f) {
         val initial = sorted.firstOrNull { it.waistCm != null && it.waistCm > 0f }?.waistCm
-        items.add(MeasuredComparisonItem("Cintura", initial, latest.waistCm))
+        items.add(MetricComparisonData("Cintura", initial, latest.waistCm))
     }
 
     // Abdômen
     if (latest.abdomenCm != null && latest.abdomenCm > 0f) {
         val initial = sorted.firstOrNull { it.abdomenCm != null && it.abdomenCm > 0f }?.abdomenCm
-        items.add(MeasuredComparisonItem("Abdômen", initial, latest.abdomenCm))
+        items.add(MetricComparisonData("Abdômen", initial, latest.abdomenCm))
     }
 
-    // Peitoral / Peito
+    // Peitoral
     if (latest.chestCm != null && latest.chestCm > 0f) {
         val initial = sorted.firstOrNull { it.chestCm != null && it.chestCm > 0f }?.chestCm
-        items.add(MeasuredComparisonItem("Peitoral", initial, latest.chestCm))
+        items.add(MetricComparisonData("Peitoral", initial, latest.chestCm))
     }
 
     // Braço direito
     if (latest.rightArmCm != null && latest.rightArmCm > 0f) {
         val initial = sorted.firstOrNull { it.rightArmCm != null && it.rightArmCm > 0f }?.rightArmCm
-        items.add(MeasuredComparisonItem("Braço direito", initial, latest.rightArmCm))
+        items.add(MetricComparisonData("Braço direito", initial, latest.rightArmCm))
     }
 
     // Braço esquerdo
     if (latest.leftArmCm != null && latest.leftArmCm > 0f) {
         val initial = sorted.firstOrNull { it.leftArmCm != null && it.leftArmCm > 0f }?.leftArmCm
-        items.add(MeasuredComparisonItem("Braço esquerdo", initial, latest.leftArmCm))
+        items.add(MetricComparisonData("Braço esquerdo", initial, latest.leftArmCm))
     }
 
     // Quadril
     if (latest.hipCm != null && latest.hipCm > 0f) {
         val initial = sorted.firstOrNull { it.hipCm != null && it.hipCm > 0f }?.hipCm
-        items.add(MeasuredComparisonItem("Quadril", initial, latest.hipCm))
+        items.add(MetricComparisonData("Quadril", initial, latest.hipCm))
     }
 
     // Coxa direita
     if (latest.rightThighCm != null && latest.rightThighCm > 0f) {
         val initial = sorted.firstOrNull { it.rightThighCm != null && it.rightThighCm > 0f }?.rightThighCm
-        items.add(MeasuredComparisonItem("Coxa direita", initial, latest.rightThighCm))
+        items.add(MetricComparisonData("Coxa direita", initial, latest.rightThighCm))
     }
 
     // Coxa esquerda
     if (latest.leftThighCm != null && latest.leftThighCm > 0f) {
         val initial = sorted.firstOrNull { it.leftThighCm != null && it.leftThighCm > 0f }?.leftThighCm
-        items.add(MeasuredComparisonItem("Coxa esquerda", initial, latest.leftThighCm))
+        items.add(MetricComparisonData("Coxa esquerda", initial, latest.leftThighCm))
     }
 
     // Panturrilha direita
     if (latest.rightCalfCm != null && latest.rightCalfCm > 0f) {
         val initial = sorted.firstOrNull { it.rightCalfCm != null && it.rightCalfCm > 0f }?.rightCalfCm
-        items.add(MeasuredComparisonItem("Panturrilha direita", initial, latest.rightCalfCm))
+        items.add(MetricComparisonData("Panturrilha direita", initial, latest.rightCalfCm))
     }
 
     // Panturrilha esquerda
     if (latest.leftCalfCm != null && latest.leftCalfCm > 0f && latest.leftCalfCm != latest.rightCalfCm) {
         val initial = sorted.firstOrNull { it.leftCalfCm != null && it.leftCalfCm > 0f }?.leftCalfCm
-        items.add(MeasuredComparisonItem("Panturrilha esquerda", initial, latest.leftCalfCm))
+        items.add(MetricComparisonData("Panturrilha esquerda", initial, latest.leftCalfCm))
     }
 
     // % Gordura
     if (latest.bodyFatPercentage != null && latest.bodyFatPercentage > 0f) {
         val initial = sorted.firstOrNull { it.bodyFatPercentage != null && it.bodyFatPercentage > 0f }?.bodyFatPercentage
-        items.add(MeasuredComparisonItem("% Gordura", initial, latest.bodyFatPercentage, unit = "%"))
+        items.add(MetricComparisonData("% Gordura", initial, latest.bodyFatPercentage, unit = "%"))
     }
 
     if (items.isEmpty()) return
@@ -172,10 +171,10 @@ fun BodyComparisonCard(
             Spacer(modifier = Modifier.height(16.dp))
 
             Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items.forEach { item ->
-                    BodyMetricSummaryCard(
+                    BodyMetricComparisonRow(
                         label = item.label,
                         initialValue = item.initialValue,
                         currentValue = item.currentValue,

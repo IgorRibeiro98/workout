@@ -70,7 +70,7 @@ fun BodyEvolutionSection(
             )
         }
 
-        // 1. Weight Card (Current Weight, Variation & Chart)
+        // 1. Weight & Chart Card (Peso atual, variação e histórico)
         WeightHistoryCard(
             currentWeight = currentWeight,
             initialWeight = initialWeight,
@@ -79,18 +79,18 @@ fun BodyEvolutionSection(
             onRegisterWeightClick = onRegisterMeasurementClick
         )
 
-        // 2. BMI Card
+        // 2. Body Measurements Comparison Card (Medidas corporais comparadas)
+        BodyComparisonCard(
+            measurements = measurements
+        )
+
+        // 3. BMI Card (IMC)
         BmiCard(
             bmi = bmi,
             currentWeight = currentWeight,
             currentHeight = currentHeight,
             bmiCategory = bmiCategory,
             onAddHeightClick = onRegisterMeasurementClick
-        )
-
-        // 3. Body Measurements Comparison Card
-        BodyComparisonCard(
-            measurements = measurements
         )
     }
 }

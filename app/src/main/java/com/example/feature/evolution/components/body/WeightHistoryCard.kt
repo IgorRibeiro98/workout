@@ -28,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,7 +40,27 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.TextTertiary
 import java.util.Locale
+
+@Composable
+fun WeightEvolutionCard(
+    currentWeight: Float?,
+    initialWeight: Float?,
+    weightVariation: Float?,
+    measurements: List<BodyMeasurement>,
+    onRegisterWeightClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    WeightHistoryCard(
+        currentWeight = currentWeight,
+        initialWeight = initialWeight,
+        weightVariation = weightVariation,
+        measurements = measurements,
+        onRegisterWeightClick = onRegisterWeightClick,
+        modifier = modifier
+    )
+}
 
 @Composable
 fun WeightHistoryCard(
@@ -165,7 +184,7 @@ fun WeightHistoryCard(
                 }
             } else {
                 val weightFormatted = String.format(Locale.US, "%.1f", currentWeight).replace('.', ',')
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -186,7 +205,8 @@ fun WeightHistoryCard(
                                 text = weightFormatted,
                                 color = TextPrimary,
                                 fontSize = 32.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("txt_current_weight")
                             )
                             Text(
                                 text = "kg",
@@ -200,32 +220,46 @@ fun WeightHistoryCard(
                     if (weightVariation != null && initialWeight != null && initialWeight > 0f) {
                         val variationSign = if (weightVariation > 0) "+" else ""
                         val variationFormatted = String.format(Locale.US, "%.1f", weightVariation).replace('.', ',')
-                        val badgeBg = if (weightVariation < 0) Color(0x244CAF50) else Color(0x242196F3)
-                        val badgeColor = if (weightVariation < 0) Color(0xFF81C784) else Color(0xFF64B5F6)
-                        val icon = if (weightVariation < 0) Icons.Default.TrendingDown else if (weightVariation > 0) Icons.Default.TrendingUp else Icons.Default.TrendingFlat
+                        val icon = when {
+                            weightVariation < 0 -> Icons.Default.TrendingDown
+                            weightVariation > 0 -> Icons.Default.TrendingUp
+                            else -> Icons.Default.TrendingFlat
+                        }
 
-                        Surface(
-                            color = badgeBg,
-                            shape = RoundedCornerShape(8.dp)
+                        Column(
+                            horizontalAlignment = Alignment.End
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            Surface(
+                                color = SurfaceHighlight,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, BorderLight)
                             ) {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = badgeColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "$variationSign$variationFormatted kg desde o início",
-                                    color = badgeColor,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "$variationSign$variationFormatted kg",
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.testTag("txt_weight_variation")
+                                    )
+                                }
                             }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Desde o primeiro registro",
+                                color = TextTertiary,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }

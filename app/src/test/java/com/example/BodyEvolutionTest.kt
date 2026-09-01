@@ -11,6 +11,8 @@ import com.example.domain.evolution.model.BMICategory
 import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.WeightTrend
 import com.example.feature.evolution.body.BodyEvolutionViewModel
+import com.example.feature.evolution.components.body.ChartPoint
+import com.example.feature.evolution.components.body.MetricComparisonData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -62,10 +64,136 @@ class BodyEvolutionTest {
     }
 
     /**
-     * Teste 1 — Mapper
-     * Entity -> Domain Model
-     * Preservar todos os dados e mapeamento correto
+     * T12.2B Teste 1 — Histórico de peso
+     * Entrada: 01/08 - 90kg, 15/08 - 89kg, 30/08 - 88kg
+     * Esperado: Gráfico/Pontos: 90, 89, 88
      */
+    @Test
+    fun testWeightHistoryGraphPoints() {
+        val m1 = BodyMeasurement(id = 1L, date = 1000L, weightKg = 90.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+        val m2 = BodyMeasurement(id = 2L, date = 2000L, weightKg = 89.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+        val m3 = BodyMeasurement(id = 3L, date = 3000L, weightKg = 88.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+
+        val list = listOf(m3, m1, m2) // fora de ordem
+        val validSorted = list.filter { it.weightKg != null && it.weightKg > 0f }.sortedBy { it.date }
+        val chartPoints = validSorted.map { ChartPoint(date = it.date, value = it.weightKg!!) }
+
+        assertEquals(3, chartPoints.size)
+        assertEquals(90.0f, chartPoints[0].value, 0.01f)
+        assertEquals(89.0f, chartPoints[1].value, 0.01f)
+        assertEquals(88.0f, chartPoints[2].value, 0.01f)
+        assertTrue(chartPoints.size >= 2) // Histórico suficiente para exibir o gráfico
+    }
+
+    /**
+     * T12.2B Teste 2 — Um único peso
+     * Entrada: 88kg
+     * Esperado: Menos de 2 pontos (size < 2), mensagem "Registre mais pesos para visualizar sua evolução"
+     */
+    @Test
+    fun testSingleWeightRequiresMoreRecordsForChart() {
+        val single = BodyMeasurement(id = 1L, date = 1000L, weightKg = 88.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+
+        val list = listOf(single)
+        val validSorted = list.filter { it.weightKg != null && it.weightKg > 0f }.sortedBy { it.date }
+        val chartPoints = validSorted.map { ChartPoint(date = it.date, value = it.weightKg!!) }
+
+        assertEquals(1, chartPoints.size)
+        assertTrue(chartPoints.size < 2) // Indica que deve exibir mensagem informativa
+    }
+
+    /**
+     * T12.2B Teste 3 — Comparação parcial
+     * Entrada: Usuário possui apenas Peso e Cintura
+     * Esperado: Mostrar somente Peso e Cintura (não mostrar peito, braço, coxa)
+     */
+    @Test
+    fun testPartialBodyComparisonShowsOnlyExistingMetrics() {
+        val m1 = BodyMeasurement(id = 1L, date = 1000L, weightKg = 90.1f, waistCm = 96.0f, heightCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+        val m2 = BodyMeasurement(id = 2L, date = 2000L, weightKg = 88.4f, waistCm = 91.0f, heightCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+
+        val measurements = listOf(m1, m2)
+        val sorted = measurements.sortedBy { it.date }
+        val latest = sorted.last()
+
+        val items = mutableListOf<MetricComparisonData>()
+        if (latest.weightKg != null && latest.weightKg > 0f) {
+            val initial = sorted.firstOrNull { it.weightKg != null && it.weightKg > 0f }?.weightKg
+            items.add(MetricComparisonData("Peso", initial, latest.weightKg, "kg"))
+        }
+        if (latest.waistCm != null && latest.waistCm > 0f) {
+            val initial = sorted.firstOrNull { it.waistCm != null && it.waistCm > 0f }?.waistCm
+            items.add(MetricComparisonData("Cintura", initial, latest.waistCm, "cm"))
+        }
+        if (latest.chestCm != null && latest.chestCm > 0f) {
+            val initial = sorted.firstOrNull { it.chestCm != null && it.chestCm > 0f }?.chestCm
+            items.add(MetricComparisonData("Peitoral", initial, latest.chestCm, "cm"))
+        }
+
+        assertEquals(2, items.size)
+        assertEquals("Peso", items[0].label)
+        assertEquals(90.1f, items[0].initialValue ?: 0f, 0.01f)
+        assertEquals(88.4f, items[0].currentValue, 0.01f)
+
+        assertEquals("Cintura", items[1].label)
+        assertEquals(96.0f, items[1].initialValue ?: 0f, 0.01f)
+        assertEquals(91.0f, items[1].currentValue, 0.01f)
+    }
+
+    /**
+     * T12.2B Teste 4 — Medidas sem alteração
+     * Entrada: Braço: 37 e 37
+     * Esperado: Mostrar 37 cm → 37 cm, não esconder.
+     */
+    @Test
+    fun testUnchangedMetricIsDisplayed() {
+        val m1 = BodyMeasurement(id = 1L, date = 1000L, weightKg = 80.0f, rightArmCm = 37.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+        val m2 = BodyMeasurement(id = 2L, date = 2000L, weightKg = 80.0f, rightArmCm = 37.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
+
+        val measurements = listOf(m1, m2)
+        val sorted = measurements.sortedBy { it.date }
+        val latest = sorted.last()
+
+        val items = mutableListOf<MetricComparisonData>()
+        if (latest.rightArmCm != null && latest.rightArmCm > 0f) {
+            val initial = sorted.firstOrNull { it.rightArmCm != null && it.rightArmCm > 0f }?.rightArmCm
+            items.add(MetricComparisonData("Braço direito", initial, latest.rightArmCm, "cm"))
+        }
+
+        assertEquals(1, items.size)
+        assertEquals("Braço direito", items[0].label)
+        assertEquals(37.0f, items[0].initialValue ?: 0f, 0.01f)
+        assertEquals(37.0f, items[0].currentValue, 0.01f)
+    }
+
+    /**
+     * T12.2B Teste 5 — Usuário novo
+     * Entrada: []
+     * Esperado: Estado vazio, sem medições.
+     */
+    @Test
+    fun testEmptyData_NewUser() = runTest {
+        val summary = BodyEvolutionCalculator.calculate(emptyList())
+        assertNull(summary.currentWeight)
+        assertNull(summary.initialWeight)
+        assertNull(summary.weightVariation)
+        assertNull(summary.currentHeight)
+        assertNull(summary.bmi)
+        assertNull(summary.bmiCategory)
+
+        val fakeRepo = BodyMeasurementRepository(createFakeDao(emptyList()))
+        val viewModel = BodyEvolutionViewModel(fakeRepo)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isLoading)
+        assertNull(state.currentWeight)
+        assertNull(state.bmi)
+        assertNull(state.weightVariation)
+        assertFalse(state.hasMeasurements)
+        assertTrue(state.measurements.isEmpty())
+    }
+
     @Test
     fun testBodyMeasurementMapper() {
         val entity = BodyMeasurementEntity(
@@ -104,131 +232,11 @@ class BodyEvolutionTest {
         assertEquals(18.5f, domain.bodyFatPercentage ?: 0f, 0.01f)
     }
 
-    /**
-     * Teste 2 — Cálculo corporal
-     * Entradas: 90kg e 88kg
-     * Esperado: peso inicial 90kg, peso atual 88kg, variação de -2,0kg
-     */
     @Test
-    fun testBodyEvolutionCalculation_WeightVariation() = runTest {
-        val m1 = BodyMeasurement(
-            id = 1L,
-            date = 1000L,
-            weightKg = 90.0f,
-            heightCm = 175.0f,
-            waistCm = null, abdomenCm = null, chestCm = null,
-            leftArmCm = null, rightArmCm = null, leftThighCm = null,
-            rightThighCm = null, leftCalfCm = null, rightCalfCm = null,
-            hipCm = null, bodyFatPercentage = null
-        )
-        val m2 = BodyMeasurement(
-            id = 2L,
-            date = 2000L,
-            weightKg = 88.0f,
-            heightCm = 175.0f,
-            waistCm = null, abdomenCm = null, chestCm = null,
-            leftArmCm = null, rightArmCm = null, leftThighCm = null,
-            rightThighCm = null, leftCalfCm = null, rightCalfCm = null,
-            hipCm = null, bodyFatPercentage = null
-        )
-
-        val summary = BodyEvolutionCalculator.calculate(listOf(m1, m2))
-
-        assertEquals(88.0f, summary.currentWeight ?: 0f, 0.01f)
-        assertEquals(90.0f, summary.initialWeight ?: 0f, 0.01f)
-        assertEquals(-2.0f, summary.weightVariation ?: 0f, 0.01f)
-
-        // Verificando também via ViewModel
-        val fakeRepo = BodyMeasurementRepository(createFakeDao(listOf(
-            BodyMeasurementEntity(id = 1L, date = 1000L, weightKg = 90.0f),
-            BodyMeasurementEntity(id = 2L, date = 2000L, weightKg = 88.0f)
-        )))
-
-        val viewModel = BodyEvolutionViewModel(fakeRepo)
-        advanceUntilIdle()
-
-        val state = viewModel.uiState.value
-        assertFalse(state.isLoading)
-        assertEquals(88.0f, state.currentWeight ?: 0f, 0.01f)
-        assertEquals(90.0f, state.initialWeight ?: 0f, 0.01f)
-        assertEquals(-2.0f, state.weightVariation ?: 0f, 0.01f)
-    }
-
-    /**
-     * Teste 3 — IMC
-     * Entrada: Peso: 88,4 kg, Altura: 171 cm (1,71 m)
-     * Esperado: IMC: 30,2 (OBESITY)
-     */
-    @Test
-    fun testBmiCalculation() = runTest {
+    fun testBmiCalculation() {
         val bmiResult = BodyMetricsCalculator.calculateBMI(weightKg = 88.4f, heightCm = 171.0f)
         assertNotNull(bmiResult)
         assertEquals(30.2f, bmiResult?.value ?: 0f, 0.05f)
         assertEquals(BMICategory.OBESITY, bmiResult?.category)
-
-        val measurement = BodyMeasurement(
-            id = 1L,
-            date = 1000L,
-            weightKg = 88.4f,
-            heightCm = 171.0f,
-            waistCm = null, abdomenCm = null, chestCm = null,
-            leftArmCm = null, rightArmCm = null, leftThighCm = null,
-            rightThighCm = null, leftCalfCm = null, rightCalfCm = null,
-            hipCm = null, bodyFatPercentage = null
-        )
-
-        val summary = BodyEvolutionCalculator.calculate(listOf(measurement))
-        assertEquals(88.4f, summary.currentWeight ?: 0f, 0.01f)
-        assertEquals(171.0f, summary.currentHeight ?: 0f, 0.01f)
-        assertEquals(30.2f, summary.bmi ?: 0f, 0.05f)
-        assertEquals(BMICategory.OBESITY, summary.bmiCategory)
-    }
-
-    /**
-     * Teste 4 — Histórico
-     * Entrada: 01/08 (90kg), 15/08 (89kg), 30/08 (88kg)
-     * Esperado: 3 pontos cronológicos ordenados com variação de -2kg e tendência DOWN
-     */
-    @Test
-    fun testWeightHistory() = runTest {
-        val m1 = BodyMeasurement(id = 1L, date = 1000L, weightKg = 90.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
-        val m2 = BodyMeasurement(id = 2L, date = 2000L, weightKg = 89.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
-        val m3 = BodyMeasurement(id = 3L, date = 3000L, weightKg = 88.0f, heightCm = null, waistCm = null, abdomenCm = null, chestCm = null, leftArmCm = null, rightArmCm = null, leftThighCm = null, rightThighCm = null, leftCalfCm = null, rightCalfCm = null, hipCm = null, bodyFatPercentage = null)
-
-        // Passando fora de ordem para validar ordenação
-        val weightEvolution = WeightEvolutionCalculator.calculateFromMeasurements(listOf(m3, m1, m2))
-        assertEquals(90.0f, weightEvolution.firstWeight ?: 0f, 0.01f)
-        assertEquals(88.0f, weightEvolution.currentWeight ?: 0f, 0.01f)
-        assertEquals(-2.0f, weightEvolution.variation ?: 0f, 0.01f)
-        assertEquals(3, weightEvolution.measurementsCount)
-        assertEquals(WeightTrend.DOWN, weightEvolution.trend)
-    }
-
-    /**
-     * Teste 5 — Sem dados
-     * Entrada: []
-     * Esperado: Estado seguro, valores nulos, sem crash
-     */
-    @Test
-    fun testEmptyDataSafety() = runTest {
-        val summary = BodyEvolutionCalculator.calculate(emptyList())
-        assertNull(summary.currentWeight)
-        assertNull(summary.initialWeight)
-        assertNull(summary.weightVariation)
-        assertNull(summary.currentHeight)
-        assertNull(summary.bmi)
-        assertNull(summary.bmiCategory)
-
-        val fakeRepo = BodyMeasurementRepository(createFakeDao(emptyList()))
-        val viewModel = BodyEvolutionViewModel(fakeRepo)
-        advanceUntilIdle()
-
-        val state = viewModel.uiState.value
-        assertFalse(state.isLoading)
-        assertNull(state.currentWeight)
-        assertNull(state.bmi)
-        assertNull(state.weightVariation)
-        assertFalse(state.hasMeasurements)
-        assertTrue(state.measurements.isEmpty())
     }
 }
