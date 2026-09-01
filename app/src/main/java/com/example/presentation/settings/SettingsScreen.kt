@@ -355,31 +355,14 @@ fun SettingsScreen() {
                             activeSheet = null
                             coroutineScope.launch {
                                 try {
-                                    val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v1.json", force = true)
-                                    val message = buildString {
-                                        if (result.errors.isEmpty()) {
-                                            appendLine("Status: Sucesso")
-                                        } else {
-                                            appendLine("Status: Falha")
-                                        }
-                                        appendLine("")
-                                        val total = result.added + result.updated + result.ignored + result.errors.size
-                                        appendLine("Exercícios encontrados: $total")
-                                        appendLine("Importados: ${result.added + result.updated}")
-                                        appendLine("Falhas: ${result.errors.size}")
-                                        appendLine("Ignorados: ${result.ignored}")
-                                        appendLine("Versão: 1.0")
-                                        
-                                        if (result.errors.isNotEmpty()) {
-                                            appendLine("")
-                                            appendLine("Lista de erros:")
-                                            result.errors.forEach { err ->
-                                                appendLine("- $err")
-                                            }
-                                        }
+                                    val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v2.json", force = true)
+                                    premiumImporter.seedPremiumTestWorkoutIfNeeded()
+                                    dialogTitle = "Exercise Premium v2 Import"
+                                    dialogMessage = if (result.formattedReport.isNotEmpty()) {
+                                        result.formattedReport
+                                    } else {
+                                        "Importação concluída. Importados: ${result.added + result.updated}"
                                     }
-                                    dialogTitle = "Exercise Premium Import"
-                                    dialogMessage = message
                                 } catch (e: Exception) {
                                     dialogTitle = "Erro"
                                     dialogMessage = "Erro ao carregar manifesto premium: ${e.message}"

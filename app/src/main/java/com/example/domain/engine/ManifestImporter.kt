@@ -24,7 +24,8 @@ data class ImportResult(
     val alternativesExisting: Int = 0,
     val errors: List<String> = emptyList(),
     val isSkippedSameVersion: Boolean = false,
-    val warnings: List<String> = emptyList()
+    val warnings: List<String> = emptyList(),
+    val formattedReport: String = ""
 )
 
 data class CatalogValidationResult(

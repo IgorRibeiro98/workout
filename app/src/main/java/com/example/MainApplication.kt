@@ -54,8 +54,13 @@ class MainApplication : Application(), ImageLoaderFactory {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 ManifestImporter(database, this@MainApplication).importFromAssets()
+                val premiumImporter = com.example.domain.engine.PremiumManifestImporter(database, this@MainApplication)
+                val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v2.json", force = true)
+                premiumImporter.seedPremiumTestWorkoutIfNeeded()
+                android.util.Log.d("MainApplication", "Premium Import Report:\n${result.formattedReport}")
+
                 val mediaEngine = com.example.domain.engine.ExerciseMediaEngine(database.workoutDao(), context = this@MainApplication)
-                mediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 1)
+                mediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 2)
             } catch (e: Exception) {
                 e.printStackTrace()
             }

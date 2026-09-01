@@ -18,13 +18,17 @@ class PremiumManifestImporter(
     private val dao = database.workoutDao()
 
     suspend fun importFromAssets(
-        assetPath: String = "catalog/exercise-content-manifest.v1.json",
+        assetPath: String = "catalog/exercise-content-manifest.v2.json",
         force: Boolean = false
     ): ImportResult = withContext(Dispatchers.IO) {
         val errors = mutableListOf<String>()
         var added = 0
         var updated = 0
         var ignored = 0
+        var gifCount = 0
+        var videoCount = 0
+        var noMediaCount = 0
+        var auditReport: PremiumAuditReport? = null
 
         try {
             val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
@@ -36,12 +40,26 @@ class PremiumManifestImporter(
                 return@withContext ImportResult(errors = errors)
             }
             
-            val contentVersion = root.optInt("contentVersion", 1)
+            val validator = PremiumManifestValidator()
+            val report = validator.validateManifest(jsonString)
+            auditReport = report
+
+            if (!report.isValid) {
+                errors.addAll(report.errors)
+                return@withContext ImportResult(errors = errors, formattedReport = report.formattedReport)
+            }
+            
+            val contentVersion = root.optInt("contentVersion", 2)
             
             if (!force) {
                 val currentVersion = settingsManager.installedCatalogContentVersionFlow.first()
                 if (currentVersion >= contentVersion) {
-                    return@withContext ImportResult(ignored = root.optJSONArray("exercises")?.length() ?: 0, unchanged = root.optJSONArray("exercises")?.length() ?: 0)
+                    return@withContext ImportResult(
+                        ignored = root.optJSONArray("exercises")?.length() ?: 0,
+                        unchanged = root.optJSONArray("exercises")?.length() ?: 0,
+                        isSkippedSameVersion = true,
+                        formattedReport = report.formattedReport
+                    )
                 }
             }
             
@@ -94,12 +112,10 @@ class PremiumManifestImporter(
                     val exObj = exercisesArray.getJSONObject(i)
                     val id = exObj.optString("id")
                     
-                    var existing = dao.getExerciseByCanonicalId(id)
+                    val existing = dao.getExerciseByCanonicalId(id)
                     var exerciseId: Long = 0
 
-
-                    // Support both v1 and v2 based on schemaVersion
-                    val schemaVersion = root.optInt("schemaVersion", 1)
+                    val schemaVersion = root.optInt("schemaVersion", 2)
 
                     val identity = exObj.optJSONObject("identity")
                     val namePtBr = identity?.optString("namePtBr") ?: continue
@@ -118,8 +134,8 @@ class PremiumManifestImporter(
                     var primaryMuscle = ""
                     var secondaryMuscles: String? = null
                     var equipment = ""
-                    var bodyRegion = classification?.optString("bodyRegion")
-                    var trainingGoals = classification?.optJSONArray("trainingGoals")?.toString()
+                    val bodyRegion = classification?.optString("bodyRegion")
+                    val trainingGoals = classification?.optJSONArray("trainingGoals")?.toString()
 
                     if (schemaVersion >= 2) {
                         primaryMuscle = classification?.optJSONArray("primaryMuscles")?.optString(0) ?: ""
@@ -141,7 +157,6 @@ class PremiumManifestImporter(
                     }
 
                     if (existing != null) {
-                        // Update existing
                         val updatedEx = existing.copy(
                             name = namePtBr,
                             nameEn = nameEn ?: existing.nameEn,
@@ -219,19 +234,36 @@ class PremiumManifestImporter(
                     }
 
                     // Media
+                    var hasGif = false
+                    var hasVideo = false
                     exObj.optJSONObject("media")?.let { media ->
-                        var gifUrl = media.optString("gifUrl")
+                        var gifUrl: String? = media.optString("gifUrl")
                         var gifSource: String? = null
                         var videos = media.optJSONArray("youtubeVideoIds")?.toString()
                         var images = media.optJSONArray("imageUrls")?.toString()
                         
                         if (schemaVersion >= 2) {
                             media.optJSONObject("gif")?.let {
-                                gifUrl = it.optString("url")
-                                gifSource = it.optString("source")
+                                val url = it.optString("url")
+                                if (url.isNotEmpty() && url != "null") {
+                                    gifUrl = url
+                                    gifSource = it.optString("source")
+                                } else {
+                                    gifUrl = null
+                                }
                             }
-                            videos = media.optJSONArray("videos")?.toString()
+                            val vArr = media.optJSONArray("videos")
+                            if (vArr != null && vArr.length() > 0) {
+                                videos = vArr.toString()
+                            }
                             images = media.optJSONArray("images")?.toString()
+                        }
+
+                        if (!gifUrl.isNullOrEmpty() && gifUrl != "null") {
+                            hasGif = true
+                        }
+                        if (!videos.isNullOrEmpty() && videos != "null" && videos != "[]") {
+                            hasVideo = true
                         }
                         
                         val entity = ExerciseMediaEntity(
@@ -245,6 +277,10 @@ class PremiumManifestImporter(
                         )
                         dao.insertExerciseMedia(entity)
                     }
+
+                    if (hasGif) gifCount++
+                    if (hasVideo) videoCount++
+                    if (!hasGif && !hasVideo) noMediaCount++
 
                     // Progression
                     exObj.optJSONObject("progression")?.let { prog ->
@@ -287,10 +323,12 @@ class PremiumManifestImporter(
                     }
 
                     // Substitutions
-                    exObj.optJSONObject(if (schemaVersion >= 2) "substitutions" else "substitutions")?.let { sub ->
+                    exObj.optJSONObject("substitutions")?.let { sub ->
+                        val sameMovementStr = sub.optJSONArray("sameMovement")?.toString() 
+                            ?: sub.optJSONArray("alternatives")?.toString()
                         val entity = ExerciseSubstitutionPremiumEntity(
                             exerciseId = exerciseId,
-                            sameMovement = sub.optJSONArray("sameMovement")?.toString(),
+                            sameMovement = sameMovementStr,
                             sameMuscle = sub.optJSONArray("sameMuscle")?.toString(),
                             notRecommended = sub.optJSONArray("notRecommended")?.toString()
                         )
@@ -329,6 +367,79 @@ class PremiumManifestImporter(
             errors.add("Erro ao importar manifesto premium: ${e.message}")
         }
 
-        return@withContext ImportResult(added = added, updated = updated, ignored = ignored, errors = errors)
+        val reportSummary = auditReport?.formattedReport ?: buildString {
+            val totalFound = added + updated + ignored
+            appendLine("Importação Premium")
+            appendLine("$totalFound exercícios encontrados")
+            appendLine("${added + updated} importados")
+            appendLine("${errors.size} erros")
+            appendLine("")
+            appendLine("Mídia:")
+            appendLine("GIF: $gifCount")
+            appendLine("Vídeos: $videoCount")
+            appendLine("Sem mídia: $noMediaCount")
+        }
+
+        return@withContext ImportResult(
+            added = added,
+            updated = updated,
+            ignored = ignored,
+            errors = errors,
+            formattedReport = reportSummary
+        )
+    }
+
+    suspend fun seedPremiumTestWorkoutIfNeeded() = withContext(Dispatchers.IO) {
+        try {
+            val templates = dao.getAllTemplatesSync()
+            if (templates.none { it.name == "Peito Premium Teste" }) {
+                val programs = dao.getAllProgramsSync()
+                val programId = if (programs.isNotEmpty()) programs.first().id else {
+                    dao.insertProgram(WorkoutProgramEntity(name = "Treinos Principais", isCurrent = true))
+                }
+                
+                val templateId = dao.insertTemplate(
+                    WorkoutTemplateEntity(
+                        programId = programId,
+                        name = "Peito Premium Teste",
+                        shortIdentifier = "P",
+                        orderInProgram = 0
+                    )
+                )
+                
+                val supinoReto = dao.getExerciseByCanonicalId("supino-reto-barra")
+                val supinoInclinado = dao.getExerciseByCanonicalId("supino-inclinado-halteres")
+                
+                if (supinoReto != null) {
+                    dao.insertTemplateExercise(
+                        WorkoutTemplateExerciseEntity(
+                            templateId = templateId,
+                            exerciseId = supinoReto.id,
+                            sortOrder = 0,
+                            targetSets = 3,
+                            minReps = 8,
+                            maxReps = 12,
+                            restDurationSeconds = 90
+                        )
+                    )
+                }
+                
+                if (supinoInclinado != null) {
+                    dao.insertTemplateExercise(
+                        WorkoutTemplateExerciseEntity(
+                            templateId = templateId,
+                            exerciseId = supinoInclinado.id,
+                            sortOrder = 1,
+                            targetSets = 3,
+                            minReps = 8,
+                            maxReps = 12,
+                            restDurationSeconds = 90
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }
