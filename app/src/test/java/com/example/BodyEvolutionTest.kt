@@ -54,23 +54,11 @@ class BodyEvolutionTest {
     /**
      * Requirement 1: ViewModel Factory Architecture
      * BodyEvolutionViewModel must receive BodyMeasurementRepository directly.
-     * Throw explicit IllegalStateException if repository is missing and never fallback to casting another DAO.
+     * MainViewModelFactory requires non-nullable BodyMeasurementRepository.
      */
     @Test
-    fun testViewModelFactory_ExplicitExceptionWhenRepoMissing() {
+    fun testViewModelFactory_DirectInjectionOfBodyMeasurementRepository() {
         val app = context.applicationContext as MainApplication
-        val factoryWithoutRepo = MainViewModelFactory(
-            repository = app.repository,
-            settingsManager = app.settingsManager,
-            workoutEngine = app.workoutEngine,
-            notificationManager = app.notificationManager,
-            bodyMeasurementRepository = null
-        )
-
-        assertThrows(IllegalStateException::class.java) {
-            factoryWithoutRepo.create(BodyEvolutionViewModel::class.java)
-        }
-
         val factoryWithRepo = MainViewModelFactory(
             repository = app.repository,
             settingsManager = app.settingsManager,
@@ -105,13 +93,13 @@ class BodyEvolutionTest {
 
     /**
      * Teste 2 (Mandatory Test 2):
-     * Cadastrar: Peso: -5 -> Bloquear salvamento
+     * Cadastrar: Peso: -10 -> Bloquear salvamento
      */
     @Test
     fun testMandatory2_BlockNegativeWeight() = runBlocking {
         val viewModel = BodyEvolutionViewModel(repository)
         viewModel.initNewMeasurement()
-        viewModel.updateWeight("-5")
+        viewModel.updateWeight("-10")
 
         val saved = viewModel.saveMeasurementSuspending()
         assertFalse("Should block negative weight", saved)
@@ -123,13 +111,13 @@ class BodyEvolutionTest {
 
     /**
      * Teste 3 (Mandatory Test 3):
-     * Editar registro existente -> Dados atualizados
+     * Criar: 88.4kg -> Editar: 87.9kg -> Registro atualizado
      */
     @Test
     fun testMandatory3_EditExistingMeasurement() = runBlocking {
         val viewModel = BodyEvolutionViewModel(repository)
 
-        // 1. Initial creation
+        // 1. Initial creation (88.4 kg)
         val initialDate = 1756598400000L
         val initial = BodyMeasurementEntity(
             date = initialDate,
@@ -148,9 +136,9 @@ class BodyEvolutionTest {
         assertEquals("88.4", viewModel.formState.value.weightKg)
         assertEquals("91", viewModel.formState.value.waistCm)
 
-        // 3. Update values (new weight: 86.3, new waist: 88.5)
-        viewModel.updateWeight("86.3")
-        viewModel.updateWaist("88.5")
+        // 3. Update values (edit to: 87.9)
+        viewModel.updateWeight("87.9")
+        viewModel.updateWaist("90.5")
 
         val updated = viewModel.saveMeasurementSuspending()
         assertTrue("Should save update successfully", updated)
@@ -158,8 +146,8 @@ class BodyEvolutionTest {
         // 4. Verify in repository
         val afterUpdate = repository.getMeasurementById(id)
         assertNotNull(afterUpdate)
-        assertEquals(86.3f, afterUpdate?.weightKg ?: 0f, 0.01f)
-        assertEquals(88.5f, afterUpdate?.waistCm ?: 0f, 0.01f)
+        assertEquals(87.9f, afterUpdate?.weightKg ?: 0f, 0.01f)
+        assertEquals(90.5f, afterUpdate?.waistCm ?: 0f, 0.01f)
 
         val all = repository.allMeasurements.first()
         assertEquals(1, all.size)
@@ -251,5 +239,36 @@ class BodyEvolutionTest {
         val obese = BodyMetricsCalculator.calculateBmi(100f, 175f)
         assertEquals("Obesidade", obese?.classification)
         assertTrue(obese?.isObese == true)
+    }
+
+    /**
+     * Dedicated tests for BodyMeasurementValidator domain logic
+     */
+    @Test
+    fun testBodyMeasurementValidator_Rules() {
+        // Weight: 0 < peso <= 500
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateWeight("88.4") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateWeight("500") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateWeight("0") is com.example.domain.body.ValidationResult.Error)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateWeight("-10") is com.example.domain.body.ValidationResult.Error)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateWeight("600") is com.example.domain.body.ValidationResult.Error)
+
+        // Height: 50 <= altura <= 300
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateHeight("171") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateHeight("50") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateHeight("300") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateHeight("49") is com.example.domain.body.ValidationResult.Error)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateHeight("301") is com.example.domain.body.ValidationResult.Error)
+
+        // Measures: 0 < medida <= 300
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyMeasure("91", "Cintura") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyMeasure("300", "Peito") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyMeasure("0", "Abdômen") is com.example.domain.body.ValidationResult.Error)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyMeasure("301", "Coxa") is com.example.domain.body.ValidationResult.Error)
+
+        // Body Fat: 0 < percentual < 100
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyFat("15.5") is com.example.domain.body.ValidationResult.Success)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyFat("0") is com.example.domain.body.ValidationResult.Error)
+        assertTrue(com.example.domain.body.BodyMeasurementValidator.validateBodyFat("100") is com.example.domain.body.ValidationResult.Error)
     }
 }

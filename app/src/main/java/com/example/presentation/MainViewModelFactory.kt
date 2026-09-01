@@ -19,14 +19,12 @@ class MainViewModelFactory(
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
     private val notificationManager: WorkoutNotificationManager,
-    private val bodyMeasurementRepository: BodyMeasurementRepository? = null
+    private val bodyMeasurementRepository: BodyMeasurementRepository
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
-            val bodyRepo = bodyMeasurementRepository
-                ?: throw IllegalStateException("BodyMeasurementRepository must be provided to create BodyEvolutionViewModel")
             @Suppress("UNCHECKED_CAST")
-            return BodyEvolutionViewModel(bodyRepo) as T
+            return BodyEvolutionViewModel(bodyMeasurementRepository) as T
         }
         if (modelClass.isAssignableFrom(ExercisesViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

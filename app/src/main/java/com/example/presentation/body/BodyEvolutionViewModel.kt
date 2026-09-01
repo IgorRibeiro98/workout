@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.BodyMeasurementEntity
 import com.example.data.repository.BodyMeasurementRepository
 import com.example.domain.body.BmiResult
+import com.example.domain.body.BodyMeasurementValidator
 import com.example.domain.body.BodyMetricsCalculator
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -297,36 +298,22 @@ class BodyEvolutionViewModel(
      */
     fun saveMeasurement(onSuccess: (() -> Unit)? = null): Boolean {
         val state = _formState.value
-        val errors = mutableMapOf<String, String>()
+        val (parsedForm, errors) = BodyMeasurementValidator.validateAll(
+            weightKg = state.weightKg,
+            heightCm = state.heightCm,
+            bodyFatPercentage = state.bodyFatPercentage,
+            waistCm = state.waistCm,
+            abdomenCm = state.abdomenCm,
+            chestCm = state.chestCm,
+            rightArmCm = state.rightArmCm,
+            leftArmCm = state.leftArmCm,
+            rightThighCm = state.rightThighCm,
+            leftThighCm = state.leftThighCm,
+            calfCm = state.calfCm,
+            hipCm = state.hipCm
+        )
 
-        // Validation Rules:
-        // Peso: 0 < peso <= 500
-        val weight = parseAndValidateWeight(state.weightKg, errors)
-
-        // Altura: 50 <= altura <= 300
-        val height = parseAndValidateHeight(state.heightCm, errors)
-
-        // Gordura: 0 < percentual < 100
-        val bodyFat = parseAndValidateBodyFat(state.bodyFatPercentage, errors)
-
-        // Medidas corporais: 0 < medida <= 300
-        val waist = parseAndValidateBodyMeasure(state.waistCm, "Cintura", "waist", errors)
-        val abdomen = parseAndValidateBodyMeasure(state.abdomenCm, "Abdômen", "abdomen", errors)
-        val chest = parseAndValidateBodyMeasure(state.chestCm, "Peito", "chest", errors)
-        val rightArm = parseAndValidateBodyMeasure(state.rightArmCm, "Braço direito", "rightArm", errors)
-        val leftArm = parseAndValidateBodyMeasure(state.leftArmCm, "Braço esquerdo", "leftArm", errors)
-        val rightThigh = parseAndValidateBodyMeasure(state.rightThighCm, "Coxa direita", "rightThigh", errors)
-        val leftThigh = parseAndValidateBodyMeasure(state.leftThighCm, "Coxa esquerda", "leftThigh", errors)
-        val calf = parseAndValidateBodyMeasure(state.calfCm, "Panturrilha", "calf", errors)
-        val hip = parseAndValidateBodyMeasure(state.hipCm, "Quadril", "hip", errors)
-
-        val hasAnyValue = listOf(weight, height, bodyFat, waist, abdomen, chest, rightArm, leftArm, rightThigh, leftThigh, calf, hip).any { it != null }
-
-        if (!hasAnyValue && errors.isEmpty()) {
-            errors["general"] = "Informe ao menos uma medida ou peso para salvar."
-        }
-
-        if (errors.isNotEmpty()) {
+        if (parsedForm == null || errors.isNotEmpty()) {
             _formState.update { it.copy(errors = errors) }
             return false
         }
@@ -334,18 +321,18 @@ class BodyEvolutionViewModel(
         val entity = BodyMeasurementEntity(
             id = state.editingMeasurementId ?: 0L,
             date = state.selectedDateMillis,
-            weightKg = weight,
-            heightCm = height,
-            bodyFatPercentage = bodyFat,
-            waistCm = waist,
-            abdomenCm = abdomen,
-            chestCm = chest,
-            rightArmCm = rightArm,
-            leftArmCm = leftArm,
-            rightThighCm = rightThigh,
-            leftThighCm = leftThigh,
-            calfCm = calf,
-            hipCm = hip
+            weightKg = parsedForm.weightKg,
+            heightCm = parsedForm.heightCm,
+            bodyFatPercentage = parsedForm.bodyFatPercentage,
+            waistCm = parsedForm.waistCm,
+            abdomenCm = parsedForm.abdomenCm,
+            chestCm = parsedForm.chestCm,
+            rightArmCm = parsedForm.rightArmCm,
+            leftArmCm = parsedForm.leftArmCm,
+            rightThighCm = parsedForm.rightThighCm,
+            leftThighCm = parsedForm.leftThighCm,
+            calfCm = parsedForm.calfCm,
+            hipCm = parsedForm.hipCm
         )
 
         _formState.update { it.copy(isSaving = true) }
@@ -357,29 +344,22 @@ class BodyEvolutionViewModel(
 
     suspend fun saveMeasurementSuspending(onSuccess: (() -> Unit)? = null): Boolean {
         val state = _formState.value
-        val errors = mutableMapOf<String, String>()
+        val (parsedForm, errors) = BodyMeasurementValidator.validateAll(
+            weightKg = state.weightKg,
+            heightCm = state.heightCm,
+            bodyFatPercentage = state.bodyFatPercentage,
+            waistCm = state.waistCm,
+            abdomenCm = state.abdomenCm,
+            chestCm = state.chestCm,
+            rightArmCm = state.rightArmCm,
+            leftArmCm = state.leftArmCm,
+            rightThighCm = state.rightThighCm,
+            leftThighCm = state.leftThighCm,
+            calfCm = state.calfCm,
+            hipCm = state.hipCm
+        )
 
-        val weight = parseAndValidateWeight(state.weightKg, errors)
-        val height = parseAndValidateHeight(state.heightCm, errors)
-        val bodyFat = parseAndValidateBodyFat(state.bodyFatPercentage, errors)
-
-        val waist = parseAndValidateBodyMeasure(state.waistCm, "Cintura", "waist", errors)
-        val abdomen = parseAndValidateBodyMeasure(state.abdomenCm, "Abdômen", "abdomen", errors)
-        val chest = parseAndValidateBodyMeasure(state.chestCm, "Peito", "chest", errors)
-        val rightArm = parseAndValidateBodyMeasure(state.rightArmCm, "Braço direito", "rightArm", errors)
-        val leftArm = parseAndValidateBodyMeasure(state.leftArmCm, "Braço esquerdo", "leftArm", errors)
-        val rightThigh = parseAndValidateBodyMeasure(state.rightThighCm, "Coxa direita", "rightThigh", errors)
-        val leftThigh = parseAndValidateBodyMeasure(state.leftThighCm, "Coxa esquerda", "leftThigh", errors)
-        val calf = parseAndValidateBodyMeasure(state.calfCm, "Panturrilha", "calf", errors)
-        val hip = parseAndValidateBodyMeasure(state.hipCm, "Quadril", "hip", errors)
-
-        val hasAnyValue = listOf(weight, height, bodyFat, waist, abdomen, chest, rightArm, leftArm, rightThigh, leftThigh, calf, hip).any { it != null }
-
-        if (!hasAnyValue && errors.isEmpty()) {
-            errors["general"] = "Informe ao menos uma medida ou peso para salvar."
-        }
-
-        if (errors.isNotEmpty()) {
+        if (parsedForm == null || errors.isNotEmpty()) {
             _formState.update { it.copy(errors = errors) }
             return false
         }
@@ -387,18 +367,18 @@ class BodyEvolutionViewModel(
         val entity = BodyMeasurementEntity(
             id = state.editingMeasurementId ?: 0L,
             date = state.selectedDateMillis,
-            weightKg = weight,
-            heightCm = height,
-            bodyFatPercentage = bodyFat,
-            waistCm = waist,
-            abdomenCm = abdomen,
-            chestCm = chest,
-            rightArmCm = rightArm,
-            leftArmCm = leftArm,
-            rightThighCm = rightThigh,
-            leftThighCm = leftThigh,
-            calfCm = calf,
-            hipCm = hip
+            weightKg = parsedForm.weightKg,
+            heightCm = parsedForm.heightCm,
+            bodyFatPercentage = parsedForm.bodyFatPercentage,
+            waistCm = parsedForm.waistCm,
+            abdomenCm = parsedForm.abdomenCm,
+            chestCm = parsedForm.chestCm,
+            rightArmCm = parsedForm.rightArmCm,
+            leftArmCm = parsedForm.leftArmCm,
+            rightThighCm = parsedForm.rightThighCm,
+            leftThighCm = parsedForm.leftThighCm,
+            calfCm = parsedForm.calfCm,
+            hipCm = parsedForm.hipCm
         )
 
         _formState.update { it.copy(isSaving = true) }
@@ -425,54 +405,5 @@ class BodyEvolutionViewModel(
         }
         _formState.update { it.copy(isSaving = false, saveSuccess = true) }
         onSuccess?.invoke()
-    }
-
-    private fun parseAndValidateWeight(input: String, errors: MutableMap<String, String>): Float? {
-        val trimmed = input.trim().replace(',', '.')
-        if (trimmed.isEmpty()) return null
-        val parsed = trimmed.toFloatOrNull()
-        if (parsed == null || parsed <= 0f || parsed > 500f) {
-            errors["weight"] = "Peso inválido. Informe um valor entre 1 e 500 kg."
-            return null
-        }
-        return parsed
-    }
-
-    private fun parseAndValidateHeight(input: String, errors: MutableMap<String, String>): Float? {
-        val trimmed = input.trim().replace(',', '.')
-        if (trimmed.isEmpty()) return null
-        val parsed = trimmed.toFloatOrNull()
-        if (parsed == null || parsed < 50f || parsed > 300f) {
-            errors["height"] = "Altura inválida. Informe um valor entre 50 e 300 cm."
-            return null
-        }
-        return parsed
-    }
-
-    private fun parseAndValidateBodyFat(input: String, errors: MutableMap<String, String>): Float? {
-        val trimmed = input.trim().replace(',', '.')
-        if (trimmed.isEmpty()) return null
-        val parsed = trimmed.toFloatOrNull()
-        if (parsed == null || parsed <= 0f || parsed >= 100f) {
-            errors["bodyFat"] = "Percentual inválido. Informe um valor entre 0 e 100%."
-            return null
-        }
-        return parsed
-    }
-
-    private fun parseAndValidateBodyMeasure(
-        input: String,
-        fieldName: String,
-        key: String,
-        errors: MutableMap<String, String>
-    ): Float? {
-        val trimmed = input.trim().replace(',', '.')
-        if (trimmed.isEmpty()) return null
-        val parsed = trimmed.toFloatOrNull()
-        if (parsed == null || parsed <= 0f || parsed > 300f) {
-            errors[key] = "$fieldName inválido(a). Informe um valor entre 1 e 300 cm."
-            return null
-        }
-        return parsed
     }
 }

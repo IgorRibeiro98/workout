@@ -164,7 +164,7 @@ fun AddBodyMeasurementScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (formState.isEditMode) "SALVAR ALTERAÇÕES" else "SALVAR MEDIÇÃO",
+                                text = if (formState.isEditMode) "Atualizar medição" else "Salvar medição",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                                 letterSpacing = 0.5.sp
