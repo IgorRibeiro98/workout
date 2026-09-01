@@ -41,13 +41,13 @@ import java.util.Locale
 
 @Composable
 fun ConsistencyCard(
-    summary: EvolutionSummary?,
-    consistency: ConsistencyMetrics? = null,
+    consistency: ConsistencyMetrics?,
+    summary: EvolutionSummary? = null,
     modifier: Modifier = Modifier
 ) {
-    val trainingDays = summary?.trainingDays ?: consistency?.trainingDays ?: 0
-    val currentStreak = consistency?.currentStreak ?: (if (trainingDays > 0) trainingDays else 0)
-    val averageWorkouts = summary?.averageWorkoutsPerWeek ?: consistency?.averageSessionsPerWeek ?: 0f
+    val currentStreak = consistency?.currentStreak ?: 0
+    val trainingDays = consistency?.trainingDays ?: summary?.trainingDays ?: 0
+    val averageWorkouts = consistency?.averageSessionsPerWeek ?: summary?.averageWorkoutsPerWeek ?: 0f
 
     Surface(
         color = SurfaceDark,
@@ -98,9 +98,9 @@ fun ConsistencyCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Streak / Active Days Box
+                // 1. Streak Box (Sequência Atual)
                 Surface(
                     color = SurfaceHighlight,
                     shape = RoundedCornerShape(12.dp),
@@ -109,33 +109,61 @@ fun ConsistencyCard(
                         .testTag("consistency_streak_box")
                 ) {
                     Column(
-                        modifier = Modifier.padding(14.dp)
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.Start
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
                                 text = "🔥",
-                                fontSize = 16.sp
+                                fontSize = 14.sp
                             )
                             Text(
-                                text = if (currentStreak > 0) "$currentStreak dias" else "$trainingDays dias",
+                                text = "$currentStreak dias",
                                 color = TextPrimary,
-                                fontSize = 18.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = if (currentStreak > 0) "sequência ativa" else "dias ativos",
+                            text = "sequência atual",
                             color = TextSecondary,
-                            fontSize = 12.sp
+                            fontSize = 11.sp
                         )
                     }
                 }
 
-                // Weekly Average Box
+                // 2. Active Days Box (Dias Ativos)
+                Surface(
+                    color = SurfaceHighlight,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("consistency_active_days_box")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(
+                            text = "$trainingDays dias",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "dias ativos",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                // 3. Weekly Average Box (Treinos por Semana)
                 Surface(
                     color = SurfaceHighlight,
                     shape = RoundedCornerShape(12.dp),
@@ -144,20 +172,21 @@ fun ConsistencyCard(
                         .testTag("consistency_weekly_avg_box")
                 ) {
                     Column(
-                        modifier = Modifier.padding(14.dp)
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.Start
                     ) {
                         val formattedAvg = String.format(Locale.US, "%.1f", averageWorkouts).replace('.', ',')
                         Text(
-                            text = "$formattedAvg treinos",
+                            text = formattedAvg,
                             color = TextPrimary,
-                            fontSize = 18.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "média semanal",
+                            text = "treinos / sem",
                             color = TextSecondary,
-                            fontSize = 12.sp
+                            fontSize = 11.sp
                         )
                     }
                 }

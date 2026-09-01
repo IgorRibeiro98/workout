@@ -31,7 +31,9 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             val useCase = getEvolutionSummaryUseCase 
                 ?: throw IllegalStateException("GetEvolutionSummaryUseCase not provided")
-            return EvolutionViewModel(useCase, evolutionRepository) as T
+            val repository = evolutionRepository
+                ?: throw IllegalStateException("EvolutionRepository not provided")
+            return EvolutionViewModel(useCase, repository) as T
         }
         if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

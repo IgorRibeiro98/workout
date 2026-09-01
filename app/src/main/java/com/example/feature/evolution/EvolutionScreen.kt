@@ -69,15 +69,22 @@ fun EvolutionScreen(
         ) {
             when {
                 uiState.isLoading -> {
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("evolution_loading"),
-                        contentAlignment = Alignment.Center
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
                         CircularProgressIndicator(
                             color = Lime400,
                             strokeWidth = 3.dp
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Carregando evolução...",
+                            color = TextSecondary,
+                            fontSize = 14.sp
                         )
                     }
                 }
@@ -92,9 +99,10 @@ fun EvolutionScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = uiState.error ?: "Erro ao carregar dados",
-                            color = TextSecondary,
-                            fontSize = 15.sp
+                            text = uiState.error ?: "Não foi possível carregar sua evolução.",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
@@ -102,7 +110,8 @@ fun EvolutionScreen(
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Lime400,
                                 contentColor = BackgroundDark
-                            )
+                            ),
+                            modifier = Modifier.testTag("evolution_retry_button")
                         ) {
                             Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
                             Spacer(modifier = Modifier.height(4.dp))
@@ -113,7 +122,9 @@ fun EvolutionScreen(
 
                 uiState.isEmpty -> {
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("evolution_empty_state"),
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
@@ -183,8 +194,8 @@ fun EvolutionScreen(
                         // 3. Card de Consistência
                         item {
                             ConsistencyCard(
-                                summary = summary,
-                                consistency = consistency
+                                consistency = consistency,
+                                summary = summary
                             )
                         }
 

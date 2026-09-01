@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 
 class EvolutionViewModel(
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase,
-    private val evolutionRepository: EvolutionRepository? = null
+    private val evolutionRepository: EvolutionRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EvolutionUiState(isLoading = true))
@@ -28,49 +28,32 @@ class EvolutionViewModel(
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
-                if (evolutionRepository != null) {
-                    combine(
-                        getEvolutionSummaryUseCase.asFlow(),
-                        evolutionRepository.getPerformanceEvolutionFlow(),
-                        evolutionRepository.getConsistencyMetricsFlow(),
-                        evolutionRepository.getWeightEvolutionFlow()
-                    ) { summary, performance, consistency, weightEvolution ->
-                        EvolutionUiState(
-                            isLoading = false,
-                            summary = summary,
-                            performance = performance,
-                            consistency = consistency,
-                            weightEvolution = weightEvolution,
-                            error = null
-                        )
-                    }.catch { e ->
-                        _uiState.value = EvolutionUiState(
-                            isLoading = false,
-                            error = e.message ?: "Erro ao carregar evolução"
-                        )
-                    }.collect { state ->
-                        _uiState.value = state
-                    }
-                } else {
-                    getEvolutionSummaryUseCase.asFlow()
-                        .catch { e ->
-                            _uiState.value = EvolutionUiState(
-                                isLoading = false,
-                                error = e.message ?: "Erro ao carregar evolução"
-                            )
-                        }
-                        .collect { summary ->
-                            _uiState.value = EvolutionUiState(
-                                isLoading = false,
-                                summary = summary,
-                                error = null
-                            )
-                        }
+                combine(
+                    getEvolutionSummaryUseCase.asFlow(),
+                    evolutionRepository.getPerformanceEvolutionFlow(),
+                    evolutionRepository.getConsistencyMetricsFlow(),
+                    evolutionRepository.getWeightEvolutionFlow()
+                ) { summary, performance, consistency, weightEvolution ->
+                    EvolutionUiState(
+                        isLoading = false,
+                        summary = summary,
+                        performance = performance,
+                        consistency = consistency,
+                        weightEvolution = weightEvolution,
+                        error = null
+                    )
+                }.catch { e ->
+                    _uiState.value = EvolutionUiState(
+                        isLoading = false,
+                        error = e.message ?: "Não foi possível carregar sua evolução."
+                    )
+                }.collect { state ->
+                    _uiState.value = state
                 }
             } catch (e: Exception) {
                 _uiState.value = EvolutionUiState(
                     isLoading = false,
-                    error = e.message ?: "Erro ao carregar evolução"
+                    error = e.message ?: "Não foi possível carregar sua evolução."
                 )
             }
         }

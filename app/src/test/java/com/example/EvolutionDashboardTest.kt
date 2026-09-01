@@ -11,7 +11,7 @@ import com.example.feature.evolution.EvolutionViewModel
 import com.example.feature.evolution.state.EvolutionUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -42,117 +42,60 @@ class EvolutionDashboardTest {
     }
 
     /**
-     * T12.1 Validação 1: Usuário sem dados
-     * Resultado esperado: Estado vazio (isEmpty = true, cards zerados ocultados)
+     * T12.1A Teste 1 — Repository obrigatório
+     * ViewModel é instanciado com useCase e repository obrigatórios, sem fallback nulo.
      */
     @Test
-    fun testEmptyState_UserWithoutData() = runTest {
-        val emptySummary = EvolutionSummary(
-            currentWeight = null,
-            initialWeight = null,
-            weightChange = null,
-            totalWorkoutSessions = 0,
-            trainingDays = 0,
-            averageWorkoutsPerWeek = 0f,
-            totalExercisesPerformed = 0,
-            generatedAt = System.currentTimeMillis()
+    fun testEvolutionRepositoryMandatory() = runTest {
+        val fakeRepo = createFakeRepo(
+            summary = EvolutionSummary(
+                currentWeight = 85f,
+                initialWeight = 85f,
+                weightChange = 0f,
+                totalWorkoutSessions = 10,
+                trainingDays = 8,
+                averageWorkoutsPerWeek = 3.0f,
+                totalExercisesPerformed = 50,
+                generatedAt = 1000L
+            )
         )
+        val useCase = GetEvolutionSummaryUseCase(fakeRepo)
+        val viewModel = EvolutionViewModel(useCase, fakeRepo)
 
-        val emptyState = EvolutionUiState(
-            isLoading = false,
-            summary = emptySummary,
-            performance = PerformanceEvolution(0, 0, 0, 0, 0f),
-            consistency = ConsistencyMetrics(0, 0, 0, 0, 0f)
-        )
+        advanceUntilIdle()
 
-        assertTrue(emptyState.isEmpty)
-        assertFalse(emptyState.isLoading)
-        assertNull(emptyState.summary?.currentWeight)
-        assertEquals(0, emptyState.summary?.totalWorkoutSessions)
+        val state = viewModel.uiState.value
+        assertFalse(state.isLoading)
+        assertNotNull(state.summary)
+        assertNotNull(state.performance)
+        assertNotNull(state.consistency)
+        assertNotNull(state.weightEvolution)
     }
 
     /**
-     * T12.1 Validação 2: Usuário com peso
-     * Entrada: 90kg, 88kg
-     * Esperado: 88kg atual, -2kg variação
+     * T12.1A Teste 2 — Streak e Dias Ativos separados
+     * Dados: 30 dias treinados, 0 dias consecutivos
+     * Esperado: 30 dias ativos, 🔥 0 dias sequência (sem fallback de streak para dias ativos)
      */
     @Test
-    fun testWeightCardData_WithWeightLoss() = runTest {
-        val summaryWithWeight = EvolutionSummary(
-            currentWeight = 88.0f,
-            initialWeight = 90.0f,
-            weightChange = -2.0f,
-            totalWorkoutSessions = 5,
-            trainingDays = 5,
-            averageWorkoutsPerWeek = 2.5f,
-            totalExercisesPerformed = 20,
-            generatedAt = System.currentTimeMillis()
-        )
-
-        val state = EvolutionUiState(
-            isLoading = false,
-            summary = summaryWithWeight
-        )
-
-        assertFalse(state.isEmpty)
-        assertEquals(88.0f, state.summary?.currentWeight ?: 0f, 0.01f)
-        assertEquals(90.0f, state.summary?.initialWeight ?: 0f, 0.01f)
-        assertEquals(-2.0f, state.summary?.weightChange ?: 0f, 0.01f)
-    }
-
-    /**
-     * T12.1 Validação 3: Usuário com treinos
-     * Entrada: 50 sessões
-     * Esperado: 50 treinos concluídos
-     */
-    @Test
-    fun testWorkoutsMetricData_With50Sessions() = runTest {
-        val summaryWithWorkouts = EvolutionSummary(
-            currentWeight = 75.0f,
-            initialWeight = 75.0f,
-            weightChange = 0.0f,
-            totalWorkoutSessions = 50,
-            trainingDays = 40,
-            averageWorkoutsPerWeek = 4.2f,
-            totalExercisesPerformed = 380,
-            generatedAt = System.currentTimeMillis()
-        )
-
-        val state = EvolutionUiState(
-            isLoading = false,
-            summary = summaryWithWorkouts
-        )
-
-        assertFalse(state.isEmpty)
-        assertEquals(50, state.summary?.totalWorkoutSessions)
-        assertEquals(40, state.summary?.trainingDays)
-        assertEquals(380, state.summary?.totalExercisesPerformed)
-    }
-
-    /**
-     * T12.1 Validação 4: Usuário com consistência
-     * Entrada: currentStreak = 10
-     * Esperado: 🔥 10 dias de sequência ativa
-     */
-    @Test
-    fun testConsistencyCardData_With10DaysStreak() = runTest {
+    fun testStreakAndActiveDaysSeparation() = runTest {
         val consistencyMetrics = ConsistencyMetrics(
-            trainingDays = 15,
-            currentStreak = 10,
-            longestStreak = 10,
-            monthlySessions = 12,
-            averageSessionsPerWeek = 4.5f
+            trainingDays = 30,
+            currentStreak = 0,
+            longestStreak = 12,
+            monthlySessions = 20,
+            averageSessionsPerWeek = 4.0f
         )
 
         val summary = EvolutionSummary(
             currentWeight = 80f,
-            initialWeight = 82f,
-            weightChange = -2f,
-            totalWorkoutSessions = 15,
-            trainingDays = 15,
-            averageWorkoutsPerWeek = 4.5f,
-            totalExercisesPerformed = 60,
-            generatedAt = System.currentTimeMillis()
+            initialWeight = 80f,
+            weightChange = 0f,
+            totalWorkoutSessions = 30,
+            trainingDays = 30,
+            averageWorkoutsPerWeek = 4.0f,
+            totalExercisesPerformed = 200,
+            generatedAt = 1000L
         )
 
         val state = EvolutionUiState(
@@ -162,57 +105,52 @@ class EvolutionDashboardTest {
         )
 
         assertFalse(state.isEmpty)
-        assertEquals(10, state.consistency?.currentStreak)
-        assertEquals(15, state.consistency?.trainingDays)
-        assertEquals(4.5f, state.consistency?.averageSessionsPerWeek ?: 0f, 0.01f)
+        // Streak deve ser 0 e NÃO 30
+        assertEquals(0, state.consistency?.currentStreak)
+        // Dias ativos deve ser 30
+        assertEquals(30, state.consistency?.trainingDays)
     }
 
     /**
-     * T12.1 Validação 5: EvolutionViewModel orquestração
+     * T12.1A Teste 3 — Evolução completa
+     * Entrada: Peso 90 -> 88, Treinos 40, Volume 100000
+     * Esperado: Dashboard carregado
      */
     @Test
-    fun testEvolutionViewModel_FlowObservation() = runTest {
-        val fakeRepo = object : EvolutionRepository {
-            override suspend fun getEvolutionSummary() = EvolutionSummary(
-                currentWeight = 88.4f,
-                initialWeight = 90.1f,
-                weightChange = -1.7f,
-                totalWorkoutSessions = 48,
-                trainingDays = 42,
-                averageWorkoutsPerWeek = 4.2f,
-                totalExercisesPerformed = 380,
+    fun testCompleteEvolutionData() = runTest {
+        val fakeRepo = createFakeRepo(
+            summary = EvolutionSummary(
+                currentWeight = 88.0f,
+                initialWeight = 90.0f,
+                weightChange = -2.0f,
+                totalWorkoutSessions = 40,
+                trainingDays = 35,
+                averageWorkoutsPerWeek = 4.0f,
+                totalExercisesPerformed = 300,
                 generatedAt = 1000L
-            )
-
-            override suspend fun getWeightEvolution() = WeightEvolution(
-                firstWeight = 90.1f,
-                currentWeight = 88.4f,
-                variation = -1.7f,
-                measurementsCount = 4,
+            ),
+            weight = WeightEvolution(
+                firstWeight = 90.0f,
+                currentWeight = 88.0f,
+                variation = -2.0f,
+                measurementsCount = 5,
                 trend = WeightTrend.DOWN
+            ),
+            performance = PerformanceEvolution(
+                totalSessions = 40,
+                totalExercises = 300,
+                totalSets = 350,
+                totalRepetitions = 3500,
+                totalVolume = 100000f
+            ),
+            consistency = ConsistencyMetrics(
+                trainingDays = 35,
+                currentStreak = 5,
+                longestStreak = 10,
+                monthlySessions = 16,
+                averageSessionsPerWeek = 4.0f
             )
-
-            override suspend fun getPerformanceEvolution() = PerformanceEvolution(
-                totalSessions = 48,
-                totalExercises = 380,
-                totalSets = 420,
-                totalRepetitions = 4200,
-                totalVolume = 125400f
-            )
-
-            override suspend fun getConsistencyMetrics() = ConsistencyMetrics(
-                trainingDays = 42,
-                currentStreak = 12,
-                longestStreak = 14,
-                monthlySessions = 18,
-                averageSessionsPerWeek = 4.2f
-            )
-
-            override fun getEvolutionSummaryFlow() = kotlinx.coroutines.flow.flow { emit(getEvolutionSummary()) }
-            override fun getWeightEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getWeightEvolution()) }
-            override fun getPerformanceEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getPerformanceEvolution()) }
-            override fun getConsistencyMetricsFlow() = kotlinx.coroutines.flow.flow { emit(getConsistencyMetrics()) }
-        }
+        )
 
         val useCase = GetEvolutionSummaryUseCase(fakeRepo)
         val viewModel = EvolutionViewModel(useCase, fakeRepo)
@@ -221,24 +159,65 @@ class EvolutionDashboardTest {
 
         val state = viewModel.uiState.value
         assertFalse(state.isLoading)
-        assertNull(state.error)
-        assertNotNull(state.summary)
         assertFalse(state.isEmpty)
+        assertNull(state.error)
 
-        // Validate summary values
-        assertEquals(88.4f, state.summary?.currentWeight ?: 0f, 0.01f)
-        assertEquals(90.1f, state.summary?.initialWeight ?: 0f, 0.01f)
-        assertEquals(-1.7f, state.summary?.weightChange ?: 0f, 0.01f)
-        assertEquals(48, state.summary?.totalWorkoutSessions)
-        assertEquals(42, state.summary?.trainingDays)
-        assertEquals(380, state.summary?.totalExercisesPerformed)
+        assertEquals(88.0f, state.summary?.currentWeight ?: 0f, 0.01f)
+        assertEquals(90.0f, state.summary?.initialWeight ?: 0f, 0.01f)
+        assertEquals(-2.0f, state.summary?.weightChange ?: 0f, 0.01f)
+        assertEquals(40, state.summary?.totalWorkoutSessions)
+        assertEquals(100000f, state.performance?.totalVolume ?: 0f, 0.01f)
+        assertEquals(5, state.consistency?.currentStreak)
+        assertEquals(35, state.consistency?.trainingDays)
+    }
 
-        // Validate performance values
-        assertEquals(125400f, state.performance?.totalVolume ?: 0f, 0.01f)
-        assertEquals(420, state.performance?.totalSets)
+    /**
+     * T12.1A Teste 4 — Usuário novo (Sem dados)
+     * Esperado: Estado vazio (isEmpty = true)
+     */
+    @Test
+    fun testEmptyState_NewUser() = runTest {
+        val emptySummary = EvolutionSummary(
+            currentWeight = null,
+            initialWeight = null,
+            weightChange = null,
+            totalWorkoutSessions = 0,
+            trainingDays = 0,
+            averageWorkoutsPerWeek = 0f,
+            totalExercisesPerformed = 0,
+            generatedAt = 1000L
+        )
 
-        // Validate consistency values
-        assertEquals(12, state.consistency?.currentStreak)
-        assertEquals(4.2f, state.consistency?.averageSessionsPerWeek ?: 0f, 0.01f)
+        val emptyState = EvolutionUiState(
+            isLoading = false,
+            summary = emptySummary,
+            performance = PerformanceEvolution(0, 0, 0, 0, 0f),
+            consistency = ConsistencyMetrics(0, 0, 0, 0, 0f),
+            weightEvolution = WeightEvolution(null, null, 0f, 0, WeightTrend.STABLE)
+        )
+
+        assertTrue(emptyState.isEmpty)
+        assertFalse(emptyState.isLoading)
+        assertNull(emptyState.summary?.currentWeight)
+        assertEquals(0, emptyState.summary?.totalWorkoutSessions)
+    }
+
+    private fun createFakeRepo(
+        summary: EvolutionSummary = EvolutionSummary(null, null, null, 0, 0, 0f, 0, 0L),
+        weight: WeightEvolution = WeightEvolution(null, null, 0f, 0, WeightTrend.STABLE),
+        performance: PerformanceEvolution = PerformanceEvolution(0, 0, 0, 0, 0f),
+        consistency: ConsistencyMetrics = ConsistencyMetrics(0, 0, 0, 0, 0f)
+    ): EvolutionRepository {
+        return object : EvolutionRepository {
+            override suspend fun getEvolutionSummary() = summary
+            override suspend fun getWeightEvolution() = weight
+            override suspend fun getPerformanceEvolution() = performance
+            override suspend fun getConsistencyMetrics() = consistency
+
+            override fun getEvolutionSummaryFlow() = flow { emit(summary) }
+            override fun getWeightEvolutionFlow() = flow { emit(weight) }
+            override fun getPerformanceEvolutionFlow() = flow { emit(performance) }
+            override fun getConsistencyMetricsFlow() = flow { emit(consistency) }
+        }
     }
 }
