@@ -7,6 +7,7 @@ import com.example.data.repository.BodyMeasurementRepository
 import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
 import com.example.domain.evolution.repository.EvolutionRepository
+import com.example.domain.evolution.repository.PerformanceRepository
 import com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
 import com.example.feature.evolution.EvolutionViewModel
 import com.example.presentation.body.BodyEvolutionViewModel
@@ -24,7 +25,8 @@ class MainViewModelFactory(
     private val notificationManager: WorkoutNotificationManager,
     private val bodyMeasurementRepository: BodyMeasurementRepository,
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase? = null,
-    private val evolutionRepository: EvolutionRepository? = null
+    private val evolutionRepository: EvolutionRepository? = null,
+    private val performanceRepository: PerformanceRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -33,7 +35,7 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("GetEvolutionSummaryUseCase not provided")
             val repository = evolutionRepository
                 ?: throw IllegalStateException("EvolutionRepository not provided")
-            return EvolutionViewModel(useCase, repository) as T
+            return EvolutionViewModel(useCase, repository, performanceRepository) as T
         }
         if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

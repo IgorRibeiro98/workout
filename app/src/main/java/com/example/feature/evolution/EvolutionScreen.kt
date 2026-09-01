@@ -36,9 +36,9 @@ import com.example.feature.evolution.components.ConsistencyCard
 import com.example.feature.evolution.components.EmptyEvolutionCard
 import com.example.feature.evolution.components.EvolutionHeader
 import com.example.feature.evolution.components.EvolutionMetricCard
-import com.example.feature.evolution.components.PerformanceCard
 import com.example.feature.evolution.components.WeightEvolutionCard
 import com.example.feature.evolution.components.body.BodyEvolutionSection
+import com.example.feature.evolution.components.performance.PerformanceSection
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
@@ -200,15 +200,7 @@ fun EvolutionScreen(
                             )
                         }
 
-                        // 4. Card de Performance
-                        item {
-                            PerformanceCard(
-                                performance = performance,
-                                summary = summary
-                            )
-                        }
-
-                        // 5. Seção de Evolução Corporal
+                        // 4. Seção de Evolução Corporal
                         item {
                             BodyEvolutionSection(
                                 measurements = uiState.measurements,
@@ -219,6 +211,16 @@ fun EvolutionScreen(
                                 bmi = uiState.bmi,
                                 bmiCategory = uiState.bmiCategory,
                                 onRegisterMeasurementClick = onNavigateToBodyEvolution
+                            )
+                        }
+
+                        // 5. Seção de Performance de Treino
+                        item {
+                            PerformanceSection(
+                                summary = uiState.performanceSummary,
+                                exercises = uiState.exerciseEvolutions,
+                                records = uiState.personalRecords,
+                                volumeHistory = uiState.volumeHistory
                             )
                         }
 

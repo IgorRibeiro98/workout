@@ -66,7 +66,8 @@ fun MainScreen() {
         notificationManager = app.notificationManager,
         bodyMeasurementRepository = app.bodyMeasurementRepository,
         getEvolutionSummaryUseCase = app.getEvolutionSummaryUseCase,
-        evolutionRepository = app.evolutionRepository
+        evolutionRepository = app.evolutionRepository,
+        performanceRepository = app.performanceRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
