@@ -12,6 +12,10 @@ class BodyMeasurementRepository(
     val allMeasurements: Flow<List<BodyMeasurementEntity>> = dao.getAllMeasurements()
     val latestMeasurement: Flow<BodyMeasurementEntity?> = dao.getLatestMeasurement()
 
+    suspend fun getAllMeasurementsSync(): List<BodyMeasurementEntity> = withContext(Dispatchers.IO) {
+        dao.getAllMeasurementsSync()
+    }
+
     suspend fun getMeasurementById(id: Long): BodyMeasurementEntity? = withContext(Dispatchers.IO) {
         dao.getMeasurementByIdSync(id)
     }

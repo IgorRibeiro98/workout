@@ -27,6 +27,12 @@ class MainApplication : Application(), ImageLoaderFactory {
 
     lateinit var bodyMeasurementRepository: com.example.data.repository.BodyMeasurementRepository
         internal set
+
+    lateinit var evolutionRepository: com.example.domain.evolution.repository.EvolutionRepository
+        internal set
+
+    lateinit var getEvolutionSummaryUseCase: com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
+        internal set
         
     lateinit var settingsManager: SettingsManager
         internal set
@@ -43,6 +49,8 @@ class MainApplication : Application(), ImageLoaderFactory {
         settingsManager = SettingsManager(this)
         repository = WorkoutRepository(database.workoutDao(), settingsManager = settingsManager)
         bodyMeasurementRepository = com.example.data.repository.BodyMeasurementRepository(database.bodyMeasurementDao())
+        evolutionRepository = com.example.data.repository.EvolutionRepositoryImpl(bodyMeasurementRepository, database.workoutDao())
+        getEvolutionSummaryUseCase = com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase(evolutionRepository)
         workoutEngine = WorkoutEngine(database.workoutDao(), settingsManager)
         notificationManager = WorkoutNotificationManager(this)
 
