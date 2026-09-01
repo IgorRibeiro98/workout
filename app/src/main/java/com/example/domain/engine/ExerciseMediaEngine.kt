@@ -50,11 +50,68 @@ class ExerciseMediaEngine(
     private val dao: WorkoutDao? = null,
     private val context: Context? = null
 ) {
+    private val localProvider = com.example.domain.provider.LocalManifestProvider()
+
     constructor(
         dao: WorkoutDao,
         remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource(),
         context: Context? = null
     ) : this(ExerciseMediaRepository(dao, remoteDataSource, context), dao, context)
+
+    suspend fun resolveExerciseMedia(
+        exercise: ExerciseEntity?,
+        override: com.example.data.local.ExerciseUserOverrideEntity? = null,
+        externalProvider: com.example.domain.provider.ExerciseMediaProvider? = null,
+        showGifs: Boolean = true
+    ): com.example.domain.provider.MediaResult {
+        if (exercise == null) return com.example.domain.provider.MediaResult()
+
+        // 1. Mídia local Premium
+        if (showGifs && !exercise.gifUrl.isNullOrBlank()) {
+            return com.example.domain.provider.MediaResult(
+                mediaUri = exercise.gifUrl,
+                isGif = true,
+                providerName = "Local Premium Manifest",
+                externalId = exercise.externalExerciseId,
+                isSuccess = true
+            )
+        }
+        if (!exercise.mediaUrl.isNullOrBlank()) {
+            return com.example.domain.provider.MediaResult(
+                mediaUri = exercise.mediaUrl,
+                isGif = false,
+                providerName = "Local Premium Media",
+                isSuccess = true
+            )
+        }
+
+        // 2. Override do usuário
+        val customPhoto = override?.customPhotoUri ?: exercise.customPhotoUri
+        if (!customPhoto.isNullOrBlank()) {
+            return com.example.domain.provider.MediaResult(
+                mediaUri = customPhoto,
+                isCustomPhoto = true,
+                providerName = "User Custom Photo",
+                isSuccess = true
+            )
+        }
+
+        // 3. Provider externo habilitado
+        if (externalProvider != null && externalProvider.isEnabled) {
+            val query = exercise.exerciseDbSearch ?: exercise.name
+            val remoteRes = externalProvider.searchMedia(exercise.id.toString(), exercise.name, query)
+            if (remoteRes.isSuccess && !remoteRes.mediaUri.isNullOrBlank()) {
+                return remoteRes
+            }
+        }
+
+        // 4. Fallback sem mídia
+        return com.example.domain.provider.MediaResult(
+            providerName = "Fallback",
+            isSuccess = false,
+            errorMessage = "Sem mídia disponível"
+        )
+    }
 
     suspend fun syncExerciseGifs(
         onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }

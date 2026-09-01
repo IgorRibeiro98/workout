@@ -42,6 +42,14 @@ import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.BottomSheetActionItem
 import com.example.ui.components.SelectionBottomSheet
 import com.example.ui.theme.*
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import com.example.data.datastore.IntegrationSettings
+import com.example.data.datastore.SyncStatus
+import com.example.data.remote.NetworkTestResult
+import com.example.domain.engine.ExerciseMediaSyncManager
 import kotlinx.coroutines.launch
 
 private sealed class SettingsSheetType {
@@ -52,6 +60,7 @@ private sealed class SettingsSheetType {
     object WeeklyGoal : SettingsSheetType()
     object ManageData : SettingsSheetType()
     object ConfirmReimportCatalog : SettingsSheetType()
+    object ExerciseDbIntegration : SettingsSheetType()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,6 +77,10 @@ fun SettingsScreen() {
     val premiumImporter = PremiumManifestImporter(db, context)
 
     val mediaEngine = ExerciseMediaEngine(db.workoutDao(), context = context)
+
+    val syncManager = remember { ExerciseMediaSyncManager(db.workoutDao(), settingsManager, context) }
+    val integrationSettings by settingsManager.integrationSettingsFlow.collectAsState(initial = IntegrationSettings())
+    val syncStatus by syncManager.syncStatusFlow.collectAsState(initial = SyncStatus.DISABLED)
 
     var activeSheet by remember { mutableStateOf<SettingsSheetType?>(null) }
     
@@ -264,6 +277,18 @@ fun SettingsScreen() {
         
         Spacer(modifier = Modifier.height(28.dp))
         
+        Text("Integrações", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsValueItem(
+            title = "ExerciseDB",
+            valueText = if (integrationSettings.exerciseDbEnabled) "Ativado" else "Desativado",
+            subtitle = "Provedor opcional de mídia remota",
+            onClick = { activeSheet = SettingsSheetType.ExerciseDbIntegration }
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
         Text("Dados e Importação", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
         
@@ -457,6 +482,15 @@ fun SettingsScreen() {
                 }
             }
         }
+        is SettingsSheetType.ExerciseDbIntegration -> {
+            ExerciseDbIntegrationSheet(
+                integrationSettings = integrationSettings,
+                syncStatus = syncStatus,
+                syncManager = syncManager,
+                settingsManager = settingsManager,
+                onDismissRequest = { activeSheet = null }
+            )
+        }
         else -> {}
     }
     
@@ -646,4 +680,201 @@ private fun SettingsActionItem(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExerciseDbIntegrationSheet(
+    integrationSettings: IntegrationSettings,
+    syncStatus: SyncStatus,
+    syncManager: ExerciseMediaSyncManager,
+    settingsManager: com.example.data.datastore.SettingsManager,
+    onDismissRequest: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var isSyncing by remember { mutableStateOf(false) }
+    var syncMessage by remember { mutableStateOf("") }
+
+    var testDialogTitle by remember { mutableStateOf("") }
+    var testDialogMsg by remember { mutableStateOf("") }
+    var showTestDialog by remember { mutableStateOf(false) }
+
+    AppModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        title = "ExerciseDB",
+        subtitle = "Integração opcional para enriquecimento de mídia (OSS)"
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(bottom = 16.dp)
+        ) {
+            // 1. Usar dados externos (Switch)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceDark, shape = RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(
+                        text = "Usar dados externos",
+                        color = TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Provedor externo opcional (ExerciseDB OSS) para buscar GIFs",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = integrationSettings.exerciseDbEnabled,
+                    onCheckedChange = { enabled ->
+                        coroutineScope.launch {
+                            settingsManager.setExerciseDbEnabled(enabled)
+                        }
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Lime400,
+                        checkedTrackColor = Lime400.copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            // 2. Sincronização automática (Switch)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceDark, shape = RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(
+                        text = "Sincronização automática",
+                        color = TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Atualizar mídias automaticamente ao atualizar catálogo",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = integrationSettings.autoSyncEnabled,
+                    onCheckedChange = { enabled ->
+                        coroutineScope.launch {
+                            settingsManager.setAutoSyncEnabled(enabled)
+                        }
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Lime400,
+                        checkedTrackColor = Lime400.copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            // 3. Status e Última sincronização
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceDark, shape = RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Status:", color = TextSecondary, fontSize = 12.sp)
+                    val statusText = when (syncStatus) {
+                        SyncStatus.DISABLED -> "Desativado"
+                        SyncStatus.READY -> "Pronto"
+                        SyncStatus.SYNCING -> "Sincronizando..."
+                        SyncStatus.SUCCESS -> "✓ Sincronizado"
+                        SyncStatus.ERROR -> "⚠ Erro de conexão"
+                    }
+                    val statusColor = when (syncStatus) {
+                        SyncStatus.DISABLED -> TextSecondary
+                        SyncStatus.READY, SyncStatus.SUCCESS -> Lime400
+                        SyncStatus.SYNCING -> Color(0xFFFFB74D)
+                        SyncStatus.ERROR -> Color(0xFFEF5350)
+                    }
+                    Text(statusText, color = statusColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Última sincronização:", color = TextSecondary, fontSize = 12.sp)
+                    val formattedDate = formatTimestamp(integrationSettings.lastSyncTimestamp)
+                    Text(formattedDate, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+
+            // 4. Sincronizar agora button
+            Button(
+                onClick = {
+                    if (!isSyncing) {
+                        isSyncing = true
+                        syncMessage = "Iniciando sincronização..."
+                        coroutineScope.launch {
+                            val result = syncManager.syncNow { cur, tot ->
+                                syncMessage = "Processando $cur de $tot..."
+                            }
+                            isSyncing = false
+                            testDialogTitle = "Sincronização Finalizada"
+                            testDialogMsg = if (result.isOffline) {
+                                "Não foi possível conectar ao ExerciseDB.\nVerifique sua conexão de internet."
+                            } else if (result.errors.isNotEmpty()) {
+                                "Sincronização concluída com avisos:\n${result.errors.joinToString("\n")}"
+                            } else {
+                                "Sincronização realizada com sucesso!\n\n" +
+                                        "Mapeados: ${result.matched}\n" +
+                                        "Já atualizados: ${result.alreadyUpToDate}\n" +
+                                        "Não encontrados: ${result.notFound}"
+                            }
+                            showTestDialog = true
+                        }
+                    }
+                },
+                enabled = integrationSettings.exerciseDbEnabled && !isSyncing,
+                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                if (isSyncing) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BackgroundDark, strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(syncMessage, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Sincronizar agora", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+            }
+        }
+    }
+
+    if (showTestDialog) {
+        AlertDialog(
+            onDismissRequest = { showTestDialog = false },
+            title = { Text(testDialogTitle, color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text(testDialogMsg, color = TextSecondary, fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = { showTestDialog = false }) {
+                    Text("OK", color = Lime400, fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = SurfaceDark
+        )
+    }
+}
+
+private fun formatTimestamp(ts: Long?): String {
+    if (ts == null || ts == 0L) return "Nunca"
+    val sdf = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(ts))
 }

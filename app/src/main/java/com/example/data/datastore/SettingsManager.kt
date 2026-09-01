@@ -33,6 +33,62 @@ class SettingsManager(private val context: Context) {
         val INSTALLED_CATALOG_CONTENT_VERSION = intPreferencesKey("installed_catalog_content_version")
         val LAST_MEDIA_SYNC_AT = longPreferencesKey("last_media_sync_at")
         val MEDIA_SYNC_CONTENT_VERSION = intPreferencesKey("media_sync_content_version")
+        val EXERCISE_DB_ENABLED = booleanPreferencesKey("exercise_db_enabled")
+        val AUTO_SYNC_ENABLED = booleanPreferencesKey("auto_sync_enabled")
+        val MEDIA_SYNC_ENABLED = booleanPreferencesKey("media_sync_enabled")
+        val LAST_SYNC_STATUS = stringPreferencesKey("last_sync_status")
+    }
+
+    val mediaProviderSettingsFlow: Flow<MediaProviderSettings> = context.dataStore.data.map { prefs ->
+        val enabled = prefs[EXERCISE_DB_ENABLED] ?: false
+        val autoSync = prefs[AUTO_SYNC_ENABLED] ?: false
+        val syncEnabled = prefs[MEDIA_SYNC_ENABLED] ?: false
+        val lastSyncAt = prefs[LAST_MEDIA_SYNC_AT]
+        val statusStr = prefs[LAST_SYNC_STATUS]
+        val status = try {
+            if (statusStr != null) SyncStatus.valueOf(statusStr) else if (enabled) SyncStatus.READY else SyncStatus.DISABLED
+        } catch (e: Exception) {
+            if (enabled) SyncStatus.READY else SyncStatus.DISABLED
+        }
+
+        MediaProviderSettings(
+            exerciseDbEnabled = enabled,
+            autoSyncEnabled = autoSync,
+            mediaSyncEnabled = syncEnabled,
+            lastSyncTimestamp = lastSyncAt,
+            lastSyncStatus = status
+        )
+    }
+
+    val integrationSettingsFlow: Flow<IntegrationSettings> = mediaProviderSettingsFlow
+
+    suspend fun setExerciseDbEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[EXERCISE_DB_ENABLED] = enabled
+            if (!enabled) {
+                prefs[LAST_SYNC_STATUS] = SyncStatus.DISABLED.name
+            } else if (prefs[LAST_SYNC_STATUS] == SyncStatus.DISABLED.name || prefs[LAST_SYNC_STATUS] == null) {
+                prefs[LAST_SYNC_STATUS] = SyncStatus.READY.name
+            }
+        }
+    }
+
+    suspend fun setAutoSyncEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[AUTO_SYNC_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setMediaSyncEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[MEDIA_SYNC_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setLastSyncStatus(status: SyncStatus) {
+        context.dataStore.edit { prefs ->
+            prefs[LAST_SYNC_STATUS] = status.name
+        }
     }
 
     val weeklyGoalFlow: Flow<Int> = context.dataStore.data.map { it[WEEKLY_GOAL] ?: 5 }

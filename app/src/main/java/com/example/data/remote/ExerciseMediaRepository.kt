@@ -15,10 +15,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class ExerciseMediaRepository(
-    private val workoutDao: WorkoutDao,
+    private val workoutDao: WorkoutDao?,
     private val remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource(),
     private val context: Context? = null
 ) {
+    constructor(remoteDataSource: ExerciseRemoteDataSource) : this(null, remoteDataSource, null)
 
     private fun isOnline(): Boolean {
         if (context == null) return true
@@ -54,7 +55,7 @@ class ExerciseMediaRepository(
         }
 
         val exercises = try {
-            workoutDao.getAllExercisesSync()
+            workoutDao?.getAllExercisesSync() ?: emptyList()
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e("ExerciseDB_SYNC", "[ExerciseDB_SYNC] Database error: ${e.message}", e)
@@ -111,7 +112,7 @@ class ExerciseMediaRepository(
                             lastVerifiedAt = System.currentTimeMillis(),
                             mappingStatus = ExerciseMatchStatus.MATCHED.name
                         )
-                        workoutDao.updateExercise(updatedEntity)
+                        workoutDao?.updateExercise(updatedEntity)
                         alreadyUpToDateCount++
                         Log.d("ExerciseDB_SYNC", """
                             [ExerciseDB_SYNC]
@@ -192,7 +193,7 @@ class ExerciseMediaRepository(
                             lastVerifiedAt = System.currentTimeMillis(),
                             mappingStatus = ExerciseMatchStatus.MATCHED.name
                         )
-                        workoutDao.updateExercise(updatedEntity)
+                        workoutDao?.updateExercise(updatedEntity)
                         matchedCount++
                         
                         matchLog.appendLine("Resultado: MATCHED")
@@ -221,7 +222,7 @@ class ExerciseMediaRepository(
                 val updatedEntity = exercise.copy(
                     mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
                 )
-                workoutDao.updateExercise(updatedEntity)
+                workoutDao?.updateExercise(updatedEntity)
                 notFoundCount++
                 Log.d("ExerciseDB_SYNC", """
                     [ExerciseDB_SYNC]
