@@ -252,14 +252,27 @@ fun ExecutionScreen(
                     ExecutionPhase.ACTIVE_SET -> {
                         val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
                         if (activeSet != null) {
-                            val activeSetKey = "${currentEx.exerciseSession.id}_${activeSet.id}_${state.activeSetIndex ?: 0}"
                             AnimatedContent(
-                                targetState = activeSetKey,
+                                targetState = Pair(state.currentExerciseIndex, state.activeSetIndex ?: 0),
                                 transitionSpec = {
-                                    (fadeIn(animationSpec = tween(AppMotion.Normal, easing = AppMotion.StandardEasing)) +
-                                     scaleIn(initialScale = 0.97f, animationSpec = tween(AppMotion.Normal, easing = AppMotion.StandardEasing))) togetherWith
-                                    (fadeOut(animationSpec = tween(AppMotion.Fast, easing = AppMotion.DecelerateEasing)) +
-                                     scaleOut(targetScale = 1.02f, animationSpec = tween(AppMotion.Fast, easing = AppMotion.DecelerateEasing)))
+                                    if (targetState.first != initialState.first) {
+                                        if (targetState.first > initialState.first) {
+                                            (slideInHorizontally(animationSpec = tween(280, easing = AppMotion.StandardEasing)) { width -> width / 3 } +
+                                             fadeIn(animationSpec = tween(280))) togetherWith
+                                            (slideOutHorizontally(animationSpec = tween(220, easing = AppMotion.DecelerateEasing)) { width -> -width / 3 } +
+                                             fadeOut(animationSpec = tween(220)))
+                                        } else {
+                                            (slideInHorizontally(animationSpec = tween(280, easing = AppMotion.StandardEasing)) { width -> -width / 3 } +
+                                             fadeIn(animationSpec = tween(280))) togetherWith
+                                            (slideOutHorizontally(animationSpec = tween(220, easing = AppMotion.DecelerateEasing)) { width -> width / 3 } +
+                                             fadeOut(animationSpec = tween(220)))
+                                        }
+                                    } else {
+                                        (fadeIn(animationSpec = tween(250, easing = AppMotion.StandardEasing)) +
+                                         scaleIn(initialScale = 0.96f, animationSpec = tween(250, easing = AppMotion.StandardEasing))) togetherWith
+                                        (fadeOut(animationSpec = tween(200, easing = AppMotion.DecelerateEasing)) +
+                                         scaleOut(targetScale = 1.03f, animationSpec = tween(200, easing = AppMotion.DecelerateEasing)))
+                                    }
                                 },
                                 label = "ActiveSetTransition"
                             ) { _ ->

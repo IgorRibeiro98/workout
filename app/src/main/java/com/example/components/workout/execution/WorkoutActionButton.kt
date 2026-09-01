@@ -27,15 +27,16 @@ import kotlinx.coroutines.delay
 fun WorkoutActionButton(
     onClick: () -> Unit,
     text: String = "CONCLUIR SÉRIE",
+    completedText: String = "✓ SÉRIE CONCLUÍDA",
     enabled: Boolean = true,
     hapticEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
-    var isClicked by remember { mutableStateOf(false) }
+    var isConfirming by remember { mutableStateOf(false) }
 
     val buttonScale by animateFloatAsState(
-        targetValue = if (isClicked) 0.94f else 1f,
+        targetValue = if (isConfirming) 0.95f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessHigh
@@ -43,28 +44,22 @@ fun WorkoutActionButton(
         label = "workout_button_scale"
     )
 
-    LaunchedEffect(isClicked) {
-        if (isClicked) {
-            delay(150)
-            isClicked = false
-        }
-    }
-
     Button(
         onClick = {
-            isClicked = true
-            if (hapticEnabled) {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (!isConfirming) {
+                isConfirming = true
+                if (hapticEnabled) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                }
             }
-            onClick()
         },
-        enabled = enabled,
+        enabled = enabled && !isConfirming,
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = Lime400,
+            containerColor = if (isConfirming) Lime400 else Lime400,
             contentColor = BackgroundDark,
-            disabledContainerColor = SurfaceDark,
-            disabledContentColor = TextSecondary
+            disabledContainerColor = if (isConfirming) Lime400 else SurfaceDark,
+            disabledContentColor = if (isConfirming) BackgroundDark else TextSecondary
         ),
         modifier = modifier
             .fillMaxWidth()
@@ -72,13 +67,21 @@ fun WorkoutActionButton(
             .scale(buttonScale)
             .testTag("complete_set_button")
     ) {
+        LaunchedEffect(isConfirming) {
+            if (isConfirming) {
+                delay(400)
+                onClick()
+                isConfirming = false
+            }
+        }
+
         AnimatedContent(
-            targetState = isClicked,
+            targetState = isConfirming,
             transitionSpec = {
                 (scaleIn() + fadeIn()) togetherWith (scaleOut() + fadeOut())
             },
             label = "button_icon_animation"
-        ) { clicked ->
+        ) { confirming ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
@@ -90,7 +93,7 @@ fun WorkoutActionButton(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (clicked) "REGISTRADO!" else text,
+                    text = if (confirming) completedText else text,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Black
                 )
@@ -98,3 +101,4 @@ fun WorkoutActionButton(
         }
     }
 }
+
