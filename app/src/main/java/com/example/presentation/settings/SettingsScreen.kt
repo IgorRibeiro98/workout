@@ -58,6 +58,11 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import com.example.data.remote.NetworkTestResult
 import kotlinx.coroutines.launch
 
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+
 private sealed class SettingsSheetType {
     object RestBetweenSets : SettingsSheetType()
     object CustomRestBetweenSets : SettingsSheetType()
@@ -72,7 +77,9 @@ private sealed class SettingsSheetType {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    onNavigateToBodyEvolution: () -> Unit = {}
+) {
     val context = LocalContext.current
     val settingsManager = (context.applicationContext as MainApplication).settingsManager
     val coroutineScope = rememberCoroutineScope()
@@ -148,6 +155,68 @@ fun SettingsScreen() {
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        Text("Perfil & Evolução", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Surface(
+            color = SurfaceDark,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, BorderLight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("nav_body_evolution_item")
+                .clickable { onNavigateToBodyEvolution() }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(LimeTransparent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Straighten,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Evolução corporal",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = "Acompanhar peso, medidas e progresso",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
         Text("Treino", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
         

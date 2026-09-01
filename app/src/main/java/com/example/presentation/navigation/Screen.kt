@@ -6,8 +6,10 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.R
 
@@ -25,9 +27,11 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
         fun createRoute(programId: Long) = "program_details/$programId"
     }
     object History : Screen("history", R.string.nav_history, Icons.Default.History)
-    object Settings : Screen("settings", R.string.nav_settings, Icons.Default.Settings)
+    object Settings : Screen("settings", R.string.nav_profile, Icons.Default.Person)
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"
     }
+    object BodyEvolution : Screen("body_evolution", R.string.body_evolution_title, Icons.Default.Straighten)
+    object AddBodyMeasurement : Screen("add_body_measurement", R.string.body_evolution_title, Icons.Default.Straighten)
 }

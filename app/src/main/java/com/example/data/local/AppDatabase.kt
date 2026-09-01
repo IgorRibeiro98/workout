@@ -32,25 +32,54 @@ import kotlinx.coroutines.launch
         ExerciseAiContextEntity::class,
         ExerciseBiomechanicsEntity::class,
         ExerciseExecutionEntity::class,
-        ExerciseSyncCheckpointEntity::class
+        ExerciseSyncCheckpointEntity::class,
+        BodyMeasurementEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
+    abstract fun bodyMeasurementDao(): BodyMeasurementDao
     
     companion object {
 
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `body_measurements` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `date` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `weightKg` REAL,
+                        `heightCm` REAL,
+                        `bodyFatPercentage` REAL,
+                        `waistCm` REAL,
+                        `abdomenCm` REAL,
+                        `chestCm` REAL,
+                        `leftArmCm` REAL,
+                        `rightArmCm` REAL,
+                        `leftThighCm` REAL,
+                        `rightThighCm` REAL,
+                        `calfCm` REAL,
+                        `hipCm` REAL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_measurements_date` ON `body_measurements` (`date`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_measurements_createdAt` ON `body_measurements` (`createdAt`)")
+            }
+        }
+
         val MIGRATION_20_21 = object : Migration(20, 21) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `exercise_sync_checkpoints`")
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `exercise_sync_checkpoints` (
                         `exerciseId` INTEGER NOT NULL,
                         `exerciseName` TEXT NOT NULL,
                         `status` TEXT NOT NULL,
-                        `attempts` INTEGER NOT NULL DEFAULT 0,
+                        `attempts` INTEGER NOT NULL,
                         `lastError` TEXT,
                         `updatedAt` INTEGER NOT NULL,
                         PRIMARY KEY(`exerciseId`)
@@ -309,7 +338,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()

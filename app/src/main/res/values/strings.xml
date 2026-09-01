@@ -96,4 +96,11 @@
     <string name="sheet_weekly_goal_title">Meta Semanal de Treinos</string>
     <string name="sheet_custom_rest_title">Tempo Personalizado</string>
     <string name="sheet_reimport_catalog_confirm_title">Reimportar Catálogo Canônico?</string>
+
+    <!-- T11 Body Evolution Strings -->
+    <string name="nav_profile">Perfil</string>
+    <string name="body_evolution_title">Evolução corporal</string>
+    <string name="body_evolution_empty_title">Ainda não existem medições.</string>
+    <string name="body_evolution_empty_desc">Registre seu primeiro acompanhamento\npara acompanhar sua evolução.</string>
+    <string name="body_evolution_add_button">Adicionar medição</string>
 </resources>

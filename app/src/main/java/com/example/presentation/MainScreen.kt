@@ -37,6 +37,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.MainApplication
 import com.example.presentation.MainViewModelFactory
+import com.example.presentation.body.AddBodyMeasurementScreen
+import com.example.presentation.body.BodyEvolutionScreen
+import com.example.presentation.body.BodyEvolutionViewModel
 import com.example.presentation.execution.ExecutionScreen
 import com.example.presentation.execution.ExecutionViewModel
 import com.example.presentation.exercises.ExercisesScreen
@@ -56,7 +59,13 @@ import androidx.compose.animation.AnimatedVisibility
 fun MainScreen() {
     val context = LocalContext.current
     val app = context.applicationContext as MainApplication
-    val factory = MainViewModelFactory(app.repository, app.settingsManager, app.workoutEngine, app.notificationManager)
+    val factory = MainViewModelFactory(
+        repository = app.repository,
+        settingsManager = app.settingsManager,
+        workoutEngine = app.workoutEngine,
+        notificationManager = app.notificationManager,
+        bodyMeasurementRepository = app.bodyMeasurementRepository
+    )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
     val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel = viewModel(factory = factory)
@@ -65,6 +74,7 @@ fun MainScreen() {
     val summaryViewModel: com.example.presentation.execution.SummaryViewModel = viewModel(factory = factory)
     val exerciseDetailsViewModel: com.example.presentation.exercises.ExerciseDetailsViewModel = viewModel(factory = factory)
     val historyViewModel: com.example.presentation.history.HistoryViewModel = viewModel(factory = factory)
+    val bodyEvolutionViewModel: BodyEvolutionViewModel = viewModel(factory = factory)
 
     val navController = rememberNavController()
     val items = listOf(
@@ -88,7 +98,9 @@ fun MainScreen() {
         Screen.Exercises.route to Screen.Exercises.route,
         Screen.ExerciseDetails.route to Screen.Exercises.route,
         Screen.History.route to Screen.History.route,
-        Screen.Settings.route to Screen.Settings.route
+        Screen.Settings.route to Screen.Settings.route,
+        Screen.BodyEvolution.route to Screen.Settings.route,
+        Screen.AddBodyMeasurement.route to Screen.Settings.route
     )
 
     val isRouteSelected = { tabRoute: String ->
@@ -201,7 +213,26 @@ fun MainScreen() {
                 )
             }
             composable(Screen.History.route) { com.example.presentation.history.HistoryScreen(historyViewModel) }
-            composable(Screen.Settings.route) { SettingsScreen() }
+            composable(Screen.Settings.route) {
+                SettingsScreen(
+                    onNavigateToBodyEvolution = {
+                        navController.navigate(Screen.BodyEvolution.route)
+                    }
+                )
+            }
+            composable(Screen.BodyEvolution.route) {
+                BodyEvolutionScreen(
+                    viewModel = bodyEvolutionViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToAddMeasurement = { navController.navigate(Screen.AddBodyMeasurement.route) }
+                )
+            }
+            composable(Screen.AddBodyMeasurement.route) {
+                AddBodyMeasurementScreen(
+                    viewModel = bodyEvolutionViewModel,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
             composable(Screen.Execution.route) {
                 ExecutionScreen(
                     viewModel = executionViewModel,

@@ -3,8 +3,10 @@ package com.example.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.data.datastore.SettingsManager
+import com.example.data.repository.BodyMeasurementRepository
 import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
+import com.example.presentation.body.BodyEvolutionViewModel
 import com.example.presentation.exercises.ExercisesViewModel
 import com.example.presentation.today.TodayViewModel
 import com.example.presentation.workouts.WorkoutsViewModel
@@ -16,9 +18,15 @@ class MainViewModelFactory(
     private val repository: WorkoutRepository,
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
-    private val notificationManager: WorkoutNotificationManager
+    private val notificationManager: WorkoutNotificationManager,
+    private val bodyMeasurementRepository: BodyMeasurementRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
+            val bodyRepo = bodyMeasurementRepository ?: BodyMeasurementRepository(repository.dao as? com.example.data.local.BodyMeasurementDao ?: throw IllegalStateException("BodyMeasurementDao not available"))
+            @Suppress("UNCHECKED_CAST")
+            return BodyEvolutionViewModel(bodyRepo) as T
+        }
         if (modelClass.isAssignableFrom(ExercisesViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             return ExercisesViewModel(repository) as T

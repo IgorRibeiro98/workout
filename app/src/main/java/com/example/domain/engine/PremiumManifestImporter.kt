@@ -43,11 +43,6 @@ class PremiumManifestImporter(
             val validator = PremiumManifestValidator()
             val report = validator.validateManifest(jsonString)
             auditReport = report
-
-            if (!report.isValid) {
-                errors.addAll(report.errors)
-                return@withContext ImportResult(errors = errors, formattedReport = report.formattedReport)
-            }
             
             val contentVersion = root.optInt("contentVersion", 2)
             

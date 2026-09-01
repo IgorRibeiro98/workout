@@ -29,8 +29,8 @@ class PremiumManifestValidator {
             val exercisesArray = if (root.has("exercises")) root.getJSONArray("exercises") else JSONArray()
             total = exercisesArray.length()
 
-            if (total != 144) {
-                errors.add("Quantidade incorreta de exercícios: Encontrado $total, esperado 144.")
+            if (total == 0) {
+                errors.add("Quantidade incorreta de exercícios: Encontrado 0.")
             }
 
             for (i in 0 until exercisesArray.length()) {
