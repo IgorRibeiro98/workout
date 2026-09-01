@@ -372,6 +372,8 @@ class WorkoutEngine(
                     actualExerciseId = plannedWithDetails.exercise.id,
                     exerciseNameSnapshot = resolvedExercise.displayName, // Historic snapshot uses resolved name
                     sortOrder = plannedWithDetails.templateExercise.sortOrder,
+                    plannedOrder = plannedWithDetails.templateExercise.sortOrder,
+                    executionOrder = plannedWithDetails.templateExercise.sortOrder,
                     machineLabelSnapshot = plannedWithDetails.templateExercise.machineLabel,
                     primaryMuscleSnapshot = plannedWithDetails.exercise.primaryMuscle,
                     restDurationSecondsSnapshot = plannedWithDetails.templateExercise.restDurationSeconds
@@ -530,5 +532,12 @@ class WorkoutEngine(
     
     suspend fun updateCheckInDetails(checkIn: CheckInEntity) {
         dao.updateCheckIn(checkIn)
+    }
+
+    suspend fun reorderExercises(sessionId: Long, updatedExercises: List<ExerciseSessionEntity>) {
+        val updated = updatedExercises.mapIndexed { index, ex ->
+            ex.copy(executionOrder = index + 1, sortOrder = index + 1)
+        }
+        dao.updateExerciseSessions(updated)
     }
 }

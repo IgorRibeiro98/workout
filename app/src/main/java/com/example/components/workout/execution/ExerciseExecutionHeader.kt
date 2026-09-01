@@ -33,6 +33,7 @@ fun ExerciseExecutionHeader(
     difficulty: String?,
     currentExerciseIndex: Int,
     totalExercises: Int,
+    isOrderAdapted: Boolean = false,
     onOpenExerciseSelector: () -> Unit,
     onOpenQuickInfo: () -> Unit,
     onOpenFullDetails: () -> Unit,
@@ -51,31 +52,52 @@ fun ExerciseExecutionHeader(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                color = SurfaceDark,
-                shape = RoundedCornerShape(20.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, BorderLight),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .clickable(onClick = onOpenExerciseSelector)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                Surface(
+                    color = SurfaceDark,
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, BorderLight),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable(onClick = onOpenExerciseSelector)
                 ) {
-                    Text(
-                        text = "EXERCÍCIO ${currentExerciseIndex + 1} DE $totalExercises",
-                        color = Lime400,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        Icons.Default.ArrowDropDown,
-                        contentDescription = "Trocar exercício",
-                        tint = Lime400,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "EXERCÍCIO ${currentExerciseIndex + 1} DE $totalExercises",
+                            color = Lime400,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.ArrowDropDown,
+                            contentDescription = "Trocar exercício",
+                            tint = Lime400,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                if (isOrderAdapted) {
+                    Surface(
+                        color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "⚡ Ordem adaptada",
+                            color = Color(0xFFF59E0B),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                        )
+                    }
                 }
             }
 

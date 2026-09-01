@@ -115,6 +115,8 @@ data class ExerciseSessionEntity(
     val actualExerciseId: Long?,
     val exerciseNameSnapshot: String, // Preserva o nome histórico mesmo se o Exercise original mudar
     val sortOrder: Int = 0,
+    val plannedOrder: Int = sortOrder,
+    val executionOrder: Int = sortOrder,
     val startedAt: Long? = null,
     val finishedAt: Long? = null,
     val notes: String? = null,

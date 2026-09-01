@@ -9,6 +9,9 @@ import com.example.data.local.SetLogEntity
 import com.example.domain.engine.SyncResult
 import com.example.domain.engine.WorkoutEngine
 import com.example.service.WorkoutNotificationManager
+import com.example.domain.workout.execution.ExerciseExecutionStatus
+import com.example.domain.workout.execution.WorkoutExerciseExecution
+import com.example.domain.workout.execution.WorkoutExecutionOrderManager
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -48,6 +51,29 @@ data class ExecutionState(
     val isAllExercisesCompleted: Boolean
         get() = sessionWithDetails?.exercises?.isNotEmpty() == true &&
                 sessionWithDetails.exercises.all { ex -> ex.sets.isNotEmpty() && ex.sets.all { it.completed } }
+
+    val isOrderAdapted: Boolean
+        get() = sessionWithDetails?.exercises?.any { it.exerciseSession.executionOrder != it.exerciseSession.plannedOrder } == true
+
+    val exerciseExecutions: List<WorkoutExerciseExecution>
+        get() = sessionWithDetails?.exercises?.mapIndexed { idx, ex ->
+            val totalSets = ex.sets.size
+            val completedCount = ex.sets.count { it.completed }
+            val status = when {
+                totalSets > 0 && completedCount == totalSets -> ExerciseExecutionStatus.COMPLETED
+                idx == currentExerciseIndex || completedCount > 0 -> ExerciseExecutionStatus.IN_PROGRESS
+                else -> ExerciseExecutionStatus.PENDING
+            }
+            val exIdStr = ex.exerciseSession.id.toString()
+            WorkoutExerciseExecution(
+                exerciseSessionId = ex.exerciseSession.id,
+                exerciseId = exIdStr,
+                name = ex.exerciseSession.exerciseNameSnapshot,
+                plannedOrder = ex.exerciseSession.plannedOrder,
+                executionOrder = ex.exerciseSession.executionOrder,
+                status = status
+            )
+        } ?: emptyList()
 
     val phase: ExecutionPhase
         get() = when {
@@ -98,7 +124,12 @@ class ExecutionViewModel(
         _previousExecutionSets,
         workoutEngine.activeResolvedExercises,
         restTimerTarget
-    ) { sessionWithDetails, index, previousSets, resolvedExercises, timerTarget ->
+    ) { rawSessionWithDetails, index, previousSets, resolvedExercises, timerTarget ->
+        val sessionWithDetails = rawSessionWithDetails?.let { session ->
+            session.copy(
+                exercises = session.exercises.sortedBy { it.exerciseSession.executionOrder }
+            )
+        }
         // Auto restore index to first incomplete exercise on session initial load
         val activeSessionId = sessionWithDetails?.session?.id
         if (sessionWithDetails != null && sessionWithDetails.exercises.isNotEmpty()) {
@@ -169,6 +200,48 @@ class ExecutionViewModel(
         val maxIndex = (state.value.sessionWithDetails?.exercises?.size ?: 1) - 1
         if (index in 0..maxIndex) {
             _currentExerciseIndex.value = index
+        }
+    }
+
+    fun moveExercise(exerciseId: String, newPosition: Int) {
+        val currentSession = state.value.sessionWithDetails ?: return
+        val executions = state.value.exerciseExecutions
+        val reorderedExecutions = WorkoutExecutionOrderManager.moveExercise(executions, exerciseId, newPosition)
+
+        val map = currentSession.exercises.associateBy {
+            it.exerciseSession.id.toString()
+        }
+
+        val updatedEntities = reorderedExecutions.mapNotNull { ex ->
+            map[ex.exerciseId]?.exerciseSession?.copy(
+                executionOrder = ex.executionOrder,
+                sortOrder = ex.executionOrder
+            )
+        }
+
+        viewModelScope.launch {
+            workoutEngine.reorderExercises(currentSession.session.id, updatedEntities)
+        }
+    }
+
+    fun moveExerciseToLater(exerciseId: String) {
+        val currentSession = state.value.sessionWithDetails ?: return
+        val executions = state.value.exerciseExecutions
+        val reorderedExecutions = WorkoutExecutionOrderManager.moveExerciseToLater(executions, exerciseId)
+
+        val map = currentSession.exercises.associateBy {
+            it.exerciseSession.id.toString()
+        }
+
+        val updatedEntities = reorderedExecutions.mapNotNull { ex ->
+            map[ex.exerciseId]?.exerciseSession?.copy(
+                executionOrder = ex.executionOrder,
+                sortOrder = ex.executionOrder
+            )
+        }
+
+        viewModelScope.launch {
+            workoutEngine.reorderExercises(currentSession.session.id, updatedEntities)
         }
     }
 

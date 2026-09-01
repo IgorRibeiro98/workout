@@ -164,6 +164,12 @@ interface WorkoutDao {
     @Insert
     suspend fun insertExerciseSession(exerciseSession: ExerciseSessionEntity): Long
 
+    @Update
+    suspend fun updateExerciseSession(exerciseSession: ExerciseSessionEntity)
+
+    @Update
+    suspend fun updateExerciseSessions(exerciseSessions: List<ExerciseSessionEntity>)
+
     @Insert
     suspend fun insertSetLogs(setLogs: List<SetLogEntity>)
 

@@ -69,6 +69,7 @@ sealed interface WorkoutSheet {
     data object Instructions : WorkoutSheet
     data object Alternatives : WorkoutSheet
     data object QuickInfo : WorkoutSheet
+    data class Reorder(val exerciseToMove: com.example.domain.workout.execution.WorkoutExerciseExecution) : WorkoutSheet
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,6 +97,7 @@ fun ExecutionScreen(
     var activeSheet by remember { mutableStateOf<WorkoutSheet?>(null) }
     var showCancelDialog by remember { mutableStateOf(false) }
     var showFinishEarlyDialog by remember { mutableStateOf(false) }
+    var completedReorderConfirm by remember { mutableStateOf<com.example.domain.workout.execution.WorkoutExerciseExecution?>(null) }
     var directInputConfig by remember { mutableStateOf<DirectInputConfig?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -289,6 +291,7 @@ fun ExecutionScreen(
                                     rirRpeEnabled = rirRpeEnabled,
                                     hapticEnabled = hapticEnabled,
                                     showGifs = showGifs,
+                                    isOrderAdapted = state.isOrderAdapted,
                                     onUpdateSet = { viewModel.updateSet(it) },
                                     onCompleteSet = {
                                         if (hapticEnabled) {
@@ -454,10 +457,33 @@ fun ExecutionScreen(
             WorkoutSheet.ExercisesList -> {
                 WorkoutExercisesBottomSheet(
                     exercises = session.exercises,
+                    exerciseExecutions = state.exerciseExecutions,
                     currentIndex = state.currentExerciseIndex,
+                    isOrderAdapted = state.isOrderAdapted,
                     onDismiss = { activeSheet = null },
                     onSelectExercise = { index ->
                         viewModel.selectExercise(index)
+                        activeSheet = null
+                    },
+                    onMoveExerciseToLater = { exId ->
+                        viewModel.moveExerciseToLater(exId)
+                    },
+                    onRequestReorderPosition = { exExec ->
+                        if (exExec.status == com.example.domain.workout.execution.ExerciseExecutionStatus.COMPLETED) {
+                            completedReorderConfirm = exExec
+                        } else {
+                            activeSheet = WorkoutSheet.Reorder(exExec)
+                        }
+                    }
+                )
+            }
+            is WorkoutSheet.Reorder -> {
+                com.example.presentation.execution.components.ExerciseReorderBottomSheet(
+                    exerciseToMove = (activeSheet as WorkoutSheet.Reorder).exerciseToMove,
+                    allExercises = state.exerciseExecutions,
+                    onDismiss = { activeSheet = null },
+                    onSelectPosition = { newPos ->
+                        viewModel.moveExercise((activeSheet as WorkoutSheet.Reorder).exerciseToMove.exerciseId, newPos)
                         activeSheet = null
                     }
                 )
@@ -519,6 +545,32 @@ fun ExecutionScreen(
         }
 
         // --- Dialogs ---
+        if (completedReorderConfirm != null) {
+            val targetEx = completedReorderConfirm!!
+            AlertDialog(
+                onDismissRequest = { completedReorderConfirm = null },
+                containerColor = SurfaceDark,
+                title = { Text("Exercício concluído", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = { Text("Este exercício já foi concluído. Deseja alterar somente os próximos exercícios?", color = TextSecondary) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val ex = completedReorderConfirm
+                        completedReorderConfirm = null
+                        if (ex != null) {
+                            activeSheet = WorkoutSheet.Reorder(ex)
+                        }
+                    }) {
+                        Text("Alterar posição", color = Lime400, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { completedReorderConfirm = null }) {
+                        Text("Cancelar", color = TextSecondary)
+                    }
+                }
+            )
+        }
+
         if (showCancelDialog) {
             AlertDialog(
                 onDismissRequest = { showCancelDialog = false },
@@ -610,6 +662,7 @@ fun FocusedActiveSetView(
     rirRpeEnabled: Boolean,
     hapticEnabled: Boolean,
     showGifs: Boolean,
+    isOrderAdapted: Boolean = false,
     onUpdateSet: (SetLogEntity) -> Unit,
     onCompleteSet: (SetLogEntity) -> Unit,
     onOpenDirectInput: (DirectInputConfig) -> Unit,
@@ -674,6 +727,7 @@ fun FocusedActiveSetView(
                 difficulty = difficulty,
                 currentExerciseIndex = currentExerciseIndex,
                 totalExercises = totalExercises,
+                isOrderAdapted = isOrderAdapted,
                 onOpenExerciseSelector = onOpenExerciseSelector,
                 onOpenQuickInfo = onOpenQuickInfo,
                 onOpenFullDetails = onOpenFullDetails
@@ -1458,9 +1512,13 @@ fun AllSetsBottomSheet(
 @Composable
 fun WorkoutExercisesBottomSheet(
     exercises: List<ExerciseSessionWithSets>,
+    exerciseExecutions: List<com.example.domain.workout.execution.WorkoutExerciseExecution>,
     currentIndex: Int,
+    isOrderAdapted: Boolean,
     onDismiss: () -> Unit,
-    onSelectExercise: (Int) -> Unit
+    onSelectExercise: (Int) -> Unit,
+    onMoveExerciseToLater: (exerciseId: String) -> Unit,
+    onRequestReorderPosition: (execution: com.example.domain.workout.execution.WorkoutExerciseExecution) -> Unit
 ) {
     AppModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1469,8 +1527,31 @@ fun WorkoutExercisesBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.6f)
+                .fillMaxHeight(0.65f)
         ) {
+            if (isOrderAdapted) {
+                Surface(
+                    color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "⚡ Ordem adaptada durante a execução",
+                            color = Color(0xFFF59E0B),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1480,6 +1561,9 @@ fun WorkoutExercisesBottomSheet(
                     val completedCount = ex.sets.count { it.completed }
                     val totalSets = ex.sets.size
                     val isAllCompleted = totalSets > 0 && completedCount == totalSets
+                    val executionModel = exerciseExecutions.getOrNull(idx)
+
+                    var menuExpanded by remember { mutableStateOf(false) }
 
                     Surface(
                         color = if (isSelected) Lime400.copy(alpha = 0.15f) else BackgroundDark,
@@ -1506,6 +1590,51 @@ fun WorkoutExercisesBottomSheet(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold
                             )
+
+                            if (executionModel != null) {
+                                Box {
+                                    IconButton(onClick = { menuExpanded = true }) {
+                                        Icon(
+                                            imageVector = Icons.Default.MoreVert,
+                                            contentDescription = "Opções do exercício",
+                                            tint = TextSecondary
+                                        )
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = menuExpanded,
+                                        onDismissRequest = { menuExpanded = false },
+                                        modifier = Modifier.background(SurfaceDark)
+                                    ) {
+                                        val isCompleted = executionModel.status == com.example.domain.workout.execution.ExerciseExecutionStatus.COMPLETED
+                                        val isCurrent = idx == currentIndex
+
+                                        if (!isCompleted) {
+                                            DropdownMenuItem(
+                                                text = { Text(if (isCurrent) "Fazer depois" else "Mover para depois", color = TextPrimary) },
+                                                onClick = {
+                                                    menuExpanded = false
+                                                    onMoveExerciseToLater(executionModel.exerciseId)
+                                                },
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Lime400)
+                                                }
+                                            )
+                                        }
+
+                                        DropdownMenuItem(
+                                            text = { Text("Alterar posição", color = TextPrimary) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                onRequestReorderPosition(executionModel)
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.SwapVert, contentDescription = null, tint = Lime400)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
