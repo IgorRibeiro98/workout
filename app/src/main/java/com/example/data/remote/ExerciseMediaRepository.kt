@@ -14,6 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+sealed class SyncExerciseItemResult {
+    object Skipped : SyncExerciseItemResult()
+    object Success : SyncExerciseItemResult()
+    data class Failed(val reason: String) : SyncExerciseItemResult()
+}
+
 class ExerciseMediaRepository(
     private val workoutDao: WorkoutDao?,
     private val remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource(),
@@ -21,7 +27,7 @@ class ExerciseMediaRepository(
 ) {
     constructor(remoteDataSource: ExerciseRemoteDataSource) : this(null, remoteDataSource, null)
 
-    private fun isOnline(): Boolean {
+    fun isOnline(): Boolean {
         if (context == null) return true
         return try {
             val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -31,6 +37,145 @@ class ExerciseMediaRepository(
         } catch (e: Exception) {
             true
         }
+    }
+
+    suspend fun syncSingleExercise(
+        exercise: ExerciseEntity,
+        rateLimiter: com.example.domain.engine.ExerciseDbRateLimiter,
+        onRetryLog: (String) -> Unit = {}
+    ): SyncExerciseItemResult = withContext(Dispatchers.IO) {
+        if (!isOnline()) {
+            return@withContext SyncExerciseItemResult.Failed("Sem conexão com a internet")
+        }
+
+        // Priority 1: Custom photo override
+        if (!exercise.customPhotoUri.isNullOrBlank()) {
+            Log.d("SYNC_LOG", "[SYNC SKIPPED] Exercise: ${exercise.name} -> Foto personalizada presente")
+            return@withContext SyncExerciseItemResult.Skipped
+        }
+
+        // Detailed Sync Start Log
+        Log.d("SYNC_LOG", """
+            [SYNC START]
+            Exercise: ${exercise.name}
+            ExternalId: ${exercise.externalExerciseId ?: "N/A"}
+            Request iniciado
+        """.trimIndent())
+
+        // 1. Direct lookup by known external ID if already matched
+        if (!exercise.externalExerciseId.isNullOrBlank() && 
+            exercise.mappingStatus == ExerciseMatchStatus.MATCHED.name && 
+            !exercise.gifUrl.isNullOrBlank()) {
+            
+            val idResult = com.example.domain.engine.RetryPolicy.executeWithRetry(
+                maxAttempts = 3,
+                rateLimiter = rateLimiter,
+                exerciseName = exercise.name,
+                onRetryAttempt = { attempt, max, delaySec, reason ->
+                    onRetryLog("[SYNC RETRY] Exercise: ${exercise.name}, Tentativa: $attempt/$max, Delay: ${delaySec}s, Motivo: $reason")
+                }
+            ) {
+                remoteDataSource.getExerciseById(exercise.externalExerciseId)
+            }
+
+            when (idResult) {
+                is NetworkResult.Success -> {
+                    val dto = idResult.data
+                    val newGifUrl = dto.gifUrl ?: exercise.gifUrl
+                    val updatedEntity = exercise.copy(
+                        gifUrl = newGifUrl,
+                        lastVerifiedAt = System.currentTimeMillis(),
+                        mappingStatus = ExerciseMatchStatus.MATCHED.name
+                    )
+                    workoutDao?.updateExercise(updatedEntity)
+                    Log.d("SYNC_LOG", """
+                        HTTP: 200
+                        Mídia encontrada
+                        Banco atualizado
+                        [SYNC FINISH] Exercise: ${exercise.name}
+                    """.trimIndent())
+                    return@withContext SyncExerciseItemResult.Success
+                }
+                is NetworkResult.Offline -> {
+                    return@withContext SyncExerciseItemResult.Failed("Sem conexão com a internet")
+                }
+                is NetworkResult.NotFound,
+                is NetworkResult.HttpError,
+                is NetworkResult.ParserError -> {
+                    // Fallback to name search queries if direct ID fails
+                }
+            }
+        }
+
+        val searchQueries = mutableListOf<String>()
+        exercise.exerciseDbSearch?.takeIf { it.isNotBlank() }?.let { searchQueries.add(it) }
+        exercise.exerciseDbAliases?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.let { searchQueries.addAll(it) }
+        exercise.nameEn?.takeIf { it.isNotBlank() }?.let { searchQueries.add(it) }
+        val normalName = exercise.canonicalId?.replace("-", " ") ?: exercise.name
+        if (normalName.isNotBlank()) searchQueries.add(normalName)
+
+        if (searchQueries.isEmpty()) {
+            Log.w("SYNC_LOG", "[SYNC ERROR] Exercise: ${exercise.name} -> Nenhum termo de busca configurado")
+            return@withContext SyncExerciseItemResult.Failed("Nenhum termo de busca configurado")
+        }
+
+        var lastErrorMsg = "Nenhum resultado encontrado"
+
+        for (query in searchQueries.distinct()) {
+            val searchResult = com.example.domain.engine.RetryPolicy.executeWithRetry(
+                maxAttempts = 3,
+                rateLimiter = rateLimiter,
+                exerciseName = exercise.name,
+                onRetryAttempt = { attempt, max, delaySec, reason ->
+                    onRetryLog("[SYNC RETRY] Exercise: ${exercise.name}, Query: $query, Tentativa: $attempt/$max, Delay: ${delaySec}s, Motivo: $reason")
+                }
+            ) {
+                remoteDataSource.searchExercises(query)
+            }
+
+            when (searchResult) {
+                is NetworkResult.Success -> {
+                    val candidates = searchResult.data
+                    val evaluation = evaluateCandidates(exercise, candidates, targetQuery = query)
+                    if (evaluation.status == ExerciseMatchStatus.MATCHED) {
+                        val best = evaluation.candidate!!
+                        val updatedEntity = exercise.copy(
+                            externalExerciseId = best.realId,
+                            gifUrl = best.gifUrl,
+                            lastVerifiedAt = System.currentTimeMillis(),
+                            mappingStatus = ExerciseMatchStatus.MATCHED.name
+                        )
+                        workoutDao?.updateExercise(updatedEntity)
+                        Log.d("SYNC_LOG", """
+                            HTTP: 200
+                            Mídia encontrada (${best.realId})
+                            Banco atualizado
+                            [SYNC FINISH] Exercise: ${exercise.name}
+                        """.trimIndent())
+                        return@withContext SyncExerciseItemResult.Success
+                    }
+                }
+                is NetworkResult.Offline -> {
+                    return@withContext SyncExerciseItemResult.Failed("Sem conexão com a internet")
+                }
+                is NetworkResult.NotFound -> {
+                    lastErrorMsg = "Não encontrado na ExerciseDB"
+                }
+                is NetworkResult.HttpError -> {
+                    lastErrorMsg = "HTTP ${searchResult.code}"
+                }
+                is NetworkResult.ParserError -> {
+                    lastErrorMsg = searchResult.throwable.message ?: "Erro de parsing"
+                }
+            }
+        }
+
+        val updatedEntity = exercise.copy(
+            mappingStatus = ExerciseMatchStatus.NOT_FOUND.name
+        )
+        workoutDao?.updateExercise(updatedEntity)
+        Log.e("SYNC_LOG", "[SYNC ERROR] Exercise: ${exercise.name} -> $lastErrorMsg")
+        SyncExerciseItemResult.Failed(lastErrorMsg)
     }
 
     suspend fun testConnection(query: String = "bench press"): NetworkTestResult {

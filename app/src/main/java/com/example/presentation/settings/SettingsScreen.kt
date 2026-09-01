@@ -32,12 +32,21 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.MainApplication
 import com.example.R
+import com.example.data.datastore.IntegrationSettings
+import com.example.data.datastore.SyncStatus
 import com.example.domain.engine.ExerciseMediaEngine
+import com.example.domain.engine.ExerciseMediaSyncManager
 import com.example.domain.engine.ManifestImporter
 import com.example.domain.engine.PremiumManifestImporter
 import com.example.domain.engine.ProgramImporter
+import com.example.domain.engine.SyncErrorItem
+import com.example.domain.engine.SyncState
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.BottomSheetActionItem
 import com.example.ui.components.SelectionBottomSheet
@@ -46,10 +55,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import com.example.data.datastore.IntegrationSettings
-import com.example.data.datastore.SyncStatus
 import com.example.data.remote.NetworkTestResult
-import com.example.domain.engine.ExerciseMediaSyncManager
 import kotlinx.coroutines.launch
 
 private sealed class SettingsSheetType {
@@ -706,12 +712,13 @@ private fun ExerciseDbIntegrationSheet(
     onDismissRequest: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var isSyncing by remember { mutableStateOf(false) }
-    var syncMessage by remember { mutableStateOf("") }
+    val syncState by syncManager.syncState.collectAsState()
+    var hasIncomplete by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
 
-    var testDialogTitle by remember { mutableStateOf("") }
-    var testDialogMsg by remember { mutableStateOf("") }
-    var showTestDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        hasIncomplete = syncManager.hasIncompleteSync()
+    }
 
     AppModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -720,7 +727,9 @@ private fun ExerciseDbIntegrationSheet(
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
         ) {
             // 1. Usar dados externos (Switch)
             Row(
@@ -805,18 +814,19 @@ private fun ExerciseDbIntegrationSheet(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Status:", color = TextSecondary, fontSize = 12.sp)
-                    val statusText = when (syncStatus) {
-                        SyncStatus.DISABLED -> "Desativado"
-                        SyncStatus.READY -> "Pronto"
-                        SyncStatus.SYNCING -> "Sincronizando..."
-                        SyncStatus.SUCCESS -> "✓ Sincronizado"
-                        SyncStatus.ERROR -> "⚠ Erro de conexão"
+                    val statusText = when {
+                        syncState is SyncState.Running -> "Sincronizando..."
+                        syncStatus == SyncStatus.DISABLED -> "Desativado"
+                        syncStatus == SyncStatus.READY -> "Pronto"
+                        syncStatus == SyncStatus.SYNCING -> "Sincronizando..."
+                        syncStatus == SyncStatus.SUCCESS -> "✓ Sincronizado"
+                        else -> "Pronto para atualização"
                     }
-                    val statusColor = when (syncStatus) {
-                        SyncStatus.DISABLED -> TextSecondary
-                        SyncStatus.READY, SyncStatus.SUCCESS -> Lime400
-                        SyncStatus.SYNCING -> Color(0xFFFFB74D)
-                        SyncStatus.ERROR -> Color(0xFFEF5350)
+                    val statusColor = when {
+                        syncState is SyncState.Running -> Color(0xFFFFB74D)
+                        syncStatus == SyncStatus.DISABLED -> TextSecondary
+                        syncStatus == SyncStatus.READY || syncStatus == SyncStatus.SUCCESS -> Lime400
+                        else -> Lime400
                     }
                     Text(statusText, color = statusColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
@@ -828,62 +838,277 @@ private fun ExerciseDbIntegrationSheet(
                 }
             }
 
-            // 4. Sincronizar agora button
-            Button(
-                onClick = {
-                    if (!isSyncing) {
-                        isSyncing = true
-                        syncMessage = "Iniciando sincronização..."
-                        coroutineScope.launch {
-                            val result = syncManager.syncNow { cur, tot ->
-                                syncMessage = "Processando $cur de $tot..."
+            // Notice Banner for Interrupted Sync (Checkpoint)
+            if (hasIncomplete && syncState is SyncState.Idle) {
+                Surface(
+                    color = Color(0xFF2E2300),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFFB74D)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "⚡ Sincronização anterior interrompida",
+                            color = Color(0xFFFFB74D),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "Deseja continuar de onde parou para economizar requisições?",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        syncManager.startSync(forceRestart = false)
+                                        hasIncomplete = syncManager.hasIncompleteSync()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(38.dp)
+                            ) {
+                                Text("Continuar", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
-                            isSyncing = false
-                            testDialogTitle = "Sincronização Finalizada"
-                            testDialogMsg = if (result.isOffline) {
-                                "Não foi possível conectar ao ExerciseDB.\nVerifique sua conexão de internet."
-                            } else if (result.errors.isNotEmpty()) {
-                                "Sincronização concluída com avisos:\n${result.errors.joinToString("\n")}"
-                            } else {
-                                "Sincronização realizada com sucesso!\n\n" +
-                                        "Mapeados: ${result.matched}\n" +
-                                        "Já atualizados: ${result.alreadyUpToDate}\n" +
-                                        "Não encontrados: ${result.notFound}"
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        syncManager.startSync(forceRestart = true)
+                                        hasIncomplete = syncManager.hasIncompleteSync()
+                                    }
+                                },
+                                border = BorderStroke(1.dp, BorderLight),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(38.dp)
+                            ) {
+                                Text("Reiniciar", color = TextPrimary, fontSize = 12.sp)
                             }
-                            showTestDialog = true
                         }
                     }
-                },
-                enabled = integrationSettings.exerciseDbEnabled && !isSyncing,
-                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
-            ) {
-                if (isSyncing) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = BackgroundDark, strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(syncMessage, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                } else {
-                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Sincronizar agora", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+            }
+
+            // Main State Switcher: Idle vs Preparing vs Running vs Success vs Error
+            when (val state = syncState) {
+                is SyncState.Idle -> {
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                syncManager.startSync(forceRestart = false)
+                                hasIncomplete = syncManager.hasIncompleteSync()
+                            }
+                        },
+                        enabled = integrationSettings.exerciseDbEnabled,
+                        colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Atualizar demonstrações", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                }
+
+                is SyncState.Preparing -> {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(color = Lime400, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            Text("Preparando fila de sincronização...", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+
+                is SyncState.Running -> {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BorderLight),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Atualizando demonstrações", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("${state.current} / ${state.total}", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            }
+
+                            LinearProgressIndicator(
+                                progress = { state.percentage / 100f },
+                                modifier = Modifier.fillMaxWidth().height(8.dp),
+                                color = Lime400,
+                                trackColor = BackgroundDark,
+                            )
+
+                            Text(
+                                text = "Processando: ${state.exerciseName}",
+                                color = TextSecondary,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            Button(
+                                onClick = { syncManager.cancelSync() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF332020), contentColor = Color(0xFFEF5350)),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Cancelar", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                is SyncState.Success -> {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Lime400.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Lime400, modifier = Modifier.size(20.dp))
+                                Text("Atualização concluída", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(BackgroundDark, shape = RoundedCornerShape(8.dp))
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Exercícios analisados:", color = TextSecondary, fontSize = 13.sp)
+                                    Text("${state.processed}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Mídias atualizadas:", color = TextSecondary, fontSize = 13.sp)
+                                    Text("${state.updated}", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Sem alteração (pulos):", color = TextSecondary, fontSize = 13.sp)
+                                    Text("${state.skipped}", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                }
+                                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Falhas:", color = TextSecondary, fontSize = 13.sp)
+                                    val errColor = if (state.failed > 0) Color(0xFFEF5350) else TextPrimary
+                                    Text("${state.failed}", color = errColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+
+                            if (state.errorDetails.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = { showDetails = !showDetails },
+                                    border = BorderStroke(1.dp, BorderLight),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        if (showDetails) "Ocultar detalhes das falhas" else "Ver detalhes (${state.errorDetails.size} falhas)",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                if (showDetails) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(BackgroundDark, shape = RoundedCornerShape(8.dp))
+                                            .padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        state.errorDetails.forEach { err ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text("❌", fontSize = 12.sp)
+                                                Column {
+                                                    Text(err.exerciseName, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                                    Text("Motivo: ${err.reason}", color = Color(0xFFEF5350), fontSize = 11.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Button(
+                                onClick = { syncManager.resetState() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(42.dp)
+                            ) {
+                                Text("Concluir", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                is SyncState.Error -> {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFEF5350)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text("⚠ Erro na sincronização", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(state.message, color = TextSecondary, fontSize = 13.sp)
+
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        syncManager.startSync(forceRestart = false)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            ) {
+                                Text("Tentar novamente", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
                 }
             }
         }
-    }
-
-    if (showTestDialog) {
-        AlertDialog(
-            onDismissRequest = { showTestDialog = false },
-            title = { Text(testDialogTitle, color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text(testDialogMsg, color = TextSecondary, fontSize = 14.sp) },
-            confirmButton = {
-                TextButton(onClick = { showTestDialog = false }) {
-                    Text("OK", color = Lime400, fontWeight = FontWeight.Bold)
-                }
-            },
-            containerColor = SurfaceDark
-        )
     }
 }
 

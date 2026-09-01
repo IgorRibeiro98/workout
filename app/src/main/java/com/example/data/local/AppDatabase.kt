@@ -31,9 +31,10 @@ import kotlinx.coroutines.launch
         ExerciseSubstitutionPremiumEntity::class,
         ExerciseAiContextEntity::class,
         ExerciseBiomechanicsEntity::class,
-        ExerciseExecutionEntity::class
+        ExerciseExecutionEntity::class,
+        ExerciseSyncCheckpointEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -41,6 +42,22 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
     
     companion object {
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `exercise_sync_checkpoints` (
+                        `exerciseId` INTEGER NOT NULL,
+                        `exerciseName` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `attempts` INTEGER NOT NULL DEFAULT 0,
+                        `lastError` TEXT,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`exerciseId`)
+                    )
+                """.trimIndent())
+            }
+        }
         
         val MIGRATION_19_20 = object : Migration(19, 20) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -292,7 +309,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()
