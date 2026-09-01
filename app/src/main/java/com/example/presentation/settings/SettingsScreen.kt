@@ -61,6 +61,7 @@ private sealed class SettingsSheetType {
     object ManageData : SettingsSheetType()
     object ConfirmReimportCatalog : SettingsSheetType()
     object ExerciseDbIntegration : SettingsSheetType()
+    object PremiumLibraryAudit : SettingsSheetType()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -352,6 +353,14 @@ fun SettingsScreen() {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     BottomSheetActionItem(
                         icon = Icons.Default.Analytics,
+                        title = "Auditoria Biblioteca Premium",
+                        subtitle = "Diagnóstico dos 144 exercícios e cobertura de mídia",
+                        onClick = {
+                            activeSheet = SettingsSheetType.PremiumLibraryAudit
+                        }
+                    )
+                    BottomSheetActionItem(
+                        icon = Icons.Default.Analytics,
                         title = "Auditoria ExerciseDB",
                         subtitle = "Verificar cobertura do catálogo",
                         onClick = {
@@ -488,6 +497,11 @@ fun SettingsScreen() {
                 syncStatus = syncStatus,
                 syncManager = syncManager,
                 settingsManager = settingsManager,
+                onDismissRequest = { activeSheet = null }
+            )
+        }
+        is SettingsSheetType.PremiumLibraryAudit -> {
+            PremiumLibraryAuditSheet(
                 onDismissRequest = { activeSheet = null }
             )
         }

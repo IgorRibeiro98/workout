@@ -1,0 +1,65 @@
+{
+  "totalExercises": 144,
+  "approved": 144,
+  "needsReview": 0,
+  "missingMedia": 0,
+  "missingAlternatives": 0,
+  "mediaCoverage": {
+    "totalExercises": 144,
+    "localGifCount": 0,
+    "exerciseDbCount": 129,
+    "youtubeCount": 15,
+    "noMediaCount": 0
+  },
+  "categories": [
+    {
+      "category": "Peito",
+      "total": 13,
+      "approved": 13,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    },
+    {
+      "category": "Costas",
+      "total": 21,
+      "approved": 21,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    },
+    {
+      "category": "Pernas",
+      "total": 47,
+      "approved": 47,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    },
+    {
+      "category": "Ombros",
+      "total": 16,
+      "approved": 16,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    },
+    {
+      "category": "Braços",
+      "total": 31,
+      "approved": 31,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    },
+    {
+      "category": "Abdômen",
+      "total": 16,
+      "approved": 16,
+      "needsReview": 0,
+      "missingMedia": 0,
+      "missingAlternatives": 0
+    }
+  ],
+  "contentIssues": []
+}
