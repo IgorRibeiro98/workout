@@ -1,11 +1,11 @@
 package com.example
 
-import com.example.data.local.BodyMeasurementEntity
 import com.example.domain.evolution.calculator.BodyMetricsCalculator
 import com.example.domain.evolution.calculator.ConsistencyCalculator
 import com.example.domain.evolution.calculator.PerformanceCalculator
 import com.example.domain.evolution.calculator.WeightEvolutionCalculator
 import com.example.domain.evolution.model.BMICategory
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.WeightTrend
 import com.example.domain.evolution.repository.EvolutionRepository
 import com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
@@ -13,7 +13,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 
@@ -205,13 +204,13 @@ class EvolutionEngineTest {
                 averageSessionsPerWeek = 3.5f
             )
 
-            override suspend fun getBodyMeasurements(): List<com.example.data.local.BodyMeasurementEntity> = emptyList()
+            override suspend fun getBodyMeasurements(): List<BodyMeasurement> = emptyList()
 
             override fun getEvolutionSummaryFlow() = kotlinx.coroutines.flow.flow { emit(getEvolutionSummary()) }
             override fun getWeightEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getWeightEvolution()) }
             override fun getPerformanceEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getPerformanceEvolution()) }
             override fun getConsistencyMetricsFlow() = kotlinx.coroutines.flow.flow { emit(getConsistencyMetrics()) }
-            override fun getBodyMeasurementsFlow() = kotlinx.coroutines.flow.flow { emit(emptyList<com.example.data.local.BodyMeasurementEntity>()) }
+            override fun getBodyMeasurementsFlow() = kotlinx.coroutines.flow.flow { emit(emptyList<BodyMeasurement>()) }
         }
 
         val useCase = GetEvolutionSummaryUseCase(fakeRepo)

@@ -2,7 +2,7 @@ package com.example.feature.evolution
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.domain.evolution.calculator.BodyMetricsCalculator
+import com.example.domain.evolution.calculator.BodyEvolutionCalculator
 import com.example.domain.evolution.repository.EvolutionRepository
 import com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
 import com.example.feature.evolution.state.EvolutionUiState
@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 class EvolutionViewModel(
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase,
@@ -37,22 +36,10 @@ class EvolutionViewModel(
                     evolutionRepository.getWeightEvolutionFlow(),
                     evolutionRepository.getBodyMeasurementsFlow()
                 ) { summary, performance, consistency, weightEvolution, measurements ->
-                    val sorted = measurements.sortedWith(compareBy({ it.date }, { it.createdAt }))
-                    val latestWithWeight = sorted.lastOrNull { it.weightKg != null && it.weightKg > 0f }
-                    val firstWithWeight = sorted.firstOrNull { it.weightKg != null && it.weightKg > 0f }
-                    val latestWithHeight = sorted.lastOrNull { it.heightCm != null && it.heightCm > 0f }
-
-                    val currentWeight = latestWithWeight?.weightKg ?: summary.currentWeight ?: weightEvolution.currentWeight
-                    val initialWeight = firstWithWeight?.weightKg ?: summary.initialWeight ?: weightEvolution.firstWeight
-                    val weightVariation = if (currentWeight != null && initialWeight != null) {
-                        val rawDiff = currentWeight - initialWeight
-                        (rawDiff * 10f).roundToInt() / 10f
-                    } else summary.weightChange ?: weightEvolution.variation
-
-                    val currentHeight = latestWithHeight?.heightCm
-                    val bmiResult = if (currentWeight != null && currentHeight != null) {
-                        BodyMetricsCalculator.calculateBMI(currentWeight, currentHeight)
-                    } else null
+                    val bodySummary = BodyEvolutionCalculator.calculate(measurements)
+                    val currentWeight = bodySummary.currentWeight ?: summary.currentWeight ?: weightEvolution.currentWeight
+                    val initialWeight = bodySummary.initialWeight ?: summary.initialWeight ?: weightEvolution.firstWeight
+                    val weightVariation = bodySummary.weightVariation ?: summary.weightChange ?: weightEvolution.variation
 
                     EvolutionUiState(
                         isLoading = false,
@@ -61,12 +48,13 @@ class EvolutionViewModel(
                         consistency = consistency,
                         weightEvolution = weightEvolution,
                         measurements = measurements,
+                        bodyEvolutionSummary = bodySummary,
                         currentWeight = currentWeight,
                         initialWeight = initialWeight,
                         weightVariation = weightVariation,
-                        currentHeight = currentHeight,
-                        bmi = bmiResult?.value,
-                        bmiCategory = bmiResult?.category,
+                        currentHeight = bodySummary.currentHeight,
+                        bmi = bodySummary.bmi,
+                        bmiCategory = bodySummary.bmiCategory,
                         error = null
                     )
                 }.catch { e ->
@@ -86,4 +74,3 @@ class EvolutionViewModel(
         }
     }
 }
-

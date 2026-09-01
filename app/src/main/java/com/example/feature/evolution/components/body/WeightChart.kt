@@ -26,10 +26,9 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.BodyMeasurementEntity
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
 import com.example.ui.theme.SurfaceHighlight
@@ -40,17 +39,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
-import kotlin.math.min
 
 @Composable
 fun WeightChart(
-    measurements: List<BodyMeasurementEntity>,
+    measurements: List<BodyMeasurement>,
     modifier: Modifier = Modifier
 ) {
     val weightData = remember(measurements) {
         measurements
             .filter { it.weightKg != null && it.weightKg > 0f }
-            .sortedWith(compareBy({ it.date }, { it.createdAt }))
+            .sortedBy { it.date }
     }
 
     val dateFormatter = remember { SimpleDateFormat("dd/MM", Locale("pt", "BR")) }
@@ -113,7 +111,6 @@ fun WeightChart(
             val weights = weightData.mapNotNull { it.weightKg }
             val minWeight = weights.minOrNull() ?: 0f
             val maxWeight = weights.maxOrNull() ?: 100f
-            val range = max(0.5f, maxWeight - minWeight)
 
             val minDisplay = (minWeight - 0.5f)
             val maxDisplay = (maxWeight + 0.5f)

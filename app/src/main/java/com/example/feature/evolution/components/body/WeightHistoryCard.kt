@@ -12,12 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MonitorWeight
-import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingFlat
 import androidx.compose.material.icons.filled.TrendingUp
@@ -35,7 +33,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.BodyMeasurementEntity
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
@@ -43,16 +41,14 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TextTertiary
 import java.util.Locale
-import kotlin.math.abs
 
 @Composable
 fun WeightHistoryCard(
     currentWeight: Float?,
     initialWeight: Float?,
     weightVariation: Float?,
-    measurements: List<BodyMeasurementEntity>,
+    measurements: List<BodyMeasurement>,
     onRegisterWeightClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {

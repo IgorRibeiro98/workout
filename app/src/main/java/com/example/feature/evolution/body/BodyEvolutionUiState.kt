@@ -1,12 +1,12 @@
 package com.example.feature.evolution.body
 
-import com.example.data.local.BodyMeasurementEntity
 import com.example.domain.evolution.model.BMICategory
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.EvolutionPeriod
 
 data class BodyEvolutionUiState(
     val isLoading: Boolean = true,
-    val measurements: List<BodyMeasurementEntity> = emptyList(),
+    val measurements: List<BodyMeasurement> = emptyList(),
     val currentWeight: Float? = null,
     val initialWeight: Float? = null,
     val weightVariation: Float? = null,
@@ -19,12 +19,12 @@ data class BodyEvolutionUiState(
     val hasMeasurements: Boolean
         get() = measurements.isNotEmpty()
 
-    val sortedMeasurements: List<BodyMeasurementEntity>
-        get() = measurements.sortedWith(compareBy({ it.date }, { it.createdAt }))
+    val sortedMeasurements: List<BodyMeasurement>
+        get() = measurements.sortedBy { it.date }
 
-    val latestMeasurement: BodyMeasurementEntity?
+    val latestMeasurement: BodyMeasurement?
         get() = sortedMeasurements.lastOrNull()
 
-    val firstMeasurement: BodyMeasurementEntity?
+    val firstMeasurement: BodyMeasurement?
         get() = sortedMeasurements.firstOrNull()
 }

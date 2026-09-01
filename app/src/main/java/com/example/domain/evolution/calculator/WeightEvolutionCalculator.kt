@@ -1,6 +1,6 @@
 package com.example.domain.evolution.calculator
 
-import com.example.data.local.BodyMeasurementEntity
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.WeightEvolution
 import com.example.domain.evolution.model.WeightTrend
 import kotlin.math.abs
@@ -58,13 +58,13 @@ object WeightEvolutionCalculator {
     }
 
     /**
-     * Calculates weight evolution metrics from a list of body measurement entities.
-     * Sorts entities chronologically by date/createdAt before calculating.
+     * Calculates weight evolution metrics from a list of body measurements.
+     * Sorts measurements chronologically by date before calculating.
      */
-    fun calculateFromMeasurements(measurements: List<BodyMeasurementEntity>): WeightEvolution {
+    fun calculateFromMeasurements(measurements: List<BodyMeasurement>): WeightEvolution {
         val sortedWeights = measurements
             .filter { it.weightKg != null && it.weightKg > 0f }
-            .sortedWith(compareBy({ it.date }, { it.createdAt }))
+            .sortedBy { it.date }
             .mapNotNull { it.weightKg }
 
         return calculate(sortedWeights)

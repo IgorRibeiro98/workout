@@ -18,15 +18,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.local.BodyMeasurementEntity
 import com.example.domain.evolution.model.BMICategory
+import com.example.domain.evolution.model.BodyMeasurement
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 @Composable
 fun BodyEvolutionSection(
-    measurements: List<BodyMeasurementEntity>,
+    measurements: List<BodyMeasurement>,
     currentWeight: Float?,
     initialWeight: Float?,
     weightVariation: Float?,
@@ -89,7 +89,7 @@ fun BodyEvolutionSection(
         )
 
         // 3. Body Measurements Comparison Card
-        BodyMeasurementComparisonCard(
+        BodyComparisonCard(
             measurements = measurements
         )
     }
