@@ -180,12 +180,29 @@ fun ExecutionScreen(
                                 .padding(vertical = 4.dp, horizontal = 8.dp)
                         ) {
                             val sessionName = session.session.templateNameSnapshot ?: "Treino"
-                            Text(
-                                text = sessionName.uppercase(),
-                                color = TextPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = sessionName.uppercase(),
+                                    color = TextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (state.isOrderAdapted) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        color = Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text(
+                                            text = "⚡ Ordem adaptada",
+                                            color = Color(0xFFF59E0B),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = "Exercício ${state.currentExerciseIndex + 1} de ${session.exercises.size}",
@@ -550,8 +567,8 @@ fun ExecutionScreen(
             AlertDialog(
                 onDismissRequest = { completedReorderConfirm = null },
                 containerColor = SurfaceDark,
-                title = { Text("Exercício concluído", color = TextPrimary, fontWeight = FontWeight.Bold) },
-                text = { Text("Este exercício já foi concluído. Deseja alterar somente os próximos exercícios?", color = TextSecondary) },
+                title = { Text("Este exercício já foi concluído", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = { Text("Este exercício já foi concluído. Deseja realmente alterar a ordem registrada?", color = TextSecondary) },
                 confirmButton = {
                     TextButton(onClick = {
                         val ex = completedReorderConfirm
@@ -560,7 +577,7 @@ fun ExecutionScreen(
                             activeSheet = WorkoutSheet.Reorder(ex)
                         }
                     }) {
-                        Text("Alterar posição", color = Lime400, fontWeight = FontWeight.Bold)
+                        Text("Continuar", color = Lime400, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {

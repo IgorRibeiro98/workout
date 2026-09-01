@@ -28,7 +28,8 @@ data class ExecutionState(
     val isLoading: Boolean = true,
     val previousExecutionSets: List<SetLogEntity> = emptyList(),
     val currentResolvedExercise: com.example.domain.model.ResolvedExercise? = null,
-    val isResting: Boolean = false
+    val isResting: Boolean = false,
+    val pendingMoveConfirmation: WorkoutExerciseExecution? = null
 ) {
     val currentExercise: ExerciseSessionWithSets?
         get() = sessionWithDetails?.exercises?.getOrNull(currentExerciseIndex)
@@ -118,6 +119,8 @@ class ExecutionViewModel(
     private var hasAutoRestoredIndex = false
     private var lastSessionId: Long? = null
 
+    private val _pendingMoveConfirmation = MutableStateFlow<WorkoutExerciseExecution?>(null)
+
     val state: StateFlow<ExecutionState> = combine(
         workoutEngine.activeSessionWithDetailsFlow,
         _currentExerciseIndex,
@@ -170,6 +173,8 @@ class ExecutionViewModel(
             currentResolvedExercise = currentResolvedEx,
             isResting = isTimerActive
         )
+    }.combine(_pendingMoveConfirmation) { currentState, pendingMove ->
+        currentState.copy(pendingMoveConfirmation = pendingMove)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ExecutionState())
 
     init {
@@ -201,6 +206,14 @@ class ExecutionViewModel(
         if (index in 0..maxIndex) {
             _currentExerciseIndex.value = index
         }
+    }
+
+    fun setPendingMoveConfirmation(execution: WorkoutExerciseExecution?) {
+        _pendingMoveConfirmation.value = execution
+    }
+
+    fun dismissPendingMoveConfirmation() {
+        _pendingMoveConfirmation.value = null
     }
 
     fun moveExercise(exerciseId: String, newPosition: Int) {

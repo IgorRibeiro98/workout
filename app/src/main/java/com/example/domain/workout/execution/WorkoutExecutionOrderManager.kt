@@ -27,7 +27,30 @@ object WorkoutExecutionOrderManager {
     }
 
     /**
-     * Moves the exercise identified by [exerciseId] to "later" (i.e. shifts it down after the next item).
+     * Checks whether an exercise can be moved directly without explicit user confirmation.
+     */
+    fun canMoveExercise(execution: WorkoutExerciseExecution): Boolean {
+        return execution.status != ExerciseExecutionStatus.COMPLETED
+    }
+
+    /**
+     * Checks if moving this exercise requires user confirmation (e.g., exercise is COMPLETED).
+     */
+    fun requiresMoveConfirmation(execution: WorkoutExerciseExecution): Boolean {
+        return execution.status == ExerciseExecutionStatus.COMPLETED
+    }
+
+    /**
+     * Checks if moving this exercise requires user confirmation (alias for backward compatibility).
+     */
+    fun isCompleted(execution: WorkoutExerciseExecution): Boolean {
+        return requiresMoveConfirmation(execution)
+    }
+
+    /**
+     * Moves the exercise identified by [exerciseId] to "later".
+     * If there are pending/in-progress exercises after it, moves it right after the last pending/in-progress exercise.
+     * If it is already the last exercise, returns the list unchanged.
      */
     fun moveExerciseToLater(
         executions: List<WorkoutExerciseExecution>,
@@ -38,20 +61,23 @@ object WorkoutExecutionOrderManager {
 
         val mutable = executions.toMutableList()
         val item = mutable.removeAt(index)
-        // Place item right after the next element
-        val targetIndex = (index + 1).coerceAtMost(mutable.size)
-        mutable.add(targetIndex, item)
+
+        // Find last pending or in-progress exercise after index in the remaining items
+        val lastPendingIndex = mutable.indexOfLast {
+            it.status == ExerciseExecutionStatus.PENDING || it.status == ExerciseExecutionStatus.IN_PROGRESS
+        }
+
+        val targetIndex = if (lastPendingIndex >= 0) {
+            lastPendingIndex + 1
+        } else {
+            index.coerceAtMost(mutable.size)
+        }
+
+        mutable.add(targetIndex.coerceIn(0, mutable.size), item)
 
         return mutable.mapIndexed { pos, ex ->
             ex.copy(executionOrder = pos + 1)
         }
-    }
-
-    /**
-     * Checks if moving this exercise requires user confirmation (e.g., exercise is COMPLETED).
-     */
-    fun isCompleted(execution: WorkoutExerciseExecution): Boolean {
-        return execution.status == ExerciseExecutionStatus.COMPLETED
     }
 
     /**

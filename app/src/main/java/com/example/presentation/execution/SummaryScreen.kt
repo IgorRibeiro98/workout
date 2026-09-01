@@ -1,5 +1,6 @@
 package com.example.presentation.execution
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -33,6 +35,7 @@ fun SummaryScreen(
     
     val totalSets = summary.exercises.sumOf { ex -> ex.sets.count { it.completed } }
     val totalVolume = summary.exercises.sumOf { ex -> VolumeCalculator.calculateVolume(ex.sets) }.toInt()
+    val isOrderAdapted = summary.exercises.any { it.exerciseSession.executionOrder != it.exerciseSession.plannedOrder }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -62,6 +65,28 @@ fun SummaryScreen(
                     SummaryStat("Exercícios", "${summary.exercises.size}")
                     SummaryStat("Séries", "$totalSets")
                     SummaryStat("Volume", "${totalVolume}kg")
+                }
+
+                if (isOrderAdapted) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Surface(
+                        color = Color(0xFFF59E0B).copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "⚡ Você adaptou a ordem dos exercícios neste treino.",
+                                color = Color(0xFFF59E0B),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
                 
                 Spacer(modifier = Modifier.height(32.dp))

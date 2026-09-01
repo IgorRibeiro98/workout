@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Treino"
+rootProject.name = "Spark"
 
 include(":app")
