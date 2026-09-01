@@ -71,6 +71,20 @@ class EvolutionViewModel(
                     val initialWeight = bodySummary.initialWeight ?: summary.initialWeight ?: weightEvolution.firstWeight
                     val weightVariation = bodySummary.weightVariation ?: summary.weightChange ?: weightEvolution.variation
 
+                    val exercisesWithHistory = exerciseEvolutions.filter { it.totalExecutions > 0 && it.bestWeight != null }
+                    val currentSelected = _uiState.value.selectedExerciseId
+                    val selectedExerciseId = when {
+                        currentSelected != null && exercisesWithHistory.any { it.exerciseId == currentSelected } -> currentSelected
+                        exercisesWithHistory.isNotEmpty() -> exercisesWithHistory.first().exerciseId
+                        else -> null
+                    }
+                    val selectedExerciseName = exercisesWithHistory.find { it.exerciseId == selectedExerciseId }?.exerciseName
+                    val strengthHistory = if (selectedExerciseId != null && performanceRepository != null) {
+                        performanceRepository.getExerciseStrengthHistory(selectedExerciseId)
+                    } else {
+                        emptyList()
+                    }
+
                     EvolutionUiState(
                         isLoading = false,
                         summary = summary,
@@ -89,6 +103,9 @@ class EvolutionViewModel(
                         exerciseEvolutions = exerciseEvolutions,
                         personalRecords = personalRecords,
                         volumeHistory = volumeHistory,
+                        selectedExerciseId = selectedExerciseId,
+                        selectedExerciseName = selectedExerciseName,
+                        strengthHistory = strengthHistory,
                         error = null
                     )
                 }.catch { e ->
@@ -103,6 +120,27 @@ class EvolutionViewModel(
                 _uiState.value = EvolutionUiState(
                     isLoading = false,
                     error = e.message ?: "Não foi possível carregar sua evolução."
+                )
+            }
+        }
+    }
+
+    fun selectExercise(exerciseId: String) {
+        val exercise = _uiState.value.exerciseEvolutions.find { it.exerciseId == exerciseId }
+        val exerciseName = exercise?.exerciseName ?: exerciseId
+        viewModelScope.launch {
+            try {
+                val strengthPoints = performanceRepository?.getExerciseStrengthHistory(exerciseId) ?: emptyList()
+                _uiState.value = _uiState.value.copy(
+                    selectedExerciseId = exerciseId,
+                    selectedExerciseName = exerciseName,
+                    strengthHistory = strengthPoints
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    selectedExerciseId = exerciseId,
+                    selectedExerciseName = exerciseName,
+                    error = e.message
                 )
             }
         }

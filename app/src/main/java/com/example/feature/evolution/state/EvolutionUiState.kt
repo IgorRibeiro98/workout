@@ -11,6 +11,7 @@ import com.example.domain.evolution.model.performance.ExercisePerformanceEvoluti
 import com.example.domain.evolution.model.performance.PersonalRecord
 import com.example.domain.evolution.model.performance.VolumePoint
 import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
+import com.example.domain.evolution.model.performance.chart.StrengthPoint
 
 data class EvolutionUiState(
     val isLoading: Boolean = false,
@@ -30,6 +31,9 @@ data class EvolutionUiState(
     val exerciseEvolutions: List<ExercisePerformanceEvolution> = emptyList(),
     val personalRecords: List<PersonalRecord> = emptyList(),
     val volumeHistory: List<VolumePoint> = emptyList(),
+    val selectedExerciseId: String? = null,
+    val selectedExerciseName: String? = null,
+    val strengthHistory: List<StrengthPoint> = emptyList(),
     val error: String? = null
 ) {
     val isEmpty: Boolean

@@ -3,6 +3,7 @@ package com.example.domain.evolution.calculator
 import com.example.data.local.SessionCalendarSummary
 import com.example.data.local.SessionWithDetails
 import com.example.domain.evolution.model.PerformanceEvolution
+import com.example.domain.evolution.model.performance.chart.StrengthPoint
 import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
 import com.example.domain.evolution.model.performance.PersonalRecord
 import com.example.domain.evolution.model.performance.VolumePoint
@@ -245,6 +246,54 @@ object PerformanceCalculator {
                         volume = sessionVolume.toFloat()
                     )
                 )
+            }
+        }
+
+        return points
+    }
+
+    /**
+     * Extracts chronological strength progression points (date, weight, repetitions) for a given exercise.
+     */
+    fun calculateExerciseStrengthHistory(
+        sessions: List<SessionCalendarSummary>,
+        exerciseId: String
+    ): List<StrengthPoint> {
+        if (sessions.isEmpty() || exerciseId.isBlank()) return emptyList()
+
+        val sortedSessions = sessions.sortedBy { it.session.startedAt }
+        val points = mutableListOf<StrengthPoint>()
+
+        for (summary in sortedSessions) {
+            val sessionTime = summary.session.startedAt
+            for (exerciseSession in summary.exercises) {
+                val rawId = exerciseSession.exerciseSession.actualExerciseId 
+                    ?: exerciseSession.exerciseSession.plannedExerciseId
+                val exerciseName = exerciseSession.exerciseSession.exerciseNameSnapshot.ifBlank { "Exercício" }
+                val key = rawId?.toString() ?: exerciseName.trim().lowercase()
+
+                val isMatch = key.equals(exerciseId, ignoreCase = true) ||
+                        exerciseName.equals(exerciseId, ignoreCase = true) ||
+                        (rawId != null && rawId.toString() == exerciseId) ||
+                        (exerciseSession.exerciseSession.actualExerciseId?.toString() == exerciseId) ||
+                        (exerciseSession.exerciseSession.plannedExerciseId?.toString() == exerciseId)
+
+                if (isMatch) {
+                    val completedSets = exerciseSession.sets.filter { it.completed && it.weight > 0f }
+                    val maxWeightSet = completedSets.maxWithOrNull(
+                        compareBy<com.example.data.local.SetLogEntity> { it.weight }.thenBy { it.repetitions }
+                    )
+
+                    if (maxWeightSet != null) {
+                        points.add(
+                            StrengthPoint(
+                                date = sessionTime,
+                                weight = maxWeightSet.weight,
+                                repetitions = maxWeightSet.repetitions
+                            )
+                        )
+                    }
+                }
             }
         }
 

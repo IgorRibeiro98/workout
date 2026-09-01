@@ -1,4 +1,4 @@
-package com.example.feature.evolution.performance
+package com.example.feature.evolution.performance.chart
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,29 +10,27 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
-class PerformanceViewModel(
+class PerformanceChartViewModel(
     private val performanceRepository: PerformanceRepository
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(PerformanceUiState(isLoading = true))
-    val uiState: StateFlow<PerformanceUiState> = _uiState.asStateFlow()
+    private val _uiState = MutableStateFlow(PerformanceChartUiState(isLoading = true))
+    val uiState: StateFlow<PerformanceChartUiState> = _uiState.asStateFlow()
 
     init {
-        loadPerformance()
+        loadCharts()
     }
 
-    fun loadPerformance() {
+    fun loadCharts() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             try {
                 combine(
-                    performanceRepository.getPerformanceSummaryFlow(),
-                    performanceRepository.getAllExercisesEvolutionFlow(),
-                    performanceRepository.getPersonalRecordsFlow(),
-                    performanceRepository.getVolumeHistoryFlow()
-                ) { summary, allExercises, records, volumeHistory ->
+                    performanceRepository.getVolumeHistoryFlow(),
+                    performanceRepository.getAllExercisesEvolutionFlow()
+                ) { volumeHistory, allExercises ->
                     val exercisesWithHistory = allExercises.filter { it.totalExecutions > 0 && it.bestWeight != null }
-                    val currentSelected = _uiState.value.selectedExerciseId
+                    val currentSelected = _uiState.value.selectedExercise
                     val selectedExerciseId = when {
                         currentSelected != null && exercisesWithHistory.any { it.exerciseId == currentSelected } -> currentSelected
                         exercisesWithHistory.isNotEmpty() -> exercisesWithHistory.first().exerciseId
@@ -46,49 +44,46 @@ class PerformanceViewModel(
                         emptyList()
                     }
 
-                    PerformanceUiState(
+                    PerformanceChartUiState(
                         isLoading = false,
-                        summary = summary,
-                        topExercises = allExercises.take(5),
-                        allExercises = exercisesWithHistory,
-                        personalRecords = records.take(5),
                         volumeHistory = volumeHistory,
-                        selectedExerciseId = selectedExerciseId,
+                        availableExercises = exercisesWithHistory,
+                        selectedExercise = selectedExerciseId,
                         selectedExerciseName = selectedExerciseName,
                         strengthHistory = strengthPoints,
                         error = null
                     )
                 }.catch { e ->
-                    _uiState.value = PerformanceUiState(
+                    _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = e.message ?: "Não foi possível carregar sua performance."
+                        error = e.message ?: "Não foi possível carregar os gráficos de performance."
                     )
                 }.collect { state ->
                     _uiState.value = state
                 }
             } catch (e: Exception) {
-                _uiState.value = PerformanceUiState(
+                _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = e.message ?: "Não foi possível carregar sua performance."
+                    error = e.message ?: "Não foi possível carregar os gráficos de performance."
                 )
             }
         }
     }
 
     fun selectExercise(exerciseId: String) {
-        val exercise = _uiState.value.allExercises.find { it.exerciseId == exerciseId }
+        val exercise = _uiState.value.availableExercises.find { it.exerciseId == exerciseId }
         val exerciseName = exercise?.exerciseName ?: exerciseId
         viewModelScope.launch {
             try {
                 val strengthPoints = performanceRepository.getExerciseStrengthHistory(exerciseId)
                 _uiState.value = _uiState.value.copy(
-                    selectedExerciseId = exerciseId,
+                    selectedExercise = exerciseId,
                     selectedExerciseName = exerciseName,
                     strengthHistory = strengthPoints
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
-                    selectedExerciseId = exerciseId,
+                    selectedExercise = exerciseId,
                     selectedExerciseName = exerciseName,
                     error = e.message
                 )

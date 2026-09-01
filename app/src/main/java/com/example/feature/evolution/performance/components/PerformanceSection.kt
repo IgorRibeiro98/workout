@@ -35,8 +35,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
 import com.example.domain.evolution.model.performance.PersonalRecord
+import com.example.domain.evolution.model.performance.VolumePoint
 import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
+import com.example.domain.evolution.model.performance.chart.StrengthPoint
 import com.example.feature.evolution.performance.PerformanceUiState
+import com.example.feature.evolution.performance.chart.PerformanceChartsSection
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
@@ -49,6 +52,7 @@ import com.example.ui.theme.TextTertiary
 fun PerformanceSection(
     uiState: PerformanceUiState,
     onRetry: () -> Unit = {},
+    onSelectExercise: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     testTag: String = "performance_section"
 ) {
@@ -58,6 +62,12 @@ fun PerformanceSection(
         summary = uiState.summary,
         topExercises = uiState.topExercises,
         personalRecords = uiState.personalRecords,
+        volumeHistory = uiState.volumeHistory,
+        availableExercises = uiState.allExercises.ifEmpty { uiState.topExercises },
+        selectedExerciseId = uiState.selectedExerciseId,
+        selectedExerciseName = uiState.selectedExerciseName,
+        strengthHistory = uiState.strengthHistory,
+        onSelectExercise = onSelectExercise,
         onRetry = onRetry,
         modifier = modifier,
         testTag = testTag
@@ -70,6 +80,12 @@ fun PerformanceSection(
     exercises: List<ExercisePerformanceEvolution>,
     records: List<PersonalRecord>,
     modifier: Modifier = Modifier,
+    volumeHistory: List<VolumePoint> = emptyList(),
+    allExercises: List<ExercisePerformanceEvolution> = emptyList(),
+    selectedExerciseId: String? = null,
+    selectedExerciseName: String? = null,
+    strengthHistory: List<StrengthPoint> = emptyList(),
+    onSelectExercise: (String) -> Unit = {},
     isLoading: Boolean = false,
     error: String? = null,
     onRetry: () -> Unit = {},
@@ -81,6 +97,12 @@ fun PerformanceSection(
         summary = summary,
         topExercises = exercises,
         personalRecords = records,
+        volumeHistory = volumeHistory,
+        availableExercises = allExercises.ifEmpty { exercises },
+        selectedExerciseId = selectedExerciseId,
+        selectedExerciseName = selectedExerciseName,
+        strengthHistory = strengthHistory,
+        onSelectExercise = onSelectExercise,
         onRetry = onRetry,
         modifier = modifier,
         testTag = testTag
@@ -94,6 +116,12 @@ private fun PerformanceSectionContent(
     summary: WorkoutPerformanceSummary?,
     topExercises: List<ExercisePerformanceEvolution>,
     personalRecords: List<PersonalRecord>,
+    volumeHistory: List<VolumePoint>,
+    availableExercises: List<ExercisePerformanceEvolution>,
+    selectedExerciseId: String?,
+    selectedExerciseName: String?,
+    strengthHistory: List<StrengthPoint>,
+    onSelectExercise: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
     testTag: String = "performance_section"
@@ -286,7 +314,18 @@ private fun PerformanceSectionContent(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // 3. Exercícios que mais evoluíram (Top 5)
+                // 3. Gráficos de Performance e Progressão (Volume e Carga)
+                PerformanceChartsSection(
+                    volumeHistory = volumeHistory,
+                    availableExercises = availableExercises,
+                    selectedExerciseId = selectedExerciseId,
+                    selectedExerciseName = selectedExerciseName,
+                    strengthHistory = strengthHistory,
+                    onSelectExercise = onSelectExercise,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 4. Exercícios que mais evoluíram (Top 5)
                 if (topExercises.isNotEmpty()) {
                     ExerciseProgressCard(
                         exercises = topExercises,
@@ -294,7 +333,7 @@ private fun PerformanceSectionContent(
                     )
                 }
 
-                // 4. Melhores marcas (PRs)
+                // 5. Melhores marcas (PRs)
                 if (personalRecords.isNotEmpty()) {
                     PersonalRecordCard(
                         records = personalRecords,

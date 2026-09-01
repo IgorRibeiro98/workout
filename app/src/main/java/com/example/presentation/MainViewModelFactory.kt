@@ -43,6 +43,12 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("PerformanceRepository not provided")
             return com.example.feature.evolution.performance.PerformanceViewModel(repository) as T
         }
+        if (modelClass.isAssignableFrom(com.example.feature.evolution.performance.chart.PerformanceChartViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            val repository = performanceRepository
+                ?: throw IllegalStateException("PerformanceRepository not provided")
+            return com.example.feature.evolution.performance.chart.PerformanceChartViewModel(repository) as T
+        }
         if (modelClass.isAssignableFrom(BodyEvolutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             return BodyEvolutionViewModel(bodyMeasurementRepository) as T

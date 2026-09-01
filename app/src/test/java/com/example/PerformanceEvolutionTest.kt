@@ -260,16 +260,183 @@ class PerformanceEvolutionTest {
             override suspend fun getAllExercisesEvolution(): List<ExercisePerformanceEvolution> = emptyList()
             override suspend fun getPersonalRecords(): List<PersonalRecord> = emptyList()
             override suspend fun getVolumeHistory() = emptyList<com.example.domain.evolution.model.performance.VolumePoint>()
+            override suspend fun getExerciseStrengthHistory(exerciseId: String) = emptyList<com.example.domain.evolution.model.performance.chart.StrengthPoint>()
 
             override fun getPerformanceSummaryFlow() = flow { emit(getPerformanceSummary()) }
             override fun getAllExercisesEvolutionFlow() = flowOf(emptyList<ExercisePerformanceEvolution>())
             override fun getPersonalRecordsFlow() = flowOf(emptyList<PersonalRecord>())
             override fun getVolumeHistoryFlow() = flowOf(emptyList<com.example.domain.evolution.model.performance.VolumePoint>())
+            override fun getExerciseStrengthHistoryFlow(exerciseId: String) = flowOf(emptyList<com.example.domain.evolution.model.performance.chart.StrengthPoint>())
         }
 
         val summary = fakeRepo.getPerformanceSummary()
         assertEquals(48, summary.totalSessions)
         assertEquals(420, summary.totalSets)
         assertEquals(125400f, summary.totalVolume, 0.01f)
+    }
+
+    /**
+     * Teste T12.3.2 — Histórico de volume por sessão
+     */
+    @Test
+    fun testVolumeHistoryCalculation() {
+        val s1 = createMockSession(
+            sessionId = "s1",
+            startTime = 1000L,
+            finishTime = 1000L + 3600000L,
+            exercises = listOf(
+                createMockExerciseWithSets(
+                    exerciseId = "bench_press",
+                    exerciseName = "Supino Reto",
+                    sets = listOf(
+                        createMockSet(completed = true, weight = 50f, repetitions = 10), // 500
+                        createMockSet(completed = true, weight = 50f, repetitions = 10)  // 500 -> total 1000
+                    )
+                )
+            )
+        )
+
+        val s2 = createMockSession(
+            sessionId = "s2",
+            startTime = 2000L,
+            finishTime = 2000L + 3600000L,
+            exercises = listOf(
+                createMockExerciseWithSets(
+                    exerciseId = "bench_press",
+                    exerciseName = "Supino Reto",
+                    sets = listOf(
+                        createMockSet(completed = true, weight = 60f, repetitions = 10) // 600 -> total 600
+                    )
+                )
+            )
+        )
+
+        val volumeHistory = PerformanceCalculator.calculateVolumeHistory(listOf(s2, s1))
+        assertEquals(2, volumeHistory.size)
+        // Deve vir ordenado cronologicamente (s1 @ 1000L, depois s2 @ 2000L)
+        assertEquals(1000L, volumeHistory[0].date)
+        assertEquals(1000f, volumeHistory[0].volume, 0.01f)
+        assertEquals(2000L, volumeHistory[1].date)
+        assertEquals(600f, volumeHistory[1].volume, 0.01f)
+    }
+
+    /**
+     * Teste T12.3.2 — Histórico de força por exercício
+     */
+    @Test
+    fun testExerciseStrengthHistoryCalculation() {
+        val s1 = createMockSession(
+            sessionId = "s1",
+            startTime = 1000L,
+            exercises = listOf(
+                createMockExerciseWithSets(
+                    exerciseId = "bench_press",
+                    exerciseName = "Supino Reto",
+                    sets = listOf(
+                        createMockSet(completed = true, weight = 40f, repetitions = 12),
+                        createMockSet(completed = true, weight = 50f, repetitions = 10) // max 50kg
+                    )
+                )
+            )
+        )
+
+        val s2 = createMockSession(
+            sessionId = "s2",
+            startTime = 2000L,
+            exercises = listOf(
+                createMockExerciseWithSets(
+                    exerciseId = "squat",
+                    exerciseName = "Agachamento",
+                    sets = listOf(
+                        createMockSet(completed = true, weight = 80f, repetitions = 8)
+                    )
+                )
+            )
+        )
+
+        val s3 = createMockSession(
+            sessionId = "s3",
+            startTime = 3000L,
+            exercises = listOf(
+                createMockExerciseWithSets(
+                    exerciseId = "bench_press",
+                    exerciseName = "Supino Reto",
+                    sets = listOf(
+                        createMockSet(completed = true, weight = 70f, repetitions = 8) // max 70kg
+                    )
+                )
+            )
+        )
+
+        val evolutions = PerformanceCalculator.calculateExerciseEvolutions(listOf(s3, s2, s1))
+        val benchPressEvolution = evolutions.find { it.exerciseName == "Supino Reto" }
+        assertNotNull(benchPressEvolution)
+
+        val strengthHistory = PerformanceCalculator.calculateExerciseStrengthHistory(
+            listOf(s3, s2, s1),
+            benchPressEvolution?.exerciseId ?: "Supino Reto"
+        )
+
+        assertEquals(2, strengthHistory.size)
+        assertEquals(1000L, strengthHistory[0].date)
+        assertEquals(50f, strengthHistory[0].weight, 0.01f)
+        assertEquals(10, strengthHistory[0].repetitions)
+
+        assertEquals(3000L, strengthHistory[1].date)
+        assertEquals(70f, strengthHistory[1].weight, 0.01f)
+        assertEquals(8, strengthHistory[1].repetitions)
+    }
+
+    private fun createMockSession(
+        sessionId: String,
+        startTime: Long,
+        finishTime: Long = startTime + 3600000L,
+        exercises: List<ExerciseSessionWithSets> = emptyList()
+    ): SessionCalendarSummary {
+        val longId = sessionId.hashCode().toLong()
+        return SessionCalendarSummary(
+            session = WorkoutSessionEntity(
+                id = longId,
+                templateId = 1L,
+                startedAt = startTime,
+                finishedAt = finishTime,
+                status = "COMPLETED"
+            ),
+            checkIn = null,
+            exercises = exercises
+        )
+    }
+
+    private fun createMockExerciseWithSets(
+        exerciseId: String,
+        exerciseName: String,
+        sets: List<SetLogEntity>
+    ): ExerciseSessionWithSets {
+        val longId = exerciseId.hashCode().toLong()
+        return ExerciseSessionWithSets(
+            exerciseSession = ExerciseSessionEntity(
+                id = longId,
+                sessionId = 1L,
+                plannedExerciseId = longId,
+                actualExerciseId = longId,
+                exerciseNameSnapshot = exerciseName
+            ),
+            sets = sets
+        )
+    }
+
+    private fun createMockSet(
+        completed: Boolean,
+        weight: Float,
+        repetitions: Int
+    ): SetLogEntity {
+        return SetLogEntity(
+            id = (weight * 100 + repetitions).toLong(),
+            exerciseSessionId = 1L,
+            setNumber = 1,
+            weight = weight,
+            repetitions = repetitions,
+            completed = completed
+        )
     }
 }

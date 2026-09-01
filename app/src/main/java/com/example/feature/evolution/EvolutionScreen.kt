@@ -220,6 +220,12 @@ fun EvolutionScreen(
                                 summary = uiState.performanceSummary,
                                 exercises = uiState.exerciseEvolutions,
                                 records = uiState.personalRecords,
+                                volumeHistory = uiState.volumeHistory,
+                                allExercises = uiState.exerciseEvolutions,
+                                selectedExerciseId = uiState.selectedExerciseId,
+                                selectedExerciseName = uiState.selectedExerciseName,
+                                strengthHistory = uiState.strengthHistory,
+                                onSelectExercise = { viewModel.selectExercise(it) },
                                 onRetry = { viewModel.loadEvolution() }
                             )
                         }
