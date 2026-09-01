@@ -134,7 +134,7 @@ fun PerformanceSummaryCard(
 
                 PerformanceMetricBox(
                     value = "${numberFormatter.format(summary.totalVolume)} kg",
-                    label = "volume total",
+                    label = "volume acumulado",
                     icon = Icons.Default.Speed,
                     modifier = Modifier.weight(1.3f),
                     highlightValue = true,

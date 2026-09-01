@@ -25,7 +25,7 @@ class RestNotificationReceiver : BroadcastReceiver() {
 
         CoroutineScope(ioDispatcher).launch {
             try {
-                handleIntent(intent, workoutEngine, settingsManager, notificationManager)
+                handleIntent(intent, workoutEngine, settingsManager, notificationManager, context.applicationContext)
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
@@ -38,7 +38,8 @@ class RestNotificationReceiver : BroadcastReceiver() {
         intent: Intent,
         workoutEngine: WorkoutEngine,
         settingsManager: SettingsManager,
-        notificationManager: WorkoutNotificationManager
+        notificationManager: WorkoutNotificationManager,
+        context: Context? = null
     ) {
         when (intent.action) {
             ACTION_ADD_30S -> {
@@ -57,6 +58,7 @@ class RestNotificationReceiver : BroadcastReceiver() {
             ACTION_TIMER_FINISHED -> {
                 val soundEnabled = settingsManager.soundEnabledFlow.firstOrNull() ?: true
                 val hapticEnabled = settingsManager.hapticEnabledFlow.firstOrNull() ?: true
+                val notificationEnabled = settingsManager.timerNotificationEnabledFlow.firstOrNull() ?: true
                 val exName = intent.getStringExtra("exerciseName")
                     ?: workoutEngine.getActiveExerciseNameForTimer()
 
@@ -64,12 +66,16 @@ class RestNotificationReceiver : BroadcastReceiver() {
                 workoutEngine.skipRestTimer()
                 // 2. Cancel the ongoing countdown notification & alarm
                 notificationManager.cancelNotification()
-                // 3. Emit completion notification with sound and vibration
-                notificationManager.showTimerFinishedAlert(
-                    exerciseName = exName,
-                    soundEnabled = soundEnabled,
-                    hapticEnabled = hapticEnabled
-                )
+                // 3. Emit completion notification with sound and vibration via RestTimerNotificationManager
+                context?.let { ctx ->
+                    val restTimerNotifManager = RestTimerNotificationManager(ctx)
+                    restTimerNotifManager.onTimerFinished(
+                        exerciseName = exName,
+                        soundEnabled = soundEnabled,
+                        hapticEnabled = hapticEnabled,
+                        notificationEnabled = notificationEnabled
+                    )
+                }
             }
         }
     }

@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -348,8 +350,9 @@ fun TodayScreen(viewModel: TodayViewModel, onNavigateToExecution: () -> Unit) {
 
         Spacer(modifier = Modifier.height(24.dp))
         
+        // Meta Semanal Bar
         Text("Meta Semanal", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -368,10 +371,166 @@ fun TodayScreen(viewModel: TodayViewModel, onNavigateToExecution: () -> Unit) {
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "${state.weeklyCompleted} de ${state.weeklyGoal} treinos concluídos",
+            text = "${state.weeklyCompleted} de ${state.weeklyGoal} treinos concluídos este ciclo",
             color = TextSecondary,
-            fontSize = 14.sp
+            fontSize = 13.sp
         )
+
+        // Seu Progresso (Minimalist Context Card)
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Seu Progresso", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(SurfaceDark)
+                .padding(20.dp)
+        ) {
+            Column {
+                val activeWeeksText = if (state.activeWeeksCount > 0) "${state.activeWeeksCount} semanas ativo" else "Iniciando jornada"
+                val workoutsCountText = "${state.totalWorkoutsCompleted} treinos concluídos"
+                
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.TrendingUp,
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "$activeWeeksText · $workoutsCountText",
+                        color = TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                val weightVarText = when {
+                    state.weightChangeKg != null && state.weightChangeKg != 0f -> 
+                        String.format(Locale("pt", "BR"), "%+.1f kg de peso corporal", state.weightChangeKg)
+                    state.latestBodyWeightKg != null -> "Peso atual: ${String.format(Locale("pt", "BR"), "%.1f kg", state.latestBodyWeightKg)}"
+                    else -> "Sem variações de peso registradas"
+                }
+                Text(
+                    text = weightVarText,
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        }
+
+        // Última Evolução (Recent PR / Milestone Card)
+        if (state.recentMilestoneText != null) {
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("Última Evolução", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(SurfaceDark)
+                    .border(1.dp, Lime400.copy(alpha = 0.3f), RoundedCornerShape(24.dp))
+                    .padding(20.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Lime400.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EmojiEvents,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            text = "RECORDES E MARCOS",
+                            color = Lime400,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = state.recentMilestoneText!!,
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Resumo Rápido (Quick Metrics Grid)
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Resumo Rápido", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Peso Atual
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(SurfaceDark)
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "PESO ATUAL",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = state.latestBodyWeightKg?.let { String.format(Locale("pt", "BR"), "%.1f kg", it) } ?: "--",
+                        color = TextPrimary,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+
+            // Volume Semanal
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(SurfaceDark)
+                    .padding(16.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "VOLUME SEMANAL",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (state.weeklyVolumeKg > 0) String.format(Locale("pt", "BR"), "%,d kg", state.weeklyVolumeKg.toInt()) else "--",
+                        color = Lime400,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(32.dp))
         

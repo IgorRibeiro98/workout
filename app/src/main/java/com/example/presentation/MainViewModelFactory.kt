@@ -119,7 +119,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(TodayViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return TodayViewModel(repository, settingsManager, workoutEngine) as T
+            return TodayViewModel(repository, settingsManager, workoutEngine, bodyMeasurementRepository) as T
         }
         if (modelClass.isAssignableFrom(ExecutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

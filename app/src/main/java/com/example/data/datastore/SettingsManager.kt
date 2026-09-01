@@ -37,6 +37,8 @@ class SettingsManager(private val context: Context) {
         val AUTO_SYNC_ENABLED = booleanPreferencesKey("auto_sync_enabled")
         val MEDIA_SYNC_ENABLED = booleanPreferencesKey("media_sync_enabled")
         val LAST_SYNC_STATUS = stringPreferencesKey("last_sync_status")
+        val TIMER_NOTIFICATION_ENABLED = booleanPreferencesKey("timer_notification_enabled")
+        val EXERCISE_DB_V2_API_KEY = stringPreferencesKey("exercise_db_v2_api_key")
     }
 
     val mediaProviderSettingsFlow: Flow<MediaProviderSettings> = context.dataStore.data.map { prefs ->
@@ -112,6 +114,16 @@ class SettingsManager(private val context: Context) {
     val rirRpeEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[RIR_RPE_ENABLED] ?: true }
     val autoRestTimerOnSetFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_REST_TIMER_ON_SET] ?: true }
     val overrideTemplateIdFlow: Flow<Long?> = context.dataStore.data.map { it[OVERRIDE_TEMPLATE_ID] }
+    val timerNotificationEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[TIMER_NOTIFICATION_ENABLED] ?: true }
+    val exerciseDbV2ApiKeyFlow: Flow<String> = context.dataStore.data.map { it[EXERCISE_DB_V2_API_KEY] ?: "" }
+
+    suspend fun setTimerNotificationEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[TIMER_NOTIFICATION_ENABLED] = enabled }
+    }
+
+    suspend fun setExerciseDbV2ApiKey(key: String) {
+        context.dataStore.edit { it[EXERCISE_DB_V2_API_KEY] = key }
+    }
 
     suspend fun setWeeklyGoal(goal: Int) {
         context.dataStore.edit { it[WEEKLY_GOAL] = goal }

@@ -101,6 +101,10 @@ fun SettingsScreen(
     var activeSheet by remember { mutableStateOf<SettingsSheetType?>(null) }
     
     val preAlertEnabled by settingsManager.preAlertEnabledFlow.collectAsState(initial = false)
+    val soundEnabled by settingsManager.soundEnabledFlow.collectAsState(initial = true)
+    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
+    val timerNotifEnabled by settingsManager.timerNotificationEnabledFlow.collectAsState(initial = true)
+    val exerciseDbV2ApiKey by settingsManager.exerciseDbV2ApiKeyFlow.collectAsState(initial = "")
     val rirRpeEnabled by settingsManager.rirRpeEnabledFlow.collectAsState(initial = false)
     val showGifs by settingsManager.showGifsFlow.collectAsState(initial = true)
     
@@ -293,6 +297,24 @@ fun SettingsScreen(
             onClick = { activeSheet = SettingsSheetType.RestBetweenExercises }
         )
         
+        SettingsToggleItem(
+            title = "Som ao finalizar descanso",
+            subtitle = "Emitir sinal sonoro ao fim do descanso",
+            checked = soundEnabled,
+            onCheckedChange = { coroutineScope.launch { settingsManager.setSoundEnabled(it) } }
+        )
+        SettingsToggleItem(
+            title = "Vibração ao finalizar descanso",
+            subtitle = "Vibrar o dispositivo ao término do tempo",
+            checked = hapticEnabled,
+            onCheckedChange = { coroutineScope.launch { settingsManager.setHapticEnabled(it) } }
+        )
+        SettingsToggleItem(
+            title = "Notificação ao finalizar descanso",
+            subtitle = "Mostrar alerta visual ao terminar o descanso",
+            checked = timerNotifEnabled,
+            onCheckedChange = { coroutineScope.launch { settingsManager.setTimerNotificationEnabled(it) } }
+        )
         SettingsToggleItem(
             title = "Pré-alerta de descanso",
             subtitle = "Avisar 10 segundos antes do término do descanso",
@@ -878,7 +900,7 @@ private fun ExerciseDbIntegrationSheet(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Provedor externo opcional (ExerciseDB OSS) para buscar GIFs",
+                        text = "Provedor externo opcional (ExerciseDB OSS / V2) para buscar GIFs",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -893,6 +915,45 @@ private fun ExerciseDbIntegrationSheet(
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Lime400,
                         checkedTrackColor = Lime400.copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            // ExerciseDB V2 Key Input
+            val v2ApiKey by settingsManager.exerciseDbV2ApiKeyFlow.collectAsState(initial = "")
+            var inputKey by remember(v2ApiKey) { mutableStateOf(v2ApiKey) }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SurfaceDark, shape = RoundedCornerShape(12.dp))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Chave da API ExerciseDB V2 (Opcional)",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Forneça sua chave RapidAPI V2 para fallback prioritário caso o servidor OSS esteja indisponível.",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+                OutlinedTextField(
+                    value = inputKey,
+                    onValueChange = {
+                        inputKey = it
+                        coroutineScope.launch { settingsManager.setExerciseDbV2ApiKey(it) }
+                    },
+                    placeholder = { Text("Cole sua chave RapidAPI V2 aqui", fontSize = 12.sp, color = TextSecondary) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lime400,
+                        unfocusedBorderColor = BorderLight,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
                     )
                 )
             }

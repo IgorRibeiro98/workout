@@ -29,13 +29,20 @@ data class TodayState(
     val activeCheckIn: com.example.data.local.CheckInEntity? = null,
     val lastSession: WorkoutSessionEntity? = null,
     val stats: com.example.domain.engine.WeeklyStats? = null,
-    val sequence: List<SequenceItemData> = emptyList()
+    val sequence: List<SequenceItemData> = emptyList(),
+    val activeWeeksCount: Int = 0,
+    val totalWorkoutsCompleted: Int = 0,
+    val latestBodyWeightKg: Float? = null,
+    val weightChangeKg: Float? = null,
+    val recentMilestoneText: String? = null,
+    val weeklyVolumeKg: Float = 0f
 )
 
 class TodayViewModel(
     private val repository: WorkoutRepository,
     private val settingsManager: SettingsManager,
-    private val workoutEngine: WorkoutEngine
+    private val workoutEngine: WorkoutEngine,
+    private val bodyMeasurementRepository: com.example.data.repository.BodyMeasurementRepository? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(TodayState())
@@ -51,6 +58,8 @@ class TodayViewModel(
             val endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000L - 1
             val statsEngine = com.example.domain.engine.StatsEngine(repository.dao)
 
+            val bodyMeasurementsFlow = bodyMeasurementRepository?.allMeasurements ?: flowOf(emptyList())
+
             combine(
                 repository.currentProgram,
                 repository.getWeeklyCompletedSessionsCount(startOfWeek),
@@ -58,7 +67,10 @@ class TodayViewModel(
                 workoutEngine.activeSessionFlow,
                 workoutEngine.activeCheckInFlow,
                 statsEngine.getWeeklyStatsFlow(startOfWeek, endOfWeek),
-                settingsManager.overrideTemplateIdFlow
+                settingsManager.overrideTemplateIdFlow,
+                repository.dao.getAllCompletedSessionsWithDetailsFlow(),
+                repository.dao.getRecentPRsFlow(),
+                bodyMeasurementsFlow
             ) { args ->
                 val program = args[0] as WorkoutProgramEntity?
                 val weeklyCount = args[1] as Int
@@ -67,6 +79,31 @@ class TodayViewModel(
                 val activeCheckIn = args[4] as com.example.data.local.CheckInEntity?
                 val stats = args[5] as com.example.domain.engine.WeeklyStats
                 val overrideTemplateId = args[6] as Long?
+                val completedSessions = args[7] as List<com.example.data.local.SessionCalendarSummary>
+                val recentPRs = args[8] as List<com.example.data.local.PersonalRecordEntity>
+                val bodyMeasurements = args[9] as List<com.example.data.local.BodyMeasurementEntity>
+
+                val totalWorkouts = completedSessions.size
+                val activeWeeks = if (completedSessions.isNotEmpty()) {
+                    val timestamps = completedSessions.map { it.session.startedAt }
+                    val minTs = timestamps.minOrNull() ?: System.currentTimeMillis()
+                    val diffDays = ((System.currentTimeMillis() - minTs) / (1000 * 60 * 60 * 24)).coerceAtLeast(0)
+                    (diffDays / 7 + 1).toInt()
+                } else {
+                    0
+                }
+
+                val recentMilestone = recentPRs.firstOrNull()?.let {
+                    "Novo PR: ${it.prType} (${it.value.toInt()} kg)"
+                }
+
+                val latestWeight = bodyMeasurements.firstOrNull()?.weightKg
+                val firstWeight = bodyMeasurements.lastOrNull()?.weightKg
+                val weightDiff = if (latestWeight != null && firstWeight != null && bodyMeasurements.size >= 2) {
+                    latestWeight - firstWeight
+                } else null
+
+                val weeklyVolume = stats.volume.toFloat()
 
                 if (program != null) {
                     val templates = repository.getTemplatesForProgram(program.id).first()
@@ -126,10 +163,27 @@ class TodayViewModel(
                         activeCheckIn = activeCheckIn,
                         lastSession = lastSession,
                         stats = stats,
-                        sequence = sequenceList
+                        sequence = sequenceList,
+                        activeWeeksCount = activeWeeks,
+                        totalWorkoutsCompleted = totalWorkouts,
+                        latestBodyWeightKg = latestWeight,
+                        weightChangeKg = weightDiff,
+                        recentMilestoneText = recentMilestone,
+                        weeklyVolumeKg = weeklyVolume
                     )
                 } else {
-                    _state.value = TodayState(weeklyGoal = goal, activeSession = activeSession, activeCheckIn = activeCheckIn, stats = stats)
+                    _state.value = TodayState(
+                        weeklyGoal = goal,
+                        activeSession = activeSession,
+                        activeCheckIn = activeCheckIn,
+                        stats = stats,
+                        activeWeeksCount = activeWeeks,
+                        totalWorkoutsCompleted = totalWorkouts,
+                        latestBodyWeightKg = latestWeight,
+                        weightChangeKg = weightDiff,
+                        recentMilestoneText = recentMilestone,
+                        weeklyVolumeKg = weeklyVolume
+                    )
                 }
             }.collect()
         }

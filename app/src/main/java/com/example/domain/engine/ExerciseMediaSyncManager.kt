@@ -26,7 +26,19 @@ class ExerciseMediaSyncManager(
     private val settingsManager: SettingsManager,
     private val context: Context? = null
 ) {
-    private val remoteDataSource = NetworkExerciseRemoteDataSource()
+    private val v1RemoteDataSource = NetworkExerciseRemoteDataSource()
+    private val v1Provider = com.example.data.remote.provider.ExerciseApiV1Provider(v1RemoteDataSource)
+    private val v2Provider = com.example.data.remote.provider.ExerciseApiV2Provider(
+        apiKeyProvider = { kotlinx.coroutines.runBlocking { settingsManager.exerciseDbV2ApiKeyFlow.first() } }
+    )
+    private val localCacheProvider = com.example.data.remote.provider.ExerciseLocalCacheProvider(dao)
+    private val compositeProvider = com.example.data.remote.provider.CompositeExerciseApiProvider(
+        v1Provider = v1Provider,
+        v2Provider = v2Provider,
+        localCacheProvider = localCacheProvider
+    )
+    private val remoteDataSource = com.example.data.remote.provider.ExerciseApiProviderAdapter(compositeProvider)
+
     private val repository = ExerciseMediaRepository(
         workoutDao = dao,
         remoteDataSource = remoteDataSource,
