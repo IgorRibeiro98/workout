@@ -54,7 +54,11 @@ fun ExerciseSelector(
     var expanded by remember { mutableStateOf(false) }
 
     val currentExercise = exercises.find { it.exerciseId == selectedExerciseId }
-    val displayName = currentExercise?.exerciseName ?: "Selecione um exercício"
+    val displayName = when {
+        exercises.isEmpty() -> "Nenhum exercício com histórico disponível"
+        currentExercise != null -> currentExercise.exerciseName
+        else -> "Selecione um exercício"
+    }
 
     Column(
         modifier = modifier
@@ -97,12 +101,12 @@ fun ExerciseSelector(
                         Icon(
                             imageVector = Icons.Default.FitnessCenter,
                             contentDescription = null,
-                            tint = if (selectedExerciseId != null) Lime400 else TextTertiary,
+                            tint = if (selectedExerciseId != null && exercises.isNotEmpty()) Lime400 else TextTertiary,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = displayName,
-                            color = if (selectedExerciseId != null) TextPrimary else TextTertiary,
+                            color = if (selectedExerciseId != null && exercises.isNotEmpty()) TextPrimary else TextTertiary,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1
@@ -118,48 +122,50 @@ fun ExerciseSelector(
                 }
             }
 
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier
-                    .background(SurfaceDark)
-                    .border(1.dp, BorderLight, RoundedCornerShape(8.dp))
-                    .testTag("exercise_selector_dropdown")
-            ) {
-                exercises.forEach { item ->
-                    val isSelected = item.exerciseId == selectedExerciseId
-                    DropdownMenuItem(
-                        text = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = item.exerciseName,
-                                    color = if (isSelected) Lime400 else TextPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                                if (item.bestWeight != null) {
-                                    Spacer(modifier = Modifier.width(16.dp))
+            if (exercises.isNotEmpty()) {
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier
+                        .background(SurfaceDark)
+                        .border(1.dp, BorderLight, RoundedCornerShape(8.dp))
+                        .testTag("exercise_selector_dropdown")
+                ) {
+                    exercises.forEach { item ->
+                        val isSelected = item.exerciseId == selectedExerciseId
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
                                     Text(
-                                        text = "${item.bestWeight}kg máx",
-                                        color = TextTertiary,
-                                        fontSize = 12.sp
+                                        text = item.exerciseName,
+                                        color = if (isSelected) Lime400 else TextPrimary,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     )
+                                    if (item.bestWeight != null) {
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Text(
+                                            text = "${item.bestWeight}kg máx",
+                                            color = TextTertiary,
+                                            fontSize = 12.sp
+                                        )
+                                    }
                                 }
-                            }
-                        },
-                        onClick = {
-                            onExerciseSelected(item.exerciseId)
-                            expanded = false
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = TextPrimary
-                        ),
-                        modifier = Modifier.testTag("exercise_option_${item.exerciseId}")
-                    )
+                            },
+                            onClick = {
+                                onExerciseSelected(item.exerciseId)
+                                expanded = false
+                            },
+                            colors = MenuDefaults.itemColors(
+                                textColor = TextPrimary
+                            ),
+                            modifier = Modifier.testTag("exercise_option_${item.exerciseId}")
+                        )
+                    }
                 }
             }
         }

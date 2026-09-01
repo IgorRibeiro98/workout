@@ -1,6 +1,7 @@
 package com.example.feature.evolution.performance.chart
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,23 +15,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
 import com.example.domain.evolution.model.performance.chart.StrengthPoint
-import com.example.feature.evolution.components.body.ChartPoint
 import com.example.feature.evolution.components.body.EvolutionLineChart
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -39,26 +40,18 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
-import java.text.DecimalFormat
-import java.text.DecimalFormatSymbols
-import java.util.Locale
 
 @Composable
 fun ExerciseStrengthChart(
-    exerciseName: String?,
-    strengthPoints: List<StrengthPoint>,
+    exercises: List<ExercisePerformanceEvolution>,
+    selectedExerciseId: String?,
+    selectedExerciseName: String?,
+    strengthHistory: List<StrengthPoint>,
+    onSelectExercise: (String) -> Unit,
     modifier: Modifier = Modifier,
     testTag: String = "exercise_strength_chart"
 ) {
-    val chartPoints = remember(strengthPoints) {
-        strengthPoints.map { ChartPoint(date = it.date, value = it.weight) }
-    }
-
-    val numberFormatter = remember {
-        DecimalFormat("#0.#", DecimalFormatSymbols(Locale("pt", "BR")))
-    }
-
-    val latestPoint = strengthPoints.lastOrNull()
+    val chartPoints = PerformanceChartMapper.mapStrengthHistoryToChartPoints(strengthHistory, selectedExerciseName)
 
     Card(
         modifier = modifier
@@ -73,133 +66,93 @@ fun ExerciseStrengthChart(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // Header
+            // Header: Título & Subtítulo
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(LimeTransparent),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(LimeTransparent),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ShowChart,
-                            contentDescription = null,
-                            tint = Lime400,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            text = exerciseName ?: "Força por exercício",
-                            color = TextPrimary,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Evolução de carga ao longo do tempo",
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.FitnessCenter,
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
 
-                if (latestPoint != null && latestPoint.weight > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(LimeTransparent)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "${numberFormatter.format(latestPoint.weight)}kg",
-                            color = Lime400,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                Column {
+                    Text(
+                        text = selectedExerciseName ?: "Evolução de Carga",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Carga máxima realizada por treino",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
                 }
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Seletor de Exercício
+            ExerciseSelector(
+                exercises = exercises,
+                selectedExerciseId = selectedExerciseId,
+                onExerciseSelected = onSelectExercise,
+                modifier = Modifier.fillMaxWidth()
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            when {
-                exerciseName == null -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF191B1F))
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
+            if (strengthHistory.isEmpty()) {
+                // PARTE 7: Estado vazio de força
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF1E2124))
+                        .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
+                        .padding(20.dp)
+                        .testTag("exercise_strength_empty"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = TextTertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
                         Text(
-                            text = "Selecione um exercício para acompanhar sua evolução.",
-                            color = TextTertiary,
-                            fontSize = 13.sp
+                            text = "Ainda não existem dados suficientes para este exercício.",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
-                chartPoints.size >= 2 -> {
-                    EvolutionLineChart(
-                        points = chartPoints,
-                        lineColor = Lime400,
-                        gradientColor = LimeTransparent,
-                        unit = "kg",
-                        modifier = Modifier.fillMaxWidth(),
-                        testTag = "strength_line_chart"
-                    )
-                }
-                chartPoints.size == 1 -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF191B1F))
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "Carga inicial: ${numberFormatter.format(chartPoints.first().value)}kg",
-                                color = Lime400,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Realize mais treinos deste exercício para ver a linha do gráfico.",
-                                color = TextTertiary,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-                else -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF191B1F))
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Ainda não existem dados suficientes.",
-                            color = TextTertiary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
+            } else {
+                EvolutionLineChart(
+                    points = chartPoints,
+                    modifier = Modifier.fillMaxWidth(),
+                    lineColor = Lime400,
+                    gradientColor = LimeTransparent,
+                    unit = "kg",
+                    testTag = "strength_line_chart"
+                )
             }
         }
     }

@@ -271,9 +271,10 @@ class NetworkExerciseRemoteDataSource(
                 }
                 if (code == 429 || code in 500..504) {
                     if (attempt < maxRetries) {
-                        Log.w("ExerciseDB_HTTP", "Transient HTTP $code encountered. Retrying in ${currentDelay}ms (attempt $attempt/$maxRetries)...")
-                        kotlinx.coroutines.delay(currentDelay)
-                        currentDelay = (currentDelay * 1.5).toLong()
+                        val retryDelay = if (code == 429) (currentDelay * 2).coerceAtLeast(2500L) else currentDelay
+                        Log.w("ExerciseDB_HTTP", "Transient HTTP $code encountered. Retrying in ${retryDelay}ms (attempt $attempt/$maxRetries)...")
+                        kotlinx.coroutines.delay(retryDelay)
+                        currentDelay = (currentDelay * 2).coerceAtMost(10000L)
                         continue
                     }
                 }

@@ -62,10 +62,18 @@ class ExerciseMediaRepository(
             Request iniciado
         """.trimIndent())
 
-        // 1. Direct lookup by known external ID if already matched
+        // Priority 2: Verified remote GIF with MATCHED status already synced
         if (!exercise.externalExerciseId.isNullOrBlank() && 
             exercise.mappingStatus == ExerciseMatchStatus.MATCHED.name && 
             !exercise.gifUrl.isNullOrBlank()) {
+            
+            val isRecentlyVerified = exercise.lastVerifiedAt != null && 
+                (System.currentTimeMillis() - exercise.lastVerifiedAt < 30L * 24 * 3600 * 1000)
+            
+            if (isRecentlyVerified) {
+                Log.d("SYNC_LOG", "[SYNC SKIPPED] Exercise: ${exercise.name} -> Já sincronizado e verificado recentemente")
+                return@withContext SyncExerciseItemResult.Success
+            }
             
             val idResult = com.example.domain.engine.RetryPolicy.executeWithRetry(
                 maxAttempts = 3,
@@ -99,8 +107,14 @@ class ExerciseMediaRepository(
                 is NetworkResult.Offline -> {
                     return@withContext SyncExerciseItemResult.Failed("Sem conexão com a internet")
                 }
+                is NetworkResult.HttpError -> {
+                    if (idResult.code == 429 && !exercise.gifUrl.isNullOrBlank()) {
+                        Log.w("SYNC_LOG", "[SYNC WARN] Exercise: ${exercise.name} -> Rate limit (429) atingido na re-verificação, preservando GIF existente.")
+                        return@withContext SyncExerciseItemResult.Success
+                    }
+                    // Fallback to name search queries if direct ID fails
+                }
                 is NetworkResult.NotFound,
-                is NetworkResult.HttpError,
                 is NetworkResult.ParserError -> {
                     // Fallback to name search queries if direct ID fails
                 }

@@ -71,7 +71,9 @@ class EvolutionViewModel(
                     val initialWeight = bodySummary.initialWeight ?: summary.initialWeight ?: weightEvolution.firstWeight
                     val weightVariation = bodySummary.weightVariation ?: summary.weightChange ?: weightEvolution.variation
 
-                    val exercisesWithHistory = exerciseEvolutions.filter { it.totalExecutions > 0 && it.bestWeight != null }
+                    val exercisesWithHistory = exerciseEvolutions
+                        .filter { it.totalExecutions > 0 && it.bestWeight != null }
+                        .sortedByDescending { it.totalExecutions }
                     val currentSelected = _uiState.value.selectedExerciseId
                     val selectedExerciseId = when {
                         currentSelected != null && exercisesWithHistory.any { it.exerciseId == currentSelected } -> currentSelected

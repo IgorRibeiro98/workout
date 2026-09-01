@@ -387,6 +387,83 @@ class PerformanceEvolutionTest {
         assertEquals(8, strengthHistory[1].repetitions)
     }
 
+    /**
+     * Teste T12.3.2A — Teste 1: Chart Volume Mapper
+     */
+    @Test
+    fun testVolumeChartMapping() {
+        val v1 = com.example.domain.evolution.model.performance.VolumePoint(date = 1000L, volume = 10000f)
+        val v2 = com.example.domain.evolution.model.performance.VolumePoint(date = 2000L, volume = 20000f)
+
+        val chartPoints = com.example.feature.evolution.performance.chart.PerformanceChartMapper.mapVolumeHistoryToChartPoints(listOf(v1, v2))
+        assertEquals(2, chartPoints.size)
+        assertEquals(10000f, chartPoints[0].value, 0.01f)
+        assertEquals(20000f, chartPoints[1].value, 0.01f)
+    }
+
+    /**
+     * Teste T12.3.2A — Teste 2: Chart Strength Line Ascending
+     */
+    @Test
+    fun testStrengthChartLineAscending() {
+        val s1 = com.example.domain.evolution.model.performance.chart.StrengthPoint(date = 1000L, weight = 40f, repetitions = 10)
+        val s2 = com.example.domain.evolution.model.performance.chart.StrengthPoint(date = 2000L, weight = 60f, repetitions = 8)
+        val s3 = com.example.domain.evolution.model.performance.chart.StrengthPoint(date = 3000L, weight = 70f, repetitions = 6)
+
+        val chartPoints = com.example.feature.evolution.performance.chart.PerformanceChartMapper.mapStrengthHistoryToChartPoints(
+            listOf(s1, s2, s3),
+            "Supino Reto"
+        )
+
+        assertEquals(3, chartPoints.size)
+        assertTrue(chartPoints[0].value < chartPoints[1].value)
+        assertTrue(chartPoints[1].value < chartPoints[2].value)
+        assertEquals(70f, chartPoints[2].value, 0.01f)
+    }
+
+    /**
+     * Teste T12.3.2A — Teste 3: Tooltip Formatting
+     */
+    @Test
+    fun testChartTooltipFormatting() {
+        val strengthPoint = com.example.domain.evolution.model.performance.chart.StrengthPoint(
+            date = 1772409600000L, // 30/08/2026 approx
+            weight = 70f,
+            repetitions = 8
+        )
+
+        val chartPoint = com.example.feature.evolution.performance.chart.PerformanceChartMapper.mapStrengthPointToChartPoint(
+            strengthPoint,
+            "Supino Reto"
+        )
+
+        assertTrue(chartPoint.tooltipText.contains("Supino Reto"))
+        assertTrue(chartPoint.tooltipText.contains("70kg x 8"))
+    }
+
+    /**
+     * Teste T12.3.2A — Teste 4: Exercício sem histórico
+     */
+    @Test
+    fun testExerciseWithoutHistory() {
+        val emptyHistory = emptyList<com.example.domain.evolution.model.performance.chart.StrengthPoint>()
+        val chartPoints = com.example.feature.evolution.performance.chart.PerformanceChartMapper.mapStrengthHistoryToChartPoints(
+            emptyHistory,
+            "Rosca Martelo"
+        )
+        assertTrue(chartPoints.isEmpty())
+    }
+
+    /**
+     * Teste T12.3.2A — Teste 5: Usuário Novo (sem treinos)
+     */
+    @Test
+    fun testNewUserEmptyState() {
+        val emptyVolume = emptyList<com.example.domain.evolution.model.performance.VolumePoint>()
+        val chartPoints = com.example.feature.evolution.performance.chart.PerformanceChartMapper.mapVolumeHistoryToChartPoints(emptyVolume)
+        assertTrue(chartPoints.isEmpty())
+    }
+
     private fun createMockSession(
         sessionId: String,
         startTime: Long,

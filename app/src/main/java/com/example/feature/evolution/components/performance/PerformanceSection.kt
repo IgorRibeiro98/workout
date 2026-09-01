@@ -32,6 +32,8 @@ import com.example.domain.evolution.model.performance.ExercisePerformanceEvoluti
 import com.example.domain.evolution.model.performance.PersonalRecord
 import com.example.domain.evolution.model.performance.VolumePoint
 import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
+import com.example.domain.evolution.model.performance.chart.StrengthPoint
+import com.example.feature.evolution.performance.chart.PerformanceChartsSection
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.LimeTransparent
@@ -46,6 +48,12 @@ fun PerformanceSection(
     exercises: List<ExercisePerformanceEvolution>,
     records: List<PersonalRecord>,
     volumeHistory: List<VolumePoint>,
+    allExercises: List<ExercisePerformanceEvolution> = exercises,
+    selectedExerciseId: String? = null,
+    selectedExerciseName: String? = null,
+    strengthHistory: List<StrengthPoint> = emptyList(),
+    onSelectExercise: (String) -> Unit = {},
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
     testTag: String = "performance_section"
 ) {
@@ -150,14 +158,7 @@ fun PerformanceSection(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // 2. Volume Total & Histórico
-            VolumeCard(
-                totalVolume = summary.totalVolume,
-                volumeHistory = volumeHistory,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            // 3. Exercícios que Evoluíram (Top 5 por maior evolução percentual)
+            // 2. Exercícios que Evoluíram (Maior evolução)
             if (exercises.isNotEmpty()) {
                 ExerciseProgressCard(
                     exercises = exercises,
@@ -165,13 +166,24 @@ fun PerformanceSection(
                 )
             }
 
-            // 4. Recordes Pessoais (PRs)
+            // 3. Recordes Pessoais (PRs)
             if (records.isNotEmpty()) {
                 PersonalRecordCard(
                     records = records,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+
+            // 4. Gráficos de Evolução (Volume & Força)
+            PerformanceChartsSection(
+                volumeHistory = volumeHistory,
+                exercises = allExercises,
+                selectedExerciseId = selectedExerciseId,
+                selectedExerciseName = selectedExerciseName,
+                strengthHistory = strengthHistory,
+                onSelectExercise = onSelectExercise,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

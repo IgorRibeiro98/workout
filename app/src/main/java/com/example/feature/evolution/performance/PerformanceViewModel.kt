@@ -2,6 +2,7 @@ package com.example.feature.evolution.performance
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
 import com.example.domain.evolution.repository.PerformanceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,7 +32,9 @@ class PerformanceViewModel(
                     performanceRepository.getPersonalRecordsFlow(),
                     performanceRepository.getVolumeHistoryFlow()
                 ) { summary, allExercises, records, volumeHistory ->
-                    val exercisesWithHistory = allExercises.filter { it.totalExecutions > 0 && it.bestWeight != null }
+                    val exercisesWithHistory = allExercises
+                        .filter { it.totalExecutions > 0 && it.bestWeight != null }
+                        .sortedByDescending { it.totalExecutions }
                     val currentSelected = _uiState.value.selectedExerciseId
                     val selectedExerciseId = when {
                         currentSelected != null && exercisesWithHistory.any { it.exerciseId == currentSelected } -> currentSelected
