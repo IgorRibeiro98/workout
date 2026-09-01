@@ -8,6 +8,8 @@ import com.example.domain.evolution.model.performance.VolumePoint
 import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
 import com.example.domain.evolution.model.performance.chart.StrengthPoint
 import com.example.domain.evolution.repository.PerformanceRepository
+import com.example.domain.performance.calculator.VolumeCalculator
+import com.example.domain.performance.model.volume.VolumeSummary
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -18,6 +20,11 @@ class PerformanceRepositoryImpl(
     override suspend fun getPerformanceSummary(): WorkoutPerformanceSummary {
         val sessions = workoutDao.getAllCompletedSessionsWithDetails()
         return PerformanceCalculator.calculateWorkoutPerformanceSummary(sessions)
+    }
+
+    override suspend fun getVolumeSummary(): VolumeSummary {
+        val sessions = workoutDao.getAllCompletedSessionsWithDetails()
+        return VolumeCalculator.calculateVolumeSummary(sessions)
     }
 
     override suspend fun getExerciseEvolution(exerciseId: String): ExercisePerformanceEvolution? {
@@ -48,6 +55,12 @@ class PerformanceRepositoryImpl(
     override fun getPerformanceSummaryFlow(): Flow<WorkoutPerformanceSummary> {
         return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
             PerformanceCalculator.calculateWorkoutPerformanceSummary(sessions)
+        }
+    }
+
+    override fun getVolumeSummaryFlow(): Flow<VolumeSummary> {
+        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
+            VolumeCalculator.calculateVolumeSummary(sessions)
         }
     }
 

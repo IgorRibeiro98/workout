@@ -256,6 +256,12 @@ class PerformanceEvolutionTest {
                 averageSessionDuration = 52
             )
 
+            override suspend fun getVolumeSummary() = com.example.domain.performance.model.volume.VolumeSummary(
+                sessionVolume = 2500.0,
+                weeklyVolume = 12500.0,
+                totalVolume = 125400.0
+            )
+
             override suspend fun getExerciseEvolution(exerciseId: String): ExercisePerformanceEvolution? = null
             override suspend fun getAllExercisesEvolution(): List<ExercisePerformanceEvolution> = emptyList()
             override suspend fun getPersonalRecords(): List<PersonalRecord> = emptyList()
@@ -263,6 +269,7 @@ class PerformanceEvolutionTest {
             override suspend fun getExerciseStrengthHistory(exerciseId: String) = emptyList<com.example.domain.evolution.model.performance.chart.StrengthPoint>()
 
             override fun getPerformanceSummaryFlow() = flow { emit(getPerformanceSummary()) }
+            override fun getVolumeSummaryFlow() = flow { emit(getVolumeSummary()) }
             override fun getAllExercisesEvolutionFlow() = flowOf(emptyList<ExercisePerformanceEvolution>())
             override fun getPersonalRecordsFlow() = flowOf(emptyList<PersonalRecord>())
             override fun getVolumeHistoryFlow() = flowOf(emptyList<com.example.domain.evolution.model.performance.VolumePoint>())

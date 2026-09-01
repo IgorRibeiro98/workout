@@ -86,13 +86,13 @@ fun VolumeSummaryCard(
 
                     Column {
                         Text(
-                            text = "Volume treinado",
+                            text = "Volume acumulado",
                             color = TextPrimary,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Carga total acumulada",
+                            text = "Carga total acumulada no histórico",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )

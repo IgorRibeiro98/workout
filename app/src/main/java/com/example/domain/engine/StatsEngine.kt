@@ -32,7 +32,7 @@ class StatsEngine(private val dao: WorkoutDao) {
                     val completedAllSets = ex.sets.filter { it.completed }
                     
                     val setCount = if (completedWorkingSets.isNotEmpty()) completedWorkingSets.size else completedAllSets.size
-                    val exVol = completedAllSets.sumOf { (it.weight * it.repetitions).toDouble() }
+                    val exVol = com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(ex.sets)
                     
                     muscleSets[muscleName] = (muscleSets[muscleName] ?: 0) + setCount
                     muscleVolume[muscleName] = (muscleVolume[muscleName] ?: 0.0) + exVol

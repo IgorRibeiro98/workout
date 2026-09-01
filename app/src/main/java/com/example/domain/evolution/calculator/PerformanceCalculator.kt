@@ -70,10 +70,8 @@ object PerformanceCalculator {
             for (exercise in item.exercises) {
                 val completedSets = exercise.sets.filter { it.completed }
                 totalSets += completedSets.size
-                for (set in completedSets) {
-                    totalRepetitions += set.repetitions
-                    totalVolume += (set.weight * set.repetitions).toDouble()
-                }
+                totalRepetitions += completedSets.sumOf { it.repetitions }
+                totalVolume += com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(exercise.sets)
             }
         }
 

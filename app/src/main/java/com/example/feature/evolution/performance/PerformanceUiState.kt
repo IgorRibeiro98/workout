@@ -5,10 +5,12 @@ import com.example.domain.evolution.model.performance.PersonalRecord
 import com.example.domain.evolution.model.performance.VolumePoint
 import com.example.domain.evolution.model.performance.WorkoutPerformanceSummary
 import com.example.domain.evolution.model.performance.chart.StrengthPoint
+import com.example.domain.performance.model.volume.VolumeSummary
 
 data class PerformanceUiState(
     val isLoading: Boolean = true,
     val summary: WorkoutPerformanceSummary? = null,
+    val volumeSummary: VolumeSummary? = null,
     val topExercises: List<ExercisePerformanceEvolution> = emptyList(),
     val allExercises: List<ExercisePerformanceEvolution> = emptyList(),
     val personalRecords: List<PersonalRecord> = emptyList(),

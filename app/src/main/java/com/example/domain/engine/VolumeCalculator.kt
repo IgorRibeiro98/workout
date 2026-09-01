@@ -9,6 +9,9 @@ object VolumeCalculator {
      * Calculates total tonnage volume (kg * reps) for completed working sets (excluding warmup).
      */
     fun calculateVolume(sets: List<SetLogEntity>, defaultBodyweight: Float = 0f): Double {
+        if (defaultBodyweight <= 0f) {
+            return com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(sets)
+        }
         return sets.filter { it.completed && it.type != SetType.WARMUP.name }
             .sumOf { set ->
                 val effectiveWeight = if (set.weight > 0f) set.weight else defaultBodyweight

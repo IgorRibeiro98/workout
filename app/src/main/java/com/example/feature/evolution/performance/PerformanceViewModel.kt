@@ -28,10 +28,11 @@ class PerformanceViewModel(
             try {
                 combine(
                     performanceRepository.getPerformanceSummaryFlow(),
+                    performanceRepository.getVolumeSummaryFlow(),
                     performanceRepository.getAllExercisesEvolutionFlow(),
                     performanceRepository.getPersonalRecordsFlow(),
                     performanceRepository.getVolumeHistoryFlow()
-                ) { summary, allExercises, records, volumeHistory ->
+                ) { summary, volumeSummary, allExercises, records, volumeHistory ->
                     val exercisesWithHistory = allExercises
                         .filter { it.totalExecutions > 0 && it.bestWeight != null }
                         .sortedByDescending { it.totalExecutions }
@@ -52,6 +53,7 @@ class PerformanceViewModel(
                     PerformanceUiState(
                         isLoading = false,
                         summary = summary,
+                        volumeSummary = volumeSummary,
                         topExercises = allExercises.take(5),
                         allExercises = exercisesWithHistory,
                         personalRecords = records.take(5),
