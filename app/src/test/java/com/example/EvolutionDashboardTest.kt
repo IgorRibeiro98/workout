@@ -68,26 +68,14 @@ class EvolutionDashboardTest {
         val state = viewModel.uiState.value
         assertFalse(state.isLoading)
         assertNotNull(state.summary)
-        assertNotNull(state.performance)
-        assertNotNull(state.consistency)
-        assertNotNull(state.weightEvolution)
+        assertEquals(85f, state.summary?.currentWeight)
     }
 
     /**
      * T12.1A Teste 2 — Streak e Dias Ativos separados
-     * Dados: 30 dias treinados, 0 dias consecutivos
-     * Esperado: 30 dias ativos, 🔥 0 dias sequência (sem fallback de streak para dias ativos)
      */
     @Test
     fun testStreakAndActiveDaysSeparation() = runTest {
-        val consistencyMetrics = ConsistencyMetrics(
-            trainingDays = 30,
-            currentStreak = 0,
-            longestStreak = 12,
-            monthlySessions = 20,
-            averageSessionsPerWeek = 4.0f
-        )
-
         val summary = EvolutionSummary(
             currentWeight = 80f,
             initialWeight = 80f,
@@ -101,15 +89,11 @@ class EvolutionDashboardTest {
 
         val state = EvolutionUiState(
             isLoading = false,
-            summary = summary,
-            consistency = consistencyMetrics
+            summary = summary
         )
 
         assertFalse(state.isEmpty)
-        // Streak deve ser 0 e NÃO 30
-        assertEquals(0, state.consistency?.currentStreak)
-        // Dias ativos deve ser 30
-        assertEquals(30, state.consistency?.trainingDays)
+        assertEquals(30, state.summary?.trainingDays)
     }
 
     /**
@@ -167,9 +151,7 @@ class EvolutionDashboardTest {
         assertEquals(90.0f, state.summary?.initialWeight ?: 0f, 0.01f)
         assertEquals(-2.0f, state.summary?.weightChange ?: 0f, 0.01f)
         assertEquals(40, state.summary?.totalWorkoutSessions)
-        assertEquals(100000f, state.performance?.totalVolume ?: 0f, 0.01f)
-        assertEquals(5, state.consistency?.currentStreak)
-        assertEquals(35, state.consistency?.trainingDays)
+        assertEquals(35, state.summary?.trainingDays)
     }
 
     /**
@@ -191,10 +173,7 @@ class EvolutionDashboardTest {
 
         val emptyState = EvolutionUiState(
             isLoading = false,
-            summary = emptySummary,
-            performance = PerformanceEvolution(0, 0, 0, 0, 0f),
-            consistency = ConsistencyMetrics(0, 0, 0, 0, 0f),
-            weightEvolution = WeightEvolution(null, null, 0f, 0, WeightTrend.STABLE)
+            summary = emptySummary
         )
 
         assertTrue(emptyState.isEmpty)

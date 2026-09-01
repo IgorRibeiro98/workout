@@ -41,7 +41,7 @@ import java.util.Locale
 
 @Composable
 fun ConsistencyCard(
-    consistency: ConsistencyMetrics?,
+    consistency: ConsistencyMetrics? = null,
     summary: EvolutionSummary? = null,
     modifier: Modifier = Modifier
 ) {

@@ -53,12 +53,12 @@ import com.example.feature.evolution.performance.PerformanceViewModel
 @Composable
 fun EvolutionScreen(
     viewModel: EvolutionViewModel,
+    bodyViewModel: BodyEvolutionViewModel,
+    performanceViewModel: PerformanceViewModel,
+    consistencyViewModel: ConsistencyViewModel,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
-    onNavigateToBodyEvolution: (() -> Unit)? = null,
-    bodyViewModel: BodyEvolutionViewModel? = null,
-    performanceViewModel: PerformanceViewModel? = null,
-    consistencyViewModel: ConsistencyViewModel? = null
+    onNavigateToBodyEvolution: (() -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -145,7 +145,6 @@ fun EvolutionScreen(
 
                 else -> {
                     val summary = uiState.summary
-                    val consistency = uiState.consistency
 
                     LazyColumn(
                         modifier = Modifier
@@ -202,67 +201,30 @@ fun EvolutionScreen(
                         // 3. Card de Consistência
                         item {
                             ConsistencyCard(
-                                consistency = consistency,
                                 summary = summary
                             )
                         }
 
                         // 4. Seção de Evolução Corporal
                         item {
-                            if (bodyViewModel != null) {
-                                BodyEvolutionSection(
-                                    viewModel = bodyViewModel,
-                                    onRegisterMeasurementClick = onNavigateToBodyEvolution
-                                )
-                            } else {
-                                BodyEvolutionSection(
-                                    measurements = uiState.measurements,
-                                    currentWeight = uiState.currentWeight,
-                                    initialWeight = uiState.initialWeight,
-                                    weightVariation = uiState.weightVariation,
-                                    currentHeight = uiState.currentHeight,
-                                    bmi = uiState.bmi,
-                                    bmiCategory = uiState.bmiCategory,
-                                    onRegisterMeasurementClick = onNavigateToBodyEvolution
-                                )
-                            }
+                            BodyEvolutionSection(
+                                viewModel = bodyViewModel,
+                                onRegisterMeasurementClick = onNavigateToBodyEvolution
+                            )
                         }
 
                         // 5. Seção de Performance de Treino
                         item {
-                            if (performanceViewModel != null) {
-                                PerformanceSection(
-                                    viewModel = performanceViewModel
-                                )
-                            } else {
-                                PerformanceSection(
-                                    summary = uiState.performanceSummary,
-                                    exercises = uiState.exerciseEvolutions,
-                                    records = uiState.personalRecords,
-                                    volumeHistory = uiState.volumeHistory,
-                                    allExercises = uiState.exerciseEvolutions,
-                                    selectedExerciseId = uiState.selectedExerciseId,
-                                    selectedExerciseName = uiState.selectedExerciseName,
-                                    strengthHistory = uiState.strengthHistory,
-                                    onSelectExercise = {},
-                                    onRetry = { viewModel.loadEvolution() }
-                                )
-                            }
+                            PerformanceSection(
+                                viewModel = performanceViewModel
+                            )
                         }
 
                         // 6. Seção de Consistência e Hábitos
                         item {
-                            if (consistencyViewModel != null) {
-                                ConsistencySection(
-                                    viewModel = consistencyViewModel
-                                )
-                            } else {
-                                ConsistencySection(
-                                    summary = uiState.consistencySummary,
-                                    frequencyHistory = uiState.frequencyHistory,
-                                    workoutTimestamps = uiState.workoutTimestamps
-                                )
-                            }
+                            ConsistencySection(
+                                viewModel = consistencyViewModel
+                            )
                         }
 
                         item {
