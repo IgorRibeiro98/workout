@@ -83,6 +83,7 @@ fun MainScreen() {
     val performanceViewModel: com.example.feature.evolution.performance.PerformanceViewModel = viewModel(factory = factory)
     val consistencyViewModel: com.example.feature.evolution.consistency.ConsistencyViewModel = viewModel(factory = factory)
     val achievementsViewModel: com.example.feature.evolution.achievements.AchievementsViewModel = viewModel(factory = factory)
+    val timelineViewModel: com.example.feature.evolution.timeline.TimelineViewModel = viewModel(factory = factory)
     val evolutionViewModel: com.example.feature.evolution.EvolutionViewModel = viewModel(factory = factory)
 
     val navController = rememberNavController()
@@ -240,6 +241,7 @@ fun MainScreen() {
                     performanceViewModel = performanceViewModel,
                     consistencyViewModel = consistencyViewModel,
                     achievementsViewModel = achievementsViewModel,
+                    timelineViewModel = timelineViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
                 )

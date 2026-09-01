@@ -51,6 +51,8 @@ import com.example.feature.evolution.achievements.components.AchievementSection
 import com.example.feature.evolution.body.BodyEvolutionViewModel
 import com.example.feature.evolution.consistency.ConsistencyViewModel
 import com.example.feature.evolution.performance.PerformanceViewModel
+import com.example.feature.evolution.timeline.TimelineViewModel
+import com.example.feature.evolution.timeline.components.TimelineSection
 
 @Composable
 fun EvolutionScreen(
@@ -59,6 +61,7 @@ fun EvolutionScreen(
     performanceViewModel: PerformanceViewModel,
     consistencyViewModel: ConsistencyViewModel,
     achievementsViewModel: AchievementsViewModel,
+    timelineViewModel: TimelineViewModel? = null,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBodyEvolution: (() -> Unit)? = null
@@ -235,6 +238,15 @@ fun EvolutionScreen(
                             AchievementSection(
                                 viewModel = achievementsViewModel
                             )
+                        }
+
+                        // 8. Seção de Linha do Tempo (Minha Jornada)
+                        if (timelineViewModel != null) {
+                            item {
+                                TimelineSection(
+                                    viewModel = timelineViewModel
+                                )
+                            }
                         }
 
                         item {

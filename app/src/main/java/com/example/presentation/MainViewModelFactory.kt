@@ -49,6 +49,24 @@ class MainViewModelFactory(
             )
             return com.example.feature.evolution.achievements.AchievementsViewModel(achievementRepo) as T
         }
+        if (modelClass.isAssignableFrom(com.example.feature.evolution.timeline.TimelineViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
+                evolutionRepository = evolutionRepository,
+                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
+                performanceRepository = performanceRepository,
+                consistencyRepository = consistencyRepository,
+                bodyMeasurementRepository = bodyMeasurementRepository
+            )
+            val timelineRepo = com.example.data.repository.TimelineRepositoryImpl(
+                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
+                performanceRepository = performanceRepository,
+                consistencyRepository = consistencyRepository,
+                bodyMeasurementRepository = bodyMeasurementRepository,
+                achievementRepository = achievementRepo
+            )
+            return com.example.feature.evolution.timeline.TimelineViewModel(timelineRepo) as T
+        }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.consistency.ConsistencyViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             val repository = consistencyRepository
