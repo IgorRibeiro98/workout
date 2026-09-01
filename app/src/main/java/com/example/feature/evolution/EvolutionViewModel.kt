@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
 class EvolutionViewModel(
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase,
     private val evolutionRepository: EvolutionRepository,
-    private val performanceRepository: PerformanceRepository? = null
+    private val performanceRepository: PerformanceRepository? = null,
+    private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EvolutionUiState(isLoading = true))
@@ -40,6 +41,10 @@ class EvolutionViewModel(
                     ?: flowOf(emptyList())
                 val volumeHistoryFlow = performanceRepository?.getVolumeHistoryFlow()
                     ?: flowOf(emptyList())
+                val consistencySummaryFlow = consistencyRepository?.getConsistencySummaryFlow()
+                    ?: flowOf(null)
+                val frequencyHistoryFlow = consistencyRepository?.getFrequencyHistoryFlow()
+                    ?: flowOf(emptyList())
 
                 combine(
                     getEvolutionSummaryUseCase.asFlow(),
@@ -50,7 +55,9 @@ class EvolutionViewModel(
                     performanceSummaryFlow,
                     exerciseEvolutionsFlow,
                     personalRecordsFlow,
-                    volumeHistoryFlow
+                    volumeHistoryFlow,
+                    consistencySummaryFlow,
+                    frequencyHistoryFlow
                 ) { args: Array<Any?> ->
                     val summary = args[0] as com.example.domain.evolution.model.EvolutionSummary
                     val performance = args[1] as com.example.domain.evolution.model.PerformanceEvolution
@@ -65,6 +72,11 @@ class EvolutionViewModel(
                     val personalRecords = args[7] as List<com.example.domain.evolution.model.performance.PersonalRecord>
                     @Suppress("UNCHECKED_CAST")
                     val volumeHistory = args[8] as List<com.example.domain.evolution.model.performance.VolumePoint>
+                    val consistencySummary = args[9] as? com.example.domain.evolution.model.consistency.WorkoutConsistencySummary
+                    @Suppress("UNCHECKED_CAST")
+                    val frequencyHistory = args[10] as List<com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint>
+
+                    val workoutTimestamps = volumeHistory.map { it.date }
 
                     val bodySummary = BodyEvolutionCalculator.calculate(measurements)
                     val currentWeight = bodySummary.currentWeight ?: summary.currentWeight ?: weightEvolution.currentWeight
@@ -92,6 +104,9 @@ class EvolutionViewModel(
                         summary = summary,
                         performance = performance,
                         consistency = consistency,
+                        consistencySummary = consistencySummary,
+                        frequencyHistory = frequencyHistory,
+                        workoutTimestamps = workoutTimestamps,
                         weightEvolution = weightEvolution,
                         measurements = measurements,
                         bodyEvolutionSummary = bodySummary,

@@ -67,7 +67,8 @@ fun MainScreen() {
         bodyMeasurementRepository = app.bodyMeasurementRepository,
         getEvolutionSummaryUseCase = app.getEvolutionSummaryUseCase,
         evolutionRepository = app.evolutionRepository,
-        performanceRepository = app.performanceRepository
+        performanceRepository = app.performanceRepository,
+        consistencyRepository = app.consistencyRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)

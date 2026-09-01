@@ -7,6 +7,8 @@ import com.example.domain.evolution.model.ConsistencyMetrics
 import com.example.domain.evolution.model.EvolutionSummary
 import com.example.domain.evolution.model.PerformanceEvolution
 import com.example.domain.evolution.model.WeightEvolution
+import com.example.domain.evolution.model.consistency.WorkoutConsistencySummary
+import com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint
 import com.example.domain.evolution.model.performance.ExercisePerformanceEvolution
 import com.example.domain.evolution.model.performance.PersonalRecord
 import com.example.domain.evolution.model.performance.VolumePoint
@@ -18,6 +20,9 @@ data class EvolutionUiState(
     val summary: EvolutionSummary? = null,
     val performance: PerformanceEvolution? = null,
     val consistency: ConsistencyMetrics? = null,
+    val consistencySummary: WorkoutConsistencySummary? = null,
+    val frequencyHistory: List<WorkoutFrequencyPoint> = emptyList(),
+    val workoutTimestamps: List<Long> = emptyList(),
     val weightEvolution: WeightEvolution? = null,
     val measurements: List<BodyMeasurement> = emptyList(),
     val bodyEvolutionSummary: BodyEvolutionSummary? = null,

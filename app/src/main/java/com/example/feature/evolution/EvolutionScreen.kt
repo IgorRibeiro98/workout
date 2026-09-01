@@ -38,6 +38,7 @@ import com.example.feature.evolution.components.EvolutionHeader
 import com.example.feature.evolution.components.EvolutionMetricCard
 import com.example.feature.evolution.components.WeightEvolutionCard
 import com.example.feature.evolution.components.body.BodyEvolutionSection
+import com.example.feature.evolution.consistency.components.ConsistencySection
 import com.example.feature.evolution.performance.components.PerformanceSection
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.Lime400
@@ -227,6 +228,15 @@ fun EvolutionScreen(
                                 strengthHistory = uiState.strengthHistory,
                                 onSelectExercise = { viewModel.selectExercise(it) },
                                 onRetry = { viewModel.loadEvolution() }
+                            )
+                        }
+
+                        // 6. Seção de Consistência e Hábitos
+                        item {
+                            ConsistencySection(
+                                summary = uiState.consistencySummary,
+                                frequencyHistory = uiState.frequencyHistory,
+                                workoutTimestamps = uiState.workoutTimestamps
                             )
                         }
 

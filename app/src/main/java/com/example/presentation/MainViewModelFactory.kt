@@ -26,7 +26,8 @@ class MainViewModelFactory(
     private val bodyMeasurementRepository: BodyMeasurementRepository,
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase? = null,
     private val evolutionRepository: EvolutionRepository? = null,
-    private val performanceRepository: PerformanceRepository? = null
+    private val performanceRepository: PerformanceRepository? = null,
+    private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -35,7 +36,13 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("GetEvolutionSummaryUseCase not provided")
             val repository = evolutionRepository
                 ?: throw IllegalStateException("EvolutionRepository not provided")
-            return EvolutionViewModel(useCase, repository, performanceRepository) as T
+            return EvolutionViewModel(useCase, repository, performanceRepository, consistencyRepository) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.feature.evolution.consistency.ConsistencyViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            val repository = consistencyRepository
+                ?: throw IllegalStateException("ConsistencyRepository not provided")
+            return com.example.feature.evolution.consistency.ConsistencyViewModel(repository) as T
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.performance.PerformanceViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
