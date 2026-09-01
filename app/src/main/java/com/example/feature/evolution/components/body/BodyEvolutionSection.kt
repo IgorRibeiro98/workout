@@ -17,12 +17,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.sp
 import com.example.domain.evolution.model.BMICategory
 import com.example.domain.evolution.model.BodyMeasurement
+import com.example.feature.evolution.body.BodyEvolutionViewModel
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+
+@Composable
+fun BodyEvolutionSection(
+    viewModel: BodyEvolutionViewModel,
+    modifier: Modifier = Modifier,
+    onRegisterMeasurementClick: (() -> Unit)? = null
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    BodyEvolutionSection(
+        measurements = uiState.measurements,
+        currentWeight = uiState.currentWeight,
+        initialWeight = uiState.initialWeight,
+        weightVariation = uiState.weightVariation,
+        currentHeight = uiState.currentHeight,
+        bmi = uiState.bmi,
+        bmiCategory = uiState.bmiCategory,
+        onRegisterMeasurementClick = onRegisterMeasurementClick,
+        modifier = modifier
+    )
+}
 
 @Composable
 fun BodyEvolutionSection(

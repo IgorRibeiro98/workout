@@ -79,6 +79,9 @@ fun MainScreen() {
     val exerciseDetailsViewModel: com.example.presentation.exercises.ExerciseDetailsViewModel = viewModel(factory = factory)
     val historyViewModel: com.example.presentation.history.HistoryViewModel = viewModel(factory = factory)
     val bodyEvolutionViewModel: BodyEvolutionViewModel = viewModel(factory = factory)
+    val featureBodyEvolutionViewModel: com.example.feature.evolution.body.BodyEvolutionViewModel = viewModel(factory = factory)
+    val performanceViewModel: com.example.feature.evolution.performance.PerformanceViewModel = viewModel(factory = factory)
+    val consistencyViewModel: com.example.feature.evolution.consistency.ConsistencyViewModel = viewModel(factory = factory)
     val evolutionViewModel: com.example.feature.evolution.EvolutionViewModel = viewModel(factory = factory)
 
     val navController = rememberNavController()
@@ -232,6 +235,9 @@ fun MainScreen() {
             composable(Screen.MyEvolution.route) {
                 com.example.feature.evolution.EvolutionScreen(
                     viewModel = evolutionViewModel,
+                    bodyViewModel = featureBodyEvolutionViewModel,
+                    performanceViewModel = performanceViewModel,
+                    consistencyViewModel = consistencyViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
                 )

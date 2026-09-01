@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.mapper.toDomain
 import com.example.data.repository.BodyMeasurementRepository
 import com.example.domain.evolution.calculator.BodyEvolutionCalculator
+import com.example.domain.evolution.calculator.WeightEvolutionCalculator
 import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.EvolutionPeriod
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,11 +51,14 @@ class BodyEvolutionViewModel(
 
     private fun processMeasurements(measurements: List<BodyMeasurement>) {
         val summary = BodyEvolutionCalculator.calculate(measurements)
+        val weightEvolution = WeightEvolutionCalculator.calculateFromMeasurements(measurements)
 
         _uiState.update {
             it.copy(
                 isLoading = false,
+                summary = summary,
                 measurements = measurements,
+                weightEvolution = weightEvolution,
                 currentWeight = summary.currentWeight,
                 initialWeight = summary.initialWeight,
                 weightVariation = summary.weightVariation,

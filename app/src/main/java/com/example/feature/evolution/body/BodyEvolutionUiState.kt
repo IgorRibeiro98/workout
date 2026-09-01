@@ -1,12 +1,16 @@
 package com.example.feature.evolution.body
 
 import com.example.domain.evolution.model.BMICategory
+import com.example.domain.evolution.model.BodyEvolutionSummary
 import com.example.domain.evolution.model.BodyMeasurement
 import com.example.domain.evolution.model.EvolutionPeriod
+import com.example.domain.evolution.model.WeightEvolution
 
 data class BodyEvolutionUiState(
     val isLoading: Boolean = true,
+    val summary: BodyEvolutionSummary? = null,
     val measurements: List<BodyMeasurement> = emptyList(),
+    val weightEvolution: WeightEvolution? = null,
     val currentWeight: Float? = null,
     val initialWeight: Float? = null,
     val weightVariation: Float? = null,

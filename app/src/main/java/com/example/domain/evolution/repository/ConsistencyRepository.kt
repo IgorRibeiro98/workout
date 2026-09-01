@@ -10,4 +10,5 @@ interface ConsistencyRepository {
 
     fun getConsistencySummaryFlow(): Flow<WorkoutConsistencySummary>
     fun getFrequencyHistoryFlow(): Flow<List<WorkoutFrequencyPoint>>
+    fun getWorkoutTimestampsFlow(): Flow<List<Long>>
 }

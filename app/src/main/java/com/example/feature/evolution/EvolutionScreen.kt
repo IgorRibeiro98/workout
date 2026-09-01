@@ -46,12 +46,19 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+import com.example.feature.evolution.body.BodyEvolutionViewModel
+import com.example.feature.evolution.consistency.ConsistencyViewModel
+import com.example.feature.evolution.performance.PerformanceViewModel
+
 @Composable
 fun EvolutionScreen(
     viewModel: EvolutionViewModel,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
-    onNavigateToBodyEvolution: (() -> Unit)? = null
+    onNavigateToBodyEvolution: (() -> Unit)? = null,
+    bodyViewModel: BodyEvolutionViewModel? = null,
+    performanceViewModel: PerformanceViewModel? = null,
+    consistencyViewModel: ConsistencyViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -138,7 +145,6 @@ fun EvolutionScreen(
 
                 else -> {
                     val summary = uiState.summary
-                    val performance = uiState.performance
                     val consistency = uiState.consistency
 
                     LazyColumn(
@@ -203,41 +209,60 @@ fun EvolutionScreen(
 
                         // 4. Seção de Evolução Corporal
                         item {
-                            BodyEvolutionSection(
-                                measurements = uiState.measurements,
-                                currentWeight = uiState.currentWeight,
-                                initialWeight = uiState.initialWeight,
-                                weightVariation = uiState.weightVariation,
-                                currentHeight = uiState.currentHeight,
-                                bmi = uiState.bmi,
-                                bmiCategory = uiState.bmiCategory,
-                                onRegisterMeasurementClick = onNavigateToBodyEvolution
-                            )
+                            if (bodyViewModel != null) {
+                                BodyEvolutionSection(
+                                    viewModel = bodyViewModel,
+                                    onRegisterMeasurementClick = onNavigateToBodyEvolution
+                                )
+                            } else {
+                                BodyEvolutionSection(
+                                    measurements = uiState.measurements,
+                                    currentWeight = uiState.currentWeight,
+                                    initialWeight = uiState.initialWeight,
+                                    weightVariation = uiState.weightVariation,
+                                    currentHeight = uiState.currentHeight,
+                                    bmi = uiState.bmi,
+                                    bmiCategory = uiState.bmiCategory,
+                                    onRegisterMeasurementClick = onNavigateToBodyEvolution
+                                )
+                            }
                         }
 
                         // 5. Seção de Performance de Treino
                         item {
-                            PerformanceSection(
-                                summary = uiState.performanceSummary,
-                                exercises = uiState.exerciseEvolutions,
-                                records = uiState.personalRecords,
-                                volumeHistory = uiState.volumeHistory,
-                                allExercises = uiState.exerciseEvolutions,
-                                selectedExerciseId = uiState.selectedExerciseId,
-                                selectedExerciseName = uiState.selectedExerciseName,
-                                strengthHistory = uiState.strengthHistory,
-                                onSelectExercise = { viewModel.selectExercise(it) },
-                                onRetry = { viewModel.loadEvolution() }
-                            )
+                            if (performanceViewModel != null) {
+                                PerformanceSection(
+                                    viewModel = performanceViewModel
+                                )
+                            } else {
+                                PerformanceSection(
+                                    summary = uiState.performanceSummary,
+                                    exercises = uiState.exerciseEvolutions,
+                                    records = uiState.personalRecords,
+                                    volumeHistory = uiState.volumeHistory,
+                                    allExercises = uiState.exerciseEvolutions,
+                                    selectedExerciseId = uiState.selectedExerciseId,
+                                    selectedExerciseName = uiState.selectedExerciseName,
+                                    strengthHistory = uiState.strengthHistory,
+                                    onSelectExercise = {},
+                                    onRetry = { viewModel.loadEvolution() }
+                                )
+                            }
                         }
 
                         // 6. Seção de Consistência e Hábitos
                         item {
-                            ConsistencySection(
-                                summary = uiState.consistencySummary,
-                                frequencyHistory = uiState.frequencyHistory,
-                                workoutTimestamps = uiState.workoutTimestamps
-                            )
+                            if (consistencyViewModel != null) {
+                                ConsistencySection(
+                                    viewModel = consistencyViewModel
+                                )
+                            } else {
+                                ConsistencySection(
+                                    summary = uiState.consistencySummary,
+                                    frequencyHistory = uiState.frequencyHistory,
+                                    workoutTimestamps = uiState.workoutTimestamps
+                                )
+                            }
                         }
 
                         item {

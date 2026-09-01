@@ -48,6 +48,26 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.example.feature.evolution.performance.PerformanceViewModel
+
+@Composable
+fun PerformanceSection(
+    viewModel: PerformanceViewModel,
+    modifier: Modifier = Modifier,
+    testTag: String = "performance_section"
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    PerformanceSection(
+        uiState = uiState,
+        onRetry = { viewModel.loadPerformance() },
+        onSelectExercise = { viewModel.selectExercise(it) },
+        modifier = modifier,
+        testTag = testTag
+    )
+}
+
 @Composable
 fun PerformanceSection(
     uiState: PerformanceUiState,

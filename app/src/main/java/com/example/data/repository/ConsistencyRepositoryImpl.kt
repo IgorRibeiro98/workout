@@ -33,4 +33,10 @@ class ConsistencyRepositoryImpl(
             ConsistencyCalculator.calculateFrequencyHistory(sessions.map { it.session.startedAt })
         }
     }
+
+    override fun getWorkoutTimestampsFlow(): Flow<List<Long>> {
+        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
+            sessions.map { it.session.startedAt }
+        }
+    }
 }

@@ -15,6 +15,26 @@ import com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.example.feature.evolution.consistency.ConsistencyViewModel
+
+@Composable
+fun ConsistencySection(
+    viewModel: ConsistencyViewModel,
+    modifier: Modifier = Modifier,
+    testTag: String = "consistency_section"
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    ConsistencySection(
+        summary = uiState.summary,
+        frequencyHistory = uiState.frequencyHistory,
+        workoutTimestamps = uiState.workoutTimestamps,
+        modifier = modifier,
+        testTag = testTag
+    )
+}
+
 @Composable
 fun ConsistencySection(
     summary: WorkoutConsistencySummary?,

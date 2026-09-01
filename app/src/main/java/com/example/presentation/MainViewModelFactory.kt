@@ -36,7 +36,7 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("GetEvolutionSummaryUseCase not provided")
             val repository = evolutionRepository
                 ?: throw IllegalStateException("EvolutionRepository not provided")
-            return EvolutionViewModel(useCase, repository, performanceRepository, consistencyRepository) as T
+            return EvolutionViewModel(useCase, repository) as T
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.consistency.ConsistencyViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
