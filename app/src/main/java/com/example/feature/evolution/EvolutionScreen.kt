@@ -38,7 +38,7 @@ import com.example.feature.evolution.components.EvolutionHeader
 import com.example.feature.evolution.components.EvolutionMetricCard
 import com.example.feature.evolution.components.WeightEvolutionCard
 import com.example.feature.evolution.components.body.BodyEvolutionSection
-import com.example.feature.evolution.components.performance.PerformanceSection
+import com.example.feature.evolution.performance.components.PerformanceSection
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
@@ -220,7 +220,7 @@ fun EvolutionScreen(
                                 summary = uiState.performanceSummary,
                                 exercises = uiState.exerciseEvolutions,
                                 records = uiState.personalRecords,
-                                volumeHistory = uiState.volumeHistory
+                                onRetry = { viewModel.loadEvolution() }
                             )
                         }
 
