@@ -6,22 +6,6 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface WorkoutDao {
     
-    // Checkpoints Sincronização
-    @Query("SELECT * FROM exercise_sync_checkpoints")
-    suspend fun getAllSyncCheckpoints(): List<ExerciseSyncCheckpointEntity>
-
-    @Query("SELECT * FROM exercise_sync_checkpoints WHERE status IN ('PENDING', 'PROCESSING', 'FAILED')")
-    suspend fun getPendingSyncCheckpoints(): List<ExerciseSyncCheckpointEntity>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertSyncCheckpoints(checkpoints: List<ExerciseSyncCheckpointEntity>)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun updateSyncCheckpoint(checkpoint: ExerciseSyncCheckpointEntity)
-
-    @Query("DELETE FROM exercise_sync_checkpoints")
-    suspend fun clearSyncCheckpoints()
-
     // Premium Entities
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExerciseEducation(entity: ExerciseEducationEntity)

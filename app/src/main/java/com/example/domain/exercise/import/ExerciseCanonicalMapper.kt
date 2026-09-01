@@ -1,18 +1,27 @@
 package com.example.domain.exercise.import
 
 import com.example.data.local.ExerciseEntity
+import com.example.data.remote.ExternalExerciseDto
 
 object ExerciseCanonicalMapper {
 
-    fun toCanonical(dto: ExternalExerciseDTO, source: String = "EXERCISE_DB"): Exercise {
-        val normalizedName = ExerciseNormalizer.normalizeName(dto.name)
-        val muscleGroups = dto.bodyParts.map { ExerciseNormalizer.normalizeMuscleGroup(it) }.distinct()
-        val primaryMuscles = dto.targetMuscles.map { ExerciseNormalizer.normalizeMuscleGroup(it) }.distinct()
-        val equipment = ExerciseNormalizer.normalizeEquipment(dto.equipment)
+    fun toCanonical(dto: ExternalExerciseDto, source: String = "EXERCISE_DB"): Exercise {
+        val normalizedName = ExerciseNormalizer.normalizeName(dto.name ?: "")
+        
+        val rawBodyParts = dto.bodyParts ?: listOfNotNull(dto.bodyPart)
+        val muscleGroups = rawBodyParts.map { ExerciseNormalizer.normalizeMuscleGroup(it) }.distinct()
+        
+        val rawTargetMuscles = dto.targetMuscles ?: listOfNotNull(dto.target)
+        val primaryMuscles = rawTargetMuscles.map { ExerciseNormalizer.normalizeMuscleGroup(it) }.distinct()
+        
+        val equipmentStr = dto.equipments?.firstOrNull() ?: dto.equipment
+        val equipment = ExerciseNormalizer.normalizeEquipment(equipmentStr)
+
+        val externalId = dto.exerciseId ?: dto.id ?: dto.name ?: ""
 
         val externalRef = ExternalExerciseReference(
             source = source,
-            externalId = dto.externalId
+            externalId = externalId
         )
 
         return Exercise(
@@ -21,14 +30,14 @@ object ExerciseCanonicalMapper {
             normalizedName = ExerciseNormalizer.cleanText(normalizedName.lowercase()),
             muscleGroups = muscleGroups,
             primaryMuscles = primaryMuscles,
-            secondaryMuscles = emptyList(),
+            secondaryMuscles = dto.secondaryMuscles ?: emptyList(),
             equipment = equipment,
-            instructions = dto.instructions.map { ExerciseNormalizer.cleanText(it) },
+            instructions = dto.instructions?.map { ExerciseNormalizer.cleanText(it) } ?: emptyList(),
             executionTips = null,
             commonMistakes = null,
             alternatives = emptyList(),
             youtubeUrl = null,
-            media = dto.mediaUrls,
+            media = listOfNotNull(dto.gifUrl),
             source = source,
             externalReferences = listOf(externalRef),
             origin = ExerciseOrigin.SYSTEM,
