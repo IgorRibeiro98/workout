@@ -64,7 +64,9 @@ fun MainScreen() {
         settingsManager = app.settingsManager,
         workoutEngine = app.workoutEngine,
         notificationManager = app.notificationManager,
-        bodyMeasurementRepository = app.bodyMeasurementRepository
+        bodyMeasurementRepository = app.bodyMeasurementRepository,
+        getEvolutionSummaryUseCase = app.getEvolutionSummaryUseCase,
+        evolutionRepository = app.evolutionRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -75,6 +77,7 @@ fun MainScreen() {
     val exerciseDetailsViewModel: com.example.presentation.exercises.ExerciseDetailsViewModel = viewModel(factory = factory)
     val historyViewModel: com.example.presentation.history.HistoryViewModel = viewModel(factory = factory)
     val bodyEvolutionViewModel: BodyEvolutionViewModel = viewModel(factory = factory)
+    val evolutionViewModel: com.example.feature.evolution.EvolutionViewModel = viewModel(factory = factory)
 
     val navController = rememberNavController()
     val items = listOf(
@@ -99,6 +102,7 @@ fun MainScreen() {
         Screen.ExerciseDetails.route to Screen.Exercises.route,
         Screen.History.route to Screen.History.route,
         Screen.Settings.route to Screen.Settings.route,
+        Screen.MyEvolution.route to Screen.Settings.route,
         Screen.BodyEvolution.route to Screen.Settings.route,
         Screen.AddBodyMeasurement.route to Screen.Settings.route
     )
@@ -215,9 +219,19 @@ fun MainScreen() {
             composable(Screen.History.route) { com.example.presentation.history.HistoryScreen(historyViewModel) }
             composable(Screen.Settings.route) {
                 SettingsScreen(
+                    onNavigateToMyEvolution = {
+                        navController.navigate(Screen.MyEvolution.route)
+                    },
                     onNavigateToBodyEvolution = {
                         navController.navigate(Screen.BodyEvolution.route)
                     }
+                )
+            }
+            composable(Screen.MyEvolution.route) {
+                com.example.feature.evolution.EvolutionScreen(
+                    viewModel = evolutionViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
                 )
             }
             composable(Screen.BodyEvolution.route) {

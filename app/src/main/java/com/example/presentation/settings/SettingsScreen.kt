@@ -59,6 +59,7 @@ import com.example.data.remote.NetworkTestResult
 import kotlinx.coroutines.launch
 
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
@@ -78,6 +79,7 @@ private sealed class SettingsSheetType {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    onNavigateToMyEvolution: () -> Unit = {},
     onNavigateToBodyEvolution: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -157,6 +159,65 @@ fun SettingsScreen(
     ) {
         Text("Perfil & Evolução", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
+
+        Surface(
+            color = SurfaceDark,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, BorderLight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("nav_my_evolution_item")
+                .clickable { onNavigateToMyEvolution() }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(LimeTransparent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TrendingUp,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Minha Evolução",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = "Resumo do seu progresso, consistência e performance",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         Surface(
             color = SurfaceDark,

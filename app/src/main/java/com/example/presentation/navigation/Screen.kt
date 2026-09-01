@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.R
 
@@ -32,6 +33,7 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"
     }
+    object MyEvolution : Screen("my_evolution", R.string.my_evolution_title, Icons.Default.TrendingUp)
     object BodyEvolution : Screen("body_evolution", R.string.body_evolution_title, Icons.Default.Straighten)
     object AddBodyMeasurement : Screen("add_body_measurement", R.string.body_evolution_title, Icons.Default.Straighten)
 }

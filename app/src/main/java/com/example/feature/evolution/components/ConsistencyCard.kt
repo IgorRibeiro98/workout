@@ -1,0 +1,167 @@
+package com.example.feature.evolution.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.domain.evolution.model.ConsistencyMetrics
+import com.example.domain.evolution.model.EvolutionSummary
+import com.example.ui.theme.Amber500
+import com.example.ui.theme.BorderLight
+import com.example.ui.theme.Orange400
+import com.example.ui.theme.SurfaceDark
+import com.example.ui.theme.SurfaceHighlight
+import com.example.ui.theme.TextPrimary
+import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.TextTertiary
+import java.util.Locale
+
+@Composable
+fun ConsistencyCard(
+    summary: EvolutionSummary?,
+    consistency: ConsistencyMetrics? = null,
+    modifier: Modifier = Modifier
+) {
+    val trainingDays = summary?.trainingDays ?: consistency?.trainingDays ?: 0
+    val currentStreak = consistency?.currentStreak ?: (if (trainingDays > 0) trainingDays else 0)
+    val averageWorkouts = summary?.averageWorkoutsPerWeek ?: consistency?.averageSessionsPerWeek ?: 0f
+
+    Surface(
+        color = SurfaceDark,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, BorderLight),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("consistency_card")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Orange400.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocalFireDepartment,
+                            contentDescription = null,
+                            tint = Orange400,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Text(
+                        text = "Consistência",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Streak / Active Days Box
+                Surface(
+                    color = SurfaceHighlight,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("consistency_streak_box")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "🔥",
+                                fontSize = 16.sp
+                            )
+                            Text(
+                                text = if (currentStreak > 0) "$currentStreak dias" else "$trainingDays dias",
+                                color = TextPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (currentStreak > 0) "sequência ativa" else "dias ativos",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                // Weekly Average Box
+                Surface(
+                    color = SurfaceHighlight,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("consistency_weekly_avg_box")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+                        val formattedAvg = String.format(Locale.US, "%.1f", averageWorkouts).replace('.', ',')
+                        Text(
+                            text = "$formattedAvg treinos",
+                            color = TextPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "média semanal",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

@@ -103,4 +103,11 @@
     <string name="body_evolution_empty_title">Ainda não existem medições.</string>
     <string name="body_evolution_empty_desc">Registre seu primeiro acompanhamento\npara acompanhar sua evolução.</string>
     <string name="body_evolution_add_button">Adicionar medição</string>
+
+    <!-- T12 My Evolution Dashboard Strings -->
+    <string name="my_evolution_title">Minha Evolução</string>
+    <string name="my_evolution_subtitle">Acompanhe sua evolução e veja seus resultados</string>
+    <string name="my_evolution_nav_desc">Resumo do seu progresso, consistência e performance</string>
+    <string name="my_evolution_empty_title">Comece sua jornada</string>
+    <string name="my_evolution_empty_desc">Complete seu primeiro treino e registre seus dados para acompanhar sua evolução.</string>
 </resources>
