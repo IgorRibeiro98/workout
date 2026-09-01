@@ -38,6 +38,7 @@ import com.example.feature.evolution.components.EvolutionHeader
 import com.example.feature.evolution.components.EvolutionMetricCard
 import com.example.feature.evolution.components.PerformanceCard
 import com.example.feature.evolution.components.WeightEvolutionCard
+import com.example.feature.evolution.components.body.BodyEvolutionSection
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
@@ -207,8 +208,22 @@ fun EvolutionScreen(
                             )
                         }
 
+                        // 5. Seção de Evolução Corporal
                         item {
-                            Spacer(modifier = Modifier.height(16.dp))
+                            BodyEvolutionSection(
+                                measurements = uiState.measurements,
+                                currentWeight = uiState.currentWeight,
+                                initialWeight = uiState.initialWeight,
+                                weightVariation = uiState.weightVariation,
+                                currentHeight = uiState.currentHeight,
+                                bmi = uiState.bmi,
+                                bmiCategory = uiState.bmiCategory,
+                                onRegisterMeasurementClick = onNavigateToBodyEvolution
+                            )
+                        }
+
+                        item {
+                            Spacer(modifier = Modifier.height(24.dp))
                         }
                     }
                 }

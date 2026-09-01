@@ -213,11 +213,13 @@ class EvolutionDashboardTest {
             override suspend fun getWeightEvolution() = weight
             override suspend fun getPerformanceEvolution() = performance
             override suspend fun getConsistencyMetrics() = consistency
+            override suspend fun getBodyMeasurements() = emptyList<com.example.data.local.BodyMeasurementEntity>()
 
             override fun getEvolutionSummaryFlow() = flow { emit(summary) }
             override fun getWeightEvolutionFlow() = flow { emit(weight) }
             override fun getPerformanceEvolutionFlow() = flow { emit(performance) }
             override fun getConsistencyMetricsFlow() = flow { emit(consistency) }
+            override fun getBodyMeasurementsFlow() = flow { emit(emptyList<com.example.data.local.BodyMeasurementEntity>()) }
         }
     }
 }

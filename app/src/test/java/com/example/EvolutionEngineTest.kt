@@ -205,10 +205,13 @@ class EvolutionEngineTest {
                 averageSessionsPerWeek = 3.5f
             )
 
+            override suspend fun getBodyMeasurements(): List<com.example.data.local.BodyMeasurementEntity> = emptyList()
+
             override fun getEvolutionSummaryFlow() = kotlinx.coroutines.flow.flow { emit(getEvolutionSummary()) }
             override fun getWeightEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getWeightEvolution()) }
             override fun getPerformanceEvolutionFlow() = kotlinx.coroutines.flow.flow { emit(getPerformanceEvolution()) }
             override fun getConsistencyMetricsFlow() = kotlinx.coroutines.flow.flow { emit(getConsistencyMetrics()) }
+            override fun getBodyMeasurementsFlow() = kotlinx.coroutines.flow.flow { emit(emptyList<com.example.data.local.BodyMeasurementEntity>()) }
         }
 
         val useCase = GetEvolutionSummaryUseCase(fakeRepo)

@@ -11,9 +11,11 @@ interface EvolutionRepository {
     suspend fun getWeightEvolution(): WeightEvolution
     suspend fun getPerformanceEvolution(): PerformanceEvolution
     suspend fun getConsistencyMetrics(): ConsistencyMetrics
+    suspend fun getBodyMeasurements(): List<com.example.data.local.BodyMeasurementEntity>
 
     fun getEvolutionSummaryFlow(): Flow<EvolutionSummary>
     fun getWeightEvolutionFlow(): Flow<WeightEvolution>
     fun getPerformanceEvolutionFlow(): Flow<PerformanceEvolution>
     fun getConsistencyMetricsFlow(): Flow<ConsistencyMetrics>
+    fun getBodyMeasurementsFlow(): Flow<List<com.example.data.local.BodyMeasurementEntity>>
 }

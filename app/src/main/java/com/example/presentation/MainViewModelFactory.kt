@@ -39,6 +39,10 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return BodyEvolutionViewModel(bodyMeasurementRepository) as T
         }
+        if (modelClass.isAssignableFrom(com.example.feature.evolution.body.BodyEvolutionViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return com.example.feature.evolution.body.BodyEvolutionViewModel(bodyMeasurementRepository) as T
+        }
         if (modelClass.isAssignableFrom(ExercisesViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             return ExercisesViewModel(repository) as T

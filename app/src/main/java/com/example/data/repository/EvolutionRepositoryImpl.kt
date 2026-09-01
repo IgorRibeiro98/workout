@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.data.local.BodyMeasurementEntity
 import com.example.data.local.WorkoutDao
 import com.example.domain.evolution.calculator.ConsistencyCalculator
 import com.example.domain.evolution.calculator.PerformanceCalculator
@@ -53,6 +54,10 @@ class EvolutionRepositoryImpl(
         return ConsistencyCalculator.calculate(sessions.map { it.session.startedAt })
     }
 
+    override suspend fun getBodyMeasurements(): List<BodyMeasurementEntity> {
+        return bodyMeasurementRepository.getAllMeasurementsSync()
+    }
+
     override fun getEvolutionSummaryFlow(): Flow<EvolutionSummary> {
         return combine(
             bodyMeasurementRepository.allMeasurements,
@@ -91,5 +96,9 @@ class EvolutionRepositoryImpl(
         return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
             ConsistencyCalculator.calculate(sessions.map { it.session.startedAt })
         }
+    }
+
+    override fun getBodyMeasurementsFlow(): Flow<List<BodyMeasurementEntity>> {
+        return bodyMeasurementRepository.allMeasurements
     }
 }
