@@ -46,6 +46,8 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
+import com.example.feature.evolution.achievements.AchievementsViewModel
+import com.example.feature.evolution.achievements.components.AchievementSection
 import com.example.feature.evolution.body.BodyEvolutionViewModel
 import com.example.feature.evolution.consistency.ConsistencyViewModel
 import com.example.feature.evolution.performance.PerformanceViewModel
@@ -56,6 +58,7 @@ fun EvolutionScreen(
     bodyViewModel: BodyEvolutionViewModel,
     performanceViewModel: PerformanceViewModel,
     consistencyViewModel: ConsistencyViewModel,
+    achievementsViewModel: AchievementsViewModel,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier,
     onNavigateToBodyEvolution: (() -> Unit)? = null
@@ -224,6 +227,13 @@ fun EvolutionScreen(
                         item {
                             ConsistencySection(
                                 viewModel = consistencyViewModel
+                            )
+                        }
+
+                        // 7. Seção de Conquistas e Marcos
+                        item {
+                            AchievementSection(
+                                viewModel = achievementsViewModel
                             )
                         }
 

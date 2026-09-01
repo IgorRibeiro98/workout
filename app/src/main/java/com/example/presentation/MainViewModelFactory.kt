@@ -38,6 +38,17 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("EvolutionRepository not provided")
             return EvolutionViewModel(useCase, repository) as T
         }
+        if (modelClass.isAssignableFrom(com.example.feature.evolution.achievements.AchievementsViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
+                evolutionRepository = evolutionRepository,
+                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
+                performanceRepository = performanceRepository,
+                consistencyRepository = consistencyRepository,
+                bodyMeasurementRepository = bodyMeasurementRepository
+            )
+            return com.example.feature.evolution.achievements.AchievementsViewModel(achievementRepo) as T
+        }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.consistency.ConsistencyViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             val repository = consistencyRepository
