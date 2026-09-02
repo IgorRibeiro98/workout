@@ -44,7 +44,7 @@ import com.example.R
 import com.example.components.workout.execution.ExerciseMediaCompact
 import com.example.components.workout.execution.ExercisePerformanceCard
 import com.example.components.workout.execution.ExerciseQuickInfoSheet
-import com.example.components.workout.execution.ExerciseTargetCard
+import com.example.components.workout.execution.ExercisePrescriptionCard
 import com.example.components.workout.execution.QuickAdjustValueCard
 import com.example.components.workout.execution.QuickCoachTip
 import com.example.components.workout.execution.RepWheelPicker
@@ -340,7 +340,8 @@ fun ExecutionScreen(
                             nextSetIndex = if (isPreparingNext) 1 else ((state.activeSetIndex ?: 0) + 1),
                             nextSetWeight = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.weight ?: 0f) else (state.activeSet?.weight ?: 0f),
                             nextSetReps = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.repetitions ?: 0) else (state.activeSet?.repetitions ?: 0),
-                            totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size
+                            totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
+                            hapticEnabled = hapticEnabled
                         )
                     }
                     ExecutionPhase.ACTIVE_SET -> {
@@ -887,8 +888,9 @@ fun FocusedActiveSetView(
             },
             text = {
                 val formattedWeight = if (currentWeight % 1f == 0f) "${currentWeight.toInt()}kg" else "${currentWeight}kg"
+                val rirInfo = if (currentRir != null) " e RIR $currentRir" else ""
                 Text(
-                    text = "Deseja sincronizar $formattedWeight e $currentReps reps para as próximas séries deste exercício?",
+                    text = "Deseja sincronizar $formattedWeight, $currentReps reps$rirInfo para as próximas séries deste exercício?",
                     color = TextSecondary,
                     fontSize = 14.sp
                 )
@@ -1046,9 +1048,9 @@ fun FocusedActiveSetView(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // 3. Target Card (Meta da série)
+                // 3. Prescription Card (Prescrição da série)
                 if (exerciseExecutionContext?.suggestedLoad != null || exerciseExecutionContext?.targetReps != null) {
-                    ExerciseTargetCard(
+                    ExercisePrescriptionCard(
                         context = exerciseExecutionContext,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1241,18 +1243,21 @@ fun FocusedRestView(
     nextSetReps: Int,
     isPreparingNextExercise: Boolean = false,
     nextMachineLabel: String? = null,
-    totalSets: Int = 1
+    totalSets: Int = 1,
+    hapticEnabled: Boolean = true
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(targetTime) {
         while (true) {
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
                 timeLeft = 0
-                if (isPreparingNextExercise) {
-                    onSkip()
+                if (hapticEnabled) {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                 }
+                onSkip()
                 break
             }
             timeLeft = remaining
@@ -1387,13 +1392,6 @@ fun FocusedRestView(
                         color = Lime400,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
-                    )
-                } else {
-                    Text(
-                        text = "Série 1",
-                        color = Lime400,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
                     )
                 }
             } else {

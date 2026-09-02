@@ -743,64 +743,131 @@ fun SettingsScreen(
 
     if (pendingRestUpdate != null) {
         val newRest = pendingRestUpdate!!
+        var updateExistingWorkouts by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { pendingRestUpdate = null },
             title = {
                 Text(
-                    text = "Tempo de descanso",
+                    text = "Deseja atualizar treinos existentes?",
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text(
-                        text = "Deseja aplicar este novo tempo de descanso aos treinos já existentes?",
+                        text = "Escolha o escopo de aplicação para o novo tempo de descanso ($newRest seg):",
                         color = TextSecondary,
                         fontSize = 14.sp
                     )
                     Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    settingsManager.setDefaultRestSeconds(newRest)
-                                    workoutEngine.updateExistingWorkoutsRestDuration(newRest)
-                                    dialogTitle = "Descanso Atualizado"
-                                    dialogMessage = "Novo tempo de descanso aplicado nas configurações e aos treinos existentes com sucesso."
-                                    showDialog = true
-                                }
-                                pendingRestUpdate = null
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_existing_workouts_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = com.example.ui.theme.BackgroundDark),
-                            shape = RoundedCornerShape(10.dp)
+                        Surface(
+                            color = if (!updateExistingWorkouts) Lime400.copy(alpha = 0.1f) else SurfaceHighlight,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (!updateExistingWorkouts) Lime400 else BorderLight),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { updateExistingWorkouts = false }
+                                .testTag("apply_new_workouts_only_option")
                         ) {
-                            Text("Atualizar treinos existentes também", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                RadioButton(
+                                    selected = !updateExistingWorkouts,
+                                    onClick = { updateExistingWorkouts = false },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Lime400, unselectedColor = TextSecondary)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Apenas novos treinos",
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "Mantém treinos e prescrições já criadas",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    settingsManager.setDefaultRestSeconds(newRest)
-                                }
-                                pendingRestUpdate = null
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_new_workouts_only_button"),
-                            border = BorderStroke(1.dp, BorderLight),
-                            shape = RoundedCornerShape(10.dp)
+                        Surface(
+                            color = if (updateExistingWorkouts) Lime400.copy(alpha = 0.1f) else SurfaceHighlight,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, if (updateExistingWorkouts) Lime400 else BorderLight),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { updateExistingWorkouts = true }
+                                .testTag("apply_existing_workouts_option")
                         ) {
-                            Text("Apenas novos treinos", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                RadioButton(
+                                    selected = updateExistingWorkouts,
+                                    onClick = { updateExistingWorkouts = true },
+                                    colors = RadioButtonDefaults.colors(selectedColor = Lime400, unselectedColor = TextSecondary)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Atualizar treinos existentes também",
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                    Text(
+                                        text = "Aplica em templates e treinos ativos",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val shouldUpdateExisting = updateExistingWorkouts
+                        coroutineScope.launch {
+                            settingsManager.setDefaultRestSeconds(newRest)
+                            if (shouldUpdateExisting) {
+                                workoutEngine.updateExistingWorkoutsRestDuration(newRest)
+                                dialogTitle = "Descanso Atualizado"
+                                dialogMessage = "Novo tempo de descanso aplicado nas configurações e aos treinos existentes com sucesso."
+                                showDialog = true
+                            }
+                        }
+                        pendingRestUpdate = null
+                    },
+                    modifier = Modifier.testTag("confirm_rest_update_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = com.example.ui.theme.BackgroundDark),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Confirmar", fontWeight = FontWeight.Bold)
+                }
+            },
             dismissButton = {
-                TextButton(onClick = { pendingRestUpdate = null }) {
+                TextButton(
+                    onClick = { pendingRestUpdate = null },
+                    modifier = Modifier.testTag("cancel_rest_update_button")
+                ) {
                     Text("Cancelar", color = TextSecondary)
                 }
             },

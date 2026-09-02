@@ -231,7 +231,14 @@ class WorkoutEngine(
                 } else if (set.type != currentSet.type) {
                     skippedType++
                 } else {
-                    eligibleSets.add(set.copy(weight = currentSet.weight, repetitions = currentSet.repetitions))
+                    eligibleSets.add(
+                        set.copy(
+                            weight = currentSet.weight,
+                            repetitions = currentSet.repetitions,
+                            rir = currentSet.rir,
+                            rpe = currentSet.rpe
+                        )
+                    )
                 }
             }
         }
