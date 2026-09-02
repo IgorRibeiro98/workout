@@ -79,7 +79,14 @@ class MainApplication : Application(), ImageLoaderFactory {
                 premiumImporter.seedPremiumTestWorkoutIfNeeded()
                 android.util.Log.d("MainApplication", "Premium Import Report:\n${result.formattedReport}")
 
-                val mediaEngine = com.example.domain.engine.ExerciseMediaEngine(database.workoutDao(), context = this@MainApplication)
+                val mediaEngine = com.example.domain.engine.ExerciseMediaEngine(
+                    dao = database.workoutDao(),
+                    remoteDataSource = com.example.data.remote.provider.ExerciseProviderFactory.create(
+                        database.workoutDao(),
+                        settingsManager
+                    ),
+                    context = this@MainApplication
+                )
                 mediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 2)
             } catch (e: Exception) {
                 e.printStackTrace()

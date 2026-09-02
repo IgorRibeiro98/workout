@@ -1,5 +1,6 @@
 package com.example.data.remote.provider
 
+import com.example.data.remote.CatalogPage
 import com.example.data.remote.ExerciseRemoteDataSource
 import com.example.data.remote.ExternalExerciseDto
 import com.example.data.remote.NetworkResult
@@ -23,5 +24,9 @@ class ExerciseApiProviderAdapter(
 
     override suspend fun testConnection(query: String): NetworkTestResult {
         return provider.testConnection(query)
+    }
+
+    override suspend fun fetchCatalogPage(limit: Int, cursor: String?): NetworkResult<CatalogPage> {
+        return provider.fetchCatalogPage(limit, cursor)
     }
 }

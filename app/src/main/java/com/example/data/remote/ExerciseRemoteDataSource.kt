@@ -74,7 +74,8 @@ data class ExternalExerciseDto(
 data class ExerciseDbEnvelopeList(
     @Json(name = "success") val success: Boolean? = null,
     @Json(name = "data") val data: List<ExternalExerciseDto>? = null,
-    @Json(name = "message") val message: String? = null
+    @Json(name = "message") val message: String? = null,
+    @Json(name = "meta") val meta: ExerciseDbMeta? = null
 )
 
 data class ExerciseDbEnvelopeItem(
@@ -83,7 +84,31 @@ data class ExerciseDbEnvelopeItem(
     @Json(name = "message") val message: String? = null
 )
 
+data class ExerciseDbMeta(
+    @Json(name = "total") val total: Int? = null,
+    @Json(name = "hasNextPage") val hasNextPage: Boolean? = null,
+    @Json(name = "nextCursor") val nextCursor: String? = null
+)
+
+/** Uma página do catálogo remoto. [nextCursor] nulo indica fim da paginação. */
+data class CatalogPage(
+    val items: List<ExternalExerciseDto>,
+    val nextCursor: String? = null,
+    val hasNextPage: Boolean = false,
+    val total: Int? = null
+)
+
 interface ExerciseApiService {
+    /**
+     * Paginação por cursor. A API OSS limita a página a 25 itens e ignora `offset`;
+     * a navegação é feita por `meta.nextCursor`.
+     */
+    @GET("exercises")
+    suspend fun getExercisesPage(
+        @Query("limit") limit: Int = ExerciseDbPaging.MAX_PAGE_SIZE,
+        @Query("cursor") cursor: String? = null
+    ): ExerciseDbEnvelopeList
+
     @GET("exercises")
     suspend fun getExercises(
         @Query("limit") limit: Int = 100,
@@ -107,11 +132,25 @@ interface ExerciseApiService {
     ): ExerciseDbEnvelopeItem
 }
 
+object ExerciseDbPaging {
+    /** A API OSS devolve no máximo 25 itens por página, independentemente do `limit` pedido. */
+    const val MAX_PAGE_SIZE = 25
+}
+
 interface ExerciseRemoteDataSource {
-    suspend fun fetchExternalCatalog(limit: Int = 100, offset: Int = 0): NetworkResult<List<ExternalExerciseDto>>
+    suspend fun fetchExternalCatalog(limit: Int = ExerciseDbPaging.MAX_PAGE_SIZE, offset: Int = 0): NetworkResult<List<ExternalExerciseDto>>
     suspend fun searchExercises(query: String): NetworkResult<List<ExternalExerciseDto>>
     suspend fun getExerciseById(id: String): NetworkResult<ExternalExerciseDto>
     suspend fun testConnection(query: String = "bench press"): NetworkTestResult
+
+    /**
+     * Busca uma página do catálogo completo. Implementações que não suportam
+     * download em massa devolvem [NetworkResult.NotFound].
+     */
+    suspend fun fetchCatalogPage(
+        limit: Int = ExerciseDbPaging.MAX_PAGE_SIZE,
+        cursor: String? = null
+    ): NetworkResult<CatalogPage> = NetworkResult.NotFound
 }
 
 class NetworkExerciseRemoteDataSource(
@@ -164,8 +203,27 @@ class NetworkExerciseRemoteDataSource(
 
     override suspend fun fetchExternalCatalog(limit: Int, offset: Int): NetworkResult<List<ExternalExerciseDto>> {
         return safeApiCall {
-            val envelope = activeApiService.getExercises(limit = limit, offset = offset)
+            val envelope = activeApiService.getExercises(
+                limit = limit.coerceAtMost(ExerciseDbPaging.MAX_PAGE_SIZE),
+                offset = offset
+            )
             envelope.data ?: emptyList()
+        }
+    }
+
+    override suspend fun fetchCatalogPage(limit: Int, cursor: String?): NetworkResult<CatalogPage> {
+        return safeApiCall {
+            val envelope = activeApiService.getExercisesPage(
+                limit = limit.coerceAtMost(ExerciseDbPaging.MAX_PAGE_SIZE),
+                cursor = cursor
+            )
+            val meta = envelope.meta
+            CatalogPage(
+                items = envelope.data ?: emptyList(),
+                nextCursor = meta?.nextCursor,
+                hasNextPage = meta?.hasNextPage == true && !meta.nextCursor.isNullOrBlank(),
+                total = meta?.total
+            )
         }
     }
 

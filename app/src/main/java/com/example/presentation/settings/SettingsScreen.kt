@@ -89,7 +89,16 @@ fun SettingsScreen(
     val programImporter = ProgramImporter(db, context)
     val premiumImporter = PremiumManifestImporter(db, context)
 
-    val mediaEngine = ExerciseMediaEngine(db.workoutDao(), context = context)
+    val mediaEngine = remember(db, settingsManager) {
+        ExerciseMediaEngine(
+            dao = db.workoutDao(),
+            remoteDataSource = com.example.data.remote.provider.ExerciseProviderFactory.create(
+                db.workoutDao(),
+                settingsManager
+            ),
+            context = context
+        )
+    }
 
     val integrationSettings by settingsManager.integrationSettingsFlow.collectAsState(initial = IntegrationSettings())
 
@@ -334,6 +343,54 @@ fun SettingsScreen(
             onCheckedChange = { coroutineScope.launch { settingsManager.setShowGifs(it) } }
         )
         
+        Spacer(modifier = Modifier.height(16.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "Chave da API ExerciseDB V2 (Opcional)",
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Forneça sua chave RapidAPI V2 para usar como fallback caso o servidor OSS esteja indisponível ou limitando requisições.",
+                color = TextSecondary,
+                fontSize = 12.sp
+            )
+            var inputKey by remember(exerciseDbV2ApiKey) { mutableStateOf(exerciseDbV2ApiKey) }
+            var keyVisible by remember { mutableStateOf(false) }
+            OutlinedTextField(
+                value = inputKey,
+                onValueChange = {
+                    inputKey = it
+                    coroutineScope.launch { settingsManager.setExerciseDbV2ApiKey(it.trim()) }
+                },
+                placeholder = { Text("Cole sua chave RapidAPI V2 aqui", fontSize = 12.sp, color = TextSecondary) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { keyVisible = !keyVisible }) {
+                        Icon(
+                            imageVector = if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (keyVisible) "Ocultar chave" else "Mostrar chave",
+                            tint = TextSecondary
+                        )
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Lime400,
+                    unfocusedBorderColor = BorderLight,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary
+                )
+            )
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
         SettingsActionItem(
             title = "ATUALIZAR DEMONSTRAÇÕES (EXERCISEDB)",
@@ -345,12 +402,24 @@ fun SettingsScreen(
                     isSyncingMedia = true
                     syncProgress = "Consultando catálogo remoto..."
                     coroutineScope.launch {
-                        val result = mediaEngine.syncExerciseGifs { cur, tot ->
+                        val result = mediaEngine.syncExerciseGifs(
+                            onCatalogProgress = { loaded, total ->
+                                syncProgress = if (total != null) {
+                                    "Baixando catálogo: $loaded de $total exercícios..."
+                                } else {
+                                    "Baixando catálogo: $loaded exercícios..."
+                                }
+                            }
+                        ) { cur, tot ->
                             syncProgress = "Verificando exercício $cur de $tot..."
                         }
-                        if (!result.isOffline && result.errors.isEmpty()) {
+                        // Progresso parcial também é gravado: um catálogo incompleto
+                        // já rendeu correspondências e a próxima execução retoma o resto.
+                        if (!result.isOffline && result.matched + result.alreadyUpToDate > 0) {
                             settingsManager.setLastMediaSyncAt(System.currentTimeMillis())
-                            settingsManager.setMediaSyncContentVersion(1)
+                            if (result.catalogComplete && result.errors.isEmpty()) {
+                                settingsManager.setMediaSyncContentVersion(1)
+                            }
                         }
                         val diag = mediaEngine.getLibraryDiagnostic()
                         isSyncingMedia = false
@@ -359,6 +428,12 @@ fun SettingsScreen(
                             "Não foi possível conectar ao ExerciseDB.\n\nVerifique a conexão de internet. Todo o treino continua funcionando 100% offline."
                         } else {
                             buildString {
+                                append("Catálogo ExerciseDB: ${result.catalogSize} exercícios")
+                                append(if (result.catalogFromCache) " (instantâneo local)\n" else "\n")
+                                if (!result.catalogComplete && result.catalogSize > 0) {
+                                    append("Download incompleto — será retomado na próxima execução.\n")
+                                }
+                                append("\n")
                                 append("Cobertura de demonstrações\n\n")
                                 append("GIF: ${diag.gifsCount}\n")
                                 append("Fotos: ${diag.customPhotosCount}\n")
@@ -371,7 +446,7 @@ fun SettingsScreen(
                                 append("• Já atualizados: ${result.alreadyUpToDate}\n")
                                 append("• Não encontrados: ${result.notFound}\n")
                                 if (result.errors.isNotEmpty()) {
-                                    append("\nErros encontrados:\n")
+                                    append("\nAvisos:\n")
                                     result.errors.forEach { err ->
                                         append("• $err\n")
                                     }

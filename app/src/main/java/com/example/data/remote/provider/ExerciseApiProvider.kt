@@ -1,5 +1,7 @@
 package com.example.data.remote.provider
 
+import com.example.data.remote.CatalogPage
+import com.example.data.remote.ExerciseDbPaging
 import com.example.data.remote.ExternalExerciseDto
 import com.example.data.remote.NetworkResult
 import com.example.data.remote.NetworkTestResult
@@ -16,4 +18,10 @@ interface ExerciseApiProvider {
     suspend fun searchExercises(query: String): NetworkResult<List<ExternalExerciseDto>>
     suspend fun getExerciseById(id: String): NetworkResult<ExternalExerciseDto>
     suspend fun testConnection(query: String = "bench press"): NetworkTestResult
+
+    /** Ver [com.example.data.remote.ExerciseRemoteDataSource.fetchCatalogPage]. */
+    suspend fun fetchCatalogPage(
+        limit: Int = ExerciseDbPaging.MAX_PAGE_SIZE,
+        cursor: String? = null
+    ): NetworkResult<CatalogPage> = NetworkResult.NotFound
 }

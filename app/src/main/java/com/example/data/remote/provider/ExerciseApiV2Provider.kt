@@ -1,6 +1,7 @@
 package com.example.data.remote.provider
 
 import android.util.Log
+import com.example.data.remote.CatalogPage
 import com.example.data.remote.ExternalExerciseDto
 import com.example.data.remote.NetworkResult
 import com.example.data.remote.NetworkTestResult
@@ -46,9 +47,14 @@ interface RapidApiV2Service {
 }
 
 class ExerciseApiV2Provider(
-    private val apiKeyProvider: () -> String,
+    private val apiKeyProvider: suspend () -> String,
     baseUrl: String = "https://exercisedb.p.rapidapi.com/"
 ) : ExerciseApiProvider {
+
+    companion object {
+        /** A API V2 não impõe o teto de 25 da OSS; páginas maiores reduzem as requisições. */
+        private const val CATALOG_PAGE_SIZE = 100
+    }
 
     override val providerType: ProviderType = ProviderType.V2_RAPID
 
@@ -142,6 +148,35 @@ class ExerciseApiV2Provider(
             NetworkTestResult.Failure(
                 errorMessage = "Erro na conexão V2: ${e.message}"
             )
+        }
+    }
+
+    /**
+     * Paginação por `offset`; o cursor transporta o próximo offset como texto.
+     */
+    override suspend fun fetchCatalogPage(limit: Int, cursor: String?): NetworkResult<CatalogPage> {
+        val apiKey = apiKeyProvider().trim()
+        if (apiKey.isEmpty()) {
+            return NetworkResult.Offline
+        }
+        val offset = cursor?.toIntOrNull() ?: 0
+        val pageSize = CATALOG_PAGE_SIZE
+        return when (val res = safeCall { service.getExercises(apiKey = apiKey, limit = pageSize, offset = offset) }) {
+            is NetworkResult.Success -> {
+                val items = res.data
+                val hasNext = items.size >= pageSize
+                NetworkResult.Success(
+                    CatalogPage(
+                        items = items,
+                        nextCursor = if (hasNext) (offset + items.size).toString() else null,
+                        hasNextPage = hasNext
+                    )
+                )
+            }
+            is NetworkResult.NotFound -> NetworkResult.NotFound
+            is NetworkResult.Offline -> NetworkResult.Offline
+            is NetworkResult.HttpError -> res
+            is NetworkResult.ParserError -> res
         }
     }
 

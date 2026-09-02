@@ -21,7 +21,18 @@ data class MatchEvaluation(
     val candidate: ExternalExerciseDto?,
     val score: Int,
     val status: ExerciseMatchStatus
-)
+) {
+    /**
+     * Ordena avaliações entre si: um MATCHED sempre supera um AMBIGUOUS, e dentro do
+     * mesmo status vale a pontuação. Usado para escolher a melhor query de um exercício.
+     */
+    val rank: Int
+        get() = when (status) {
+            ExerciseMatchStatus.MATCHED -> 10_000 + score
+            ExerciseMatchStatus.AMBIGUOUS -> 5_000 + score
+            else -> score
+        }
+}
 
 data class MediaSyncResult(
     val matched: Int = 0,
@@ -29,7 +40,12 @@ data class MediaSyncResult(
     val notFound: Int = 0,
     val alreadyUpToDate: Int = 0,
     val isOffline: Boolean = false,
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    /** Tamanho do instantâneo do ExerciseDB usado no casamento. */
+    val catalogSize: Int = 0,
+    val catalogComplete: Boolean = false,
+    /** true quando o instantâneo local já estava válido e nenhuma requisição foi feita. */
+    val catalogFromCache: Boolean = false
 )
 
 data class MediaLibraryDiagnostic(
@@ -114,8 +130,14 @@ class ExerciseMediaEngine(
     }
 
     suspend fun syncExerciseGifs(
+        force: Boolean = false,
+        onCatalogProgress: (loaded: Int, total: Int?) -> Unit = { _, _ -> },
         onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }
-    ): MediaSyncResult = repository.syncExerciseGifs(onProgress)
+    ): MediaSyncResult = repository.syncExerciseGifs(
+        force = force,
+        onCatalogProgress = onCatalogProgress,
+        onProgress = onProgress
+    )
 
     suspend fun testConnection(query: String = "bench press"): com.example.data.remote.NetworkTestResult = 
         repository.testConnection(query)
