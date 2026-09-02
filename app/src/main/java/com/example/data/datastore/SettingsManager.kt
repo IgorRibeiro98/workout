@@ -22,6 +22,7 @@ class SettingsManager(private val context: Context) {
         val AUTO_CHECK_IN = booleanPreferencesKey("auto_check_in")
         val AUTO_CHECK_OUT = booleanPreferencesKey("auto_check_out")
         val SHOW_GIFS = booleanPreferencesKey("show_gifs")
+        val SHOW_COACH_TIP = booleanPreferencesKey("show_coach_tip")
         val DEFAULT_REST_SECONDS = intPreferencesKey("default_rest_seconds")
         val DEFAULT_EXERCISE_REST_SECONDS = intPreferencesKey("default_exercise_rest_seconds")
         val REST_TIMER_DEADLINE = longPreferencesKey("rest_timer_deadline")
@@ -102,6 +103,7 @@ class SettingsManager(private val context: Context) {
     val autoCheckInFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_IN] ?: true }
     val autoCheckOutFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_OUT] ?: true }
     val showGifsFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_GIFS] ?: true }
+    val showCoachTipFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_COACH_TIP] ?: true }
     val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
     val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
     val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
@@ -139,6 +141,10 @@ class SettingsManager(private val context: Context) {
     
     suspend fun setShowGifs(show: Boolean) {
         context.dataStore.edit { it[SHOW_GIFS] = show }
+    }
+
+    suspend fun setShowCoachTip(show: Boolean) {
+        context.dataStore.edit { it[SHOW_COACH_TIP] = show }
     }
 
     suspend fun setHapticEnabled(enabled: Boolean) {

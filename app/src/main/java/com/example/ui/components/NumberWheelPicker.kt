@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -67,6 +68,17 @@ object WheelPickerDefaults {
         val index = Math.round((value - min) * multiplier)
         return index.coerceIn(0, totalItems - 1)
     }
+
+    /** Base row height at fontScale 1.0. */
+    val BaseItemHeight: Dp = 44.dp
+
+    /**
+     * Row height that follows the system font scale.
+     *
+     * The selected value renders at 30.sp, so a fixed dp row clips the digits once
+     * the user raises the font size. Scaling the row keeps the wheel legible instead.
+     */
+    fun itemHeightFor(fontScale: Float): Dp = BaseItemHeight * fontScale.coerceIn(1f, 2f)
 }
 
 /**
@@ -86,7 +98,7 @@ fun NumberWheelPicker(
     hapticEnabled: Boolean = true,
     modifier: Modifier = Modifier,
     visibleItemsCount: Int = 3,
-    itemHeight: Dp = 44.dp
+    itemHeight: Dp = WheelPickerDefaults.itemHeightFor(LocalDensity.current.fontScale)
 ) {
     val haptic = LocalHapticFeedback.current
     val totalItems = remember(range, step) {
@@ -395,7 +407,7 @@ fun DirectNumericInputSheet(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .heightIn(min = 52.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
             ) {

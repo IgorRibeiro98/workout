@@ -111,6 +111,7 @@ fun SettingsScreen(
     val exerciseDbV2ApiKey by settingsManager.exerciseDbV2ApiKeyFlow.collectAsState(initial = "")
     val rirRpeEnabled by settingsManager.rirRpeEnabledFlow.collectAsState(initial = false)
     val showGifs by settingsManager.showGifsFlow.collectAsState(initial = true)
+    val showCoachTip by settingsManager.showCoachTipFlow.collectAsState(initial = true)
     
     val defaultRestSecs by settingsManager.defaultRestSecondsFlow.collectAsState(initial = 60)
     val defaultExerciseRestSecs by settingsManager.defaultExerciseRestSecondsFlow.collectAsState(initial = 120)
@@ -391,6 +392,14 @@ fun SettingsScreen(
             )
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+        SettingsToggleItem(
+            title = "Exibir Dica do Treinador",
+            subtitle = "Mostrar a dica do exercício durante o treino",
+            checked = showCoachTip,
+            onCheckedChange = { coroutineScope.launch { settingsManager.setShowCoachTip(it) } }
+        )
+        
         Spacer(modifier = Modifier.height(8.dp))
         SettingsActionItem(
             title = "ATUALIZAR DEMONSTRAÇÕES (EXERCISEDB)",

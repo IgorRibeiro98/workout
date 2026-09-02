@@ -63,7 +63,9 @@ fun WorkoutActionButton(
         ),
         modifier = modifier
             .fillMaxWidth()
-            .height(60.dp)
+            // Minimum, not fixed: at large font scales the label must push the
+            // button taller instead of being clipped inside it.
+            .heightIn(min = 60.dp)
             .scale(buttonScale)
             .testTag("complete_set_button")
     ) {

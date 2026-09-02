@@ -1,6 +1,9 @@
 package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -9,26 +12,25 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.Spring
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
 import com.example.domain.engine.RirFormatter
 import com.example.ui.theme.*
 
 data class RirOption(
     val value: Int,
+    val emoji: String,
     val displayLabel: String,
+    val rirLabel: String,
     val isFailure: Boolean = false
 )
 
@@ -38,17 +40,26 @@ fun RirSelector(
     onRirSelected: (Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val options = listOf(
-        RirOption(4, "4+"),
-        RirOption(3, "3"),
-        RirOption(2, "2"),
-        RirOption(1, "1"),
-        RirOption(0, "🔥 FALHA", isFailure = true)
-    )
+    val options = remember {
+        listOf(
+            RirOption(value = 0, emoji = "🔥", displayLabel = "Falha", rirLabel = "RIR 0", isFailure = true),
+            RirOption(value = 1, emoji = "😤", displayLabel = "M. pesado", rirLabel = "RIR 1"),
+            RirOption(value = 2, emoji = "💪", displayLabel = "Pesado", rirLabel = "RIR 2"),
+            RirOption(value = 3, emoji = "🙂", displayLabel = "Controlado", rirLabel = "RIR 3+")
+        )
+    }
+
+    val selectedIndex = when {
+        currentRir == null -> -1
+        currentRir == 0 -> 0
+        currentRir == 1 -> 1
+        currentRir == 2 -> 2
+        else -> 3
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -56,109 +67,107 @@ fun RirSelector(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = stringResource(id = R.string.rir_effort_label),
+                text = "ESFORÇO / RIR",
                 color = TextSecondary,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
 
             if (currentRir == 0) {
                 Text(
-                    text = stringResource(id = R.string.rir_failure_full),
+                    text = "🔥 Até a falha (RIR 0)",
                     color = Color(0xFFFFB74D),
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Black
                 )
             } else if (currentRir != null) {
+                val effortName = RirFormatter.formatEffort(currentRir) ?: ""
+                val secRir = RirFormatter.formatSecondaryRir(currentRir)
                 Text(
-                    text = RirFormatter.formatRir(currentRir) ?: "",
+                    text = "$effortName ($secRir)",
                     color = TextPrimary,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
         }
 
+        // 4 options fitting 100% of the screen width with no horizontal scroll
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            options.forEach { option ->
-                val isSelected = when {
-                    option.value == 4 -> currentRir != null && currentRir >= 4
-                    else -> currentRir == option.value
-                }
-
-                val accessibilityDescription = if (option.isFailure) {
-                    if (isSelected) stringResource(id = R.string.rir_failure_accessibility) + ", selecionado"
-                    else stringResource(id = R.string.rir_failure_accessibility)
-                } else {
-                    if (isSelected) "RIR ${option.displayLabel}, selecionado"
-                    else "RIR ${option.displayLabel}"
-                }
+            options.forEachIndexed { index, option ->
+                val isSelected = index == selectedIndex
 
                 val targetBgColor = when {
-                    isSelected && option.isFailure -> Color(0xFFFF9800).copy(alpha = 0.25f)
-                    isSelected -> Lime400.copy(alpha = 0.2f)
+                    isSelected && option.isFailure -> Color(0xFFFF9800).copy(alpha = 0.28f)
+                    isSelected -> Lime400.copy(alpha = 0.25f)
+                    selectedIndex >= 0 -> SurfaceDark.copy(alpha = 0.4f)
                     else -> SurfaceDark
                 }
-
                 val targetBorderColor = when {
                     isSelected && option.isFailure -> Color(0xFFFF9800)
                     isSelected -> Lime400
+                    selectedIndex >= 0 -> BorderLight.copy(alpha = 0.3f)
                     else -> BorderLight
                 }
-
                 val targetTextColor = when {
                     isSelected && option.isFailure -> Color(0xFFFFB74D)
                     isSelected -> Lime400
+                    selectedIndex >= 0 -> TextSecondary.copy(alpha = 0.5f)
                     option.isFailure -> TextPrimary
                     else -> TextSecondary
                 }
 
-                val containerColor by animateColorAsState(targetBgColor, label = "rirBgColor")
-                val borderColor by animateColorAsState(targetBorderColor, label = "rirBorderColor")
-                val textColor by animateColorAsState(targetTextColor, label = "rirTextColor")
+                val containerColor by animateColorAsState(targetBgColor, label = "rirBgColor_$index")
+                val borderColor by animateColorAsState(targetBorderColor, label = "rirBorderColor_$index")
+                val textColor by animateColorAsState(targetTextColor, label = "rirTextColor_$index")
 
                 val optionScale by animateFloatAsState(
-                    targetValue = if (isSelected && option.isFailure) 1.15f else 1.0f,
-                    animationSpec = spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium),
-                    label = "rirOptionScale"
+                    targetValue = if (isSelected) 1.05f else if (selectedIndex >= 0) 0.98f else 1.0f,
+                    animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMedium),
+                    label = "rirOptionScale_$index"
                 )
 
                 Surface(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxHeight()
+                        .height(54.dp)
                         .graphicsLayer(scaleX = optionScale, scaleY = optionScale)
-                        .semantics { contentDescription = accessibilityDescription }
+                        .semantics {
+                            contentDescription = "${option.emoji} ${option.displayLabel}, ${option.rirLabel}${if (isSelected) ", selecionado" else ""}"
+                        }
                         .clickable {
-                            if (isSelected) {
-                                onRirSelected(null)
-                            } else {
-                                onRirSelected(option.value)
-                            }
+                            onRirSelected(if (isSelected) null else option.value)
                         },
                     shape = RoundedCornerShape(12.dp),
                     color = containerColor,
-                    border = BorderStroke(1.dp, borderColor)
+                    border = BorderStroke(if (isSelected) 2.dp else 1.dp, borderColor)
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 2.dp)
+                            .padding(2.dp)
                     ) {
                         Text(
-                            text = if (isSelected && option.isFailure) "🔥 FALHA" else option.displayLabel,
+                            text = "${option.emoji} ${option.displayLabel}",
                             color = textColor,
-                            fontSize = if (option.isFailure) 11.sp else 14.sp,
-                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.SemiBold,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
+                            textAlign = TextAlign.Center,
                             maxLines = 1
+                        )
+                        Text(
+                            text = option.rirLabel,
+                            color = if (isSelected) textColor.copy(alpha = 0.9f) else if (selectedIndex >= 0) TextSecondary.copy(alpha = 0.4f) else TextSecondary,
+                            fontSize = 10.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -166,3 +175,4 @@ fun RirSelector(
         }
     }
 }
+

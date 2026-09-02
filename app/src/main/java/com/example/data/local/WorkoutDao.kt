@@ -175,6 +175,30 @@ interface WorkoutDao {
     """)
     suspend fun getLastExecutionSetsForExercise(exerciseId: Long): List<SetLogEntity>
 
+    @Query("""
+        SELECT ws.finishedAt FROM workout_sessions ws
+        INNER JOIN exercise_sessions es ON ws.id = es.sessionId
+        WHERE ws.status = 'COMPLETED'
+          AND (es.actualExerciseId = :exerciseId OR es.plannedExerciseId = :exerciseId)
+        ORDER BY ws.finishedAt DESC
+        LIMIT 1
+    """)
+    suspend fun getLastSessionFinishedAtForExercise(exerciseId: Long): Long?
+
+    @Query("""
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN exercise_sessions es ON sl.exerciseSessionId = es.id
+        INNER JOIN workout_sessions ws ON es.sessionId = ws.id
+        WHERE ws.status = 'COMPLETED' AND sl.completed = 1
+          AND (es.actualExerciseId = :exerciseId OR es.plannedExerciseId = :exerciseId)
+        ORDER BY sl.weight DESC, sl.repetitions DESC
+        LIMIT 1
+    """)
+    suspend fun getBestSetLogForExercise(exerciseId: Long): SetLogEntity?
+
+    @Query("SELECT * FROM workout_template_exercises WHERE templateId = :templateId AND exerciseId = :exerciseId LIMIT 1")
+    suspend fun getTemplateExercise(templateId: Long, exerciseId: Long): WorkoutTemplateExerciseEntity?
+
     @Query("SELECT * FROM set_logs WHERE exerciseSessionId = :exerciseSessionId ORDER BY setNumber ASC")
     suspend fun getSetLogsForExerciseSession(exerciseSessionId: Long): List<SetLogEntity>
 
@@ -202,6 +226,14 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM personal_records WHERE exerciseId = :exerciseId AND prType = :prType ORDER BY value DESC LIMIT 1")
     suspend fun getHighestPR(exerciseId: Long, prType: String): PersonalRecordEntity?
+
+    @Query("""
+        SELECT COUNT(DISTINCT ws.id) FROM workout_sessions ws
+        INNER JOIN exercise_sessions es ON ws.id = es.sessionId
+        WHERE ws.status = 'COMPLETED'
+          AND (es.actualExerciseId = :exerciseId OR es.plannedExerciseId = :exerciseId)
+    """)
+    suspend fun getExerciseExecutionCount(exerciseId: Long): Int
 
     @Query("SELECT * FROM personal_records WHERE exerciseId = :exerciseId ORDER BY date DESC")
     fun getPRsForExerciseFlow(exerciseId: Long): Flow<List<PersonalRecordEntity>>

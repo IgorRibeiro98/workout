@@ -1,20 +1,25 @@
 package com.example.presentation.execution
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -26,39 +31,40 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
+import com.example.R
+import com.example.components.workout.execution.ExerciseMediaCompact
+import com.example.components.workout.execution.ExercisePerformanceCard
+import com.example.components.workout.execution.ExerciseQuickInfoSheet
+import com.example.components.workout.execution.ExerciseTargetCard
+import com.example.components.workout.execution.QuickAdjustValueCard
+import com.example.components.workout.execution.QuickCoachTip
+import com.example.components.workout.execution.RepWheelPicker
+import com.example.components.workout.execution.SetFeedbackBanner
+import com.example.components.workout.execution.WeightWheelPicker
+import com.example.components.workout.execution.WorkoutActionButton
+import com.example.components.workout.execution.WorkoutProgressHeader
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SetLogEntity
-import com.example.data.local.SetType
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.domain.engine.RirFormatter
-import com.example.R
-import com.example.ui.components.DirectNumericInputSheet
-import com.example.ui.components.RepsWheelPicker
-import com.example.ui.components.RirSelector
-import com.example.ui.components.SyncExerciseSheet
-import com.example.ui.components.AppModalBottomSheet
+import com.example.domain.workout.execution.ExerciseExecutionContext
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
-import com.example.components.workout.execution.ExerciseExecutionHeader
-import com.example.components.workout.execution.ExerciseMediaCompact
-import com.example.components.workout.execution.WeightWheelPicker
-import com.example.components.workout.execution.RepWheelPicker
-import com.example.components.workout.execution.RirSelector
-import com.example.components.workout.execution.QuickCoachTip
-import com.example.components.workout.execution.ExerciseQuickInfoSheet
-import com.example.components.workout.execution.WorkoutActionButton
+import com.example.ui.components.AppModalBottomSheet
+import com.example.ui.components.DirectNumericInputSheet
+import com.example.ui.components.RirSelector
+import com.example.ui.components.SyncExerciseSheet
 import com.example.ui.theme.*
+import kotlinx.coroutines.launch
 
 sealed interface WorkoutSheet {
     data object OptionsMenu : WorkoutSheet
@@ -88,6 +94,7 @@ fun ExecutionScreen(
     val preAlertEnabled by viewModel.preAlertEnabled.collectAsState()
     val rirRpeEnabled by viewModel.rirRpeEnabled.collectAsState()
     val showGifs by viewModel.showGifs.collectAsState()
+    val showCoachTip by viewModel.showCoachTip.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? androidx.activity.ComponentActivity
@@ -142,21 +149,35 @@ fun ExecutionScreen(
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
                 )
             }
-        ) { innerPadding ->
-            Box(modifier = Modifier.fillMaxSize().padding(innerPadding), contentAlignment = Alignment.Center) {
+        ) { padding ->
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("Nenhum exercício encontrado.", color = TextSecondary)
             }
         }
         return
     }
 
-    val totalSetsAcrossWorkout = remember(session) {
-        session.exercises.sumOf { it.sets.size }.coerceAtLeast(1)
+    val pagerState = rememberPagerState(
+        initialPage = state.currentExerciseIndex,
+        pageCount = { session.exercises.size }
+    )
+
+    LaunchedEffect(state.currentExerciseIndex) {
+        if (pagerState.currentPage != state.currentExerciseIndex && state.currentExerciseIndex in 0 until session.exercises.size) {
+            pagerState.animateScrollToPage(state.currentExerciseIndex)
+        }
     }
-    val completedSetsCount = remember(session) {
-        session.exercises.sumOf { ex -> ex.sets.count { it.completed } }
+
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage != state.currentExerciseIndex && pagerState.currentPage in 0 until session.exercises.size) {
+            viewModel.selectExercise(pagerState.currentPage)
+        }
     }
-    val targetProgress = (completedSetsCount.toFloat() / totalSetsAcrossWorkout).coerceIn(0f, 1f)
+
+    // Animated Workout Progress
+    val totalSetsCount = session.exercises.sumOf { it.sets.size }
+    val completedSetsCount = session.exercises.sumOf { it.sets.count { s -> s.completed } }
+    val targetProgress = if (totalSetsCount > 0) completedSetsCount.toFloat() / totalSetsCount.toFloat() else 0f
     val animatedProgress by animateFloatAsState(
         targetValue = targetProgress,
         animationSpec = tween(
@@ -165,6 +186,15 @@ fun ExecutionScreen(
         ),
         label = "workoutProgressBar"
     )
+
+    val openFullDetails: () -> Unit = {
+        val exId = currentEx.exerciseSession.actualExerciseId ?: currentEx.exerciseSession.plannedExerciseId
+        if (exId != null && onNavigateToExerciseDetails != null) {
+            onNavigateToExerciseDetails(exId, currentEx.exerciseSession.exerciseNameSnapshot)
+        } else {
+            activeSheet = WorkoutSheet.Instructions
+        }
+    }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -226,8 +256,35 @@ fun ExecutionScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { activeSheet = WorkoutSheet.OptionsMenu }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Menu do treino", tint = TextPrimary)
+                        IconButton(
+                            onClick = { activeSheet = WorkoutSheet.QuickInfo },
+                            modifier = Modifier.testTag("quick_info_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Informações rápidas",
+                                tint = Lime400
+                            )
+                        }
+                        IconButton(
+                            onClick = openFullDetails,
+                            modifier = Modifier.testTag("full_details_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInNew,
+                                contentDescription = "Ver exercício completo",
+                                tint = TextSecondary
+                            )
+                        }
+                        IconButton(
+                            onClick = { activeSheet = WorkoutSheet.OptionsMenu },
+                            modifier = Modifier.testTag("workout_menu_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Menu do treino",
+                                tint = TextPrimary
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
@@ -269,70 +326,78 @@ fun ExecutionScreen(
                         )
                     }
                     ExecutionPhase.ACTIVE_SET -> {
-                        val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
-                        if (activeSet != null) {
-                            AnimatedContent(
-                                targetState = Pair(state.currentExerciseIndex, state.activeSetIndex ?: 0),
-                                transitionSpec = {
-                                    if (targetState.first != initialState.first) {
-                                        if (targetState.first > initialState.first) {
-                                            (slideInHorizontally(animationSpec = tween(280, easing = AppMotion.StandardEasing)) { width -> width / 3 } +
-                                             fadeIn(animationSpec = tween(280))) togetherWith
-                                            (slideOutHorizontally(animationSpec = tween(220, easing = AppMotion.DecelerateEasing)) { width -> -width / 3 } +
-                                             fadeOut(animationSpec = tween(220)))
-                                        } else {
-                                            (slideInHorizontally(animationSpec = tween(280, easing = AppMotion.StandardEasing)) { width -> -width / 3 } +
-                                             fadeIn(animationSpec = tween(280))) togetherWith
-                                            (slideOutHorizontally(animationSpec = tween(220, easing = AppMotion.DecelerateEasing)) { width -> width / 3 } +
-                                             fadeOut(animationSpec = tween(220)))
-                                        }
-                                    } else {
-                                        (fadeIn(animationSpec = tween(250, easing = AppMotion.StandardEasing)) +
-                                         scaleIn(initialScale = 0.96f, animationSpec = tween(250, easing = AppMotion.StandardEasing))) togetherWith
-                                        (fadeOut(animationSpec = tween(200, easing = AppMotion.DecelerateEasing)) +
-                                         scaleOut(targetScale = 1.03f, animationSpec = tween(200, easing = AppMotion.DecelerateEasing)))
+                        HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.fillMaxSize()
+                        ) { page ->
+                            if (page == state.currentExerciseIndex) {
+                                val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
+                                if (activeSet != null) {
+                                    AnimatedContent(
+                                        targetState = state.activeSetIndex ?: 0,
+                                        transitionSpec = {
+                                            (fadeIn(animationSpec = tween(250, easing = AppMotion.StandardEasing)) +
+                                             scaleIn(initialScale = 0.96f, animationSpec = tween(250, easing = AppMotion.StandardEasing))) togetherWith
+                                            (fadeOut(animationSpec = tween(200, easing = AppMotion.DecelerateEasing)) +
+                                             scaleOut(targetScale = 1.03f, animationSpec = tween(200, easing = AppMotion.DecelerateEasing)))
+                                        },
+                                        label = "ActiveSetTransition"
+                                    ) { _ ->
+                                        FocusedActiveSetView(
+                                            currentEx = currentEx,
+                                            activeSet = activeSet,
+                                            activeSetIndex = state.activeSetIndex ?: 0,
+                                            totalSets = currentEx.sets.size,
+                                            currentExerciseIndex = state.currentExerciseIndex,
+                                            totalExercises = session.exercises.size,
+                                            resolvedExercise = state.currentResolvedExercise,
+                                            premiumInfo = premiumInfo,
+                                            previousExecutionSets = state.previousExecutionSets,
+                                            exerciseExecutionContext = state.exerciseExecutionContext,
+                                            lastSetFeedback = state.lastSetFeedback,
+                                            isLastExercise = state.isLastExercise,
+                                            rirRpeEnabled = rirRpeEnabled,
+                                            hapticEnabled = hapticEnabled,
+                                            showGifs = showGifs,
+                                            showCoachTip = showCoachTip,
+                                            isOrderAdapted = state.isOrderAdapted,
+                                            onUpdateSet = { viewModel.updateSet(it) },
+                                            onCompleteSet = {
+                                                if (hapticEnabled) {
+                                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                }
+                                                viewModel.completeSet(it)
+                                            },
+                                            onDismissFeedback = { viewModel.dismissFeedback() },
+                                            onOpenDirectInput = { config -> directInputConfig = config },
+                                            onOpenExerciseSelector = { activeSheet = WorkoutSheet.ExercisesList },
+                                            onOpenQuickInfo = { activeSheet = WorkoutSheet.QuickInfo },
+                                            onOpenFullDetails = openFullDetails,
+                                            onNextExercise = { viewModel.nextExercise() },
+                                            onPreviousExercise = { viewModel.previousExercise() },
+                                            onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
+                                            onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
+                                            onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync },
+                                            onReplicateCurrentSet = { setLog ->
+                                                viewModel.updateSet(setLog)
+                                                viewModel.replicateCurrentSet { result ->
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Configuração aplicada a ${result.updatedCount} séries seguintes")
+                                                    }
+                                                }
+                                            }
+                                        )
                                     }
-                                },
-                                label = "ActiveSetTransition"
-                            ) { _ ->
-                                FocusedActiveSetView(
-                                    currentEx = currentEx,
-                                    activeSet = activeSet,
-                                    activeSetIndex = state.activeSetIndex ?: 0,
-                                    totalSets = currentEx.sets.size,
-                                    currentExerciseIndex = state.currentExerciseIndex,
-                                    totalExercises = session.exercises.size,
-                                    resolvedExercise = state.currentResolvedExercise,
-                                    premiumInfo = premiumInfo,
-                                    previousExecutionSets = state.previousExecutionSets,
-                                    rirRpeEnabled = rirRpeEnabled,
-                                    hapticEnabled = hapticEnabled,
-                                    showGifs = showGifs,
-                                    isOrderAdapted = state.isOrderAdapted,
-                                    onUpdateSet = { viewModel.updateSet(it) },
-                                    onCompleteSet = {
-                                        if (hapticEnabled) {
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        }
-                                        viewModel.completeSet(it)
-                                    },
-                                    onOpenDirectInput = { config -> directInputConfig = config },
-                                    onOpenExerciseSelector = { activeSheet = WorkoutSheet.ExercisesList },
-                                    onOpenQuickInfo = { activeSheet = WorkoutSheet.QuickInfo },
-                                    onOpenFullDetails = {
-                                        val exId = currentEx.exerciseSession.actualExerciseId ?: currentEx.exerciseSession.plannedExerciseId
-                                        if (exId != null && onNavigateToExerciseDetails != null) {
-                                            onNavigateToExerciseDetails(exId, currentEx.exerciseSession.exerciseNameSnapshot)
-                                        } else {
-                                            activeSheet = WorkoutSheet.Instructions
-                                        }
-                                    },
-                                    onNextExercise = { viewModel.nextExercise() },
-                                    onPreviousExercise = { viewModel.previousExercise() },
-                                    onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
-                                    onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
-                                    onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync }
-                                )
+                                }
+                            } else {
+                                val adjacentEx = session.exercises.getOrNull(page)
+                                if (adjacentEx != null) {
+                                    AdjacentExercisePreview(
+                                        exercise = adjacentEx,
+                                        index = page,
+                                        total = session.exercises.size
+                                    )
+                                }
                             }
                         }
                     }
@@ -374,7 +439,7 @@ fun ExecutionScreen(
             }
         }
 
-        // --- Single Controlled Active Bottom Sheet ---
+        // Action BottomSheets
         when (activeSheet) {
             WorkoutSheet.OptionsMenu -> {
                 ActionBottomSheet(
@@ -382,17 +447,17 @@ fun ExecutionScreen(
                     title = stringResource(id = R.string.sheet_workout_options),
                     actions = listOf(
                         ActionItemData(
-                            title = stringResource(id = R.string.sheet_action_instructions),
-                            icon = Icons.Default.Info,
-                            onClick = { activeSheet = WorkoutSheet.Instructions }
-                        ),
-                        ActionItemData(
                             title = stringResource(id = R.string.sheet_action_swap),
                             icon = Icons.Default.SwapHoriz,
                             onClick = {
-                                activeSheet = WorkoutSheet.Alternatives
+                                activeSheet = null
                                 viewModel.loadAlternatives()
                             }
+                        ),
+                        ActionItemData(
+                            title = stringResource(id = R.string.sheet_action_instructions),
+                            icon = Icons.Default.HelpOutline,
+                            onClick = { activeSheet = WorkoutSheet.Instructions }
                         ),
                         ActionItemData(
                             title = stringResource(id = R.string.sheet_action_sync),
@@ -509,6 +574,7 @@ fun ExecutionScreen(
                 PreviousExecutionBottomSheet(
                     exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
                     previousSets = state.previousExecutionSets,
+                    summary = state.exerciseExecutionContext?.summary,
                     onDismiss = { activeSheet = null }
                 )
             }
@@ -550,34 +616,26 @@ fun ExecutionScreen(
                     )
                 }
             }
-            null -> {
-                if (alternatives.isNotEmpty()) {
-                    AlternativesBottomSheet(
-                        alternatives = alternatives,
-                        onDismiss = { viewModel.clearAlternatives() },
-                        onSwap = { altId -> viewModel.swapCurrentExercise(altId, false) }
-                    )
-                }
-            }
+            null -> {}
         }
 
-        // --- Dialogs ---
         if (completedReorderConfirm != null) {
-            val targetEx = completedReorderConfirm!!
+            val exExec = completedReorderConfirm!!
             AlertDialog(
                 onDismissRequest = { completedReorderConfirm = null },
                 containerColor = SurfaceDark,
-                title = { Text("Este exercício já foi concluído", color = TextPrimary, fontWeight = FontWeight.Bold) },
-                text = { Text("Este exercício já foi concluído. Deseja realmente alterar a ordem registrada?", color = TextSecondary) },
+                title = { Text("Mover Exercício Concluído?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = { Text("Este exercício já foi concluído. Mover para outra posição reorganizará o histórico do treino.", color = TextSecondary) },
                 confirmButton = {
-                    TextButton(onClick = {
-                        val ex = completedReorderConfirm
-                        completedReorderConfirm = null
-                        if (ex != null) {
-                            activeSheet = WorkoutSheet.Reorder(ex)
-                        }
-                    }) {
-                        Text("Continuar", color = Lime400, fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            val toMove = exExec
+                            completedReorderConfirm = null
+                            activeSheet = WorkoutSheet.Reorder(toMove)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+                    ) {
+                        Text("Sim, Continuar", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
@@ -666,6 +724,65 @@ data class DirectInputConfig(
 )
 
 @Composable
+fun AdjacentExercisePreview(
+    exercise: ExerciseSessionWithSets,
+    index: Int,
+    total: Int
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            color = Lime400.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Lime400.copy(alpha = 0.3f))
+        ) {
+            Text(
+                text = "EXERCÍCIO ${index + 1} DE $total",
+                color = Lime400,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = exercise.exerciseSession.exerciseNameSnapshot,
+            color = TextPrimary,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Black,
+            textAlign = TextAlign.Center
+        )
+        if (!exercise.exerciseSession.machineLabelSnapshot.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = exercise.exerciseSession.machineLabelSnapshot!!,
+                color = Lime400,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        } else if (!exercise.exerciseSession.primaryMuscleSnapshot.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = exercise.exerciseSession.primaryMuscleSnapshot!!,
+                color = TextSecondary,
+                fontSize = 14.sp
+            )
+        }
+        Spacer(modifier = Modifier.height(20.dp))
+        Text(
+            text = "${exercise.sets.size} séries planejadas · ${exercise.sets.count { it.completed }} concluídas",
+            color = TextSecondary,
+            fontSize = 13.sp
+        )
+    }
+}
+
+@Composable
 fun FocusedActiveSetView(
     currentEx: ExerciseSessionWithSets,
     activeSet: SetLogEntity,
@@ -676,12 +793,17 @@ fun FocusedActiveSetView(
     resolvedExercise: com.example.domain.model.ResolvedExercise?,
     premiumInfo: com.example.presentation.exercises.PremiumExerciseInfo?,
     previousExecutionSets: List<SetLogEntity>,
+    exerciseExecutionContext: ExerciseExecutionContext? = null,
+    lastSetFeedback: com.example.presentation.execution.SetCompletionFeedback? = null,
+    isLastExercise: Boolean = false,
     rirRpeEnabled: Boolean,
     hapticEnabled: Boolean,
     showGifs: Boolean,
+    showCoachTip: Boolean,
     isOrderAdapted: Boolean = false,
     onUpdateSet: (SetLogEntity) -> Unit,
     onCompleteSet: (SetLogEntity) -> Unit,
+    onDismissFeedback: () -> Unit = {},
     onOpenDirectInput: (DirectInputConfig) -> Unit,
     onOpenExerciseSelector: () -> Unit,
     onOpenQuickInfo: () -> Unit,
@@ -690,9 +812,9 @@ fun FocusedActiveSetView(
     onPreviousExercise: () -> Unit,
     onViewAllSets: () -> Unit,
     onViewLastWorkout: () -> Unit,
-    onOpenSyncSheet: () -> Unit
+    onOpenSyncSheet: () -> Unit,
+    onReplicateCurrentSet: (SetLogEntity) -> Unit
 ) {
-    val machineLabel = currentEx.exerciseSession.machineLabelSnapshot
     val primaryMuscle = currentEx.exerciseSession.primaryMuscleSnapshot ?: resolvedExercise?.primaryMuscle
     val mediaUrl = resolvedExercise?.resolvedMedia?.mediaUri
     val equipment = resolvedExercise?.rawExercise?.equipment ?: currentEx.exerciseSession.machineLabelSnapshot
@@ -701,6 +823,7 @@ fun FocusedActiveSetView(
     var currentWeight by remember(activeSet.id) { mutableFloatStateOf(activeSet.weight) }
     var currentReps by remember(activeSet.id) { mutableIntStateOf(activeSet.repetitions) }
     var currentRir by remember(activeSet.id) { mutableStateOf(activeSet.rir) }
+    var showReplicateConfirmDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeSet.id, activeSet.weight, activeSet.repetitions, activeSet.rir) {
         currentWeight = activeSet.weight
@@ -708,323 +831,324 @@ fun FocusedActiveSetView(
         currentRir = activeSet.rir
     }
 
-    var touchOffsetX by remember { mutableFloatStateOf(0f) }
+    val scrollState = rememberScrollState()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragEnd = {
-                        if (touchOffsetX < -100f) {
-                            onNextExercise()
-                        } else if (touchOffsetX > 100f) {
-                            onPreviousExercise()
-                        }
-                        touchOffsetX = 0f
-                    },
-                    onDragCancel = { touchOffsetX = 0f },
-                    onHorizontalDrag = { _, dragAmount ->
-                        touchOffsetX += dragAmount
-                    }
+    val isBodyweight = resolvedExercise?.rawExercise?.isBodyweight == true ||
+        resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("body") == true ||
+        resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("corporal") == true ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("flexão") ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("barra fixa") ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("paralelas") ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("abdominal") ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
+        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
+
+    val actionButtonText = when {
+        isLastExercise && activeSetIndex == totalSets - 1 -> "✓ CONCLUIR TREINO"
+        activeSetIndex == totalSets - 1 -> "✓ CONCLUIR E IR PARA PRÓXIMO"
+        else -> "✓ CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
+    }
+
+    if (showReplicateConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showReplicateConfirmDialog = false },
+            title = {
+                Text(
+                    text = "Aplicar em todas as séries?",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
                 )
             },
-        verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Exercise Execution Header
-            ExerciseExecutionHeader(
-                exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
-                primaryMuscle = primaryMuscle,
-                machineLabel = machineLabel,
-                difficulty = difficulty,
-                currentExerciseIndex = currentExerciseIndex,
-                totalExercises = totalExercises,
-                isOrderAdapted = isOrderAdapted,
-                onOpenExerciseSelector = onOpenExerciseSelector,
-                onOpenQuickInfo = onOpenQuickInfo,
-                onOpenFullDetails = onOpenFullDetails
-            )
-
-            // Compact Media
-            ExerciseMediaCompact(
-                mediaUrl = mediaUrl,
-                primaryMuscle = primaryMuscle,
-                equipment = equipment,
-                difficulty = difficulty,
-                onClick = onOpenFullDetails
-            )
-
-            // Quick Coach Tip
-            val coachTip = parseJsonListFirst(premiumInfo?.education?.tips) ?: parseJsonListFirst(premiumInfo?.education?.coachNotes)
-            val warningText = parseJsonListFirst(premiumInfo?.education?.commonMistakes) ?: parseJsonListFirst(premiumInfo?.safety?.attentionPoints)
-
-            QuickCoachTip(
-                coachTip = coachTip,
-                warningText = warningText,
-                onOpenQuickInfoSheet = onOpenQuickInfo
-            )
-
-            // Set badge & sync / history summary
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    color = Lime400.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, Lime400.copy(alpha = 0.3f))
+            text = {
+                val formattedWeight = if (currentWeight % 1f == 0f) "${currentWeight.toInt()}kg" else "${currentWeight}kg"
+                Text(
+                    text = "Deseja replicar $formattedWeight e $currentReps reps para todas as próximas séries deste exercício?",
+                    color = TextSecondary,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showReplicateConfirmDialog = false
+                        onReplicateCurrentSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text(
-                        text = "SÉRIE ${activeSetIndex + 1} DE $totalSets",
-                        color = Lime400,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    Text("Aplicar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReplicateConfirmDialog = false }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val compactLayout = LocalDensity.current.fontScale >= 1.5f || maxHeight < 560.dp
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Scrollable Content
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Exercise Name (Header)
+                Text(
+                    text = currentEx.exerciseSession.exerciseNameSnapshot,
+                    color = TextPrimary,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("exercise_execution_header")
+                )
+
+                // Compact Media (single place for media, muscle, equipment, difficulty)
+                ExerciseMediaCompact(
+                    mediaUrl = mediaUrl,
+                    primaryMuscle = primaryMuscle,
+                    equipment = equipment,
+                    difficulty = difficulty,
+                    onClick = onOpenFullDetails
+                )
+
+                // 1. Performance Card (Última vez + Recorde)
+                ExercisePerformanceCard(
+                    context = exerciseExecutionContext,
+                    onViewHistory = onViewLastWorkout,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 2. Target Card (Meta da série)
+                if (exerciseExecutionContext?.suggestedLoad != null || exerciseExecutionContext?.targetReps != null) {
+                    ExerciseTargetCard(
+                        context = exerciseExecutionContext,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
+                // 3. Set Badge and Actions (Aplicar em todas & Ver todas)
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        color = SurfaceDark,
+                        color = Lime400.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(20.dp),
-                        border = BorderStroke(1.dp, Lime400.copy(alpha = 0.4f)),
+                        border = BorderStroke(1.dp, Lime400.copy(alpha = 0.3f)),
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .clickable(onClick = onOpenSyncSheet)
+                            .clickable(onClick = onViewAllSets)
+                            .testTag("set_badge")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Sincronizar exercício",
+                                imageVector = Icons.AutoMirrored.Filled.List,
+                                contentDescription = null,
                                 tint = Lime400,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = stringResource(id = R.string.sync_action_label),
-                                color = TextPrimary,
-                                fontSize = 11.sp,
+                                text = "SÉRIE ${activeSetIndex + 1} DE $totalSets (${currentEx.sets.count { it.completed }}/$totalSets)",
+                                color = Lime400,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
 
-                    if (previousExecutionSets.isNotEmpty()) {
-                        val summaryText = previousExecutionSets.take(3).joinToString(" · ") { setLog ->
-                            val weightStr = if (setLog.weight % 1f == 0f) setLog.weight.toInt().toString() else setLog.weight.toString()
-                            val rirTag = RirFormatter.formatRir(setLog.rir)
-                            val rirPart = if (rirTag != null) " $rirTag" else ""
-                            "${weightStr}kg×${setLog.repetitions}$rirPart"
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (totalSets > 1) {
+                            Surface(
+                                color = SurfaceDark,
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, BorderLight),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { showReplicateConfirmDialog = true }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Aplicar em todas",
+                                        tint = TextPrimary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Aplicar em todas",
+                                        color = TextPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         }
+
                         Text(
-                            text = "Último: $summaryText",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
+                            text = "Ver todas",
+                            color = Lime400,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = onViewLastWorkout)
-                                .padding(4.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                                .clickable(onClick = onViewAllSets)
+                                .padding(4.dp)
                         )
                     }
                 }
-            }
-        }
 
-        // Wheel Pickers & Adjusters
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val isBodyweight = resolvedExercise?.rawExercise?.isBodyweight == true ||
-                    resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("body") == true ||
-                    resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("corporal") == true ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("flexão") ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("barra fixa") ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("paralelas") ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("abdominal") ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
-                    currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
-
-                if (isBodyweight && currentWeight == 0f) {
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(120.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(SurfaceDark)
-                            .border(1.dp, BorderLight, RoundedCornerShape(20.dp))
-                            .clickable {
-                                onOpenDirectInput(
-                                    DirectInputConfig(
-                                        title = "Carga Adicional (kg)",
-                                        initialValue = "0",
-                                        isDecimal = true,
-                                        unitLabel = "kg",
-                                        onConfirm = { newWeight ->
-                                            currentWeight = newWeight
-                                            onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
-                                        }
-                                    )
-                                )
-                            }
-                            .padding(12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AccessibilityNew,
-                            contentDescription = null,
-                            tint = Lime400,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Peso corporal",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = "+ Carga adicional",
-                            color = Lime400,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 11.sp,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                } else {
-                    Column(modifier = Modifier.weight(1f)) {
-                        WeightWheelPicker(
-                            value = currentWeight,
-                            step = 0.5f,
-                            minWeight = 0f,
-                            maxWeight = 500f,
-                            hapticEnabled = hapticEnabled,
-                            label = if (isBodyweight) "Carga adicional" else "Carga",
-                            onValueSettled = { newWeight ->
-                                currentWeight = newWeight
-                                onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
-                            },
-                            onDirectInputRequest = {
-                                onOpenDirectInput(
-                                    DirectInputConfig(
-                                        title = if (isBodyweight) "Carga Adicional (kg)" else "Ajustar Carga (kg)",
-                                        initialValue = if (currentWeight % 1f == 0f) currentWeight.toInt().toString() else currentWeight.toString(),
-                                        isDecimal = true,
-                                        unitLabel = "kg",
-                                        onConfirm = { newWeight ->
-                                            currentWeight = newWeight
-                                            onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
-                                        }
-                                    )
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        if (isBodyweight && currentWeight > 0f) {
-                            Text(
-                                text = "Limpar carga",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .clickable {
-                                        currentWeight = 0f
-                                        onUpdateSet(activeSet.copy(weight = 0f, repetitions = currentReps, rir = currentRir))
-                                    }
-                                    .padding(top = 2.dp)
-                            )
-                        }
-                    }
-                }
-
-                RepWheelPicker(
-                    value = currentReps,
-                    step = 1,
-                    minReps = 1,
-                    maxReps = 100,
-                    hapticEnabled = hapticEnabled,
-                    onValueSettled = { newReps ->
-                        currentReps = newReps
-                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newReps, rir = currentRir))
-                    },
-                    onDirectInputRequest = {
-                        onOpenDirectInput(
-                            DirectInputConfig(
-                                title = "Ajustar Repetições",
-                                initialValue = currentReps.toString(),
-                                isDecimal = false,
-                                unitLabel = "reps",
-                                onConfirm = { newReps ->
-                                    val r = newReps.toInt().coerceAtLeast(1)
-                                    currentReps = r
-                                    onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = r, rir = currentRir))
-                                }
-                            )
-                        )
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            if (rirRpeEnabled) {
-                RirSelector(
-                    currentRir = currentRir,
-                    onRirSelected = { newRir ->
-                        currentRir = newRir
-                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = newRir))
-                    },
+                // 4. Feedback Banner (se houver feedback ativo)
+                SetFeedbackBanner(
+                    feedback = lastSetFeedback,
+                    onDismiss = onDismissFeedback,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // 5. Coach Tip (se habilitado)
+                if (showCoachTip) {
+                    val coachTip = parseJsonListFirst(premiumInfo?.education?.tips) ?: parseJsonListFirst(premiumInfo?.education?.coachNotes)
+                    val warningText = parseJsonListFirst(premiumInfo?.education?.commonMistakes) ?: parseJsonListFirst(premiumInfo?.safety?.attentionPoints)
+
+                    QuickCoachTip(
+                        coachTip = coachTip,
+                        warningText = warningText,
+                        onOpenQuickInfoSheet = onOpenQuickInfo
+                    )
+                }
+
+                // If compact layout, place effort selector inside scroll
+                if (compactLayout && rirRpeEnabled) {
+                    RirSelector(
+                        currentRir = currentRir,
+                        onRirSelected = { newRir ->
+                            currentRir = newRir
+                            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = newRir))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
-        }
 
-        // CTA Button
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            WorkoutActionButton(
-                onClick = {
-                    onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
-                },
-                text = "CONCLUIR SÉRIE",
-                hapticEnabled = hapticEnabled
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            TextButton(
-                onClick = onViewAllSets,
-                modifier = Modifier.fillMaxWidth()
+            // Anchored Controls
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .testTag("active_set_controls"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Ver todas as séries (${currentEx.sets.count { it.completed }}/$totalSets)",
-                    color = TextSecondary,
-                    fontSize = 13.sp
+                // Vertical Scroll Wheel Pickers (Carga & Reps)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Carga Wheel Picker
+                    WeightWheelPicker(
+                        value = currentWeight,
+                        step = 0.5f,
+                        minWeight = 0f,
+                        maxWeight = 500f,
+                        label = if (isBodyweight) "Carga Adicional" else "Carga",
+                        hapticEnabled = hapticEnabled,
+                        onValueSettled = { newWeight ->
+                            currentWeight = newWeight
+                            onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
+                        },
+                        onDirectInputRequest = {
+                            onOpenDirectInput(
+                                DirectInputConfig(
+                                    title = if (isBodyweight) "Carga Adicional (kg)" else "Ajustar Carga (kg)",
+                                    initialValue = if (currentWeight % 1f == 0f) currentWeight.toInt().toString() else currentWeight.toString(),
+                                    isDecimal = true,
+                                    unitLabel = "kg",
+                                    onConfirm = { newWeight ->
+                                        currentWeight = newWeight
+                                        onUpdateSet(activeSet.copy(weight = newWeight, repetitions = currentReps, rir = currentRir))
+                                    }
+                                )
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    // Reps Wheel Picker
+                    RepWheelPicker(
+                        value = currentReps,
+                        minReps = 1,
+                        maxReps = 100,
+                        hapticEnabled = hapticEnabled,
+                        onValueSettled = { newReps ->
+                            currentReps = newReps
+                            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newReps, rir = currentRir))
+                        },
+                        onDirectInputRequest = {
+                            onOpenDirectInput(
+                                DirectInputConfig(
+                                    title = "Ajustar Repetições",
+                                    initialValue = currentReps.toString(),
+                                    isDecimal = false,
+                                    unitLabel = "reps",
+                                    onConfirm = { newReps ->
+                                        val r = newReps.toInt().coerceAtLeast(1)
+                                        currentReps = r
+                                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = r, rir = currentRir))
+                                    }
+                                )
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Effort selector if not compact
+                if (!compactLayout && rirRpeEnabled) {
+                    RirSelector(
+                        currentRir = currentRir,
+                        onRirSelected = { newRir ->
+                            currentRir = newRir
+                            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = newRir))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Action Button (with contextual copy)
+                WorkoutActionButton(
+                    onClick = {
+                        onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
+                    },
+                    text = actionButtonText,
+                    hapticEnabled = hapticEnabled
                 )
             }
         }
@@ -1033,73 +1157,47 @@ fun FocusedActiveSetView(
 
 private fun parseJsonListFirst(jsonStr: String?): String? {
     if (jsonStr.isNullOrBlank()) return null
+    val trimmed = jsonStr.trim()
     return try {
-        val array = org.json.JSONArray(jsonStr)
-        if (array.length() > 0) array.getString(0) else null
+        if (trimmed.startsWith("[")) {
+            val array = org.json.JSONArray(trimmed)
+            if (array.length() == 0) return null
+            val obj = array.optJSONObject(0)
+            if (obj != null) {
+                extractFirstTextFromJson(obj)
+            } else {
+                val firstItem = array.getString(0)
+                parseRawStringOrJson(firstItem)
+            }
+        } else if (trimmed.startsWith("{")) {
+            extractFirstTextFromJson(org.json.JSONObject(trimmed))
+        } else {
+            trimmed
+        }
     } catch (e: Exception) {
-        jsonStr
+        trimmed
     }
 }
 
-@Composable
-fun MetricAdjuster(
-    label: String,
-    value: String,
-    unit: String,
-    onDecrease: () -> Unit,
-    onIncrease: () -> Unit
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = label.uppercase(), color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            IconButton(
-                onClick = onDecrease,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(SurfaceDark)
-            ) {
-                Icon(Icons.Default.Remove, contentDescription = "Diminuir", tint = TextPrimary)
-            }
+private fun extractFirstTextFromJson(obj: org.json.JSONObject): String {
+    val keys = listOf("mistake", "point", "tip", "text", "title", "description", "note", "instruction", "reason")
+    for (key in keys) {
+        val value = obj.optString(key)
+        if (!value.isNullOrBlank()) return value
+    }
+    return obj.toString()
+}
 
-            Spacer(modifier = Modifier.width(20.dp))
-
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = value,
-                    color = TextPrimary,
-                    fontSize = 42.sp,
-                    fontWeight = FontWeight.Black
-                )
-                if (unit.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = unit,
-                        color = TextSecondary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(20.dp))
-
-            IconButton(
-                onClick = onIncrease,
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(SurfaceDark)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Aumentar", tint = TextPrimary)
-            }
+private fun parseRawStringOrJson(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.startsWith("{")) {
+        return try {
+            extractFirstTextFromJson(org.json.JSONObject(trimmed))
+        } catch (e: Exception) {
+            trimmed
         }
     }
+    return trimmed
 }
 
 @Composable
@@ -1271,7 +1369,7 @@ fun FocusedExerciseTransitionView(
                 onClick = onStartNext,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(60.dp),
+                    .heightIn(min = 60.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
             ) {
@@ -1350,33 +1448,12 @@ fun FocusedWorkoutCompleteView(
             onClick = onFinishWorkout,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp),
+                .heightIn(min = 60.dp),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
         ) {
             Text("FINALIZAR TREINO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
-    }
-}
-
-@Composable
-fun SecondaryOptionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    textColor: Color = TextPrimary,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 12.dp, horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(icon, contentDescription = null, tint = textColor, modifier = Modifier.size(24.dp))
-        Spacer(modifier = Modifier.width(16.dp))
-        Text(text, color = textColor, fontSize = 16.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1393,6 +1470,8 @@ fun AllSetsBottomSheet(
     onRemoveSet: (SetLogEntity) -> Unit,
     onOpenSyncSheet: () -> Unit
 ) {
+    var editingSet by remember { mutableStateOf<SetLogEntity?>(null) }
+
     AppModalBottomSheet(
         onDismissRequest = onDismiss,
         title = "Todas as Séries",
@@ -1405,22 +1484,12 @@ fun AllSetsBottomSheet(
                     tint = Lime400
                 )
             }
-            Spacer(modifier = Modifier.width(4.dp))
-            Button(
-                onClick = onAddSet,
-                colors = ButtonDefaults.buttonColors(containerColor = Lime400.copy(alpha = 0.2f), contentColor = Lime400),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Adicionar Série", fontSize = 13.sp)
-            }
         }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.7f)
+                .fillMaxHeight(0.75f)
         ) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -1428,100 +1497,272 @@ fun AllSetsBottomSheet(
             ) {
                 itemsIndexed(sets) { index, setLog ->
                     Surface(
-                        color = BackgroundDark,
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, if (setLog.completed) Emerald500.copy(alpha = 0.5f) else BorderLight)
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, if (setLog.completed) Emerald500.copy(alpha = 0.5f) else BorderLight),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { editingSet = setLog }
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            IconButton(onClick = { onToggleComplete(setLog) }) {
-                                Icon(
-                                    if (setLog.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                                    contentDescription = "Concluir série",
-                                    tint = if (setLog.completed) Emerald500 else TextSecondary
-                                )
-                            }
-
-                            Text(
-                                text = "${index + 1}",
-                                color = TextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.width(24.dp)
-                            )
-
-                            // Carga
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { onUpdateSet(setLog.copy(weight = (setLog.weight - 1f).coerceAtLeast(0f))) }) {
-                                    Icon(Icons.Default.Remove, contentDescription = "Menos carga", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                }
-                                Text("${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight}kg", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                IconButton(onClick = { onUpdateSet(setLog.copy(weight = setLog.weight + 1f)) }) {
-                                    Icon(Icons.Default.Add, contentDescription = "Mais carga", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                }
-                            }
-
-                            Text("×", color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp))
-
-                            // Reps
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { onUpdateSet(setLog.copy(repetitions = (setLog.repetitions - 1).coerceAtLeast(0))) }) {
-                                    Icon(Icons.Default.Remove, contentDescription = "Menos reps", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                }
-                                Text("${setLog.repetitions}", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                IconButton(onClick = { onUpdateSet(setLog.copy(repetitions = setLog.repetitions + 1)) }) {
-                                    Icon(Icons.Default.Add, contentDescription = "Mais reps", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                                }
-                            }
-
-                            if (rirRpeEnabled) {
-                                val rirText = RirFormatter.formatRir(setLog.rir)
-                                val rirLabel = if (rirText != null) "· $rirText" else "· RIR -"
-                                Surface(
-                                    color = if (setLog.rir == 0) Color(0xFFFF9800).copy(alpha = 0.2f) else BackgroundDark,
-                                    shape = RoundedCornerShape(6.dp),
-                                    border = BorderStroke(1.dp, if (setLog.rir == 0) Color(0xFFFF9800) else BorderLight),
-                                    modifier = Modifier
-                                        .padding(start = 4.dp)
-                                        .clickable {
-                                            val nextRir = when (setLog.rir) {
-                                                null -> 4
-                                                4 -> 3
-                                                3 -> 2
-                                                2 -> 1
-                                                1 -> 0
-                                                else -> null
-                                            }
-                                            onUpdateSet(setLog.copy(rir = nextRir))
-                                        }
+                            // Left: Check status + Set Number + Load/Reps + RIR
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                IconButton(
+                                    onClick = { onToggleComplete(setLog) },
+                                    modifier = Modifier.size(32.dp)
                                 ) {
-                                    Text(
-                                        text = rirLabel,
-                                        color = if (setLog.rir == 0) Color(0xFFFFB74D) else TextSecondary,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (setLog.rir == 0) FontWeight.Bold else FontWeight.Medium,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    Icon(
+                                        imageVector = if (setLog.completed) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                                        contentDescription = "Concluir série",
+                                        tint = if (setLog.completed) Emerald500 else TextSecondary,
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Série ${index + 1}",
+                                            color = if (setLog.completed) Emerald500 else TextSecondary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+
+                                        if (setLog.completed) {
+                                            Surface(
+                                                color = Emerald500.copy(alpha = 0.15f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Concluída",
+                                                    color = Emerald500,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    val weightStr = if (setLog.weight % 1f == 0f) "${setLog.weight.toInt()}" else "${setLog.weight}"
+                                    Text(
+                                        text = "${weightStr}kg  ×  ${setLog.repetitions} reps",
+                                        color = TextPrimary,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Black
+                                    )
+
+                                    if (rirRpeEnabled) {
+                                        val effortText = when (setLog.rir) {
+                                            0 -> "🔥 Falha (RIR 0)"
+                                            1 -> "😤 Muito pesado (RIR 1)"
+                                            2 -> "💪 Pesado (RIR 2)"
+                                            3 -> "🙂 Controlado (RIR 3+)"
+                                            else -> "Sem esforço registrado"
+                                        }
+                                        Text(
+                                            text = effortText,
+                                            color = if (setLog.rir == 0) Color(0xFFFFB74D) else if (setLog.rir != null) Lime400 else TextSecondary.copy(alpha = 0.6f),
+                                            fontSize = 12.sp,
+                                            fontWeight = if (setLog.rir != null) FontWeight.SemiBold else FontWeight.Normal
+                                        )
+                                    }
+                                }
                             }
 
-                            Spacer(modifier = Modifier.weight(1f))
+                            // Right: Edit and Delete actions
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    color = BackgroundDark,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = BorderStroke(1.dp, BorderLight),
+                                    modifier = Modifier.clickable { editingSet = setLog }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Editar", tint = Lime400, modifier = Modifier.size(14.dp))
+                                        Text("Editar", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
 
-                            if (sets.size > 1) {
-                                IconButton(onClick = { onRemoveSet(setLog) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Excluir série", tint = Color.Red.copy(alpha = 0.6f), modifier = Modifier.size(20.dp))
+                                if (sets.size > 1) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { onRemoveSet(setLog) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Excluir série",
+                                            tint = Color.Red.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onAddSet,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Lime400.copy(alpha = 0.18f), contentColor = Lime400),
+                border = BorderStroke(1.dp, Lime400.copy(alpha = 0.4f))
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Adicionar Série", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+
+    // Modal Edit Set Dialog
+    editingSet?.let { activeEditingSet ->
+        var currentWeight by remember(activeEditingSet.id) { mutableFloatStateOf(activeEditingSet.weight) }
+        var currentReps by remember(activeEditingSet.id) { mutableIntStateOf(activeEditingSet.repetitions) }
+        var currentRir by remember(activeEditingSet.id) { mutableStateOf(activeEditingSet.rir) }
+
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { editingSet = null },
+            title = {
+                Text(
+                    text = "Editar Série ${activeEditingSet.setNumber}",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Carga Control
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Carga (kg)", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { currentWeight = (currentWeight - 2.5f).coerceAtLeast(0f) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Text("-2.5", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            IconButton(
+                                onClick = { currentWeight = (currentWeight - 0.5f).coerceAtLeast(0f) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Remove, contentDescription = "Menos", tint = TextPrimary)
+                            }
+                            Text(
+                                text = "${if (currentWeight % 1f == 0f) currentWeight.toInt() else currentWeight} kg",
+                                color = TextPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            IconButton(
+                                onClick = { currentWeight += 0.5f },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Mais", tint = TextPrimary)
+                            }
+                            IconButton(
+                                onClick = { currentWeight += 2.5f },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Text("+2.5", color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    // Repetições Control
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Repetições", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { currentReps = (currentReps - 1).coerceAtLeast(1) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Remove, contentDescription = "Menos reps", tint = TextPrimary)
+                            }
+                            Text(
+                                text = "$currentReps reps",
+                                color = TextPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            IconButton(
+                                onClick = { currentReps += 1 },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Mais reps", tint = TextPrimary)
+                            }
+                        }
+                    }
+
+                    // RIR Selector
+                    if (rirRpeEnabled) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Esforço (RIR)", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            com.example.ui.components.RirSelector(
+                                currentRir = currentRir,
+                                onRirSelected = { currentRir = it }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUpdateSet(activeEditingSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
+                        editingSet = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+                ) {
+                    Text("Salvar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingSet = null }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }
 
@@ -1550,20 +1791,19 @@ fun WorkoutExercisesBottomSheet(
                 Surface(
                     color = Color(0xFFF59E0B).copy(alpha = 0.15f),
                     shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.4f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp)
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "⚡ Ordem adaptada durante a execução",
+                            text = "A ordem dos exercícios foi adaptada dinamicamente.",
                             color = Color(0xFFF59E0B),
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -1574,28 +1814,46 @@ fun WorkoutExercisesBottomSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 itemsIndexed(exercises) { idx, ex ->
-                    val isSelected = idx == currentIndex
+                    val isCurrent = idx == currentIndex
                     val completedCount = ex.sets.count { it.completed }
                     val totalSets = ex.sets.size
-                    val isAllCompleted = totalSets > 0 && completedCount == totalSets
+                    val isAllCompleted = completedCount == totalSets && totalSets > 0
                     val executionModel = exerciseExecutions.getOrNull(idx)
-
                     var menuExpanded by remember { mutableStateOf(false) }
 
                     Surface(
-                        color = if (isSelected) Lime400.copy(alpha = 0.15f) else BackgroundDark,
+                        color = if (isCurrent) Lime400.copy(alpha = 0.1f) else BackgroundDark,
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, if (isSelected) Lime400 else BorderLight),
-                        modifier = Modifier.fillMaxWidth().clickable { onSelectExercise(idx) }
+                        border = BorderStroke(
+                            1.dp,
+                            when {
+                                isCurrent -> Lime400
+                                isAllCompleted -> Emerald500.copy(alpha = 0.4f)
+                                else -> BorderLight
+                            }
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelectExercise(idx) }
                     ) {
                         Row(
-                            modifier = Modifier.padding(14.dp),
+                            modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("${idx + 1}.", color = if (isSelected) Lime400 else TextSecondary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "${idx + 1}",
+                                color = if (isCurrent) Lime400 else TextSecondary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(28.dp)
+                            )
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(ex.exerciseSession.exerciseNameSnapshot, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = ex.exerciseSession.exerciseNameSnapshot,
+                                    color = if (isCurrent) Lime400 else TextPrimary,
+                                    fontSize = 15.sp,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium
+                                )
                                 if (!ex.exerciseSession.machineLabelSnapshot.isNullOrBlank()) {
                                     Text(ex.exerciseSession.machineLabelSnapshot!!, color = Lime400, fontSize = 12.sp)
                                 }
@@ -1624,7 +1882,6 @@ fun WorkoutExercisesBottomSheet(
                                         modifier = Modifier.background(SurfaceDark)
                                     ) {
                                         val isCompleted = executionModel.status == com.example.domain.workout.execution.ExerciseExecutionStatus.COMPLETED
-                                        val isCurrent = idx == currentIndex
 
                                         if (!isCompleted) {
                                             DropdownMenuItem(
@@ -1666,6 +1923,7 @@ fun WorkoutExercisesBottomSheet(
 fun PreviousExecutionBottomSheet(
     exerciseName: String,
     previousSets: List<SetLogEntity>,
+    summary: com.example.domain.workout.execution.ExercisePerformanceSummary? = null,
     onDismiss: () -> Unit
 ) {
     AppModalBottomSheet(
@@ -1676,6 +1934,53 @@ fun PreviousExecutionBottomSheet(
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
+            // General history summary (PARTE 8)
+            if (summary != null && (summary.maxWeight != null || summary.maxVolume != null || summary.totalExecutions > 0)) {
+                Surface(
+                    color = SurfaceDark,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, BorderLight),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Histórico Geral",
+                            color = Lime400,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceAround
+                        ) {
+                            if (summary.maxWeight != null) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Maior carga", color = TextSecondary, fontSize = 11.sp)
+                                    val wStr = if (summary.maxWeight % 1f == 0f) "${summary.maxWeight.toInt()}" else "${summary.maxWeight}"
+                                    Text("${wStr}kg", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            if (summary.maxVolume != null) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Maior volume", color = TextSecondary, fontSize = 11.sp)
+                                    val vStr = if (summary.maxVolume % 1f == 0f) "${summary.maxVolume.toInt()}" else "${summary.maxVolume}"
+                                    Text("${vStr}kg", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            if (summary.totalExecutions > 0) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Execuções", color = TextSecondary, fontSize = 11.sp)
+                                    Text("${summary.totalExecutions}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (previousSets.isEmpty()) {
                 Text("Nenhum registro anterior encontrado para este exercício.", color = TextSecondary, fontSize = 14.sp)
             } else {
@@ -1691,7 +1996,7 @@ fun PreviousExecutionBottomSheet(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("Série ${setLog.setNumber}", color = TextSecondary, fontSize = 14.sp)
-                            val rirTag = RirFormatter.formatRir(setLog.rir)
+                            val rirTag = RirFormatter.formatEffort(setLog.rir, short = true)
                             val rirSuffix = if (rirTag != null) " · $rirTag" else ""
                             Text(
                                 text = "${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight} kg  ×  ${setLog.repetitions} reps$rirSuffix",
@@ -1775,7 +2080,6 @@ fun AlternativesBottomSheet(
                 .fillMaxWidth()
                 .fillMaxHeight(0.6f)
         ) {
-
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1806,4 +2110,3 @@ fun AlternativesBottomSheet(
         }
     }
 }
-

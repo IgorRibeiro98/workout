@@ -24,7 +24,13 @@ fun ExerciseMistakesCard(mistakesJson: String?) {
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i)
                 if (obj != null) {
-                    list.add(Triple(obj.optString("mistake"), obj.optString("why"), obj.optString("correction")))
+                    list.add(
+                        Triple(
+                            obj.optString("mistake"),
+                            obj.optString("reason").ifBlank { obj.optString("why") },
+                            obj.optString("correction")
+                        )
+                    )
                 } else {
                     list.add(Triple(arr.getString(i), "", ""))
                 }

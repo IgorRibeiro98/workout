@@ -141,6 +141,79 @@ class WorkoutEngine(
         return dao.getLastExecutionSetsForExercise(exerciseId)
     }
 
+    suspend fun getExerciseExecutionContext(exerciseId: Long, templateId: Long?): com.example.domain.workout.execution.ExerciseExecutionContext {
+        val lastSets = dao.getLastExecutionSetsForExercise(exerciseId)
+        val lastFinishedAt = dao.getLastSessionFinishedAtForExercise(exerciseId)
+        val daysAgo = if (lastFinishedAt != null && lastFinishedAt > 0) {
+            val diffMs = System.currentTimeMillis() - lastFinishedAt
+            (diffMs / (1000L * 60 * 60 * 24)).coerceAtLeast(0L)
+        } else {
+            null
+        }
+
+        val lastPerformance = if (lastSets.isNotEmpty()) {
+            val representativeSet = lastSets.maxByOrNull { it.weight } ?: lastSets.first()
+            com.example.domain.workout.execution.PerformanceHistory(
+                weight = representativeSet.weight,
+                reps = representativeSet.repetitions,
+                rir = representativeSet.rir,
+                timestamp = lastFinishedAt,
+                daysAgo = daysAgo,
+                completedSets = lastSets
+            )
+        } else {
+            null
+        }
+
+        val bestSet = dao.getBestSetLogForExercise(exerciseId)
+        val highestPr = dao.getHighestPR(exerciseId, PRType.MAX_WEIGHT.name)
+        val personalRecord = when {
+            bestSet != null -> com.example.domain.workout.execution.PersonalRecord(
+                maxWeight = bestSet.weight,
+                repsAtMaxWeight = bestSet.repetitions,
+                date = lastFinishedAt
+            )
+            highestPr != null -> com.example.domain.workout.execution.PersonalRecord(
+                maxWeight = highestPr.value,
+                repsAtMaxWeight = 1,
+                date = highestPr.date
+            )
+            else -> null
+        }
+
+        val templateExercise = if (templateId != null) dao.getTemplateExercise(templateId, exerciseId) else null
+        val targetReps = if (templateExercise != null && templateExercise.minReps > 0) {
+            templateExercise.minReps..templateExercise.maxReps
+        } else {
+            null
+        }
+        val suggestedLoad = templateExercise?.plannedWeight ?: lastPerformance?.weight
+        val targetSets = templateExercise?.targetSets
+
+        val maxVolumePr = dao.getHighestPR(exerciseId, PRType.MAX_VOLUME.name)
+        val executionCount = dao.getExerciseExecutionCount(exerciseId)
+
+        val summary = if (executionCount > 0 || personalRecord != null) {
+            com.example.domain.workout.execution.ExercisePerformanceSummary(
+                maxWeight = personalRecord?.maxWeight,
+                maxVolume = maxVolumePr?.value,
+                totalExecutions = executionCount
+            )
+        } else {
+            null
+        }
+
+        return com.example.domain.workout.execution.ExerciseExecutionContext(
+            lastPerformance = lastPerformance,
+            personalRecord = personalRecord,
+            suggestedLoad = suggestedLoad,
+            targetReps = targetReps,
+            targetSets = targetSets,
+            summary = summary,
+            isFirstTime = lastPerformance == null && personalRecord == null
+        )
+    }
+
     /**
      * Replicates the current set's weight and reps to subsequent pending sets of the same SetType.
      * Does NOT touch completed sets, different SetTypes, or RIR/RPE values.

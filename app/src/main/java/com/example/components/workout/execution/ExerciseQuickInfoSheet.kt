@@ -211,7 +211,7 @@ fun ExerciseQuickInfoSheet(
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .heightIn(min = 52.dp)
             ) {
                 Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -223,14 +223,53 @@ fun ExerciseQuickInfoSheet(
 
 private fun parseJsonList(jsonStr: String?): List<String> {
     if (jsonStr.isNullOrBlank()) return emptyList()
+    val trimmed = jsonStr.trim()
     return try {
-        val array = JSONArray(jsonStr)
-        val list = mutableListOf<String>()
-        for (i in 0 until array.length()) {
-            list.add(array.getString(i))
+        if (trimmed.startsWith("[")) {
+            val array = JSONArray(trimmed)
+            val list = mutableListOf<String>()
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i)
+                if (obj != null) {
+                    list.add(extractFirstTextFromJson(obj))
+                } else {
+                    val item = array.getString(i)
+                    list.add(parseRawStringOrJson(item))
+                }
+            }
+            list
+        } else if (trimmed.startsWith("{")) {
+            listOf(extractFirstTextFromJson(org.json.JSONObject(trimmed)))
+        } else {
+            listOf(trimmed)
         }
-        list
     } catch (e: Exception) {
-        listOf(jsonStr)
+        listOf(trimmed)
     }
+}
+
+private fun extractFirstTextFromJson(obj: org.json.JSONObject): String {
+    val mistake = obj.optString("mistake").takeIf { !it.isNullOrBlank() }
+    val reason = obj.optString("reason").takeIf { !it.isNullOrBlank() }
+    if (mistake != null && reason != null) {
+        return "$mistake ($reason)"
+    }
+    val keys = listOf("mistake", "point", "tip", "text", "title", "description", "note", "instruction", "reason")
+    for (key in keys) {
+        val value = obj.optString(key)
+        if (!value.isNullOrBlank()) return value
+    }
+    return obj.toString()
+}
+
+private fun parseRawStringOrJson(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.startsWith("{")) {
+        return try {
+            extractFirstTextFromJson(org.json.JSONObject(trimmed))
+        } catch (e: Exception) {
+            trimmed
+        }
+    }
+    return trimmed
 }
