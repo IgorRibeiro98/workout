@@ -919,12 +919,13 @@ fun FocusedActiveSetView(
                         .testTag("exercise_execution_header")
                 )
 
-                // Compact Media (single place for media, muscle, equipment, difficulty)
+                // Media em linha exclusiva + Card de informações contextuais
                 ExerciseMediaCompact(
                     mediaUrl = mediaUrl,
                     primaryMuscle = primaryMuscle,
                     equipment = equipment,
                     difficulty = difficulty,
+                    nameEn = resolvedExercise?.nameEn,
                     onClick = onOpenFullDetails
                 )
 
@@ -2035,15 +2036,19 @@ fun ExerciseInstructionsBottomSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(180.dp)
+                        .height(200.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(BackgroundDark),
+                        .background(Color(0xFF0D0D0E)),
                     contentAlignment = Alignment.Center
                 ) {
                     AsyncImage(
                         model = mediaUrl,
                         contentDescription = "Instrução do Exercício",
-                        modifier = Modifier.fillMaxSize()
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        alignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))

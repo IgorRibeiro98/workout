@@ -151,11 +151,13 @@ fun ExerciseDetailsScreen(
             // HERO SECTION
             item {
                 ExerciseHeroCard(
-                    title = exerciseInfo?.name ?: "",
+                    title = resolvedName,
+                    subtitle = nameEn ?: movementPattern,
                     primaryMuscle = primaryMuscle,
                     equipment = equipment,
                     difficulty = exerciseInfo?.difficulty,
-                    mediaUrl = resolvedMedia?.mediaUri
+                    mediaUrl = resolvedMedia?.mediaUri,
+                    movementPattern = movementPattern
                 )
             }
             
