@@ -2,7 +2,7 @@ package com.example
 
 import com.example.domain.workout.execution.ExerciseExecutionContext
 import com.example.domain.workout.execution.ExercisePerformanceSummary
-import com.example.domain.workout.execution.LastExercisePerformance
+import com.example.domain.workout.execution.PerformanceHistory
 import com.example.domain.workout.execution.PersonalRecord
 import com.example.presentation.execution.FeedbackType
 import org.junit.Assert.assertEquals
@@ -13,7 +13,7 @@ class ExecutionIntelligenceTest {
 
     @Test
     fun `test new record feedback detection`() {
-        val pr = PersonalRecord(maxWeight = 80f, repsAtMaxWeight = 10, achievedAt = 1000L)
+        val pr = PersonalRecord(maxWeight = 80f, repsAtMaxWeight = 10, date = 1000L)
         val currentWeight = 85f
         val currentReps = 8
 
@@ -23,7 +23,7 @@ class ExecutionIntelligenceTest {
 
     @Test
     fun `test load progression feedback detection`() {
-        val lastPerf = LastExercisePerformance(weight = 75f, reps = 10, rir = 2, executedAt = 1000L, daysAgo = 3L)
+        val lastPerf = PerformanceHistory(weight = 75f, reps = 10, rir = 2, timestamp = 1000L, daysAgo = 3L)
         val currentWeight = 77.5f
         val currentReps = 10
 
@@ -33,7 +33,7 @@ class ExecutionIntelligenceTest {
 
     @Test
     fun `test repetition progression feedback detection`() {
-        val lastPerf = LastExercisePerformance(weight = 80f, reps = 8, rir = 2, executedAt = 1000L, daysAgo = 5L)
+        val lastPerf = PerformanceHistory(weight = 80f, reps = 8, rir = 2, timestamp = 1000L, daysAgo = 5L)
         val currentWeight = 80f
         val currentReps = 10
 
