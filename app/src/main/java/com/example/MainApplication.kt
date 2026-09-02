@@ -75,7 +75,9 @@ class MainApplication : Application(), ImageLoaderFactory {
             try {
                 ManifestImporter(database, this@MainApplication).importFromAssets()
                 val premiumImporter = com.example.domain.engine.PremiumManifestImporter(database, this@MainApplication)
-                val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v2.json", force = true)
+                // force = false agora é seguro: o manifesto premium tem chave de versão própria,
+                // e assim as 354 entradas não são reimportadas a cada abertura do app.
+                val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v2.json")
                 premiumImporter.seedPremiumTestWorkoutIfNeeded()
                 android.util.Log.d("MainApplication", "Premium Import Report:\n${result.formattedReport}")
 

@@ -47,7 +47,7 @@ class PremiumManifestImporter(
             val contentVersion = root.optInt("contentVersion", 2)
             
             if (!force) {
-                val currentVersion = settingsManager.installedCatalogContentVersionFlow.first()
+                val currentVersion = settingsManager.installedPremiumContentVersionFlow.first()
                 if (currentVersion >= contentVersion) {
                     return@withContext ImportResult(
                         ignored = root.optJSONArray("exercises")?.length() ?: 0,
@@ -355,7 +355,7 @@ class PremiumManifestImporter(
             }
             
             if (contentVersion > 0) {
-                settingsManager.setInstalledCatalogContentVersion(contentVersion)
+                settingsManager.setInstalledPremiumContentVersion(contentVersion)
             }
             
         } catch (e: Exception) {

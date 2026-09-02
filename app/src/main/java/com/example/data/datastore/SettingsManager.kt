@@ -31,7 +31,10 @@ class SettingsManager(private val context: Context) {
         val REST_TIMER_TYPE = stringPreferencesKey("rest_timer_type")
         val RIR_RPE_ENABLED = booleanPreferencesKey("rir_rpe_enabled")
         val AUTO_REST_TIMER_ON_SET = booleanPreferencesKey("auto_rest_timer_on_set")
+        // Cada manifesto tem a sua própria chave: compartilhá-las fazia a gravação de um
+        // importador bloquear a importação do outro.
         val INSTALLED_CATALOG_CONTENT_VERSION = intPreferencesKey("installed_catalog_content_version")
+        val INSTALLED_PREMIUM_CONTENT_VERSION = intPreferencesKey("installed_premium_content_version")
         val LAST_MEDIA_SYNC_AT = longPreferencesKey("last_media_sync_at")
         val MEDIA_SYNC_CONTENT_VERSION = intPreferencesKey("media_sync_content_version")
         val EXERCISE_DB_ENABLED = booleanPreferencesKey("exercise_db_enabled")
@@ -107,6 +110,7 @@ class SettingsManager(private val context: Context) {
     val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
     val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
     val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
+    val installedPremiumContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_PREMIUM_CONTENT_VERSION] ?: 0 }
     val lastMediaSyncAtFlow: Flow<Long?> = context.dataStore.data.map { it[LAST_MEDIA_SYNC_AT] }
     val mediaSyncContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[MEDIA_SYNC_CONTENT_VERSION] ?: 0 }
     val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_DEADLINE] }
@@ -169,6 +173,10 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setDefaultExerciseRestSeconds(seconds: Int) {
         context.dataStore.edit { it[DEFAULT_EXERCISE_REST_SECONDS] = seconds }
+    }
+
+    suspend fun setInstalledPremiumContentVersion(version: Int) {
+        context.dataStore.edit { it[INSTALLED_PREMIUM_CONTENT_VERSION] = version }
     }
 
     suspend fun setInstalledCatalogContentVersion(version: Int) {

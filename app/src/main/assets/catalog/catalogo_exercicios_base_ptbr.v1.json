@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "contentVersion": 3,
+  "contentVersion": 10,
   "locale": "pt-BR",
   "description": "Catálogo base de exercícios em pt-BR. Entradas adicionais derivadas do ExerciseDB (oss.exercisedb.dev), traduzidas e classificadas no padrão do catálogo.",
   "externalMediaProvider": {
