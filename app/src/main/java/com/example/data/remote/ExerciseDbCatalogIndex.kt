@@ -13,23 +13,27 @@ import com.example.domain.engine.ExerciseDbNormalizer
  */
 class ExerciseDbCatalogIndex(items: List<ExternalExerciseDto>) {
 
-    private data class Entry(
+    private data class CatalogEntry(
         val dto: ExternalExerciseDto,
         val normalizedName: String,
         val tokens: Set<String>
     )
 
-    private val entries: List<Entry> = items
+    private val entries: List<CatalogEntry> = items
         .filter { !it.gifUrl.isNullOrBlank() }
         .map { dto ->
             val norm = ExerciseDbNormalizer.normalize(dto.name)
-            Entry(dto, norm, norm.split(" ").filter { it.length > 2 }.toSet())
+            CatalogEntry(dto, norm, norm.split(" ").filter { it.length > 2 }.toSet())
         }
 
-    private val byToken: Map<String, List<Entry>> = buildMap<String, MutableList<Entry>> {
-        entries.forEach { entry ->
-            entry.tokens.forEach { token -> getOrPut(token) { mutableListOf() }.add(entry) }
+    private val byToken: Map<String, List<CatalogEntry>> = run {
+        val map = mutableMapOf<String, MutableList<CatalogEntry>>()
+        for (entry in entries) {
+            for (token in entry.tokens) {
+                map.getOrPut(token) { mutableListOf() }.add(entry)
+            }
         }
+        map
     }
 
     val size: Int get() = entries.size
@@ -44,7 +48,7 @@ class ExerciseDbCatalogIndex(items: List<ExternalExerciseDto>) {
 
         val queryTokens = normQuery.split(" ").filter { it.length > 2 }.toSet()
 
-        val pool = LinkedHashSet<Entry>()
+        val pool = LinkedHashSet<CatalogEntry>()
         entries.firstOrNull { it.normalizedName == normQuery }?.let { pool.add(it) }
         queryTokens.forEach { token -> byToken[token]?.let { pool.addAll(it) } }
         entries.filter { it.normalizedName.contains(normQuery) || normQuery.contains(it.normalizedName) }
@@ -54,7 +58,7 @@ class ExerciseDbCatalogIndex(items: List<ExternalExerciseDto>) {
 
         return pool
             .sortedWith(
-                compareByDescending<Entry> { if (it.normalizedName == normQuery) 1 else 0 }
+                compareByDescending<CatalogEntry> { if (it.normalizedName == normQuery) 1 else 0 }
                     .thenByDescending { it.tokens.count { token -> queryTokens.contains(token) } }
                     .thenBy { it.normalizedName.length }
             )
