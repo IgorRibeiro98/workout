@@ -126,6 +126,12 @@ interface WorkoutDao {
     @Query("DELETE FROM workout_template_exercises WHERE templateId = :templateId")
     suspend fun deleteTemplateExercisesForTemplate(templateId: Long)
 
+    @Query("UPDATE workout_template_exercises SET restDurationSeconds = :restSeconds")
+    suspend fun updateAllTemplateExercisesRestDuration(restSeconds: Int)
+
+    @Query("UPDATE exercise_sessions SET restDurationSecondsSnapshot = :restSeconds WHERE finishedAt IS NULL")
+    suspend fun updateActiveExerciseSessionsRestDuration(restSeconds: Int)
+
     // Sessions (for history and next workout logic)
     @Query("SELECT * FROM workout_sessions WHERE status = 'COMPLETED' ORDER BY finishedAt DESC LIMIT 1")
     suspend fun getLastCompletedSession(): WorkoutSessionEntity?
@@ -160,6 +166,10 @@ interface WorkoutDao {
     @Transaction
     @Query("SELECT * FROM workout_sessions WHERE status = 'IN_PROGRESS' ORDER BY startedAt DESC LIMIT 1")
     fun getActiveSessionWithDetailsFlow(): Flow<SessionWithDetails?>
+
+    @Transaction
+    @Query("SELECT * FROM workout_sessions WHERE id = :sessionId LIMIT 1")
+    suspend fun getSessionWithDetails(sessionId: Long): SessionWithDetails?
 
     @Query("""
         SELECT sl.* FROM set_logs sl

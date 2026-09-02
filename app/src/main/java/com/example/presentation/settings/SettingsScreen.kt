@@ -88,6 +88,10 @@ fun SettingsScreen(
     val manifestImporter = ManifestImporter(db, context)
     val programImporter = ProgramImporter(db, context)
     val premiumImporter = PremiumManifestImporter(db, context)
+    val workoutEngine = remember(db, settingsManager) {
+        com.example.domain.engine.WorkoutEngine(db.workoutDao(), settingsManager)
+    }
+    var pendingRestUpdate by remember { mutableStateOf<Int?>(null) }
 
     val mediaEngine = remember(db, settingsManager) {
         ExerciseMediaEngine(
@@ -543,7 +547,9 @@ fun SettingsScreen(
                 selectedOption = listOf("Desativado" to 0, "30 segundos" to 30, "45 segundos" to 45, "60 segundos (1 min)" to 60, "90 segundos (1.5 min)" to 90, "120 segundos (2 min)" to 120, "180 segundos (3 min)" to 180).find { it.second == defaultRestSecs },
                 optionTitle = { it.first },
                 onOptionSelected = { 
-                    coroutineScope.launch { settingsManager.setDefaultRestSeconds(it.second) }
+                    if (it.second != defaultRestSecs) {
+                        pendingRestUpdate = it.second
+                    }
                     activeSheet = null
                 },
                 onDismissRequest = { activeSheet = null }
@@ -732,6 +738,74 @@ fun SettingsScreen(
             text = { Text(dialogMessage, color = TextSecondary, fontSize = 14.sp) },
             confirmButton = { TextButton(onClick = { showDialog = false }) { Text("OK", color = Lime400, fontWeight = FontWeight.Bold) } },
             containerColor = SurfaceDark
+        )
+    }
+
+    if (pendingRestUpdate != null) {
+        val newRest = pendingRestUpdate!!
+        AlertDialog(
+            onDismissRequest = { pendingRestUpdate = null },
+            title = {
+                Text(
+                    text = "Tempo de descanso",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        text = "Deseja aplicar este novo tempo de descanso aos treinos já existentes?",
+                        color = TextSecondary,
+                        fontSize = 14.sp
+                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    settingsManager.setDefaultRestSeconds(newRest)
+                                    workoutEngine.updateExistingWorkoutsRestDuration(newRest)
+                                    dialogTitle = "Descanso Atualizado"
+                                    dialogMessage = "Novo tempo de descanso aplicado nas configurações e aos treinos existentes com sucesso."
+                                    showDialog = true
+                                }
+                                pendingRestUpdate = null
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_existing_workouts_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = com.example.ui.theme.BackgroundDark),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Atualizar treinos existentes também", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    settingsManager.setDefaultRestSeconds(newRest)
+                                }
+                                pendingRestUpdate = null
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_new_workouts_only_button"),
+                            border = BorderStroke(1.dp, BorderLight),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Apenas novos treinos", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pendingRestUpdate = null }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(16.dp)
         )
     }
 }

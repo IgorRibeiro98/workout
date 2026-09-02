@@ -304,25 +304,53 @@ class WorkoutEngine(
     suspend fun updateSet(setLog: SetLogEntity) {
         dao.updateSetLog(setLog)
         if (setLog.completed) {
+            val exSession = dao.getExerciseSessionById(setLog.exerciseSessionId)
+            val sessionId = exSession?.sessionId
+            val sessionWithDetails = sessionId?.let { dao.getSessionWithDetails(it) }
+            val allExercises = sessionWithDetails?.exercises ?: emptyList()
+
+            // Check if entire workout is completed
+            val isEntireWorkoutCompleted = allExercises.isNotEmpty() && allExercises.all { ex ->
+                ex.sets.all { it.completed || it.id == setLog.id }
+            }
+
+            if (isEntireWorkoutCompleted) {
+                // Entire workout completed! No rest timer should start. Cancel any active timer.
+                skipRestTimer()
+                return
+            }
+
             val autoTimer = settingsManager.autoRestTimerOnSetFlow.firstOrNull() ?: true
             if (autoTimer) {
-                val exSession = dao.getExerciseSessionById(setLog.exerciseSessionId)
+                val isCurrentExerciseCompleted = allExercises.find { it.exerciseSession.id == setLog.exerciseSessionId }
+                    ?.sets?.all { it.completed || it.id == setLog.id } ?: false
+
                 val override = exSession?.actualExerciseId?.let { dao.getOverrideForExercise(it) }
                 
-                val restDuration = exSession?.restDurationSecondsSnapshot
-                    ?: override?.defaultRestSeconds
-                    ?: settingsManager.defaultExerciseRestSecondsFlow.firstOrNull()
-                    ?: settingsManager.defaultRestSecondsFlow.firstOrNull()
-                    ?: 90
+                val restDuration = if (isCurrentExerciseCompleted) {
+                    settingsManager.defaultExerciseRestSecondsFlow.firstOrNull()
+                        ?: exSession?.restDurationSecondsSnapshot
+                        ?: 90
+                } else {
+                    exSession?.restDurationSecondsSnapshot
+                        ?: override?.defaultRestSeconds
+                        ?: settingsManager.defaultRestSecondsFlow.firstOrNull()
+                        ?: 90
+                }
 
                 startRestTimer(
                     durationSeconds = restDuration,
                     workoutSessionId = exSession?.sessionId,
                     exerciseSessionId = setLog.exerciseSessionId,
-                    timerType = "REST_SET"
+                    timerType = if (isCurrentExerciseCompleted) "REST_EXERCISE" else "REST_SET"
                 )
             }
         }
+    }
+
+    suspend fun updateExistingWorkoutsRestDuration(newRestSeconds: Int) {
+        dao.updateAllTemplateExercisesRestDuration(newRestSeconds)
+        dao.updateActiveExerciseSessionsRestDuration(newRestSeconds)
     }
 
     suspend fun addSet(exerciseSessionId: Long, setNumber: Int, repetitions: Int, weight: Float) {

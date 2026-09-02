@@ -95,8 +95,8 @@ data class ExecutionState(
 
     val phase: ExecutionPhase
         get() = when {
-            isResting -> ExecutionPhase.RESTING
             isAllExercisesCompleted -> ExecutionPhase.WORKOUT_COMPLETE
+            isResting -> ExecutionPhase.RESTING
             isExerciseCompleted -> ExecutionPhase.EXERCISE_TRANSITION
             else -> ExecutionPhase.ACTIVE_SET
         }
@@ -461,6 +461,18 @@ class ExecutionViewModel(
     fun adjustRestTimer(seconds: Int) {
         viewModelScope.launch {
             workoutEngine.adjustRestTimer(seconds)
+        }
+    }
+
+    fun startRestTimer(durationSeconds: Int) {
+        viewModelScope.launch {
+            val currentEx = state.value.currentExercise
+            workoutEngine.startRestTimer(
+                durationSeconds = durationSeconds,
+                workoutSessionId = state.value.sessionWithDetails?.session?.id,
+                exerciseSessionId = currentEx?.exerciseSession?.id,
+                timerType = "REST_EXERCISE"
+            )
         }
     }
 

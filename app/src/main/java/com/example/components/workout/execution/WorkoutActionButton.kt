@@ -27,13 +27,16 @@ import kotlinx.coroutines.delay
 fun WorkoutActionButton(
     onClick: () -> Unit,
     text: String = "CONCLUIR SÉRIE",
-    completedText: String = "✓ SÉRIE CONCLUÍDA",
+    completedText: String = "SÉRIE CONCLUÍDA",
     enabled: Boolean = true,
     hapticEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
     var isConfirming by remember { mutableStateOf(false) }
+
+    val cleanText = remember(text) { text.removePrefix("✓ ").trim() }
+    val cleanCompletedText = remember(completedText) { completedText.removePrefix("✓ ").trim() }
 
     val buttonScale by animateFloatAsState(
         targetValue = if (isConfirming) 0.95f else 1f,
@@ -95,7 +98,7 @@ fun WorkoutActionButton(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (confirming) completedText else text,
+                    text = if (confirming) cleanCompletedText else cleanText,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Black
                 )

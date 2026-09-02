@@ -314,15 +314,33 @@ fun ExecutionScreen(
             ) { phase ->
                 when (phase) {
                     ExecutionPhase.RESTING -> {
+                        val isPreparingNext = state.isExerciseCompleted
+                        val nextExSession = if (isPreparingNext) {
+                            session.exercises.getOrNull(state.currentExerciseIndex + 1)
+                        } else {
+                            null
+                        }
                         FocusedRestView(
                             targetTime = timerTarget ?: System.currentTimeMillis(),
                             onAdd15s = { viewModel.adjustRestTimer(15) },
                             onAdd30s = { viewModel.adjustRestTimer(30) },
-                            onSkip = { viewModel.skipRestTimer() },
-                            nextExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
-                            nextSetIndex = (state.activeSetIndex ?: 0) + 1,
-                            nextSetWeight = state.activeSet?.weight ?: 0f,
-                            nextSetReps = state.activeSet?.repetitions ?: 0
+                            onSkip = {
+                                viewModel.skipRestTimer()
+                                if (isPreparingNext) {
+                                    viewModel.nextExercise()
+                                }
+                            },
+                            isPreparingNextExercise = isPreparingNext,
+                            nextExerciseName = if (isPreparingNext) {
+                                nextExSession?.exerciseSession?.exerciseNameSnapshot ?: "Próximo Exercício"
+                            } else {
+                                currentEx.exerciseSession.exerciseNameSnapshot
+                            },
+                            nextMachineLabel = if (isPreparingNext) nextExSession?.exerciseSession?.machineLabelSnapshot else null,
+                            nextSetIndex = if (isPreparingNext) 1 else ((state.activeSetIndex ?: 0) + 1),
+                            nextSetWeight = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.weight ?: 0f) else (state.activeSet?.weight ?: 0f),
+                            nextSetReps = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.repetitions ?: 0) else (state.activeSet?.repetitions ?: 0),
+                            totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size
                         )
                     }
                     ExecutionPhase.ACTIVE_SET -> {
@@ -382,7 +400,7 @@ fun ExecutionScreen(
                                                 viewModel.updateSet(setLog)
                                                 viewModel.replicateCurrentSet { result ->
                                                     coroutineScope.launch {
-                                                        snackbarHostState.showSnackbar("Configuração aplicada a ${result.updatedCount} séries seguintes")
+                                                        snackbarHostState.showSnackbar("Séries sincronizadas: ${result.updatedCount} séries atualizadas")
                                                     }
                                                 }
                                             }
@@ -403,6 +421,9 @@ fun ExecutionScreen(
                     }
                     ExecutionPhase.EXERCISE_TRANSITION -> {
                         val nextExSession = session.exercises.getOrNull(state.currentExerciseIndex + 1)
+                        val recRest = nextExSession?.exerciseSession?.restDurationSecondsSnapshot
+                            ?: currentEx.exerciseSession.restDurationSecondsSnapshot
+                            ?: 90
                         FocusedExerciseTransitionView(
                             completedExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
                             completedSetsCount = currentEx.sets.count { it.completed },
@@ -410,6 +431,10 @@ fun ExecutionScreen(
                             nextExerciseName = nextExSession?.exerciseSession?.exerciseNameSnapshot,
                             nextMachineLabel = nextExSession?.exerciseSession?.machineLabelSnapshot,
                             nextPrimaryMuscle = nextExSession?.exerciseSession?.primaryMuscleSnapshot,
+                            recommendedRestSeconds = recRest,
+                            onStartRest = { duration ->
+                                viewModel.startRestTimer(duration)
+                            },
                             onStartNext = { viewModel.nextExercise() }
                         )
                     }
@@ -844,9 +869,9 @@ fun FocusedActiveSetView(
         currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
 
     val actionButtonText = when {
-        isLastExercise && activeSetIndex == totalSets - 1 -> "✓ CONCLUIR TREINO"
-        activeSetIndex == totalSets - 1 -> "✓ CONCLUIR E IR PARA PRÓXIMO"
-        else -> "✓ CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
+        isLastExercise && activeSetIndex == totalSets - 1 -> "CONCLUIR TREINO"
+        activeSetIndex == totalSets - 1 -> "CONCLUIR E IR PARA PRÓXIMO"
+        else -> "CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
     }
 
     if (showReplicateConfirmDialog) {
@@ -854,7 +879,7 @@ fun FocusedActiveSetView(
             onDismissRequest = { showReplicateConfirmDialog = false },
             title = {
                 Text(
-                    text = "Aplicar em todas as séries?",
+                    text = "Sincronizar séries?",
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp
@@ -863,7 +888,7 @@ fun FocusedActiveSetView(
             text = {
                 val formattedWeight = if (currentWeight % 1f == 0f) "${currentWeight.toInt()}kg" else "${currentWeight}kg"
                 Text(
-                    text = "Deseja replicar $formattedWeight e $currentReps reps para todas as próximas séries deste exercício?",
+                    text = "Deseja sincronizar $formattedWeight e $currentReps reps para as próximas séries deste exercício?",
                     color = TextSecondary,
                     fontSize = 14.sp
                 )
@@ -877,7 +902,7 @@ fun FocusedActiveSetView(
                     colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Aplicar", fontWeight = FontWeight.Bold)
+                    Text("Sincronizar", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -929,24 +954,11 @@ fun FocusedActiveSetView(
                     onClick = onOpenFullDetails
                 )
 
-                // 1. Performance Card (Última vez + Recorde)
-                ExercisePerformanceCard(
-                    context = exerciseExecutionContext,
-                    onViewHistory = onViewLastWorkout,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // 2. Target Card (Meta da série)
-                if (exerciseExecutionContext?.suggestedLoad != null || exerciseExecutionContext?.targetReps != null) {
-                    ExerciseTargetCard(
-                        context = exerciseExecutionContext,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // 3. Set Badge and Actions (Aplicar em todas & Ver todas)
+                // 1. Set Badge and Actions (SÉRIE X DE Y, Sincronizar séries & Ver todas)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("set_actions_row"),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -991,20 +1003,21 @@ fun FocusedActiveSetView(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable { showReplicateConfirmDialog = true }
+                                    .testTag("sync_sets_button")
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.ContentCopy,
-                                        contentDescription = "Aplicar em todas",
+                                        imageVector = Icons.Default.Sync,
+                                        contentDescription = "Sincronizar séries",
                                         tint = TextPrimary,
                                         modifier = Modifier.size(12.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "Aplicar em todas",
+                                        text = "Sincronizar séries",
                                         color = TextPrimary,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold
@@ -1024,6 +1037,21 @@ fun FocusedActiveSetView(
                                 .padding(4.dp)
                         )
                     }
+                }
+
+                // 2. Performance Card (Última vez + Recorde)
+                ExercisePerformanceCard(
+                    context = exerciseExecutionContext,
+                    onViewHistory = onViewLastWorkout,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 3. Target Card (Meta da série)
+                if (exerciseExecutionContext?.suggestedLoad != null || exerciseExecutionContext?.targetReps != null) {
+                    ExerciseTargetCard(
+                        context = exerciseExecutionContext,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 // 4. Feedback Banner (se houver feedback ativo)
@@ -1210,7 +1238,10 @@ fun FocusedRestView(
     nextExerciseName: String,
     nextSetIndex: Int,
     nextSetWeight: Float,
-    nextSetReps: Int
+    nextSetReps: Int,
+    isPreparingNextExercise: Boolean = false,
+    nextMachineLabel: String? = null,
+    totalSets: Int = 1
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
 
@@ -1219,6 +1250,9 @@ fun FocusedRestView(
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
                 timeLeft = 0
+                if (isPreparingNextExercise) {
+                    onSkip()
+                }
                 break
             }
             timeLeft = remaining
@@ -1227,14 +1261,60 @@ fun FocusedRestView(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("focused_rest_view"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.height(16.dp))
-            Text("TEMPO DE DESCANSO", color = Lime400, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
+
+            Surface(
+                color = if (isPreparingNextExercise) Lime400.copy(alpha = 0.15f) else SurfaceDark,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, if (isPreparingNextExercise) Lime400.copy(alpha = 0.4f) else BorderLight)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    if (isPreparingNextExercise) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Série concluída ✓",
+                            color = Lime400,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            text = "Descanso iniciado",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = if (isPreparingNextExercise) "PREPARANDO PRÓXIMO EXERCÍCIO" else "TEMPO DE DESCANSO",
+                color = Lime400,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text(
                 text = String.format("%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60),
                 color = TextPrimary,
@@ -1261,30 +1341,76 @@ fun FocusedRestView(
 
                 Button(
                     onClick = onSkip,
-                    colors = ButtonDefaults.buttonColors(containerColor = Emerald500.copy(alpha = 0.2f), contentColor = Emerald500),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isPreparingNextExercise) Lime400 else Emerald500.copy(alpha = 0.2f),
+                        contentColor = if (isPreparingNextExercise) BackgroundDark else Emerald500
+                    ),
                     shape = RoundedCornerShape(12.dp)
-                ) { Text("PULAR", fontWeight = FontWeight.Bold) }
+                ) {
+                    Text(
+                        text = if (isPreparingNextExercise) "COMEÇAR AGORA" else "PULAR",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
-        // Next set card
+        // Next set card / Próximo Exercício
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(SurfaceDark)
-                .border(1.dp, BorderLight, RoundedCornerShape(16.dp))
+                .border(1.dp, if (isPreparingNextExercise) Lime400.copy(alpha = 0.4f) else BorderLight, RoundedCornerShape(16.dp))
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("PRÓXIMA SÉRIE", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(
+                text = if (isPreparingNextExercise) "PRÓXIMO EXERCÍCIO" else "PRÓXIMA SÉRIE",
+                color = if (isPreparingNextExercise) Lime400 else TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
             Spacer(modifier = Modifier.height(6.dp))
-            Text(nextExerciseName, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text(
+                text = nextExerciseName,
+                color = TextPrimary,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
             Spacer(modifier = Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Série $nextSetIndex", color = Lime400, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                if (nextSetWeight > 0f || nextSetReps > 0) {
-                    Text(" · ${if (nextSetWeight % 1f == 0f) nextSetWeight.toInt() else nextSetWeight}kg × $nextSetReps reps", color = TextSecondary, fontSize = 14.sp)
+            if (isPreparingNextExercise) {
+                if (!nextMachineLabel.isNullOrBlank()) {
+                    Text(
+                        text = nextMachineLabel,
+                        color = Lime400,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                } else {
+                    Text(
+                        text = "Série 1",
+                        color = Lime400,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Série $nextSetIndex de $totalSets",
+                        color = Lime400,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (nextSetWeight > 0f || nextSetReps > 0) {
+                        Text(
+                            text = " · ${if (nextSetWeight % 1f == 0f) nextSetWeight.toInt() else nextSetWeight}kg × $nextSetReps reps",
+                            color = TextSecondary,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
             }
         }
@@ -1299,6 +1425,8 @@ fun FocusedExerciseTransitionView(
     nextExerciseName: String?,
     nextMachineLabel: String?,
     nextPrimaryMuscle: String?,
+    recommendedRestSeconds: Int = 90,
+    onStartRest: (Int) -> Unit = {},
     onStartNext: () -> Unit
 ) {
     var visible by remember { mutableStateOf(false) }
@@ -1316,10 +1444,15 @@ fun FocusedExerciseTransitionView(
         label = "exCompleteOpacity"
     )
 
+    val formattedRest = remember(recommendedRestSeconds) {
+        String.format("%02d:%02d", (recommendedRestSeconds.coerceAtLeast(0)) / 60, (recommendedRestSeconds.coerceAtLeast(0)) % 60)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity),
+            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity)
+            .testTag("exercise_transition_view"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1327,10 +1460,34 @@ fun FocusedExerciseTransitionView(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(top = 24.dp)
         ) {
-            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Emerald500, modifier = Modifier.size(72.dp))
+            Surface(
+                color = Lime400.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, Lime400.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Série concluída ✓",
+                        color = Lime400,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
-            Text("✓ EXERCÍCIO CONCLUÍDO!", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Black)
-            Spacer(modifier = Modifier.height(4.dp))
+            Text("Preparando próximo exercício", color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Black)
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = "$completedExerciseName ($completedSetsCount/$totalSetsCount séries)",
                 color = TextSecondary,
@@ -1364,19 +1521,67 @@ fun FocusedExerciseTransitionView(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(text = nextPrimaryMuscle, color = TextSecondary, fontSize = 13.sp)
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Surface(
+                    color = BackgroundDark,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, BorderLight)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HourglassEmpty,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Descanso recomendado: $formattedRest",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
 
-            Button(
-                onClick = onStartNext,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 60.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("COMEÇAR PRÓXIMO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(Icons.Default.ArrowForward, contentDescription = null)
+                Button(
+                    onClick = { onStartRest(recommendedRestSeconds) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .testTag("start_rest_button"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
+                ) {
+                    Icon(Icons.Default.HourglassEmpty, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Iniciar descanso", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = onStartNext,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 50.dp)
+                        .testTag("start_next_button"),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Lime400.copy(alpha = 0.5f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime400)
+                ) {
+                    Text("Começar próximo", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
             }
         }
     }
@@ -1407,7 +1612,8 @@ fun FocusedWorkoutCompleteView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity),
+            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = opacity)
+            .testTag("workout_complete_view"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -1417,9 +1623,9 @@ fun FocusedWorkoutCompleteView(
         ) {
             Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Lime400, modifier = Modifier.size(88.dp))
             Spacer(modifier = Modifier.height(20.dp))
-            Text("TREINO CONCLUÍDO!", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+            Text("Treino finalizado 🎉", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
             Spacer(modifier = Modifier.height(8.dp))
-            Text(sessionName, color = Lime400, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("Resumo do treino", color = Lime400, fontSize = 18.sp, fontWeight = FontWeight.Bold)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -1449,11 +1655,12 @@ fun FocusedWorkoutCompleteView(
             onClick = onFinishWorkout,
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 60.dp),
+                .heightIn(min = 60.dp)
+                .testTag("finish_workout_button"),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark)
         ) {
-            Text("FINALIZAR TREINO", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("Ver evolução", fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
