@@ -498,7 +498,7 @@ fun ExerciseDetailsScreen(
                                 ) {
                                     Text("Série ${index + 1} (${setLog.type})", color = TextSecondary, fontSize = 13.sp)
                                     val weightStr = if (setLog.weight % 1f == 0f) setLog.weight.toInt().toString() else setLog.weight.toString()
-                                    val rirTag = RirFormatter.formatRir(setLog.rir)
+                                    val rirTag = RirFormatter.formatEffort(setLog.rir, short = true)
                                     val rirSuffix = if (rirTag != null) " · $rirTag" else ""
                                     Text("$weightStr kg × ${setLog.repetitions}$rirSuffix", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }

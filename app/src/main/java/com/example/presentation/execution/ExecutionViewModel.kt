@@ -22,14 +22,31 @@ enum class ExecutionPhase {
     WORKOUT_COMPLETE
 }
 
+enum class FeedbackType {
+    NEW_RECORD,
+    PROGRESSION,
+    GOAL_ACHIEVED,
+    FIRST_TIME,
+    NORMAL
+}
+
+data class SetCompletionFeedback(
+    val type: FeedbackType,
+    val title: String,
+    val subtitle: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 data class ExecutionState(
     val sessionWithDetails: SessionWithDetails? = null,
     val currentExerciseIndex: Int = 0,
     val isLoading: Boolean = true,
     val previousExecutionSets: List<SetLogEntity> = emptyList(),
     val currentResolvedExercise: com.example.domain.model.ResolvedExercise? = null,
+    val exerciseExecutionContext: com.example.domain.workout.execution.ExerciseExecutionContext? = null,
     val isResting: Boolean = false,
-    val pendingMoveConfirmation: WorkoutExerciseExecution? = null
+    val pendingMoveConfirmation: WorkoutExerciseExecution? = null,
+    val lastSetFeedback: SetCompletionFeedback? = null
 ) {
     val currentExercise: ExerciseSessionWithSets?
         get() = sessionWithDetails?.exercises?.getOrNull(currentExerciseIndex)
@@ -109,9 +126,14 @@ class ExecutionViewModel(
     val showGifs = settingsManager.showGifsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
+    val showCoachTip = settingsManager.showCoachTipFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
     private val _currentExerciseIndex = MutableStateFlow(0)
     
     private val _previousExecutionSets = MutableStateFlow<List<SetLogEntity>>(emptyList())
+    private val _exerciseExecutionContext = MutableStateFlow<com.example.domain.workout.execution.ExerciseExecutionContext?>(null)
+    private val _setFeedback = MutableStateFlow<SetCompletionFeedback?>(null)
 
     val restTimerTarget = workoutEngine.restTimerTarget
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -121,13 +143,13 @@ class ExecutionViewModel(
 
     private val _pendingMoveConfirmation = MutableStateFlow<WorkoutExerciseExecution?>(null)
 
-    val state: StateFlow<ExecutionState> = combine(
+    private val baseSessionState = combine(
         workoutEngine.activeSessionWithDetailsFlow,
         _currentExerciseIndex,
         _previousExecutionSets,
-        workoutEngine.activeResolvedExercises,
-        restTimerTarget
-    ) { rawSessionWithDetails, index, previousSets, resolvedExercises, timerTarget ->
+        _exerciseExecutionContext,
+        workoutEngine.activeResolvedExercises
+    ) { rawSessionWithDetails, index, previousSets, exerciseContext, resolvedExercises ->
         val sessionWithDetails = rawSessionWithDetails?.let { session ->
             session.copy(
                 exercises = session.exercises.sortedBy { it.exerciseSession.executionOrder }
@@ -162,8 +184,6 @@ class ExecutionViewModel(
         val currentResolvedEx = currentExSession?.exerciseSession?.actualExerciseId?.let { id ->
             resolvedExercises.find { it.id == id }
         }
-
-        val isTimerActive = timerTarget != null && timerTarget > System.currentTimeMillis()
         
         ExecutionState(
             sessionWithDetails = sessionWithDetails,
@@ -171,19 +191,39 @@ class ExecutionViewModel(
             isLoading = sessionWithDetails == null,
             previousExecutionSets = previousSets,
             currentResolvedExercise = currentResolvedEx,
-            isResting = isTimerActive
+            exerciseExecutionContext = exerciseContext
         )
-    }.combine(_pendingMoveConfirmation) { currentState, pendingMove ->
-        currentState.copy(pendingMoveConfirmation = pendingMove)
+    }
+
+    val state: StateFlow<ExecutionState> = combine(
+        baseSessionState,
+        restTimerTarget,
+        _setFeedback,
+        _pendingMoveConfirmation
+    ) { baseState, timerTarget, feedback, pendingMove ->
+        val isTimerActive = timerTarget != null && timerTarget > System.currentTimeMillis()
+        baseState.copy(
+            isResting = isTimerActive,
+            lastSetFeedback = feedback,
+            pendingMoveConfirmation = pendingMove
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ExecutionState())
 
     init {
         viewModelScope.launch {
-            state.map { it.currentExercise?.exerciseSession?.actualExerciseId }.distinctUntilChanged().collect { exerciseId ->
+            combine(
+                state.map { it.currentExercise?.exerciseSession?.actualExerciseId }.distinctUntilChanged(),
+                state.map { it.sessionWithDetails?.session?.templateId }.distinctUntilChanged()
+            ) { exerciseId, templateId ->
+                Pair(exerciseId, templateId)
+            }.collect { (exerciseId, templateId) ->
                 if (exerciseId != null) {
+                    val context = workoutEngine.getExerciseExecutionContext(exerciseId, templateId)
+                    _exerciseExecutionContext.value = context
                     val prevSets = workoutEngine.getLastExecutionSetsForExercise(exerciseId)
                     _previousExecutionSets.value = prevSets
                 } else {
+                    _exerciseExecutionContext.value = null
                     _previousExecutionSets.value = emptyList()
                 }
             }
@@ -278,9 +318,100 @@ class ExecutionViewModel(
     }
 
     fun completeSet(setLog: SetLogEntity) {
+        val currentContext = state.value.exerciseExecutionContext
+        val lastPerf = currentContext?.lastPerformance
+        val pr = currentContext?.personalRecord
+        val targetWeight = currentContext?.suggestedLoad ?: 0f
+        val targetReps = currentContext?.targetReps
+
+        val feedback = when {
+            // Caso 1: Novo recorde pessoal de carga (maior que o maior PR histórico)
+            pr != null && setLog.weight > pr.maxWeight && setLog.weight > 0f -> {
+                val diff = setLog.weight - pr.maxWeight
+                val diffStr = if (diff % 1f == 0f) "+${diff.toInt()}kg" else "+${diff}kg"
+                SetCompletionFeedback(
+                    type = FeedbackType.NEW_RECORD,
+                    title = "🔥 Novo recorde!",
+                    subtitle = "$diffStr comparado ao melhor histórico"
+                )
+            }
+            // Caso 2A: Evolução de carga em relação ao último treino
+            lastPerf != null && setLog.weight > lastPerf.weight && setLog.weight > 0f -> {
+                val diff = setLog.weight - lastPerf.weight
+                val diffStr = if (diff % 1f == 0f) "+${diff.toInt()}kg" else "+${diff}kg"
+                SetCompletionFeedback(
+                    type = FeedbackType.PROGRESSION,
+                    title = "🚀 Evolução de carga!",
+                    subtitle = "↑ $diffStr desde o último treino"
+                )
+            }
+            // Caso 2B: Evolução de repetições com a mesma carga em relação ao último treino
+            lastPerf != null && setLog.weight >= lastPerf.weight && setLog.repetitions > lastPerf.reps -> {
+                val diffReps = setLog.repetitions - lastPerf.reps
+                SetCompletionFeedback(
+                    type = FeedbackType.PROGRESSION,
+                    title = "💪 Evolução!",
+                    subtitle = "↑ +$diffReps reps comparado ao último treino"
+                )
+            }
+            // Caso 4: Primeira execução
+            currentContext?.isFirstTime == true || (lastPerf == null && pr == null) -> {
+                SetCompletionFeedback(
+                    type = FeedbackType.FIRST_TIME,
+                    title = "Histórico iniciado ✨",
+                    subtitle = "Primeira execução deste exercício"
+                )
+            }
+            // Prescrição atingida
+            (targetReps != null && setLog.repetitions in targetReps.first..targetReps.last) ||
+            (targetWeight > 0f && setLog.weight >= targetWeight) -> {
+                SetCompletionFeedback(
+                    type = FeedbackType.GOAL_ACHIEVED,
+                    title = "Prescrição atingida 💪",
+                    subtitle = "Dentro da faixa esperada"
+                )
+            }
+            // Caso 3: Dentro da média / Mantendo consistência
+            else -> {
+                SetCompletionFeedback(
+                    type = FeedbackType.NORMAL,
+                    title = "Série registrada",
+                    subtitle = "Mantendo consistência"
+                )
+            }
+        }
+
+        _setFeedback.value = feedback
+
         viewModelScope.launch {
             workoutEngine.updateSet(setLog.copy(completed = true, finishedAt = System.currentTimeMillis()))
+            
+            // Record new PR if max weight exceeded
+            val exerciseId = state.value.currentExercise?.exerciseSession?.actualExerciseId
+            if (exerciseId != null && setLog.weight > 0f) {
+                val highestPR = workoutEngine.dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_WEIGHT.name)
+                if (highestPR == null || setLog.weight > highestPR.value) {
+                    workoutEngine.dao.insertPersonalRecord(
+                        com.example.data.local.PersonalRecordEntity(
+                            exerciseId = exerciseId,
+                            date = System.currentTimeMillis(),
+                            prType = com.example.data.local.PRType.MAX_WEIGHT,
+                            value = setLog.weight
+                        )
+                    )
+                }
+            }
+
+            // Auto dismiss feedback after delay
+            kotlinx.coroutines.delay(3500)
+            if (_setFeedback.value == feedback) {
+                _setFeedback.value = null
+            }
         }
+    }
+
+    fun dismissFeedback() {
+        _setFeedback.value = null
     }
     
     fun uncompleteSet(setLog: SetLogEntity) {
