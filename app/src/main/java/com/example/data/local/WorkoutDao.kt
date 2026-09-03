@@ -139,6 +139,13 @@ interface WorkoutDao {
     @Query("SELECT COUNT(*) FROM workout_sessions WHERE status = 'COMPLETED' AND finishedAt >= :startOfWeek")
     fun getWeeklyCompletedSessionsCount(startOfWeek: Long): Flow<Int>
 
+    @Query("""
+        SELECT COALESCE(finishedAt, startedAt) FROM workout_sessions
+        WHERE status = 'COMPLETED'
+        ORDER BY COALESCE(finishedAt, startedAt) ASC
+    """)
+    suspend fun getCompletedSessionTimestamps(): List<Long>
+
     @Query("SELECT * FROM workout_sessions WHERE status = 'IN_PROGRESS' ORDER BY startedAt DESC LIMIT 1")
     fun getActiveSessionFlow(): Flow<WorkoutSessionEntity?>
 

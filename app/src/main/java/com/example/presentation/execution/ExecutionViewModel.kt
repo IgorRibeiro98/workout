@@ -452,20 +452,15 @@ class ExecutionViewModel(
         viewModelScope.launch {
             workoutEngine.updateSet(setLog.copy(completed = true, finishedAt = System.currentTimeMillis()))
             
-            // Record new PR if max weight exceeded
+            // Record new PR if max weight exceeded (regra única no motor: grava e informa o fato)
             val exerciseId = state.value.currentExercise?.exerciseSession?.actualExerciseId
             if (exerciseId != null && setLog.weight > 0f) {
-                val highestPR = workoutEngine.dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_WEIGHT.name)
-                if (highestPR == null || setLog.weight > highestPR.value) {
-                    workoutEngine.dao.insertPersonalRecord(
-                        com.example.data.local.PersonalRecordEntity(
-                            exerciseId = exerciseId,
-                            date = System.currentTimeMillis(),
-                            prType = com.example.data.local.PRType.MAX_WEIGHT,
-                            value = setLog.weight
-                        )
-                    )
-                }
+                workoutEngine.registerPersonalRecordIfImproved(
+                    exerciseId = exerciseId,
+                    prType = com.example.data.local.PRType.MAX_WEIGHT,
+                    value = setLog.weight,
+                    exerciseName = state.value.currentExercise?.exerciseSession?.exerciseNameSnapshot
+                )
             }
 
             // Auto dismiss feedback after delay

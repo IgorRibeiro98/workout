@@ -14,6 +14,7 @@ import com.example.service.WorkoutNotificationManager
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.example.domain.engine.ManifestImporter
 
@@ -40,6 +41,12 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var getEvolutionSummaryUseCase: com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
         internal set
         
+    lateinit var gamificationEventRepository: com.example.domain.gamification.repository.GamificationEventRepository
+        internal set
+
+    lateinit var gamificationEventPublisher: com.example.domain.gamification.GamificationEventPublisher
+        internal set
+
     lateinit var settingsManager: SettingsManager
         internal set
         
@@ -59,7 +66,19 @@ class MainApplication : Application(), ImageLoaderFactory {
         performanceRepository = com.example.data.repository.PerformanceRepositoryImpl(database.workoutDao())
         consistencyRepository = com.example.data.repository.ConsistencyRepositoryImpl(database.workoutDao())
         getEvolutionSummaryUseCase = com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase(evolutionRepository)
-        workoutEngine = WorkoutEngine(database.workoutDao(), settingsManager)
+        gamificationEventRepository = com.example.data.repository.GamificationEventRepositoryImpl(
+            database.gamificationEventDao()
+        )
+        gamificationEventPublisher = com.example.domain.gamification.GamificationEventRecorder(
+            repository = gamificationEventRepository,
+            workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
+            weeklyGoalProvider = { settingsManager.weeklyGoalFlow.first() }
+        )
+        workoutEngine = WorkoutEngine(
+            dao = database.workoutDao(),
+            settingsManager = settingsManager,
+            gamificationEvents = gamificationEventPublisher
+        )
         notificationManager = WorkoutNotificationManager(this)
 
         CoroutineScope(Dispatchers.Main).launch {
