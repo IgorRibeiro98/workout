@@ -428,7 +428,10 @@ data class SessionWithDetails(
         entityColumn = "sessionId"
     )
     val exercises: List<ExerciseSessionWithSets>
-)
+) {
+    val sortedExercises: List<ExerciseSessionWithSets>
+        get() = exercises.sortedWith(compareBy({ it.exerciseSession.executionOrder }, { it.exerciseSession.sortOrder }, { it.exerciseSession.id }))
+}
 
 data class SessionCalendarSummary(
     @Embedded val session: WorkoutSessionEntity,
@@ -443,5 +446,8 @@ data class SessionCalendarSummary(
         entityColumn = "sessionId"
     )
     val exercises: List<ExerciseSessionWithSets>
-)
+) {
+    val sortedExercises: List<ExerciseSessionWithSets>
+        get() = exercises.sortedWith(compareBy({ it.exerciseSession.executionOrder }, { it.exerciseSession.sortOrder }, { it.exerciseSession.id }))
+}
 

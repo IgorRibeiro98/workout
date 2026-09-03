@@ -339,7 +339,18 @@ fun ExecutionScreen(
                             nextMachineLabel = if (isPreparingNext) nextExSession?.exerciseSession?.machineLabelSnapshot else null,
                             nextSetIndex = if (isPreparingNext) 1 else ((state.activeSetIndex ?: 0) + 1),
                             nextSetWeight = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.weight ?: 0f) else (state.activeSet?.weight ?: 0f),
-                            nextSetReps = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.repetitions ?: 0) else (state.activeSet?.repetitions ?: 0),
+                            nextSetReps = if (isPreparingNext) {
+                                val firstSet = nextExSession?.sets?.firstOrNull()
+                                if (firstSet?.isDurationMode == true) firstSet.durationSeconds ?: firstSet.repetitions else firstSet?.repetitions ?: 0
+                            } else {
+                                val actSet = state.activeSet
+                                if (actSet?.isDurationMode == true) actSet.durationSeconds ?: actSet.repetitions else actSet?.repetitions ?: 0
+                            },
+                            isDurationMode = if (isPreparingNext) {
+                                nextExSession?.sets?.firstOrNull()?.isDurationMode == true
+                            } else {
+                                state.activeSet?.isDurationMode == true
+                            },
                             totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
                             hapticEnabled = hapticEnabled
                         )
@@ -1348,9 +1359,15 @@ fun FocusedRestView(
     isPreparingNextExercise: Boolean = false,
     nextMachineLabel: String? = null,
     totalSets: Int = 1,
-    hapticEnabled: Boolean = true
+    hapticEnabled: Boolean = true,
+    isDurationMode: Boolean = false
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
+    var isFinishedAlertState by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
+    val soundEnabled by settingsManager.soundEnabledFlow.collectAsState(initial = true)
+    val notifSettingEnabled by settingsManager.timerNotificationEnabledFlow.collectAsState(initial = true)
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(targetTime) {
@@ -1358,9 +1375,18 @@ fun FocusedRestView(
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
                 timeLeft = 0
+                isFinishedAlertState = true
                 if (hapticEnabled) {
                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                 }
+                com.example.service.RestTimerAlertAuthority.getInstance(context).notifyTimerFinished(
+                    exerciseName = nextExerciseName,
+                    soundEnabled = soundEnabled,
+                    hapticEnabled = hapticEnabled,
+                    notificationEnabled = notifSettingEnabled,
+                    source = "FocusedRestView"
+                )
+                kotlinx.coroutines.delay(650)
                 onSkip()
                 break
             }
@@ -1416,8 +1442,8 @@ fun FocusedRestView(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = if (isPreparingNextExercise) "PREPARANDO PRÓXIMO EXERCÍCIO" else "TEMPO DE DESCANSO",
-                color = Lime400,
+                text = if (isFinishedAlertState) "DESCANSO CONCLUÍDO! 🔔" else if (isPreparingNextExercise) "PREPARANDO PRÓXIMO EXERCÍCIO" else "TEMPO DE DESCANSO",
+                color = if (isFinishedAlertState) Emerald500 else Lime400,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -1507,8 +1533,10 @@ fun FocusedRestView(
                         fontWeight = FontWeight.Bold
                     )
                     if (nextSetWeight > 0f || nextSetReps > 0) {
+                        val unitLabel = if (isDurationMode) "s" else " reps"
+                        val weightPart = if (nextSetWeight > 0f) "${if (nextSetWeight % 1f == 0f) nextSetWeight.toInt() else nextSetWeight}kg × " else ""
                         Text(
-                            text = " · ${if (nextSetWeight % 1f == 0f) nextSetWeight.toInt() else nextSetWeight}kg × $nextSetReps reps",
+                            text = " · $weightPart$nextSetReps$unitLabel",
                             color = TextSecondary,
                             fontSize = 14.sp
                         )

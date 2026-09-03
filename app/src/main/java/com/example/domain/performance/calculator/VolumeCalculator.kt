@@ -22,7 +22,7 @@ object VolumeCalculator {
      * Calculates total tonnage volume for completed working sets (excludes warmup).
      */
     fun calculateSetsVolume(sets: List<SetLogEntity>): Double {
-        return sets.filter { it.completed && it.type != SetType.WARMUP.name }
+        return sets.filter { it.completed && it.type != SetType.WARMUP.name && !it.isDurationMode }
             .sumOf { calculateSetVolume(it.weight, it.repetitions) }
     }
 

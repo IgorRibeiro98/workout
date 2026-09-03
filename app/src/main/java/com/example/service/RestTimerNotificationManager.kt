@@ -56,15 +56,13 @@ class RestTimerNotificationManager(private val context: Context) {
         }
         lastAlertTimestampMs = now
 
-        if (notificationEnabled) {
-            showFinishedNotification(exerciseName)
-        }
-        if (soundEnabled) {
-            playSoundAlert()
-        }
-        if (hapticEnabled) {
-            triggerVibrationAlert()
-        }
+        RestTimerAlertAuthority.getInstance(context).notifyTimerFinished(
+            exerciseName = exerciseName,
+            soundEnabled = soundEnabled,
+            hapticEnabled = hapticEnabled,
+            notificationEnabled = notificationEnabled,
+            source = "RestTimerNotificationManager"
+        )
     }
 
     private fun showFinishedNotification(exerciseName: String?) {

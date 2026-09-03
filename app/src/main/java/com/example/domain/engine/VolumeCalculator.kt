@@ -12,7 +12,7 @@ object VolumeCalculator {
         if (defaultBodyweight <= 0f) {
             return com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(sets)
         }
-        return sets.filter { it.completed && it.type != SetType.WARMUP.name }
+        return sets.filter { it.completed && it.type != SetType.WARMUP.name && !it.isDurationMode }
             .sumOf { set ->
                 val effectiveWeight = if (set.weight > 0f) set.weight else defaultBodyweight
                 (effectiveWeight * set.repetitions).toDouble()
@@ -41,7 +41,7 @@ object VolumeCalculator {
      * Finds the best estimated 1RM among completed working sets.
      */
     fun findBest1RM(sets: List<SetLogEntity>): Float {
-        return sets.filter { it.completed && it.type != SetType.WARMUP.name && it.weight > 0f && it.repetitions > 0 }
+        return sets.filter { it.completed && it.type != SetType.WARMUP.name && it.weight > 0f && it.repetitions > 0 && !it.isDurationMode }
             .maxOfOrNull { calculateOneRepMax(it.weight, it.repetitions) } ?: 0f
     }
 }

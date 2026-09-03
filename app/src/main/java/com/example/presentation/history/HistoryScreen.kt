@@ -2,6 +2,7 @@ package com.example.presentation.history
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -63,10 +64,51 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
     var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
     var sessionToEditCheckIn by remember { mutableStateOf<SessionCalendarSummary?>(null) }
 
-    val groupedAllSessions = remember(state.allCompletedSessions) {
-        val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-        state.allCompletedSessions.groupBy { summary ->
-            dateFormat.format(Date(summary.session.startedAt))
+    var historyPeriodFilter by remember { mutableStateOf("Todos") }
+    var historyTypeFilter by remember { mutableStateOf("Todos") }
+    var historyGrouping by remember { mutableStateOf("Semana") }
+
+    val filteredAllSessions = remember(state.allCompletedSessions, historyPeriodFilter, historyTypeFilter) {
+        val now = System.currentTimeMillis()
+        val minTime = when (historyPeriodFilter) {
+            "7 dias" -> now - 7L * 24 * 60 * 60 * 1000
+            "30 dias" -> now - 30L * 24 * 60 * 60 * 1000
+            else -> 0L
+        }
+
+        state.allCompletedSessions.filter { summary ->
+            val matchesPeriod = summary.session.startedAt >= minTime
+            val totalSets = summary.exercises.sumOf { it.sets.size }
+            val completedSets = summary.exercises.sumOf { e -> e.sets.count { it.completed } }
+            val isPartial = totalSets > 0 && completedSets < totalSets
+            val matchesType = when (historyTypeFilter) {
+                "Concluídos" -> !isPartial
+                "Parciais" -> isPartial
+                else -> true
+            }
+            matchesPeriod && matchesType
+        }
+    }
+
+    val groupedAllSessions = remember(filteredAllSessions, historyGrouping) {
+        when (historyGrouping) {
+            "Mês" -> {
+                val format = SimpleDateFormat("MMMM yyyy", Locale("pt", "BR"))
+                filteredAllSessions.groupBy { format.format(Date(it.session.startedAt)).replaceFirstChar { c -> c.uppercase() } }
+            }
+            "Semana" -> {
+                val cal = Calendar.getInstance()
+                filteredAllSessions.groupBy { summary ->
+                    cal.timeInMillis = summary.session.startedAt
+                    val week = cal.get(Calendar.WEEK_OF_YEAR)
+                    val year = cal.get(Calendar.YEAR)
+                    "Semana $week de $year"
+                }
+            }
+            else -> {
+                val format = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+                filteredAllSessions.groupBy { format.format(Date(it.session.startedAt)) }
+            }
         }
     }
 
@@ -229,45 +271,146 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                             }
                         }
                     } else {
-                        groupedAllSessions.forEach { (dateStr, sessionsInGroup) ->
-                            item(key = "header_$dateStr") {
-                                Text(
-                                    text = dateStr,
-                                    color = TextSecondary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(vertical = 8.dp)
-                                )
-                            }
-                            items(sessionsInGroup, key = { "all_${it.session.id}" }) { summary ->
-                                val deleteAction = SwipeAction(
-                                    icon = Icons.Default.Delete,
-                                    label = "Excluir",
-                                    backgroundColor = Red500,
-                                    contentColor = Color.White,
-                                    onTrigger = { sessionToDelete = summary.session }
-                                )
-                                val editAction = SwipeAction(
-                                    icon = Icons.Default.Edit,
-                                    label = "Editar",
-                                    backgroundColor = SurfaceDark,
-                                    contentColor = Lime400,
-                                    onTrigger = { sessionToEditCheckIn = summary }
-                                )
-
-                                SwipeActionRow(
-                                    startAction = editAction,
-                                    endAction = deleteAction,
-                                    hapticEnabled = hapticEnabled,
-                                    modifier = Modifier.fillMaxWidth()
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Período
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    SessionDetailsCard(
-                                        summary = summary,
-                                        onOptionsClick = { activeSessionForSheet = summary },
-                                        onCardClick = { selectedSummaryForDetail = summary }
+                                    Text("Período:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    listOf("Todos", "7 dias", "30 dias").forEach { period ->
+                                        val isSelected = period == historyPeriodFilter
+                                        Surface(
+                                            color = if (isSelected) Lime400 else SurfaceDark,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.clickable { historyPeriodFilter = period }
+                                        ) {
+                                            Text(
+                                                text = period,
+                                                color = if (isSelected) BackgroundDark else TextSecondary,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                // Tipo & Agrupamento
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Tipo:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        listOf("Todos", "Concluídos", "Parciais").forEach { type ->
+                                            val isSelected = type == historyTypeFilter
+                                            Surface(
+                                                color = if (isSelected) Lime400 else SurfaceDark,
+                                                shape = RoundedCornerShape(8.dp),
+                                                modifier = Modifier.clickable { historyTypeFilter = type }
+                                            ) {
+                                                Text(
+                                                    text = type,
+                                                    color = if (isSelected) BackgroundDark else TextSecondary,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        listOf("Semana", "Mês", "Dia").forEach { grp ->
+                                            val isSelected = grp == historyGrouping
+                                            Surface(
+                                                color = if (isSelected) Lime400.copy(alpha = 0.2f) else SurfaceDark,
+                                                shape = RoundedCornerShape(8.dp),
+                                                border = BorderStroke(1.dp, if (isSelected) Lime400 else BorderLight),
+                                                modifier = Modifier.clickable { historyGrouping = grp }
+                                            ) {
+                                                Text(
+                                                    text = grp,
+                                                    color = if (isSelected) Lime400 else TextSecondary,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (filteredAllSessions.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "Nenhum treino com os filtros selecionados.",
+                                        color = TextSecondary,
+                                        fontSize = 14.sp
                                     )
                                 }
-                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                        } else {
+                            groupedAllSessions.forEach { (dateStr, sessionsInGroup) ->
+                                item(key = "header_$dateStr") {
+                                    Text(
+                                        text = dateStr,
+                                        color = TextSecondary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(vertical = 8.dp)
+                                    )
+                                }
+                                items(sessionsInGroup, key = { "all_${it.session.id}" }) { summary ->
+                                    val deleteAction = SwipeAction(
+                                        icon = Icons.Default.Delete,
+                                        label = "Excluir",
+                                        backgroundColor = Red500,
+                                        contentColor = Color.White,
+                                        onTrigger = { sessionToDelete = summary.session }
+                                    )
+                                    val editAction = SwipeAction(
+                                        icon = Icons.Default.Edit,
+                                        label = "Editar",
+                                        backgroundColor = SurfaceDark,
+                                        contentColor = Lime400,
+                                        onTrigger = { sessionToEditCheckIn = summary }
+                                    )
+
+                                    SwipeActionRow(
+                                        startAction = editAction,
+                                        endAction = deleteAction,
+                                        hapticEnabled = hapticEnabled,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        SessionDetailsCard(
+                                            summary = summary,
+                                            onOptionsClick = { activeSessionForSheet = summary },
+                                            onCardClick = { selectedSummaryForDetail = summary }
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                }
                             }
                         }
                     }
@@ -399,7 +542,7 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
             subtitle = SimpleDateFormat("dd/MM/yyyy • HH:mm", Locale.getDefault()).format(Date(summary.session.startedAt))
         ) {
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
-                items(summary.exercises) { exSummary ->
+                items(summary.sortedExercises) { exSummary ->
                     Surface(
                         color = BackgroundDark,
                         shape = RoundedCornerShape(12.dp),
@@ -419,8 +562,14 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(text = "Série ${i + 1}", color = TextSecondary, fontSize = 14.sp)
+                                    val valStr = if (set.isDurationMode) {
+                                        val dur = set.durationSeconds ?: set.repetitions
+                                        if (set.weight > 0f) "${set.weight}kg × ${dur}s" else "${dur}s"
+                                    } else {
+                                        "${set.weight}kg × ${set.repetitions} reps"
+                                    }
                                     Text(
-                                        text = "${set.weight}kg x ${set.repetitions}",
+                                        text = valStr,
                                         color = TextPrimary,
                                         fontWeight = FontWeight.Medium,
                                         fontSize = 14.sp
@@ -713,7 +862,7 @@ fun SessionDetailsCard(
     val durationStr = if (durationMin > 60) "${durationMin/60}h${durationMin%60}m" else "${durationMin}m"
     
     val totalSets = summary.exercises.sumOf { ex -> ex.sets.count { it.completed } }
-    val totalVolume = summary.exercises.sumOf { ex -> ex.sets.filter{it.completed}.sumOf { (it.weight * it.repetitions).toDouble() } }.toInt()
+    val totalVolume = summary.exercises.sumOf { ex -> ex.sets.filter { it.completed && !it.isDurationMode }.sumOf { (it.weight * it.repetitions).toDouble() } }.toInt()
     
     Column(
         modifier = Modifier

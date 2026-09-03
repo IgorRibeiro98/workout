@@ -188,6 +188,12 @@ fun RirSelector(
             }
         }
 
+        Text(
+            text = "Repetições em Reserva: quantas reps aguentaria antes de falhar.",
+            color = TextSecondary.copy(alpha = 0.7f),
+            fontSize = 11.sp
+        )
+
         // 4 options fitting 100% of the screen width with no horizontal scroll
         Row(
             modifier = Modifier.fillMaxWidth(),

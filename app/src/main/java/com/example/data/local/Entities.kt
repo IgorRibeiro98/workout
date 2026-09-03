@@ -223,8 +223,19 @@ data class SetLogEntity(
     val startedAt: Long? = null,
     val finishedAt: Long? = null,
     val rpe: Float? = null,
-    val rir: Int? = null
-)
+    val rir: Int? = null,
+    val durationSeconds: Int? = null
+) {
+    val executionValue: com.example.domain.model.ExerciseExecutionValue
+        get() = if (durationSeconds != null && durationSeconds > 0) {
+            com.example.domain.model.ExerciseExecutionValue(com.example.domain.model.ExerciseExecutionMode.DURATION, durationSeconds)
+        } else {
+            com.example.domain.model.ExerciseExecutionValue(com.example.domain.model.ExerciseExecutionMode.REPS, repetitions)
+        }
+
+    val isDurationMode: Boolean
+        get() = durationSeconds != null && durationSeconds > 0
+}
 
 class Converters {
     @androidx.room.TypeConverter

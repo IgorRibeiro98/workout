@@ -197,7 +197,7 @@ object PerformanceCalculator {
                 val exerciseName = exerciseSession.exerciseSession.exerciseNameSnapshot.ifBlank { "Exercício" }
                 val key = rawId?.toString() ?: exerciseName.trim().lowercase()
 
-                val completedSets = exerciseSession.sets.filter { it.completed && it.weight > 0f }
+                val completedSets = exerciseSession.sets.filter { it.completed && it.weight > 0f && !it.isDurationMode }
 
                 for (set in completedSets) {
                     val currentBest = bestSetsByExercise[key]
@@ -232,7 +232,7 @@ object PerformanceCalculator {
         for (summary in sortedSessions) {
             var sessionVolume = 0.0
             for (exercise in summary.exercises) {
-                val completedSets = exercise.sets.filter { it.completed }
+                val completedSets = exercise.sets.filter { it.completed && !it.isDurationMode }
                 for (set in completedSets) {
                     sessionVolume += (set.weight * set.repetitions).toDouble()
                 }
@@ -328,8 +328,10 @@ object PerformanceCalculator {
                 val completedSets = exercise.sets.filter { it.completed }
                 totalSets += completedSets.size
                 for (set in completedSets) {
-                    totalRepetitions += set.repetitions
-                    totalVolume += (set.weight * set.repetitions).toDouble()
+                    if (!set.isDurationMode) {
+                        totalRepetitions += set.repetitions
+                        totalVolume += (set.weight * set.repetitions).toDouble()
+                    }
                 }
             }
         }

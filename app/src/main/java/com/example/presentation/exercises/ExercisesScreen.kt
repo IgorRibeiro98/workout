@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.domain.engine.ExerciseSearchEngine
 import com.example.domain.engine.MuscleNormalizer
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.AppModalBottomSheet
@@ -66,16 +68,14 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
             (if (selectedMode != "Todos") 1 else 0)
 
     val filteredExercises = exercises.filter {
-        val search = searchQuery.trim().lowercase()
-        val searchInEn = it.nameEn?.lowercase()?.contains(search) == true
-        val searchInMuscle = it.primaryMuscle?.lowercase()?.contains(search) == true || it.secondaryMuscles.any { m -> m.lowercase().contains(search) }
-        val searchInEq = it.equipment?.lowercase()?.contains(search) == true
-        val searchInPattern = it.movementPattern?.lowercase()?.contains(search) == true
-        val searchInNotes = it.notes?.lowercase()?.contains(search) == true
-        val matchesSearch = search.isEmpty() ||
-                it.displayName.lowercase().contains(search) ||
-                (it.rawExercise.aliases?.lowercase()?.contains(search) == true) ||
-                searchInEn || searchInMuscle || searchInEq || searchInPattern || searchInNotes
+        val matchesSearch = ExerciseSearchEngine.matches(
+            query = searchQuery,
+            name = "${it.displayName} ${it.nameEn ?: ""}",
+            primaryMuscle = it.primaryMuscle,
+            secondaryMuscles = it.secondaryMuscles.joinToString(" "),
+            equipment = it.equipment,
+            notes = "${it.notes ?: ""} ${it.rawExercise.aliases ?: ""}"
+        )
         
         val matchesRegion = selectedRegion == "Todas" || getMuscleRegion(it.primaryMuscle) == selectedRegion
         val matchesMuscle = selectedMuscle == "Todos" || MuscleNormalizer.normalize(it.primaryMuscle).contains(selectedMuscle, ignoreCase = true)
@@ -135,6 +135,13 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Buscar exercício...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Limpar busca", tint = TextSecondary)
+                            }
+                        }
+                    },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = SurfaceDark,
                         unfocusedContainerColor = SurfaceDark,
