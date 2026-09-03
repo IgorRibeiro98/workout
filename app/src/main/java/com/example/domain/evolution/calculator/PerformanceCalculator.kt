@@ -70,7 +70,7 @@ object PerformanceCalculator {
             for (exercise in item.exercises) {
                 val completedSets = exercise.sets.filter { it.completed }
                 totalSets += completedSets.size
-                totalRepetitions += completedSets.sumOf { it.repetitions }
+                totalRepetitions += completedSets.filter { !it.isDurationMode }.sumOf { it.repetitions }
                 totalVolume += com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(exercise.sets)
             }
         }
@@ -120,13 +120,13 @@ object PerformanceCalculator {
                 val key = rawId?.toString() ?: exerciseName.trim().lowercase()
 
                 val completedSets = exerciseSession.sets.filter { it.completed }
-                val setsWithWeight = completedSets.filter { it.weight > 0f }
+                val setsWithWeight = completedSets.filter { it.weight > 0f && !it.isDurationMode }
 
                 val maxWeight = if (setsWithWeight.isNotEmpty()) {
                     setsWithWeight.maxOf { it.weight }
                 } else null
 
-                val sessionVolume = completedSets.sumOf { (it.weight * it.repetitions).toDouble() }.toFloat()
+                val sessionVolume = com.example.domain.performance.calculator.VolumeCalculator.calculateSetsVolume(exerciseSession.sets).toFloat()
 
                 val entry = exerciseRecordsMap.getOrPut(key) {
                     exerciseName to mutableListOf()
@@ -277,7 +277,7 @@ object PerformanceCalculator {
                         (exerciseSession.exerciseSession.plannedExerciseId?.toString() == exerciseId)
 
                 if (isMatch) {
-                    val completedSets = exerciseSession.sets.filter { it.completed && it.weight > 0f }
+                    val completedSets = exerciseSession.sets.filter { it.completed && it.weight > 0f && !it.isDurationMode }
                     val maxWeightSet = completedSets.maxWithOrNull(
                         compareBy<com.example.data.local.SetLogEntity> { it.weight }.thenBy { it.repetitions }
                     )

@@ -62,7 +62,7 @@ class HistoryViewModel(
                 // STRICTLY EXCLUDE WARMUP
                 val completedSets = ex.sets.filter { it.completed && it.type != com.example.data.local.SetType.WARMUP.name }
                 val setsCount = completedSets.size
-                val vol = completedSets.sumOf { (it.weight * it.repetitions).toDouble() }
+                val vol = completedSets.filter { !it.isDurationMode }.sumOf { (it.weight * it.repetitions).toDouble() }
 
                 if (setsCount > 0) {
                     muscleSets[muscleName] = (muscleSets[muscleName] ?: 0) + setsCount

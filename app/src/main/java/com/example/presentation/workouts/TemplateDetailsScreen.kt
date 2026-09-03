@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -27,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
+import com.example.domain.engine.ExerciseSearchEngine
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.SwipeAction
 import com.example.ui.components.SwipeActionRow
@@ -186,10 +189,12 @@ fun TemplateDetailsScreen(
         val muscleFilters = listOf("Todos", "Peitoral", "Costas", "Quadríceps", "Posterior", "Glúteos", "Panturrilhas", "Bíceps", "Tríceps", "Ombros", "Abdômen")
 
         val filteredCatalog = allExercises.filter { ex ->
-            val matchesSearch = searchQuery.isBlank() || 
-                ex.displayName.contains(searchQuery, ignoreCase = true) ||
-                (ex.nameEn?.contains(searchQuery, ignoreCase = true) == true) ||
-                (ex.equipment?.contains(searchQuery, ignoreCase = true) == true)
+            val matchesSearch = ExerciseSearchEngine.matches(
+                query = searchQuery,
+                name = ex.displayName,
+                primaryMuscle = ex.primaryMuscle,
+                equipment = ex.equipment
+            )
             
             val matchesMuscle = selectedMuscleFilter == "Todos" || 
                 MuscleVisualResolver.getDisplayName(ex.primaryMuscle) == selectedMuscleFilter ||
@@ -370,11 +375,33 @@ fun TemplateDetailsScreen(
     // Exercise Action Sheet
     if (activeExerciseActionSheet != null) {
         val selectedItem = activeExerciseActionSheet!!
-        ActionBottomSheet(
-            onDismissRequest = { activeExerciseActionSheet = null },
-            title = stringResource(id = R.string.sheet_exercise_options),
-            subtitle = selectedItem.resolvedExercise.displayName,
-            actions = listOf(
+        val currentIndex = exercises.indexOfFirst { it.templateExercise.id == selectedItem.templateExercise.id }
+        val actions = buildList {
+            if (currentIndex > 0) {
+                add(
+                    ActionItemData(
+                        title = "Mover para cima",
+                        icon = Icons.Default.ArrowUpward,
+                        onClick = {
+                            viewModel.moveExercise(currentIndex, currentIndex - 1)
+                            activeExerciseActionSheet = null
+                        }
+                    )
+                )
+            }
+            if (currentIndex >= 0 && currentIndex < exercises.size - 1) {
+                add(
+                    ActionItemData(
+                        title = "Mover para baixo",
+                        icon = Icons.Default.ArrowDownward,
+                        onClick = {
+                            viewModel.moveExercise(currentIndex, currentIndex + 1)
+                            activeExerciseActionSheet = null
+                        }
+                    )
+                )
+            }
+            add(
                 ActionItemData(
                     title = stringResource(id = R.string.sheet_action_edit_template_exercise),
                     icon = Icons.Default.Edit,
@@ -382,7 +409,9 @@ fun TemplateDetailsScreen(
                         exerciseToEdit = selectedItem
                         activeExerciseActionSheet = null
                     }
-                ),
+                )
+            )
+            add(
                 ActionItemData(
                     title = stringResource(id = R.string.sheet_action_delete_template_exercise),
                     icon = Icons.Default.Delete,
@@ -393,6 +422,12 @@ fun TemplateDetailsScreen(
                     }
                 )
             )
+        }
+        ActionBottomSheet(
+            onDismissRequest = { activeExerciseActionSheet = null },
+            title = stringResource(id = R.string.sheet_exercise_options),
+            subtitle = selectedItem.resolvedExercise.displayName,
+            actions = actions
         )
     }
 

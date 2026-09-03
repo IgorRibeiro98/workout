@@ -204,14 +204,7 @@ fun EvolutionScreen(
                             )
                         }
 
-                        // 3. Card de Consistência
-                        item {
-                            ConsistencyCard(
-                                summary = summary
-                            )
-                        }
-
-                        // 4. Seção de Evolução Corporal
+                        // 3. Seção de Evolução Corporal
                         item {
                             BodyEvolutionSection(
                                 viewModel = bodyViewModel,

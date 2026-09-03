@@ -25,11 +25,14 @@ fun ExercisePrescriptionCard(
 ) {
     val targetWeight = context?.suggestedLoad
     val targetReps = context?.targetReps
+    val isDurationMode = context?.isDurationMode == true
 
     // If no target weight or reps are defined, don't render an empty card
     if (targetWeight == null && targetReps == null) return
 
     val repsStr = when {
+        isDurationMode && targetReps != null && targetReps.first == targetReps.last -> "${targetReps.first}s"
+        isDurationMode && targetReps != null -> "${targetReps.first}-${targetReps.last}s"
         targetReps != null && targetReps.first == targetReps.last -> "${targetReps.first} reps"
         targetReps != null -> "${targetReps.first}-${targetReps.last} reps"
         else -> null

@@ -101,6 +101,10 @@ class WorkoutRepository(
         dao.updateTemplateExerciseFull(templateExercise)
     }
 
+    suspend fun updateTemplateExercises(items: List<WorkoutTemplateExerciseEntity>) {
+        items.forEach { dao.updateTemplateExerciseFull(it) }
+    }
+
     suspend fun removeExerciseFromTemplate(templateExercise: WorkoutTemplateExerciseEntity) {
         dao.deleteTemplateExercise(templateExercise)
     }

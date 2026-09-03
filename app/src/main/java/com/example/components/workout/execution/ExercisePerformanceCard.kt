@@ -38,6 +38,7 @@ fun ExercisePerformanceCard(
 ) {
     val lastPerf = context?.lastPerformance
     val pr = context?.personalRecord
+    val isDurationMode = context?.isDurationMode == true || lastPerf?.isDurationMode == true
     val isFirstTime = context?.isFirstTime == true || (lastPerf == null && pr == null)
 
     Surface(
@@ -86,7 +87,7 @@ fun ExercisePerformanceCard(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Registre sua carga inicial para criar seu histórico de evolução",
+                        text = if (isDurationMode) "Registre seu tempo inicial para criar seu histórico de evolução" else "Registre sua carga inicial para criar seu histórico de evolução",
                         color = TextSecondary,
                         fontSize = 11.sp,
                         lineHeight = 14.sp
@@ -129,6 +130,11 @@ fun ExercisePerformanceCard(
                     // Best record
                     if (pr != null) {
                         val prWeightStr = if (pr.maxWeight % 1f == 0f) "${pr.maxWeight.toInt()}" else "${pr.maxWeight}"
+                        val prLabel = if (isDurationMode) {
+                            "Melhor: ${pr.repsAtMaxWeight}s"
+                        } else {
+                            "Melhor: ${prWeightStr}kg × ${pr.repsAtMaxWeight}"
+                        }
                         Surface(
                             color = Color(0xFFFFB74D).copy(alpha = 0.15f),
                             shape = RoundedCornerShape(8.dp),
@@ -146,7 +152,7 @@ fun ExercisePerformanceCard(
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = "Melhor: ${prWeightStr}kg × ${pr.repsAtMaxWeight}",
+                                    text = prLabel,
                                     color = Color(0xFFFFB74D),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -166,6 +172,11 @@ fun ExercisePerformanceCard(
                         else -> "há ${lastPerf.daysAgo} dias"
                     }
                     val rirLabel = RirFormatter.formatSecondaryRir(lastPerf.rir)
+                    val perfText = if (isDurationMode) {
+                        if (lastPerf.weight > 0f) "${weightStr}kg × ${lastPerf.reps}s" else "${lastPerf.reps}s"
+                    } else {
+                        "${weightStr}kg × ${lastPerf.reps} reps"
+                    }
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -173,7 +184,7 @@ fun ExercisePerformanceCard(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "${weightStr}kg × ${lastPerf.reps} reps",
+                            text = perfText,
                             color = TextPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Black

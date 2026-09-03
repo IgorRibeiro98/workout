@@ -144,6 +144,9 @@ class WorkoutEngine(
     suspend fun getExerciseExecutionContext(exerciseId: Long, templateId: Long?): com.example.domain.workout.execution.ExerciseExecutionContext {
         val lastSets = dao.getLastExecutionSetsForExercise(exerciseId)
         val lastFinishedAt = dao.getLastSessionFinishedAtForExercise(exerciseId)
+        val exercise = dao.getExerciseById(exerciseId)
+        val resolvedExercise = exercise?.let { ExerciseResolver.resolve(it, null) }
+        val isDuration = resolvedExercise?.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION || lastSets.any { it.isDurationMode }
         val daysAgo = if (lastFinishedAt != null && lastFinishedAt > 0) {
             val diffMs = System.currentTimeMillis() - lastFinishedAt
             (diffMs / (1000L * 60 * 60 * 24)).coerceAtLeast(0L)
@@ -159,14 +162,15 @@ class WorkoutEngine(
                 rir = representativeSet.rir,
                 timestamp = lastFinishedAt,
                 daysAgo = daysAgo,
-                completedSets = lastSets
+                completedSets = lastSets,
+                isDurationMode = representativeSet.isDurationMode || isDuration
             )
         } else {
             null
         }
 
-        val bestSet = dao.getBestSetLogForExercise(exerciseId)
-        val highestPr = dao.getHighestPR(exerciseId, PRType.MAX_WEIGHT.name)
+        val bestSet = if (!isDuration) dao.getBestSetLogForExercise(exerciseId) else null
+        val highestPr = if (!isDuration) dao.getHighestPR(exerciseId, PRType.MAX_WEIGHT.name) else null
         val personalRecord = when {
             bestSet != null -> com.example.domain.workout.execution.PersonalRecord(
                 maxWeight = bestSet.weight,
@@ -190,7 +194,7 @@ class WorkoutEngine(
         val suggestedLoad = templateExercise?.plannedWeight ?: lastPerformance?.weight
         val targetSets = templateExercise?.targetSets
 
-        val maxVolumePr = dao.getHighestPR(exerciseId, PRType.MAX_VOLUME.name)
+        val maxVolumePr = if (!isDuration) dao.getHighestPR(exerciseId, PRType.MAX_VOLUME.name) else null
         val executionCount = dao.getExerciseExecutionCount(exerciseId)
 
         val summary = if (executionCount > 0 || personalRecord != null) {
@@ -210,7 +214,8 @@ class WorkoutEngine(
             targetReps = targetReps,
             targetSets = targetSets,
             summary = summary,
-            isFirstTime = lastPerformance == null && personalRecord == null
+            isFirstTime = lastPerformance == null && personalRecord == null,
+            isDurationMode = isDuration
         )
     }
 
@@ -583,21 +588,42 @@ class WorkoutEngine(
             val workingCompletedSets = ex.sets.filter { it.completed && it.type != SetType.WARMUP.name }
             if (workingCompletedSets.isEmpty()) return@forEach
             
-            // Max Weight PR
-            val maxWeightThisSession = workingCompletedSets.maxOf { it.weight }
-            val pastMaxWeight = dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_WEIGHT.name)?.value ?: 0f
-            if (maxWeightThisSession > pastMaxWeight && maxWeightThisSession > 0f) {
-                dao.insertPersonalRecord(
-                    PersonalRecordEntity(
-                        exerciseId = exerciseId,
-                        date = System.currentTimeMillis(),
-                        prType = com.example.data.local.PRType.MAX_WEIGHT,
-                        value = maxWeightThisSession
+            // Strictly exclude duration-based exercises from Max Weight and 1RM
+            val strengthCompletedSets = workingCompletedSets.filter { !it.isDurationMode }
+            if (strengthCompletedSets.isNotEmpty()) {
+                // Max Weight PR
+                val maxWeightThisSession = strengthCompletedSets.maxOf { it.weight }
+                val pastMaxWeight = dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_WEIGHT.name)?.value ?: 0f
+                if (maxWeightThisSession > pastMaxWeight && maxWeightThisSession > 0f) {
+                    dao.insertPersonalRecord(
+                        PersonalRecordEntity(
+                            exerciseId = exerciseId,
+                            date = System.currentTimeMillis(),
+                            prType = com.example.data.local.PRType.MAX_WEIGHT,
+                            value = maxWeightThisSession
+                        )
                     )
-                )
+                }
+
+                // 1RM Estimated on working sets
+                val best1RMThisSession = strengthCompletedSets
+                    .filter { it.weight > 0f && it.repetitions > 0 }
+                    .maxOfOrNull { VolumeCalculator.calculateOneRepMax(it.weight, it.repetitions) } ?: 0f
+
+                val past1RM = dao.getHighestPR(exerciseId, com.example.data.local.PRType.ONE_REP_MAX.name)?.value ?: 0f
+                if (best1RMThisSession > past1RM && best1RMThisSession > 0f) {
+                    dao.insertPersonalRecord(
+                        PersonalRecordEntity(
+                            exerciseId = exerciseId,
+                            date = System.currentTimeMillis(),
+                            prType = com.example.data.local.PRType.ONE_REP_MAX,
+                            value = best1RMThisSession
+                        )
+                    )
+                }
             }
             
-            // Max Volume PR (Tonnage on working sets)
+            // Max Volume PR (Tonnage on working sets - VolumeCalculator automatically excludes duration sets)
             val volumeThisSession = VolumeCalculator.calculateVolume(ex.sets).toFloat()
             val pastMaxVolume = dao.getHighestPR(exerciseId, com.example.data.local.PRType.MAX_VOLUME.name)?.value ?: 0f
             if (volumeThisSession > pastMaxVolume && volumeThisSession > 0f) {
@@ -607,23 +633,6 @@ class WorkoutEngine(
                         date = System.currentTimeMillis(),
                         prType = com.example.data.local.PRType.MAX_VOLUME,
                         value = volumeThisSession
-                    )
-                )
-            }
-            
-            // 1RM Estimated on working sets
-            val best1RMThisSession = workingCompletedSets
-                .filter { it.weight > 0f && it.repetitions > 0 }
-                .maxOfOrNull { VolumeCalculator.calculateOneRepMax(it.weight, it.repetitions) } ?: 0f
-
-            val past1RM = dao.getHighestPR(exerciseId, com.example.data.local.PRType.ONE_REP_MAX.name)?.value ?: 0f
-            if (best1RMThisSession > past1RM && best1RMThisSession > 0f) {
-                dao.insertPersonalRecord(
-                    PersonalRecordEntity(
-                        exerciseId = exerciseId,
-                        date = System.currentTimeMillis(),
-                        prType = com.example.data.local.PRType.ONE_REP_MAX,
-                        value = best1RMThisSession
                     )
                 )
             }

@@ -84,4 +84,18 @@ class TemplateDetailsViewModel(
             repository.removeExerciseFromTemplate(templateExercise)
         }
     }
+
+    fun moveExercise(fromIndex: Int, toIndex: Int) {
+        val currentList = exercises.value
+        if (fromIndex !in currentList.indices || toIndex !in currentList.indices || fromIndex == toIndex) return
+        val mutable = currentList.map { it.templateExercise }.toMutableList()
+        val item = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, item)
+        val updated = mutable.mapIndexed { index, entity ->
+            entity.copy(sortOrder = index)
+        }
+        viewModelScope.launch {
+            repository.updateTemplateExercises(updated)
+        }
+    }
 }

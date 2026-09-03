@@ -11,7 +11,8 @@ data class PerformanceHistory(
     val rir: Int? = null,
     val timestamp: Long? = null,
     val daysAgo: Long? = null,
-    val completedSets: List<SetLogEntity> = emptyList()
+    val completedSets: List<SetLogEntity> = emptyList(),
+    val isDurationMode: Boolean = false
 )
 
 /**
@@ -42,5 +43,6 @@ data class ExerciseExecutionContext(
     val targetReps: IntRange? = null,
     val targetSets: Int? = null,
     val summary: ExercisePerformanceSummary? = null,
-    val isFirstTime: Boolean = lastPerformance == null && personalRecord == null
+    val isFirstTime: Boolean = lastPerformance == null && personalRecord == null,
+    val isDurationMode: Boolean = false
 )
