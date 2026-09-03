@@ -54,6 +54,23 @@ data class ExecutionState(
     val isLastExercise: Boolean
         get() = currentExerciseIndex >= (sessionWithDetails?.exercises?.size ?: 1) - 1
 
+    /**
+     * True only when no other exercise still has pending sets, so finishing the current one
+     * finishes the workout.
+     *
+     * Being positionally last is not enough: after a reorder the user can be standing on the
+     * last card while an earlier exercise is still pending, and offering "concluir treino"
+     * there would end the session with work left to do.
+     */
+    val isLastPendingExercise: Boolean
+        get() {
+            val exercises = sessionWithDetails?.exercises ?: return false
+            if (exercises.isEmpty()) return false
+            return exercises.withIndex().none { (idx, ex) ->
+                idx != currentExerciseIndex && (ex.sets.isEmpty() || ex.sets.any { !it.completed })
+            }
+        }
+
     val isFirstExercise: Boolean
         get() = currentExerciseIndex == 0
 

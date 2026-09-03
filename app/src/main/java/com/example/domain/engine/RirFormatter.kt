@@ -53,8 +53,8 @@ object RirFormatter {
     fun formatEffort(rir: Int?, short: Boolean = false): String? {
         if (rir == null) return null
         val bucket = rir.coerceIn(0, 4)
-        val label = if (short) shortEffortLabels[bucket] else effortLabels.firstOrNull { it.first == bucket }?.second
-        return label?.let { if (isFailure(bucket)) "🔥 $it" else it }
+        // The labels already carry their own emoji; prefixing another one produced "🔥 🔥 Falha".
+        return if (short) shortEffortLabels[bucket] else effortLabels.firstOrNull { it.first == bucket }?.second
     }
 
     /**
@@ -75,4 +75,27 @@ object RirFormatter {
      * Helper to check if a RIR value represents failure.
      */
     fun isFailure(rir: Int?): Boolean = rir == 0
+
+    /** Title used wherever RIR is explained to the user. */
+    const val HELP_TITLE = "O que é RIR?"
+
+    /**
+     * Plain-language definition shown to first-time users. Kept here so every entry point
+     * explains the concept with exactly the same words.
+     */
+    const val HELP_DEFINITION =
+        "RIR significa Repetições em Reserva. É uma estimativa de quantas repetições você ainda " +
+            "conseguiria fazer antes de chegar à falha."
+
+    /** Effort scale explained one line per level, hardest first. */
+    val HELP_SCALE: List<Pair<String, String>> = listOf(
+        "🔥 Falha (RIR 0)" to "Não conseguiria mais nenhuma repetição.",
+        "😤 Muito pesado (RIR 1)" to "Conseguiria apenas mais 1 repetição.",
+        "💪 Pesado (RIR 2)" to "Conseguiria mais 2 repetições com boa técnica.",
+        "🙂 Controlado (RIR 3+)" to "Conseguiria 3 ou mais — aquecimento ou reserva alta."
+    )
+
+    /** Closing hint that connects the emoji scale to the number stored in the log. */
+    const val HELP_FOOTNOTE =
+        "Você escolhe pelo esforço; o número (RIR) fica registrado junto como informação complementar."
 }

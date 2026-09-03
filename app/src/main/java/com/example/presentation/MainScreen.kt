@@ -179,6 +179,13 @@ fun MainScreen() {
                     },
                     onNavigateToProfile = {
                         navController.navigate(Screen.Profile.route)
+                    },
+                    onNavigateToEvolution = {
+                        // Progress questions belong to Evolução, so Hoje hands them over
+                        // instead of answering them inline.
+                        navController.navigate(Screen.MyEvolution.route) {
+                            launchSingleTop = true
+                        }
                     }
                 ) 
             }

@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,29 +65,21 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
     var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
     var sessionToEditCheckIn by remember { mutableStateOf<SessionCalendarSummary?>(null) }
 
-    var historyPeriodFilter by remember { mutableStateOf("Todos") }
     var historyTypeFilter by remember { mutableStateOf("Todos") }
     var historyGrouping by remember { mutableStateOf("Semana") }
 
-    val filteredAllSessions = remember(state.allCompletedSessions, historyPeriodFilter, historyTypeFilter) {
-        val now = System.currentTimeMillis()
-        val minTime = when (historyPeriodFilter) {
-            "7 dias" -> now - 7L * 24 * 60 * 60 * 1000
-            "30 dias" -> now - 30L * 24 * 60 * 60 * 1000
-            else -> 0L
-        }
-
-        state.allCompletedSessions.filter { summary ->
-            val matchesPeriod = summary.session.startedAt >= minTime
+    // The period comes from the ViewModel so the workout list and the analysis tab always
+    // describe the same slice of time.
+    val filteredAllSessions = remember(state.sessionsInPeriod, historyTypeFilter) {
+        state.sessionsInPeriod.filter { summary ->
             val totalSets = summary.exercises.sumOf { it.sets.size }
             val completedSets = summary.exercises.sumOf { e -> e.sets.count { it.completed } }
             val isPartial = totalSets > 0 && completedSets < totalSets
-            val matchesType = when (historyTypeFilter) {
+            when (historyTypeFilter) {
                 "Concluídos" -> !isPartial
                 "Parciais" -> isPartial
                 else -> true
             }
-            matchesPeriod && matchesType
         }
     }
 
@@ -157,7 +150,7 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val tabs = listOf("Calendário", "Todos os Treinos", "Volume")
+                    val tabs = listOf("Calendário", "Todos os Treinos", "Análise")
                     tabs.forEachIndexed { index, title ->
                         val isSelected = selectedTab == index
                         Box(
@@ -179,6 +172,27 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                         }
                     }
                 }
+
+                if (selectedTab != 0) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("history_period_filter"),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Período:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        HistoryPeriod.entries.forEach { period ->
+                            HistoryFilterChip(
+                                label = period.label,
+                                isSelected = period == state.period,
+                                onClick = { viewModel.setPeriod(period) }
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
@@ -278,29 +292,6 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                                     .padding(bottom = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Período
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Período:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    listOf("Todos", "7 dias", "30 dias").forEach { period ->
-                                        val isSelected = period == historyPeriodFilter
-                                        Surface(
-                                            color = if (isSelected) Lime400 else SurfaceDark,
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.clickable { historyPeriodFilter = period }
-                                        ) {
-                                            Text(
-                                                text = period,
-                                                color = if (isSelected) BackgroundDark else TextSecondary,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                            )
-                                        }
-                                    }
-                                }
                                 // Tipo & Agrupamento
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -416,41 +407,36 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                     }
                 }
                 2 -> {
-                    // Volume Tab
+                    // Análise: one period, three lenses. Kept to simple bars and rows on purpose —
+                    // the goal is to spot evolution, not to operate a reporting tool.
                     item {
-                        var expandedFilter by remember { mutableStateOf(false) }
-                        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.End) {
-                            Box {
-                                TextButton(onClick = { expandedFilter = true }) {
-                                    Text(state.volumeTimeRange, color = Lime400, fontWeight = FontWeight.Bold)
-                                }
-                                DropdownMenu(
-                                    expanded = expandedFilter,
-                                    onDismissRequest = { expandedFilter = false },
-                                    modifier = Modifier.background(SurfaceDark)
-                                ) {
-                                    listOf("Esta semana", "Este mês", "Tudo").forEach { range ->
-                                        DropdownMenuItem(
-                                            text = { Text(range, color = TextPrimary) },
-                                            onClick = {
-                                                viewModel.setVolumeTimeRange(range)
-                                                expandedFilter = false
-                                            }
-                                        )
-                                    }
-                                }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                                .testTag("history_analysis_filter"),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Análise:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            HistoryAnalysis.entries.forEach { analysis ->
+                                HistoryFilterChip(
+                                    label = analysis.label,
+                                    isSelected = analysis == state.analysis,
+                                    onClick = { viewModel.setAnalysis(analysis) }
+                                )
                             }
                         }
                     }
 
-                    if (state.muscleSetsDistribution.isEmpty()) {
+                    if (state.totals.sessions == 0) {
                         item {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(32.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "Sem dados de volume suficientes.",
+                                    text = "Nenhum treino em ${state.period.label.lowercase(Locale("pt", "BR"))}.",
                                     color = TextSecondary,
                                     textAlign = TextAlign.Center,
                                     fontSize = 14.sp
@@ -458,74 +444,94 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                             }
                         }
                     } else {
-                        val maxSets = (state.muscleSetsDistribution.values.maxOrNull() ?: 1).coerceAtLeast(1)
                         item {
-                            Text(
-                                text = "Distribuição de Séries por Grupo Muscular",
-                                color = TextPrimary,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            PeriodTotalsCard(totals = state.totals, period = state.period)
                             Spacer(modifier = Modifier.height(16.dp))
                         }
-                        
-                        items(state.muscleSetsDistribution.entries.sortedByDescending { it.value }.toList()) { entry ->
-                            val group = MuscleVisualResolver.resolveGroup(entry.key)
-                            val fraction = (entry.value.toFloat() / maxSets.toFloat()).coerceIn(0.05f, 1f)
-                            val kgVol = state.muscleVolumeDistribution[entry.key]?.toInt() ?: 0
-                            
-                            Surface(
-                                color = SurfaceDark,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(14.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+
+                        val showStrength = state.analysis == HistoryAnalysis.ALL || state.analysis == HistoryAnalysis.STRENGTH
+                        val showVolume = state.analysis == HistoryAnalysis.ALL || state.analysis == HistoryAnalysis.VOLUME
+                        val showGroups = state.analysis == HistoryAnalysis.ALL || state.analysis == HistoryAnalysis.MUSCLE_GROUPS
+
+                        if (showStrength) {
+                            item {
+                                AnalysisSectionTitle("Cargas mais pesadas do período")
+                            }
+                            if (state.strengthHighlights.isEmpty()) {
+                                item { AnalysisEmptyRow("Sem séries com carga registrada.") }
+                            } else {
+                                items(state.strengthHighlights, key = { "strength_${it.exerciseName}" }) { highlight ->
+                                    Surface(
+                                        color = SurfaceDark,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                imageVector = group.icon,
-                                                contentDescription = null,
-                                                tint = group.color,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             Text(
-                                                text = entry.key,
+                                                text = highlight.exerciseName,
                                                 color = TextPrimary,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 15.sp
+                                                fontSize = 15.sp,
+                                                maxLines = 2,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Text(
+                                                text = "${formatKg(highlight.maxWeight.toDouble())} × ${highlight.repsAtMaxWeight}",
+                                                color = Lime400,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
                                             )
                                         }
-                                        Text(
-                                            text = "${entry.value} séries • ${kgVol}kg",
-                                            color = Lime400,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 13.sp
-                                        )
                                     }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(8.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(BackgroundDark)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth(fraction)
-                                                .fillMaxHeight()
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(group.color)
-                                        )
-                                    }
+                                    Spacer(modifier = Modifier.height(12.dp))
                                 }
                             }
-                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        if (showVolume) {
+                            item {
+                                AnalysisSectionTitle("Volume por grupo muscular")
+                            }
+                            val volumeEntries = state.muscleVolumeDistribution.entries
+                                .filter { it.value > 0.0 }
+                                .sortedByDescending { it.value }
+                            if (volumeEntries.isEmpty()) {
+                                item { AnalysisEmptyRow("Sem volume registrado no período.") }
+                            } else {
+                                val maxVolume = volumeEntries.first().value
+                                items(volumeEntries.toList(), key = { "volume_${it.key}" }) { entry ->
+                                    MuscleDistributionRow(
+                                        muscleName = entry.key,
+                                        valueLabel = formatKg(entry.value),
+                                        fraction = (entry.value / maxVolume).toFloat()
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                }
+                            }
+                        }
+
+                        if (showGroups) {
+                            item {
+                                AnalysisSectionTitle("Séries por grupo muscular")
+                            }
+                            val setEntries = state.muscleSetsDistribution.entries.sortedByDescending { it.value }
+                            if (setEntries.isEmpty()) {
+                                item { AnalysisEmptyRow("Sem séries concluídas no período.") }
+                            } else {
+                                val maxSets = setEntries.first().value.coerceAtLeast(1)
+                                items(setEntries.toList(), key = { "sets_${it.key}" }) { entry ->
+                                    MuscleDistributionRow(
+                                        muscleName = entry.key,
+                                        valueLabel = "${entry.value} séries",
+                                        fraction = entry.value.toFloat() / maxSets.toFloat()
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                }
+                            }
                         }
                     }
                 }
@@ -931,4 +937,159 @@ private fun isSameDay(date1: Date, date2: Date): Boolean {
     val cal2 = Calendar.getInstance().apply { time = date2 }
     return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
            cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
+}
+
+/** Rounded selectable chip used by the history period and analysis filters. */
+@Composable
+private fun HistoryFilterChip(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (isSelected) Lime400 else SurfaceDark,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Text(
+            text = label,
+            color = if (isSelected) BackgroundDark else TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@Composable
+private fun AnalysisSectionTitle(title: String) {
+    Text(
+        text = title,
+        color = TextPrimary,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(bottom = 12.dp)
+    )
+}
+
+@Composable
+private fun AnalysisEmptyRow(message: String) {
+    Text(
+        text = message,
+        color = TextSecondary,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(bottom = 16.dp)
+    )
+}
+
+/** Headline numbers for the selected period, shared by every analysis lens. */
+@Composable
+private fun PeriodTotalsCard(totals: PeriodTotals, period: HistoryPeriod) {
+    Surface(
+        color = SurfaceDark,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().testTag("history_period_totals")
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = period.label.uppercase(Locale("pt", "BR")),
+                color = Lime400,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                TotalsItem(value = "${totals.sessions}", label = if (totals.sessions == 1) "treino" else "treinos")
+                TotalsItem(value = "${totals.completedSets}", label = "séries")
+                TotalsItem(value = formatKg(totals.volumeKg), label = "volume")
+                TotalsItem(value = formatDuration(totals.durationMinutes), label = "tempo")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TotalsItem(value: String, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = value, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Black)
+        Text(text = label, color = TextSecondary, fontSize = 11.sp)
+    }
+}
+
+/** One muscle group with a proportional bar, used for both volume and set distribution. */
+@Composable
+private fun MuscleDistributionRow(
+    muscleName: String,
+    valueLabel: String,
+    fraction: Float
+) {
+    val group = MuscleVisualResolver.resolveGroup(muscleName)
+    Surface(
+        color = SurfaceDark,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = group.icon,
+                        contentDescription = null,
+                        tint = group.color,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = muscleName,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                }
+                Text(
+                    text = valueLabel,
+                    color = Lime400,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(BackgroundDark)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction.coerceIn(0.05f, 1f))
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(group.color)
+                )
+            }
+        }
+    }
+}
+
+private fun formatKg(value: Double): String {
+    return when {
+        value >= 1000 -> String.format(Locale("pt", "BR"), "%.1ft", value / 1000)
+        value % 1.0 == 0.0 -> "${value.toInt()}kg"
+        else -> String.format(Locale("pt", "BR"), "%.1fkg", value)
+    }
+}
+
+private fun formatDuration(minutes: Long): String {
+    return if (minutes >= 60) "${minutes / 60}h${minutes % 60}m" else "${minutes}m"
 }

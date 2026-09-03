@@ -18,6 +18,17 @@ data class SequenceItemData(
     val isCurrent: Boolean
 )
 
+/**
+ * The single thing worth celebrating on the Home screen.
+ *
+ * "Hoje" answers "qual treino eu faço agora?" — a dashboard belongs to Evolução. One highlight is
+ * the most the screen shows about the past, and only when there is something real to show.
+ */
+data class TodayHighlight(
+    val emoji: String,
+    val text: String
+)
+
 data class TodayState(
     val nextTemplate: WorkoutTemplateEntity? = null,
     val nextTemplateExerciseCount: Int = 0,
@@ -35,7 +46,9 @@ data class TodayState(
     val latestBodyWeightKg: Float? = null,
     val weightChangeKg: Float? = null,
     val recentMilestoneText: String? = null,
-    val weeklyVolumeKg: Float = 0f
+    val weeklyVolumeKg: Float = 0f,
+    val streakWeeks: Int = 0,
+    val highlight: TodayHighlight? = null
 )
 
 class TodayViewModel(
@@ -93,9 +106,11 @@ class TodayViewModel(
                     0
                 }
 
-                val recentMilestone = recentPRs.firstOrNull()?.let {
-                    "Novo PR: ${it.prType} (${it.value.toInt()} kg)"
-                }
+                val recentMilestone = TodayHighlightCalculator.formatRecentMilestone(recentPRs)
+                val streakWeeks = TodayHighlightCalculator.calculateStreakWeeks(
+                    completedSessions.map { it.session.startedAt }
+                )
+                val highlight = TodayHighlightCalculator.buildHighlight(streakWeeks, recentMilestone)
 
                 val latestWeight = bodyMeasurements.firstOrNull()?.weightKg
                 val firstWeight = bodyMeasurements.lastOrNull()?.weightKg
@@ -169,7 +184,9 @@ class TodayViewModel(
                         latestBodyWeightKg = latestWeight,
                         weightChangeKg = weightDiff,
                         recentMilestoneText = recentMilestone,
-                        weeklyVolumeKg = weeklyVolume
+                        weeklyVolumeKg = weeklyVolume,
+                        streakWeeks = streakWeeks,
+                        highlight = highlight
                     )
                 } else {
                     _state.value = TodayState(
@@ -182,7 +199,9 @@ class TodayViewModel(
                         latestBodyWeightKg = latestWeight,
                         weightChangeKg = weightDiff,
                         recentMilestoneText = recentMilestone,
-                        weeklyVolumeKg = weeklyVolume
+                        weeklyVolumeKg = weeklyVolume,
+                        streakWeeks = streakWeeks,
+                        highlight = highlight
                     )
                 }
             }.collect()
@@ -241,4 +260,5 @@ class TodayViewModel(
         cal.set(Calendar.SECOND, 0)
         return cal.timeInMillis
     }
+
 }

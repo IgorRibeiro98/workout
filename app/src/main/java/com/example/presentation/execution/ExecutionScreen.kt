@@ -385,7 +385,7 @@ fun ExecutionScreen(
                                             previousExecutionSets = state.previousExecutionSets,
                                             exerciseExecutionContext = state.exerciseExecutionContext,
                                             lastSetFeedback = state.lastSetFeedback,
-                                            isLastExercise = state.isLastExercise,
+                                            isLastExercise = state.isLastPendingExercise,
                                             rirRpeEnabled = rirRpeEnabled,
                                             hapticEnabled = hapticEnabled,
                                             showGifs = showGifs,

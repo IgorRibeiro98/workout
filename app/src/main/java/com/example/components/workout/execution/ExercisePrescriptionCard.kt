@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.workout.execution.ExerciseExecutionContext
+import com.example.ui.components.RirHelpLabel
 import com.example.ui.theme.*
 
 @Composable
@@ -42,8 +43,12 @@ fun ExercisePrescriptionCard(
         if (targetWeight % 1f == 0f) "${targetWeight.toInt()}kg" else "${targetWeight}kg"
     } else null
 
-    val items = listOfNotNull(repsStr, weightStr, "RIR 2-3")
+    val items = listOfNotNull(repsStr, weightStr)
     val targetText = items.joinToString("  ·  ")
+
+    // The suggested effort is shown as a number here and in plain language on the effort
+    // selector; the help icon next to it explains what the number means.
+    val suggestedRirLabel = "RIR 2-3"
 
     Surface(
         color = SurfaceDark,
@@ -78,12 +83,30 @@ fun ExercisePrescriptionCard(
                 )
             }
 
-            Text(
-                text = targetText,
-                color = TextPrimary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (targetText.isNotBlank()) {
+                    Text(
+                        text = targetText,
+                        color = TextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "·",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                RirHelpLabel(
+                    text = suggestedRirLabel,
+                    color = TextPrimary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }

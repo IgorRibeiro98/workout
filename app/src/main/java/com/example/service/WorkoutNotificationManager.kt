@@ -16,7 +16,6 @@ class WorkoutNotificationManager(private val context: Context) {
     private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val channelId = "workout_channel"
-    private val alertChannelId = "workout_alert_channel_v2"
 
     init {
         createChannel()
@@ -32,17 +31,6 @@ class WorkoutNotificationManager(private val context: Context) {
                 description = "Notificações de treinos ativos e contagem regressiva de descanso"
             }
             notificationManager.createNotificationChannel(channel)
-            
-            val alertChannel = NotificationChannel(
-                alertChannelId,
-                "Alertas de Fim de Descanso",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Notificação visual quando o descanso acaba"
-                setSound(null, null)
-                enableVibration(false)
-            }
-            notificationManager.createNotificationChannel(alertChannel)
         }
     }
 
@@ -136,6 +124,6 @@ class WorkoutNotificationManager(private val context: Context) {
 
     companion object {
         const val NOTIFICATION_ID = 1001
-        const val ALERT_NOTIFICATION_ID = 1002
+        const val ALERT_NOTIFICATION_ID = RestTimerAlertAuthority.ALERT_NOTIFICATION_ID
     }
 }

@@ -96,8 +96,10 @@ fun EvolutionHeader(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column {
+                // Evolução owns one question, and Hoje owns the other ("qual treino eu faço
+                // agora?"). Stating it here is what keeps the two screens from overlapping.
                 Text(
-                    text = "Resumo do seu progresso",
+                    text = stringResource(R.string.my_evolution_question),
                     color = TextPrimary,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp

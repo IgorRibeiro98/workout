@@ -323,7 +323,7 @@ class WorkoutEngine(
 
             // Check if entire workout is completed
             val isEntireWorkoutCompleted = allExercises.isNotEmpty() && allExercises.all { ex ->
-                ex.sets.all { it.completed || it.id == setLog.id }
+                ex.sets.isNotEmpty() && ex.sets.all { it.completed || it.id == setLog.id }
             }
 
             if (isEntireWorkoutCompleted) {
@@ -334,8 +334,10 @@ class WorkoutEngine(
 
             val autoTimer = settingsManager.autoRestTimerOnSetFlow.firstOrNull() ?: true
             if (autoTimer) {
-                val isCurrentExerciseCompleted = allExercises.find { it.exerciseSession.id == setLog.exerciseSessionId }
-                    ?.sets?.all { it.completed || it.id == setLog.id } ?: false
+                val currentExerciseSets = allExercises.find { it.exerciseSession.id == setLog.exerciseSessionId }?.sets
+                val isCurrentExerciseCompleted = currentExerciseSets != null &&
+                        currentExerciseSets.isNotEmpty() &&
+                        currentExerciseSets.all { it.completed || it.id == setLog.id }
 
                 val override = exSession?.actualExerciseId?.let { dao.getOverrideForExercise(it) }
                 
@@ -475,7 +477,10 @@ class WorkoutEngine(
         val plannedExercises = dao.getTemplateExercisesWithDetails(templateId)
 
         // 3. Create ExerciseSessions and SetLogs with robust preload & snapshots
-        plannedExercises.forEach { plannedWithDetails ->
+        plannedExercises.forEachIndexed { plannedIndex, plannedWithDetails ->
+            // Positions are normalized to 1..N here so that planned and execution order share one
+            // base with reorderExercises; template sortOrder may be 0-based, sparse or duplicated.
+            val position = plannedIndex + 1
             val exerciseOverride = dao.getOverrideForExercise(plannedWithDetails.exercise.id)
             val resolvedExercise = com.example.domain.engine.ExerciseResolver.resolve(plannedWithDetails.exercise, exerciseOverride)
             val exSessionId = dao.insertExerciseSession(
@@ -484,9 +489,9 @@ class WorkoutEngine(
                     plannedExerciseId = plannedWithDetails.exercise.id,
                     actualExerciseId = plannedWithDetails.exercise.id,
                     exerciseNameSnapshot = resolvedExercise.displayName, // Historic snapshot uses resolved name
-                    sortOrder = plannedWithDetails.templateExercise.sortOrder,
-                    plannedOrder = plannedWithDetails.templateExercise.sortOrder,
-                    executionOrder = plannedWithDetails.templateExercise.sortOrder,
+                    sortOrder = position,
+                    plannedOrder = position,
+                    executionOrder = position,
                     machineLabelSnapshot = plannedWithDetails.templateExercise.machineLabel,
                     primaryMuscleSnapshot = plannedWithDetails.exercise.primaryMuscle,
                     restDurationSecondsSnapshot = plannedWithDetails.templateExercise.restDurationSeconds

@@ -40,7 +40,8 @@ import java.util.Locale
 fun TodayScreen(
     viewModel: TodayViewModel,
     onNavigateToExecution: () -> Unit,
-    onNavigateToProfile: () -> Unit = {}
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToEvolution: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
@@ -424,34 +425,63 @@ fun TodayScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
         
-        if (state.lastSession != null) {
-            Text("Último Treino", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(16.dp))
+        // A single highlight — never a dashboard. Charts, muscle distribution and workout
+        // history all live in Evolução; Hoje only answers "qual treino eu faço agora?".
+        val highlight = state.highlight
+        if (highlight != null) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(24.dp))
                     .background(SurfaceDark)
-                    .padding(20.dp),
+                    .clickable { onNavigateToEvolution() }
+                    .padding(20.dp)
+                    .testTag("today_highlight_card"),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(text = highlight.emoji, fontSize = 24.sp)
                     Text(
-                        text = state.lastSession?.templateNameSnapshot ?: "Treino Livre",
+                        text = highlight.text,
                         color = TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    val dateStr = SimpleDateFormat("dd/MM", Locale("pt", "BR")).format(Date(state.lastSession!!.startedAt))
-                    Text(
-                        text = dateStr,
-                        color = TextSecondary,
-                        fontSize = 14.sp
-                    )
                 }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Ver evolução",
+                    tint = TextSecondary
+                )
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
+
+        TextButton(
+            onClick = onNavigateToEvolution,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("today_open_evolution_button")
+        ) {
+            Text(
+                text = "Ver minha evolução",
+                color = Lime400,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = Lime400,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+
         Spacer(modifier = Modifier.height(80.dp))
         }
 
