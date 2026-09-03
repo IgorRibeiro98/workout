@@ -15,6 +15,7 @@ import java.time.ZoneId
  */
 class GamificationEventRecorder(
     private val repository: GamificationEventRepository,
+    private val xpCalculatorService: XpCalculatorService,
     private val workoutTimestampsProvider: suspend () -> List<Long>,
     private val weeklyGoalProvider: suspend () -> Int,
     private val zoneId: ZoneId = ZoneId.systemDefault()
@@ -28,8 +29,15 @@ class GamificationEventRecorder(
             return false
         }
 
-        if (stored && event.type == GamificationEventType.WORKOUT_COMPLETED) {
-            evaluateConsistency(event.timestamp)
+        if (stored) {
+            try {
+                xpCalculatorService.processEvent(event)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            if (event.type == GamificationEventType.WORKOUT_COMPLETED) {
+                evaluateConsistency(event.timestamp)
+            }
         }
         return stored
     }
@@ -42,7 +50,12 @@ class GamificationEventRecorder(
                 referenceTimestamp = referenceTimestamp,
                 zoneId = zoneId
             )
-            derived.forEach { repository.record(it) }
+            derived.forEach { 
+                val derivedStored = repository.record(it)
+                if (derivedStored) {
+                    xpCalculatorService.processEvent(it)
+                }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

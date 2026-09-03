@@ -33,9 +33,10 @@ import kotlinx.coroutines.launch
         ExerciseBiomechanicsEntity::class,
         ExerciseExecutionEntity::class,
         BodyMeasurementEntity::class,
-        GamificationEventEntity::class
+        GamificationEventEntity::class,
+        XpTransactionEntity::class
     ],
-    version = 27,
+    version = 28,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -43,8 +44,26 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
     abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun gamificationEventDao(): GamificationEventDao
+    abstract fun xpTransactionDao(): XpTransactionDao
     
     companion object {
+
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `xp_transactions` (
+                        `id` TEXT NOT NULL,
+                        `eventId` TEXT NOT NULL,
+                        `amount` INTEGER NOT NULL,
+                        `reason` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_xp_transactions_eventId` ON `xp_transactions` (`eventId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_xp_transactions_createdAt` ON `xp_transactions` (`createdAt`)")
+            }
+        }
 
         val MIGRATION_26_27 = object : Migration(26, 27) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -394,7 +413,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()

@@ -27,7 +27,8 @@ class MainViewModelFactory(
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase? = null,
     private val evolutionRepository: EvolutionRepository? = null,
     private val performanceRepository: PerformanceRepository? = null,
-    private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null
+    private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null,
+    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -119,7 +120,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(TodayViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return TodayViewModel(repository, settingsManager, workoutEngine, bodyMeasurementRepository) as T
+            return TodayViewModel(repository, settingsManager, workoutEngine, bodyMeasurementRepository, xpTransactionRepository) as T
         }
         if (modelClass.isAssignableFrom(ExecutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

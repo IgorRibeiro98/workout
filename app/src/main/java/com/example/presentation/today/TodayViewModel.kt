@@ -48,14 +48,16 @@ data class TodayState(
     val recentMilestoneText: String? = null,
     val weeklyVolumeKg: Float = 0f,
     val streakWeeks: Int = 0,
-    val highlight: TodayHighlight? = null
+    val highlight: TodayHighlight? = null,
+    val userProgress: com.example.domain.gamification.model.UserProgress? = null
 )
 
 class TodayViewModel(
     private val repository: WorkoutRepository,
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
-    private val bodyMeasurementRepository: com.example.data.repository.BodyMeasurementRepository? = null
+    private val bodyMeasurementRepository: com.example.data.repository.BodyMeasurementRepository? = null,
+    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(TodayState())
@@ -66,6 +68,12 @@ class TodayViewModel(
     }
 
     private fun loadTodayData() {
+        viewModelScope.launch {
+            xpTransactionRepository?.getUserProgress()?.collect { progress ->
+                _state.update { it.copy(userProgress = progress) }
+            }
+        }
+
         viewModelScope.launch {
             val startOfWeek = getStartOfWeekTimestamp()
             val endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000L - 1

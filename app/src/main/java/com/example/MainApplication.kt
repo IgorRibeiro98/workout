@@ -47,6 +47,12 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var gamificationEventPublisher: com.example.domain.gamification.GamificationEventPublisher
         internal set
 
+    lateinit var xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository
+        internal set
+
+    lateinit var xpCalculatorService: com.example.domain.gamification.XpCalculatorService
+        internal set
+
     lateinit var settingsManager: SettingsManager
         internal set
         
@@ -69,8 +75,15 @@ class MainApplication : Application(), ImageLoaderFactory {
         gamificationEventRepository = com.example.data.repository.GamificationEventRepositoryImpl(
             database.gamificationEventDao()
         )
+        xpTransactionRepository = com.example.data.repository.XpTransactionRepositoryImpl(
+            database.xpTransactionDao()
+        )
+        xpCalculatorService = com.example.domain.gamification.XpCalculatorService(
+            xpTransactionRepository
+        )
         gamificationEventPublisher = com.example.domain.gamification.GamificationEventRecorder(
             repository = gamificationEventRepository,
+            xpCalculatorService = xpCalculatorService,
             workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
             weeklyGoalProvider = { settingsManager.weeklyGoalFlow.first() }
         )

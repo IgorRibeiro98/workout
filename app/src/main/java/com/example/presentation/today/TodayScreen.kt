@@ -35,6 +35,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import com.example.presentation.gamification.components.XpProgressBar
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodayScreen(
@@ -102,6 +104,16 @@ fun TodayScreen(
                         tint = Lime400
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            if (state.userProgress != null) {
+                XpProgressBar(
+                    currentXp = state.userProgress!!.currentLevelXp,
+                    xpForNextLevel = state.userProgress!!.xpForNextLevel,
+                    level = state.userProgress!!.currentLevel
+                )
             }
 
             Spacer(modifier = Modifier.height(32.dp))
