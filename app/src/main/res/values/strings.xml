@@ -4,6 +4,7 @@
     <string name="nav_workouts">Treinos</string>
     <string name="nav_exercises">Exercícios</string>
     <string name="nav_history">Histórico</string>
+    <string name="nav_evolution">Evolução</string>
     <string name="nav_settings">Ajustes</string>
 
     <string name="today_summary">Resumo</string>

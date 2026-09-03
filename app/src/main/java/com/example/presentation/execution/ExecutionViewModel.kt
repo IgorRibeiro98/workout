@@ -73,6 +73,22 @@ data class ExecutionState(
     val isOrderAdapted: Boolean
         get() = sessionWithDetails?.exercises?.any { it.exerciseSession.executionOrder != it.exerciseSession.plannedOrder } == true
 
+    val nextPendingExercise: ExerciseSessionWithSets?
+        get() {
+            val exercises = sessionWithDetails?.exercises ?: return null
+            if (exercises.isEmpty()) return null
+            val cur = currentExerciseIndex
+            // First search forward from current index
+            val forward = (cur + 1 until exercises.size).asSequence()
+                .map { exercises[it] }
+                .firstOrNull { it.sets.isEmpty() || it.sets.any { s -> !s.completed } }
+            if (forward != null) return forward
+            // Then wrap around to earlier exercises if pending
+            return (0 until cur).asSequence()
+                .map { exercises[it] }
+                .firstOrNull { it.sets.isEmpty() || it.sets.any { s -> !s.completed } }
+        }
+
     val exerciseExecutions: List<WorkoutExerciseExecution>
         get() = sessionWithDetails?.exercises?.mapIndexed { idx, ex ->
             val totalSets = ex.sets.size
@@ -130,6 +146,7 @@ class ExecutionViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     private val _currentExerciseIndex = MutableStateFlow(0)
+    private val _currentExerciseSessionId = MutableStateFlow<Long?>(null)
     
     private val _previousExecutionSets = MutableStateFlow<List<SetLogEntity>>(emptyList())
     private val _exerciseExecutionContext = MutableStateFlow<com.example.domain.workout.execution.ExerciseExecutionContext?>(null)
@@ -169,13 +186,27 @@ class ExecutionViewModel(
                 }
                 if (firstIncomplete >= 0) {
                     _currentExerciseIndex.value = firstIncomplete
+                    _currentExerciseSessionId.value = sessionWithDetails.exercises[firstIncomplete].exerciseSession.id
                 }
                 hasAutoRestoredIndex = true
             }
         }
 
+        val trackedId = _currentExerciseSessionId.value
         val safeIndex = if (sessionWithDetails != null && sessionWithDetails.exercises.isNotEmpty()) {
-            _currentExerciseIndex.value.coerceIn(0, sessionWithDetails.exercises.size - 1)
+            if (trackedId != null) {
+                val foundIdx = sessionWithDetails.exercises.indexOfFirst { it.exerciseSession.id == trackedId }
+                if (foundIdx >= 0) {
+                    if (_currentExerciseIndex.value != foundIdx) {
+                        _currentExerciseIndex.value = foundIdx
+                    }
+                    foundIdx
+                } else {
+                    _currentExerciseIndex.value.coerceIn(0, sessionWithDetails.exercises.size - 1)
+                }
+            } else {
+                _currentExerciseIndex.value.coerceIn(0, sessionWithDetails.exercises.size - 1)
+            }
         } else {
             0
         }
@@ -242,9 +273,10 @@ class ExecutionViewModel(
     }
 
     fun selectExercise(index: Int) {
-        val maxIndex = (state.value.sessionWithDetails?.exercises?.size ?: 1) - 1
-        if (index in 0..maxIndex) {
+        val exercises = state.value.sessionWithDetails?.exercises ?: return
+        if (index in exercises.indices) {
             _currentExerciseIndex.value = index
+            _currentExerciseSessionId.value = exercises[index].exerciseSession.id
         }
     }
 
@@ -299,15 +331,32 @@ class ExecutionViewModel(
     }
 
     fun nextExercise() {
-        val maxIndex = (state.value.sessionWithDetails?.exercises?.size ?: 1) - 1
-        if (_currentExerciseIndex.value < maxIndex) {
-            _currentExerciseIndex.value += 1
+        val exercises = state.value.sessionWithDetails?.exercises ?: return
+        if (exercises.isEmpty()) return
+
+        val cur = _currentExerciseIndex.value
+        // 1. Search forward from cur + 1 for next pending/incomplete exercise
+        val nextPendingIndex = (cur + 1 until exercises.size).firstOrNull { idx ->
+            val ex = exercises[idx]
+            ex.sets.isEmpty() || ex.sets.any { !it.completed }
+        } ?: (0 until cur).firstOrNull { idx ->
+            // 2. Wrap around from beginning if earlier exercises are pending
+            val ex = exercises[idx]
+            ex.sets.isEmpty() || ex.sets.any { !it.completed }
+        } ?: (cur + 1).takeIf { it in exercises.indices } // 3. Fallback to immediate next
+
+        if (nextPendingIndex != null) {
+            _currentExerciseIndex.value = nextPendingIndex
+            _currentExerciseSessionId.value = exercises[nextPendingIndex].exerciseSession.id
         }
     }
 
     fun previousExercise() {
+        val exercises = state.value.sessionWithDetails?.exercises ?: return
         if (_currentExerciseIndex.value > 0) {
-            _currentExerciseIndex.value -= 1
+            val newIdx = _currentExerciseIndex.value - 1
+            _currentExerciseIndex.value = newIdx
+            _currentExerciseSessionId.value = exercises[newIdx].exerciseSession.id
         }
     }
 

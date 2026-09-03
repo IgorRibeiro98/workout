@@ -316,7 +316,7 @@ fun ExecutionScreen(
                     ExecutionPhase.RESTING -> {
                         val isPreparingNext = state.isExerciseCompleted
                         val nextExSession = if (isPreparingNext) {
-                            session.exercises.getOrNull(state.currentExerciseIndex + 1)
+                            state.nextPendingExercise
                         } else {
                             null
                         }
@@ -421,7 +421,7 @@ fun ExecutionScreen(
                         }
                     }
                     ExecutionPhase.EXERCISE_TRANSITION -> {
-                        val nextExSession = session.exercises.getOrNull(state.currentExerciseIndex + 1)
+                        val nextExSession = state.nextPendingExercise
                         val recRest = nextExSession?.exerciseSession?.restDurationSecondsSnapshot
                             ?: currentEx.exerciseSession.restDurationSecondsSnapshot
                             ?: 90
@@ -601,6 +601,7 @@ fun ExecutionScreen(
                     exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
                     previousSets = state.previousExecutionSets,
                     summary = state.exerciseExecutionContext?.summary,
+                    isDurationMode = state.currentResolvedExercise?.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION,
                     onDismiss = { activeSheet = null }
                 )
             }
@@ -869,9 +870,23 @@ fun FocusedActiveSetView(
         currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
         currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
 
+    val isDurationMode = resolvedExercise?.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
+
+    var isLiveTimerRunning by remember(activeSet.id) { mutableStateOf(false) }
+
+    LaunchedEffect(isLiveTimerRunning, activeSet.id) {
+        while (isLiveTimerRunning) {
+            kotlinx.coroutines.delay(1000L)
+            val updated = currentReps + 1
+            currentReps = updated
+            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = updated, rir = currentRir))
+        }
+    }
+
     val actionButtonText = when {
         isLastExercise && activeSetIndex == totalSets - 1 -> "CONCLUIR TREINO"
         activeSetIndex == totalSets - 1 -> "CONCLUIR E IR PARA PRÓXIMO"
+        isDurationMode -> "CONCLUIR SÉRIE (${currentReps}s)"
         else -> "CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
     }
 
@@ -889,8 +904,9 @@ fun FocusedActiveSetView(
             text = {
                 val formattedWeight = if (currentWeight % 1f == 0f) "${currentWeight.toInt()}kg" else "${currentWeight}kg"
                 val rirInfo = if (currentRir != null) " e RIR $currentRir" else ""
+                val repText = if (isDurationMode) "${currentReps}s" else "$currentReps reps"
                 Text(
-                    text = "Deseja sincronizar $formattedWeight, $currentReps reps$rirInfo para as próximas séries deste exercício?",
+                    text = "Deseja sincronizar $formattedWeight, $repText$rirInfo para as próximas séries deste exercício?",
                     color = TextSecondary,
                     fontSize = 14.sp
                 )
@@ -1132,11 +1148,14 @@ fun FocusedActiveSetView(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Reps Wheel Picker
+                    // Reps / Duration Wheel Picker
                     RepWheelPicker(
                         value = currentReps,
-                        minReps = 1,
-                        maxReps = 100,
+                        minReps = if (isDurationMode) 5 else 1,
+                        maxReps = if (isDurationMode) 600 else 100,
+                        step = if (isDurationMode) 5 else 1,
+                        label = if (isDurationMode) "Duração" else "Repetições",
+                        unit = if (isDurationMode) "s" else "reps",
                         hapticEnabled = hapticEnabled,
                         onValueSettled = { newReps ->
                             currentReps = newReps
@@ -1145,10 +1164,10 @@ fun FocusedActiveSetView(
                         onDirectInputRequest = {
                             onOpenDirectInput(
                                 DirectInputConfig(
-                                    title = "Ajustar Repetições",
+                                    title = if (isDurationMode) "Ajustar Duração (s)" else "Ajustar Repetições",
                                     initialValue = currentReps.toString(),
                                     isDecimal = false,
-                                    unitLabel = "reps",
+                                    unitLabel = if (isDurationMode) "s" else "reps",
                                     onConfirm = { newReps ->
                                         val r = newReps.toInt().coerceAtLeast(1)
                                         currentReps = r
@@ -1159,6 +1178,91 @@ fun FocusedActiveSetView(
                         },
                         modifier = Modifier.weight(1f)
                     )
+                }
+
+                // Interactive Duration Stopwatch Bar (quando exercício é baseado em tempo)
+                if (isDurationMode) {
+                    Surface(
+                        color = SurfaceDark,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, if (isLiveTimerRunning) Lime400 else BorderLight),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = if (isLiveTimerRunning) "CRONÔMETRO EM ANDAMENTO" else "TEMPO EXECUTADO",
+                                    color = if (isLiveTimerRunning) Lime400 else TextSecondary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.5.sp
+                                )
+                                Text(
+                                    text = String.format("%02d:%02d", currentReps / 60, currentReps % 60),
+                                    color = TextPrimary,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    onClick = {
+                                        val newR = (currentReps - 5).coerceAtLeast(5)
+                                        currentReps = newR
+                                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
+                                    },
+                                    color = BackgroundDark,
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("-5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                                }
+
+                                Surface(
+                                    onClick = {
+                                        val newR = currentReps + 5
+                                        currentReps = newR
+                                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
+                                    },
+                                    color = BackgroundDark,
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("+5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                                }
+
+                                Button(
+                                    onClick = { isLiveTimerRunning = !isLiveTimerRunning },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isLiveTimerRunning) Color(0xFFFF5252) else Lime400,
+                                        contentColor = BackgroundDark
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isLiveTimerRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isLiveTimerRunning) "Pausar cronômetro" else "Iniciar cronômetro",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isLiveTimerRunning) "Pausar" else "Iniciar",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Effort selector if not compact
@@ -1764,8 +1868,12 @@ fun AllSetsBottomSheet(
                                     }
 
                                     val weightStr = if (setLog.weight % 1f == 0f) "${setLog.weight.toInt()}" else "${setLog.weight}"
+                                    val isDurationMode = exerciseName.lowercase().let {
+                                        it.contains("prancha") || it.contains("plank") || it.contains("isometria") || it.contains("isométrico") || it.contains("wall sit") || it.contains("hang")
+                                    }
+                                    val repUnit = if (isDurationMode) "s" else "reps"
                                     Text(
-                                        text = "${weightStr}kg  ×  ${setLog.repetitions} reps",
+                                        text = "${weightStr}kg  ×  ${setLog.repetitions} $repUnit",
                                         color = TextPrimary,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.Black
@@ -2130,6 +2238,7 @@ fun PreviousExecutionBottomSheet(
     exerciseName: String,
     previousSets: List<SetLogEntity>,
     summary: com.example.domain.workout.execution.ExercisePerformanceSummary? = null,
+    isDurationMode: Boolean = false,
     onDismiss: () -> Unit
 ) {
     AppModalBottomSheet(
@@ -2204,8 +2313,9 @@ fun PreviousExecutionBottomSheet(
                             Text("Série ${setLog.setNumber}", color = TextSecondary, fontSize = 14.sp)
                             val rirTag = RirFormatter.formatEffort(setLog.rir, short = true)
                             val rirSuffix = if (rirTag != null) " · $rirTag" else ""
+                            val repUnit = if (isDurationMode) "s" else "reps"
                             Text(
-                                text = "${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight} kg  ×  ${setLog.repetitions} reps$rirSuffix",
+                                text = "${if (setLog.weight % 1f == 0f) setLog.weight.toInt() else setLog.weight} kg  ×  ${setLog.repetitions} $repUnit$rirSuffix",
                                 color = TextPrimary,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold

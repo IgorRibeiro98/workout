@@ -6,13 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
-import android.media.RingtoneManager
-import android.media.ToneGenerator
 import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
@@ -125,67 +119,6 @@ class WorkoutNotificationManager(private val context: Context) {
         }
     }
     
-    fun showTimerFinishedAlert(
-        exerciseName: String? = null,
-        soundEnabled: Boolean = true,
-        hapticEnabled: Boolean = true
-    ) {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        
-        val title = if (!exerciseName.isNullOrBlank()) "Descanso finalizado: $exerciseName" else "Descanso finalizado!"
-        val notification = NotificationCompat.Builder(context, alertChannelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText("Hora de voltar ao treino.")
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
-            .build()
-
-        notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
-
-        playAlertFeedback(soundEnabled, hapticEnabled)
-    }
-
-    private fun playAlertFeedback(soundEnabled: Boolean, hapticEnabled: Boolean) {
-        if (soundEnabled) {
-            try {
-                val toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
-                toneGen.startTone(ToneGenerator.TONE_PROP_BEEP2, 500)
-            } catch (_: Exception) {
-                try {
-                    val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                    val ringtone = RingtoneManager.getRingtone(context, alertUri)
-                    ringtone?.play()
-                } catch (_: Exception) {}
-            }
-        }
-        if (hapticEnabled) {
-            try {
-                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                    vibratorManager?.defaultVibrator
-                } else {
-                    @Suppress("DEPRECATION")
-                    context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator?.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
-                } else {
-                    @Suppress("DEPRECATION")
-                    vibrator?.vibrate(500)
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
     fun cancelNotification() {
         notificationManager.cancel(NOTIFICATION_ID)
         

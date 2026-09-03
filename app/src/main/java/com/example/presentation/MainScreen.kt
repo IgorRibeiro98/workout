@@ -45,6 +45,7 @@ import com.example.presentation.execution.ExecutionViewModel
 import com.example.presentation.exercises.ExercisesScreen
 import com.example.presentation.history.HistoryScreen
 import com.example.presentation.navigation.Screen
+import com.example.presentation.profile.ProfileScreen
 import com.example.presentation.settings.SettingsScreen
 import com.example.presentation.today.TodayScreen
 import com.example.presentation.workouts.WorkoutsScreen
@@ -92,7 +93,7 @@ fun MainScreen() {
         Screen.Workouts,
         Screen.Exercises,
         Screen.History,
-        Screen.Settings
+        Screen.MyEvolution
     )
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -102,16 +103,17 @@ fun MainScreen() {
     val topLevelDestinationMap = mapOf(
         Screen.Today.route to Screen.Today.route,
         Screen.Summary.route to Screen.Today.route,
+        Screen.Profile.route to Screen.Today.route,
+        Screen.Settings.route to Screen.Today.route,
         Screen.Workouts.route to Screen.Workouts.route,
         Screen.ProgramDetails.route to Screen.Workouts.route,
         Screen.TemplateDetails.route to Screen.Workouts.route,
         Screen.Exercises.route to Screen.Exercises.route,
         Screen.ExerciseDetails.route to Screen.Exercises.route,
         Screen.History.route to Screen.History.route,
-        Screen.Settings.route to Screen.Settings.route,
-        Screen.MyEvolution.route to Screen.Settings.route,
-        Screen.BodyEvolution.route to Screen.Settings.route,
-        Screen.AddBodyMeasurement.route to Screen.Settings.route
+        Screen.MyEvolution.route to Screen.MyEvolution.route,
+        Screen.BodyEvolution.route to Screen.MyEvolution.route,
+        Screen.AddBodyMeasurement.route to Screen.MyEvolution.route
     )
 
     val isRouteSelected = { tabRoute: String ->
@@ -174,6 +176,9 @@ fun MainScreen() {
                     viewModel = todayViewModel,
                     onNavigateToExecution = {
                         navController.navigate(Screen.Execution.route)
+                    },
+                    onNavigateToProfile = {
+                        navController.navigate(Screen.Profile.route)
                     }
                 ) 
             }
@@ -224,8 +229,16 @@ fun MainScreen() {
                 )
             }
             composable(Screen.History.route) { com.example.presentation.history.HistoryScreen(historyViewModel) }
+            composable(Screen.Profile.route) {
+                ProfileScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
+                )
+            }
             composable(Screen.Settings.route) {
                 SettingsScreen(
+                    onNavigateBack = { navController.popBackStack() },
                     onNavigateToMyEvolution = {
                         navController.navigate(Screen.MyEvolution.route)
                     },

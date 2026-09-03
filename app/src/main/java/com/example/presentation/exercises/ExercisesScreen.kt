@@ -37,25 +37,57 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
     var showFilterSheet by remember { mutableStateOf(false) }
     
     var searchQuery by remember { mutableStateOf("") }
+    var selectedRegion by remember { mutableStateOf("Todas") }
     var selectedMuscle by remember { mutableStateOf("Todos") }
     var selectedEquipment by remember { mutableStateOf("Todos") }
+    var selectedMode by remember { mutableStateOf("Todos") }
     
+    val allRegions = listOf("Todas", "Superiores", "Inferiores", "Core")
     val allMuscles = listOf("Todos", "Peitoral", "Costas", "Quadríceps", "Posterior", "Glúteos", "Panturrilha", "Bíceps", "Tríceps", "Ombros", "Abdômen", "Antebraço", "Trapézio")
     val allEquipments = listOf("Todos", "Barra", "Halteres", "Máquina", "Anilha", "Cabo", "Peso Corporal", "Kettlebell")
+    val allModes = listOf("Todos", "Repetições", "Tempo / Isometria")
 
-    val activeFiltersCount = (if (selectedMuscle != "Todos") 1 else 0) + (if (selectedEquipment != "Todos") 1 else 0)
+    fun getMuscleRegion(muscle: String?): String {
+        val norm = MuscleNormalizer.normalize(muscle).lowercase()
+        return when {
+            norm.contains("peitoral") || norm.contains("costas") || norm.contains("bíceps") ||
+            norm.contains("tríceps") || norm.contains("ombros") || norm.contains("antebraço") ||
+            norm.contains("trapézio") -> "Superiores"
+            norm.contains("quadríceps") || norm.contains("posterior") || norm.contains("glúteo") ||
+            norm.contains("panturrilha") -> "Inferiores"
+            norm.contains("abdômen") || norm.contains("core") || norm.contains("lombar") -> "Core"
+            else -> "Superiores"
+        }
+    }
+
+    val activeFiltersCount = (if (selectedRegion != "Todas") 1 else 0) +
+            (if (selectedMuscle != "Todos") 1 else 0) +
+            (if (selectedEquipment != "Todos") 1 else 0) +
+            (if (selectedMode != "Todos") 1 else 0)
 
     val filteredExercises = exercises.filter {
         val search = searchQuery.trim().lowercase()
         val searchInEn = it.nameEn?.lowercase()?.contains(search) == true
         val searchInMuscle = it.primaryMuscle?.lowercase()?.contains(search) == true || it.secondaryMuscles.any { m -> m.lowercase().contains(search) }
         val searchInEq = it.equipment?.lowercase()?.contains(search) == true
-        val matchesSearch = search.isEmpty() || it.displayName.lowercase().contains(search) || (it.rawExercise.aliases?.lowercase()?.contains(search) == true) || searchInEn || searchInMuscle || searchInEq
+        val searchInPattern = it.movementPattern?.lowercase()?.contains(search) == true
+        val searchInNotes = it.notes?.lowercase()?.contains(search) == true
+        val matchesSearch = search.isEmpty() ||
+                it.displayName.lowercase().contains(search) ||
+                (it.rawExercise.aliases?.lowercase()?.contains(search) == true) ||
+                searchInEn || searchInMuscle || searchInEq || searchInPattern || searchInNotes
         
+        val matchesRegion = selectedRegion == "Todas" || getMuscleRegion(it.primaryMuscle) == selectedRegion
         val matchesMuscle = selectedMuscle == "Todos" || MuscleNormalizer.normalize(it.primaryMuscle).contains(selectedMuscle, ignoreCase = true)
         val matchesEquipment = selectedEquipment == "Todos" || it.equipment?.contains(selectedEquipment, ignoreCase = true) == true
+        val isDuration = it.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
+        val matchesMode = when (selectedMode) {
+            "Repetições" -> !isDuration
+            "Tempo / Isometria" -> isDuration
+            else -> true
+        }
         
-        matchesSearch && matchesMuscle && matchesEquipment
+        matchesSearch && matchesRegion && matchesMuscle && matchesEquipment && matchesMode
     }
 
     if (showFilterSheet || showAddSheet) {
@@ -171,10 +203,13 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Nenhum exercício encontrado.", color = TextSecondary, fontSize = 15.sp)
-                        if (activeFiltersCount > 0 || selectedMuscle != "Todos") {
+                        if (activeFiltersCount > 0 || searchQuery.isNotEmpty()) {
                             TextButton(onClick = {
+                                searchQuery = ""
+                                selectedRegion = "Todas"
                                 selectedMuscle = "Todos"
                                 selectedEquipment = "Todos"
+                                selectedMode = "Todos"
                             }) {
                                 Text(stringResource(id = R.string.sheet_action_clear_filters), color = Lime400, fontWeight = FontWeight.Bold)
                             }
@@ -254,17 +289,23 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
 
     // Filter Exercises Bottom Sheet
     if (showFilterSheet) {
+        var tempRegion by remember { mutableStateOf(selectedRegion) }
         var tempMuscle by remember { mutableStateOf(selectedMuscle) }
         var tempEquipment by remember { mutableStateOf(selectedEquipment) }
+        var tempMode by remember { mutableStateOf(selectedMode) }
+
+        val hasAnyFilter = tempRegion != "Todas" || tempMuscle != "Todos" || tempEquipment != "Todos" || tempMode != "Todos"
 
         AppModalBottomSheet(
             onDismissRequest = { showFilterSheet = false },
             title = stringResource(id = R.string.sheet_filter_exercises_title),
             headerRightContent = {
-                if (tempMuscle != "Todos" || tempEquipment != "Todos") {
+                if (hasAnyFilter) {
                     TextButton(onClick = {
+                        tempRegion = "Todas"
                         tempMuscle = "Todos"
                         tempEquipment = "Todos"
+                        tempMode = "Todos"
                     }) {
                         Text(stringResource(id = R.string.sheet_action_clear_filters), color = Red500, fontSize = 13.sp)
                     }
@@ -272,6 +313,29 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
             }
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // 1. Região Corporal
+                Text("Região Corporal", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(allRegions) { region ->
+                        val isSelected = region == tempRegion
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) Lime400 else SurfaceHighlight)
+                                .clickable { tempRegion = region }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = region,
+                                color = if (isSelected) BackgroundDark else TextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
+                // 2. Grupo Muscular
                 Text("Grupo Muscular", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(allMuscles) { muscle ->
@@ -293,6 +357,7 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                     }
                 }
 
+                // 3. Equipamento
                 Text("Equipamento", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(allEquipments) { equipment ->
@@ -314,12 +379,36 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                     }
                 }
 
+                // 4. Modo de Execução
+                Text("Modo de Execução", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(allModes) { mode ->
+                        val isSelected = mode == tempMode
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) Lime400 else SurfaceHighlight)
+                                .clickable { tempMode = mode }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = mode,
+                                color = if (isSelected) BackgroundDark else TextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = {
+                        selectedRegion = tempRegion
                         selectedMuscle = tempMuscle
                         selectedEquipment = tempEquipment
+                        selectedMode = tempMode
                         showFilterSheet = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),

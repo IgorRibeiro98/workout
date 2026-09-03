@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.res.stringResource
+import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
@@ -23,6 +24,7 @@ import com.example.R
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import com.example.ui.components.AppModalBottomSheet
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -172,10 +174,11 @@ fun ExerciseDetailsScreen(
                 )
             }
             
-            // PREMIUM CONTENT
+            // PREMIUM CONTENT & SECONDARY DETAILS (Progressive Disclosure)
             if (premiumInfo != null) {
                 val premium = premiumInfo!!
                 
+                // Primary: Execution guide is immediately visible
                 if (premium.execution != null) {
                     item {
                         ExerciseExecutionCard(
@@ -185,46 +188,112 @@ fun ExerciseDetailsScreen(
                         )
                     }
                 }
-                
-                if (premium.education != null) {
-                    if (!premium.education.tips.isNullOrEmpty()) {
-                        item { ExerciseTipsCard(premium.education.tips) }
-                    }
-                    if (!premium.education.commonMistakes.isNullOrEmpty()) {
-                        item { ExerciseMistakesCard(premium.education.commonMistakes) }
-                    }
-                }
-                
-                if (premium.progression != null) {
+
+                // Secondary details: Hidden behind progressive disclosure
+                val hasSecondaryDetails = premium.education != null || premium.progression != null ||
+                        premium.substitution != null || premium.safety != null
+
+                if (hasSecondaryDetails) {
                     item {
-                        ExerciseProgressionCard(
-                            method = premium.progression.progressionMethod,
-                            repRange = premium.progression.repRange,
-                            rule = premium.progression.increaseRule,
-                            sets = premium.progression.standardSets,
-                            incUpper = premium.progression.incrementUpper,
-                            incLower = premium.progression.incrementLower
-                        )
-                    }
-                }
-                
-                if (premium.substitution != null) {
-                    item {
-                        ExerciseSubstitutionCard(
-                            sameMovement = premium.substitution.sameMovement,
-                            sameMuscle = premium.substitution.sameMuscle,
-                            notRecommended = premium.substitution.notRecommended
-                        )
-                    }
-                }
-                
-                if (premium.safety != null) {
-                    item {
-                        ExerciseSafetyCard(
-                            riskLevel = premium.safety.riskLevel,
-                            attentionPointsJson = premium.safety.attentionPoints,
-                            discomfortsJson = premium.safety.commonDiscomforts
-                        )
+                        var showSecondaryDetails by remember { mutableStateOf(false) }
+
+                        Surface(
+                            color = SurfaceDark,
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, BorderLight),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { showSecondaryDetails = !showSecondaryDetails }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Lime400,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "Dicas, Biomecânica e Segurança",
+                                            color = TextPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (showSecondaryDetails) "Toque para recolher" else "Toque para ver detalhes aprofundados",
+                                            color = TextSecondary,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+
+                                Icon(
+                                    imageVector = if (showSecondaryDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = if (showSecondaryDetails) "Recolher" else "Expandir",
+                                    tint = Lime400
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(
+                            visible = showSecondaryDetails,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                if (premium.education != null) {
+                                    if (!premium.education.tips.isNullOrEmpty()) {
+                                        ExerciseTipsCard(premium.education.tips)
+                                    }
+                                    if (!premium.education.commonMistakes.isNullOrEmpty()) {
+                                        ExerciseMistakesCard(premium.education.commonMistakes)
+                                    }
+                                }
+                                
+                                if (premium.progression != null) {
+                                    ExerciseProgressionCard(
+                                        method = premium.progression.progressionMethod,
+                                        repRange = premium.progression.repRange,
+                                        rule = premium.progression.increaseRule,
+                                        sets = premium.progression.standardSets,
+                                        incUpper = premium.progression.incrementUpper,
+                                        incLower = premium.progression.incrementLower
+                                    )
+                                }
+                                
+                                if (premium.substitution != null) {
+                                    ExerciseSubstitutionCard(
+                                        sameMovement = premium.substitution.sameMovement,
+                                        sameMuscle = premium.substitution.sameMuscle,
+                                        notRecommended = premium.substitution.notRecommended
+                                    )
+                                }
+                                
+                                if (premium.safety != null) {
+                                    ExerciseSafetyCard(
+                                        riskLevel = premium.safety.riskLevel,
+                                        attentionPointsJson = premium.safety.attentionPoints,
+                                        discomfortsJson = premium.safety.commonDiscomforts
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

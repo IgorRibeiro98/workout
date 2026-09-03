@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.FileDownload
@@ -76,6 +77,7 @@ private sealed class SettingsSheetType {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
+    onNavigateBack: () -> Unit = {},
     onNavigateToMyEvolution: () -> Unit = {},
     onNavigateToBodyEvolution: () -> Unit = {}
 ) {
@@ -163,135 +165,40 @@ fun SettingsScreen(
         }
     }
     
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(com.example.ui.theme.BackgroundDark)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
-    ) {
-        Text("Perfil & Evolução", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Surface(
-            color = SurfaceDark,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, BorderLight),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("nav_my_evolution_item")
-                .clickable { onNavigateToMyEvolution() }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(LimeTransparent),
-                        contentAlignment = Alignment.Center
-                    ) {
+    Scaffold(
+        containerColor = BackgroundDark,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Configurações",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
                         Icon(
-                            imageVector = Icons.Default.TrendingUp,
-                            contentDescription = null,
-                            tint = Lime400,
-                            modifier = Modifier.size(22.dp)
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Voltar",
+                            tint = TextPrimary
                         )
                     }
-                    Column {
-                        Text(
-                            text = "Minha Evolução",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            text = "Resumo do seu progresso, consistência e performance",
-                            color = TextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
+            )
         }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Surface(
-            color = SurfaceDark,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, BorderLight),
+    ) { innerPadding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .testTag("nav_body_evolution_item")
-                .clickable { onNavigateToBodyEvolution() }
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(BackgroundDark)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(LimeTransparent),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Straighten,
-                            contentDescription = null,
-                            tint = Lime400,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = "Evolução corporal",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            text = "Acompanhar peso, medidas e progresso",
-                            color = TextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(28.dp))
-
-        Text("Treino", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text("Treino", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(12.dp))
         
         SettingsValueItem(
@@ -874,6 +781,7 @@ fun SettingsScreen(
             containerColor = SurfaceDark,
             shape = RoundedCornerShape(16.dp)
         )
+    }
     }
 }
 

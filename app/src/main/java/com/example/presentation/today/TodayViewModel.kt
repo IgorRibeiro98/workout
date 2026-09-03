@@ -227,6 +227,12 @@ class TodayViewModel(
         }
     }
 
+    fun updateWeeklyGoal(newGoal: Int) {
+        viewModelScope.launch {
+            settingsManager.setWeeklyGoal(newGoal)
+        }
+    }
+
     private fun getStartOfWeekTimestamp(): Long {
         val cal = Calendar.getInstance()
         cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)

@@ -42,12 +42,20 @@ class RestTimerNotificationManager(private val context: Context) {
         }
     }
 
+    @Synchronized
     fun onTimerFinished(
         exerciseName: String? = null,
         soundEnabled: Boolean = true,
         hapticEnabled: Boolean = true,
         notificationEnabled: Boolean = true
     ) {
+        val now = System.currentTimeMillis()
+        if (now - lastAlertTimestampMs < MIN_ALERT_INTERVAL_MS) {
+            // Debounce duplicate invocations from concurrent triggers
+            return
+        }
+        lastAlertTimestampMs = now
+
         if (notificationEnabled) {
             showFinishedNotification(exerciseName)
         }
@@ -123,5 +131,8 @@ class RestTimerNotificationManager(private val context: Context) {
 
     companion object {
         const val ALERT_NOTIFICATION_ID = 1002
+        @Volatile
+        private var lastAlertTimestampMs: Long = 0L
+        private const val MIN_ALERT_INTERVAL_MS = 3000L
     }
 }
