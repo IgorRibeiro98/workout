@@ -87,7 +87,9 @@ class RestTimerAlertAuthority(private val context: Context) {
         soundEnabled: Boolean = true,
         hapticEnabled: Boolean = true,
         notificationEnabled: Boolean = true,
-        source: String = "UNKNOWN"
+        source: String = "UNKNOWN",
+        title: String? = null,
+        message: String? = null
     ): Boolean {
         val now = System.currentTimeMillis()
         val lastTimestamp = lastAlertTimestampMs.get()
@@ -110,7 +112,7 @@ class RestTimerAlertAuthority(private val context: Context) {
 
         // 3. Show notification if enabled
         if (notificationEnabled) {
-            showNotification(exerciseName)
+            showNotification(exerciseName, title, message)
         }
 
         return true
@@ -227,7 +229,7 @@ class RestTimerAlertAuthority(private val context: Context) {
         }
     }
 
-    private fun showNotification(exerciseName: String?) {
+    private fun showNotification(exerciseName: String?, title: String? = null, message: String? = null) {
         try {
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -237,11 +239,12 @@ class RestTimerAlertAuthority(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            val title = if (!exerciseName.isNullOrBlank()) "Descanso finalizado: $exerciseName" else "Descanso finalizado!"
+            val resolvedTitle = title
+                ?: if (!exerciseName.isNullOrBlank()) "Descanso finalizado: $exerciseName" else "Descanso finalizado!"
             val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle(title)
-                .setContentText("Hora de voltar ao treino.")
+                .setContentTitle(resolvedTitle)
+                .setContentText(message ?: "Hora de voltar ao treino.")
                 .setContentIntent(pendingIntent)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_ALARM)

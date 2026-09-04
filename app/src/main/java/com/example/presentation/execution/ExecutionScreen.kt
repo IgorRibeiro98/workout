@@ -883,21 +883,55 @@ fun FocusedActiveSetView(
 
     val isDurationMode = resolvedExercise?.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
 
+    // Em exercícios por tempo a roda define a META e o cronômetro conta do zero até ela.
     var isLiveTimerRunning by remember(activeSet.id) { mutableStateOf(false) }
+    var elapsedSeconds by remember(activeSet.id) { mutableIntStateOf(0) }
+    var timerFinished by remember(activeSet.id) { mutableStateOf(false) }
+
+    val timerContext = androidx.compose.ui.platform.LocalContext.current
+    val timerSettingsManager = remember { (timerContext.applicationContext as com.example.MainApplication).settingsManager }
+    val soundEnabled by timerSettingsManager.soundEnabledFlow.collectAsState(initial = true)
+    val timerNotificationEnabled by timerSettingsManager.timerNotificationEnabledFlow.collectAsState(initial = true)
+    val timerHaptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(isLiveTimerRunning, activeSet.id) {
-        while (isLiveTimerRunning) {
-            kotlinx.coroutines.delay(1000L)
-            val updated = currentReps + 1
-            currentReps = updated
-            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = updated, rir = currentRir))
+        if (!isLiveTimerRunning) return@LaunchedEffect
+        // O relógio de parede é a referência: o cronômetro não perde tempo em recomposições
+        // nem quando a tela fica sem atualizar, e uma pausa retoma exatamente de onde parou.
+        val anchorMs = System.currentTimeMillis() - elapsedSeconds * 1000L
+        while (true) {
+            val goal = currentReps
+            val secondsSoFar = ((System.currentTimeMillis() - anchorMs) / 1000L).toInt()
+            if (secondsSoFar >= goal) {
+                elapsedSeconds = goal
+                isLiveTimerRunning = false
+                timerFinished = true
+                if (hapticEnabled) {
+                    timerHaptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                }
+                com.example.service.RestTimerAlertAuthority.getInstance(timerContext).notifyTimerFinished(
+                    exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                    soundEnabled = soundEnabled,
+                    hapticEnabled = hapticEnabled,
+                    notificationEnabled = timerNotificationEnabled,
+                    source = "DurationSetTimer",
+                    title = "Tempo concluído: ${currentEx.exerciseSession.exerciseNameSnapshot}",
+                    message = "Você completou ${goal}s. Conclua a série."
+                )
+                break
+            }
+            elapsedSeconds = secondsSoFar
+            kotlinx.coroutines.delay(200L)
         }
     }
+
+    // O tempo registrado é o executado; sem cronômetro, vale a meta da roda.
+    val recordedDurationValue = if (elapsedSeconds > 0) elapsedSeconds else currentReps
 
     val actionButtonText = when {
         isLastExercise && activeSetIndex == totalSets - 1 -> "CONCLUIR TREINO"
         activeSetIndex == totalSets - 1 -> "CONCLUIR E IR PARA PRÓXIMO"
-        isDurationMode -> "CONCLUIR SÉRIE (${currentReps}s)"
+        isDurationMode -> "CONCLUIR SÉRIE (${recordedDurationValue}s)"
         else -> "CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
     }
 
@@ -1159,29 +1193,31 @@ fun FocusedActiveSetView(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Reps / Duration Wheel Picker
+                    // Reps / Duration Wheel Picker (em tempo, a roda define a meta)
                     RepWheelPicker(
                         value = currentReps,
                         minReps = if (isDurationMode) 5 else 1,
                         maxReps = if (isDurationMode) 600 else 100,
                         step = if (isDurationMode) 5 else 1,
-                        label = if (isDurationMode) "Duração" else "Repetições",
+                        label = if (isDurationMode) "Meta" else "Repetições",
                         unit = if (isDurationMode) "s" else "reps",
                         hapticEnabled = hapticEnabled,
                         onValueSettled = { newReps ->
                             currentReps = newReps
+                            if (newReps > elapsedSeconds) timerFinished = false
                             onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newReps, rir = currentRir))
                         },
                         onDirectInputRequest = {
                             onOpenDirectInput(
                                 DirectInputConfig(
-                                    title = if (isDurationMode) "Ajustar Duração (s)" else "Ajustar Repetições",
+                                    title = if (isDurationMode) "Ajustar Meta de Tempo (s)" else "Ajustar Repetições",
                                     initialValue = currentReps.toString(),
                                     isDecimal = false,
                                     unitLabel = if (isDurationMode) "s" else "reps",
                                     onConfirm = { newReps ->
                                         val r = newReps.toInt().coerceAtLeast(1)
                                         currentReps = r
+                                        if (r > elapsedSeconds) timerFinished = false
                                         onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = r, rir = currentRir))
                                     }
                                 )
@@ -1191,87 +1227,139 @@ fun FocusedActiveSetView(
                     )
                 }
 
-                // Interactive Duration Stopwatch Bar (quando exercício é baseado em tempo)
+                // Countdown-to-goal bar: a roda define a meta, este contador sobe do zero até ela.
                 if (isDurationMode) {
+                    val goalSeconds = currentReps.coerceAtLeast(1)
+                    val timerAccent = if (timerFinished || isLiveTimerRunning) Lime400 else BorderLight
                     Surface(
                         color = SurfaceDark,
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, if (isLiveTimerRunning) Lime400 else BorderLight),
+                        border = BorderStroke(1.dp, timerAccent),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
-                            Column {
-                                Text(
-                                    text = if (isLiveTimerRunning) "CRONÔMETRO EM ANDAMENTO" else "TEMPO EXECUTADO",
-                                    color = if (isLiveTimerRunning) Lime400 else TextSecondary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.5.sp
-                                )
-                                Text(
-                                    text = String.format("%02d:%02d", currentReps / 60, currentReps % 60),
-                                    color = TextPrimary,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                            }
-
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Surface(
-                                    onClick = {
-                                        val newR = (currentReps - 5).coerceAtLeast(5)
-                                        currentReps = newR
-                                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
-                                    },
-                                    color = BackgroundDark,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text("-5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-                                }
-
-                                Surface(
-                                    onClick = {
-                                        val newR = currentReps + 5
-                                        currentReps = newR
-                                        onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
-                                    },
-                                    color = BackgroundDark,
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text("+5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-                                }
-
-                                Button(
-                                    onClick = { isLiveTimerRunning = !isLiveTimerRunning },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isLiveTimerRunning) Color(0xFFFF5252) else Lime400,
-                                        contentColor = BackgroundDark
-                                    ),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isLiveTimerRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                        contentDescription = if (isLiveTimerRunning) "Pausar cronômetro" else "Iniciar cronômetro",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                Column {
                                     Text(
-                                        text = if (isLiveTimerRunning) "Pausar" else "Iniciar",
+                                        text = when {
+                                            timerFinished -> "TEMPO CONCLUÍDO!"
+                                            isLiveTimerRunning -> "CRONÔMETRO EM ANDAMENTO"
+                                            else -> "TEMPO EXECUTADO"
+                                        },
+                                        color = if (timerFinished || isLiveTimerRunning) Lime400 else TextSecondary,
+                                        fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp
+                                        letterSpacing = 0.5.sp
                                     )
+                                    Row(verticalAlignment = Alignment.Bottom) {
+                                        Text(
+                                            text = String.format("%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60),
+                                            color = TextPrimary,
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Black
+                                        )
+                                        Text(
+                                            text = String.format(" / %02d:%02d", goalSeconds / 60, goalSeconds % 60),
+                                            color = TextSecondary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(start = 2.dp, bottom = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        onClick = {
+                                            val newR = (currentReps - 5).coerceAtLeast(5)
+                                            currentReps = newR
+                                            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
+                                        },
+                                        color = BackgroundDark,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("-5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                                    }
+
+                                    Surface(
+                                        onClick = {
+                                            val newR = currentReps + 5
+                                            currentReps = newR
+                                            timerFinished = false
+                                            onUpdateSet(activeSet.copy(weight = currentWeight, repetitions = newR, rir = currentRir))
+                                        },
+                                        color = BackgroundDark,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("+5s", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            when {
+                                                isLiveTimerRunning -> isLiveTimerRunning = false
+                                                timerFinished -> {
+                                                    elapsedSeconds = 0
+                                                    timerFinished = false
+                                                    isLiveTimerRunning = true
+                                                }
+                                                else -> isLiveTimerRunning = true
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isLiveTimerRunning) Color(0xFFFF5252) else Lime400,
+                                            contentColor = BackgroundDark
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        val timerActionLabel = when {
+                                            isLiveTimerRunning -> "Pausar"
+                                            timerFinished -> "Reiniciar"
+                                            elapsedSeconds > 0 -> "Retomar"
+                                            else -> "Iniciar"
+                                        }
+                                        Icon(
+                                            imageVector = when {
+                                                isLiveTimerRunning -> Icons.Default.Pause
+                                                timerFinished -> Icons.Default.Refresh
+                                                else -> Icons.Default.PlayArrow
+                                            },
+                                            contentDescription = "$timerActionLabel cronômetro",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = timerActionLabel,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            LinearProgressIndicator(
+                                progress = { (elapsedSeconds.toFloat() / goalSeconds).coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = Lime400,
+                                trackColor = BackgroundDark
+                            )
                         }
                     }
                 }
@@ -1291,7 +1379,7 @@ fun FocusedActiveSetView(
                 // Action Button (with contextual copy)
                 WorkoutActionButton(
                     onClick = {
-                        onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = currentReps, rir = currentRir))
+                        onCompleteSet(activeSet.copy(weight = currentWeight, repetitions = if (isDurationMode) recordedDurationValue else currentReps, rir = currentRir))
                     },
                     text = actionButtonText,
                     hapticEnabled = hapticEnabled
