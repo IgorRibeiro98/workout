@@ -126,9 +126,20 @@ class MainApplication : Application(), ImageLoaderFactory {
             
             try {
                 val reconciler = com.example.domain.gamification.XpReconciler(
-                    xpTransactionRepository,
-                    gamificationEventRepository,
-                    settingsManager
+                    xpTransactionRepository = xpTransactionRepository,
+                    eventRepository = gamificationEventRepository,
+                    xpCalculatorService = xpCalculatorService,
+                    xpPolicyVersionProvider = { settingsManager.xpPolicyVersionFlow.first() },
+                    xpPolicyVersionWriter = { settingsManager.setXpPolicyVersion(it) },
+                    firstCompletedWorkoutProvider = {
+                        // Histórico canônico de treinos: o evento só é recriado com prova real.
+                        database.workoutDao().getFirstCompletedSession()?.let { session ->
+                            com.example.domain.gamification.CompletedWorkoutReference(
+                                sessionId = session.id,
+                                completedAt = session.finishedAt ?: session.startedAt
+                            )
+                        }
+                    }
                 )
                 reconciler.reconcile()
 

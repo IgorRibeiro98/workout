@@ -27,6 +27,7 @@ import java.time.ZoneId
 import com.example.domain.gamification.XpCalculatorService
 import com.example.domain.gamification.model.UserProgress
 import com.example.domain.gamification.model.XpTransaction
+import com.example.domain.gamification.repository.XpTransactionOrigin
 import com.example.domain.gamification.repository.XpTransactionRepository
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,11 +44,14 @@ class GamificationEventFoundationTest {
     private val zone: ZoneId = ZoneId.of("UTC")
 
     private class DummyXpTransactionRepository : XpTransactionRepository {
-        override suspend fun saveTransaction(transaction: XpTransaction): Boolean = true
+        override suspend fun saveTransaction(
+            transaction: XpTransaction,
+            origin: XpTransactionOrigin
+        ): Boolean = true
         override suspend fun hasTransactionForEvent(eventId: String): Boolean = false
         override fun getTransactions(): Flow<List<XpTransaction>> = emptyFlow()
         override fun getUserProgress(): Flow<UserProgress> = emptyFlow()
-        override suspend fun deleteAllTransactions() {}
+        override suspend fun replaceAllTransactions(transactions: List<XpTransaction>) {}
         override val newTransactions: SharedFlow<XpTransaction> = MutableSharedFlow()
     }
 

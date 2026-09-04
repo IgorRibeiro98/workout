@@ -146,6 +146,20 @@ interface WorkoutDao {
     """)
     suspend fun getCompletedSessionTimestamps(): List<Long>
 
+    /**
+     * Primeira sessão realmente concluída: prova histórica de qual treino foi o primeiro.
+     *
+     * O desempate por `id` mantém o resultado estável quando duas sessões terminam no mesmo
+     * instante registrado.
+     */
+    @Query("""
+        SELECT * FROM workout_sessions
+        WHERE status = 'COMPLETED'
+        ORDER BY COALESCE(finishedAt, startedAt) ASC, id ASC
+        LIMIT 1
+    """)
+    suspend fun getFirstCompletedSession(): WorkoutSessionEntity?
+
     @Query("SELECT * FROM workout_sessions WHERE status = 'IN_PROGRESS' ORDER BY startedAt DESC LIMIT 1")
     fun getActiveSessionFlow(): Flow<WorkoutSessionEntity?>
 

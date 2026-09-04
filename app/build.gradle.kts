@@ -17,6 +17,14 @@ android {
             isIncludeAndroidResources = true
         }
     }
+    // Fonte canônica dos schemas do Room: `app/schemas`, gerada pelo KSP e versionada no Git.
+    // Nada é copiado para `build/intermediates`, `src/main/assets` ou `src/test/assets`.
+    //
+    // `MigrationTestHelper` lê os schemas pelo AssetManager. Nos testes locais (Robolectric) o AGP
+    // aponta `android_merged_assets` para os assets mesclados da variante testada, então apenas a
+    // entrada de `debug` faz o teste de migração encontrar os arquivos — assets dos source sets de
+    // teste não são lidos nesse caminho. Sem ela, `AppDatabaseMigrationTest` falha com
+    // "Cannot find the schema file in the assets folder". A variante de release não os recebe.
     sourceSets {
         getByName("androidTest") {
             assets.directories.add("$projectDir/schemas")

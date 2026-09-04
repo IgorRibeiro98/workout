@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Testes unitários e build de debug
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Permitir execução do Gradle Wrapper
+        run: chmod +x ./gradlew
+
+      - name: Testes unitários (debug)
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build de debug
+        run: ./gradlew :app:assembleDebug --stacktrace
