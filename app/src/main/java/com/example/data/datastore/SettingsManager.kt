@@ -43,6 +43,15 @@ class SettingsManager(private val context: Context) {
         val LAST_SYNC_STATUS = stringPreferencesKey("last_sync_status")
         val TIMER_NOTIFICATION_ENABLED = booleanPreferencesKey("timer_notification_enabled")
         val EXERCISE_DB_V2_API_KEY = stringPreferencesKey("exercise_db_v2_api_key")
+        val XP_POLICY_VERSION = intPreferencesKey("xp_policy_version")
+    }
+
+    val xpPolicyVersionFlow: Flow<Int> = context.dataStore.data.map { it[XP_POLICY_VERSION] ?: 0 }
+
+    suspend fun setXpPolicyVersion(version: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[XP_POLICY_VERSION] = version
+        }
     }
 
     val mediaProviderSettingsFlow: Flow<MediaProviderSettings> = context.dataStore.data.map { prefs ->

@@ -19,4 +19,7 @@ interface XpTransactionDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM xp_transactions WHERE eventId = :eventId)")
     suspend fun hasTransactionForEvent(eventId: String): Boolean
+
+    @Query("DELETE FROM xp_transactions")
+    suspend fun deleteAllTransactions()
 }

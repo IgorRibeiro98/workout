@@ -22,6 +22,14 @@ import org.junit.Test
 import java.time.LocalDate
 import java.time.ZoneId
 
+import com.example.domain.gamification.XpCalculatorService
+import com.example.domain.gamification.model.UserProgress
+import com.example.domain.gamification.model.XpTransaction
+import com.example.domain.gamification.repository.XpTransactionRepository
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.emptyFlow
+
 /**
  * T13.0 — Fundação do Sistema de Gamificação e Eventos.
  *
@@ -31,6 +39,15 @@ import java.time.ZoneId
 class GamificationEventFoundationTest {
 
     private val zone: ZoneId = ZoneId.of("UTC")
+
+    private class DummyXpTransactionRepository : XpTransactionRepository {
+        override suspend fun saveTransaction(transaction: XpTransaction): Boolean = true
+        override suspend fun hasTransactionForEvent(eventId: String): Boolean = false
+        override fun getTransactions(): Flow<List<XpTransaction>> = emptyFlow()
+        override fun getUserProgress(): Flow<UserProgress> = emptyFlow()
+        override suspend fun deleteAllTransactions() {}
+        override val newTransactions: SharedFlow<XpTransaction> = MutableSharedFlow()
+    }
 
     /**
      * Repositório em memória que reproduz o contrato do Room: `dedupeKey` é único e os eventos são
@@ -68,6 +85,7 @@ class GamificationEventFoundationTest {
         weeklyGoal: Int = 3
     ) = GamificationEventRecorder(
         repository = repository,
+        xpCalculatorService = XpCalculatorService(DummyXpTransactionRepository()),
         workoutTimestampsProvider = { workoutTimestamps },
         weeklyGoalProvider = { weeklyGoal },
         zoneId = zone

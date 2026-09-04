@@ -52,6 +52,19 @@ object GamificationEvents {
         }
     )
 
+    fun firstWorkoutCompleted(
+        sessionId: Long,
+        timestamp: Long
+    ): GamificationEvent = GamificationEvent(
+        type = GamificationEventType.FIRST_WORKOUT_COMPLETED,
+        timestamp = timestamp,
+        source = GamificationEventSource.WORKOUT_ENGINE,
+        dedupeKey = "first_workout_completed",
+        metadata = mapOf(
+            GamificationEventMetadata.SESSION_ID to sessionId.toString()
+        )
+    )
+
     fun exerciseCompleted(
         exerciseSessionId: Long,
         exerciseId: Long,

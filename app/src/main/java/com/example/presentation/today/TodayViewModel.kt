@@ -62,6 +62,8 @@ class TodayViewModel(
 
     private val _state = MutableStateFlow(TodayState())
     val state: StateFlow<TodayState> = _state.asStateFlow()
+    
+    val xpGainFlow = xpTransactionRepository?.newTransactions
 
     init {
         loadTodayData()

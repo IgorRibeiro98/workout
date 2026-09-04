@@ -741,6 +741,17 @@ class WorkoutEngine(
                 durationSeconds = ((finishedAt - session.startedAt) / 1000).coerceAtLeast(0)
             )
         )
+        
+        val workoutExecutionCount = runCatching { dao.getCompletedSessionTimestamps().size }.getOrDefault(0)
+        // Note: the current session is already COMPLETED here. So if it's 1, it's the very first.
+        if (workoutExecutionCount <= 1) {
+            publishEvent(
+                GamificationEvents.firstWorkoutCompleted(
+                    sessionId = session.id,
+                    timestamp = finishedAt
+                )
+            )
+        }
     }
 
     /** A gamificação nunca pode interromper o treino: falhas ao publicar são contidas aqui. */

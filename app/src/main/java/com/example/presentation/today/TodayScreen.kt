@@ -36,6 +36,8 @@ import java.util.Date
 import java.util.Locale
 
 import com.example.presentation.gamification.components.XpProgressBar
+import com.example.presentation.gamification.components.XpGainAnimation
+import com.example.domain.gamification.model.XpTransaction
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +55,14 @@ fun TodayScreen(
     var showFinishDialog by remember { mutableStateOf(false) }
     var isFinishing by remember { mutableStateOf(false) }
     var showWeeklyGoalSheet by remember { mutableStateOf(false) }
+    
+    val activeXpGains = remember { mutableStateListOf<XpTransaction>() }
+
+    LaunchedEffect(viewModel.xpGainFlow) {
+        viewModel.xpGainFlow?.collect { transaction ->
+            activeXpGains.add(transaction)
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -503,6 +513,28 @@ fun TodayScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 16.dp)
         )
+
+        // Floating XP gains overlay
+        if (activeXpGains.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 80.dp, end = 24.dp),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    activeXpGains.forEach { gain ->
+                        XpGainAnimation(
+                            amount = gain.amount,
+                            reason = gain.reason,
+                            onAnimationEnd = {
+                                activeXpGains.remove(gain)
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 
     if (showFinishDialog && state.activeSession != null) {

@@ -105,6 +105,17 @@ class MainApplication : Application(), ImageLoaderFactory {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val reconciler = com.example.domain.gamification.XpReconciler(
+                    xpTransactionRepository,
+                    gamificationEventRepository,
+                    settingsManager
+                )
+                reconciler.reconcile()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            
+            try {
                 ManifestImporter(database, this@MainApplication).importFromAssets()
                 val premiumImporter = com.example.domain.engine.PremiumManifestImporter(database, this@MainApplication)
                 // force = false agora é seguro: o manifesto premium tem chave de versão própria,

@@ -6,6 +6,9 @@ import com.example.domain.gamification.model.UserProgress
 import com.example.domain.gamification.model.XpTransaction
 import com.example.domain.gamification.repository.XpTransactionRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 
@@ -13,7 +16,10 @@ class XpTransactionRepositoryImpl(
     private val xpTransactionDao: XpTransactionDao
 ) : XpTransactionRepository {
 
-    override suspend fun saveTransaction(transaction: XpTransaction) {
+    private val _newTransactions = MutableSharedFlow<XpTransaction>()
+    override val newTransactions: SharedFlow<XpTransaction> = _newTransactions.asSharedFlow()
+
+    override suspend fun saveTransaction(transaction: XpTransaction): Boolean {
         val entity = XpTransactionEntity(
             id = UUID.randomUUID().toString(),
             eventId = transaction.eventId,
@@ -21,7 +27,12 @@ class XpTransactionRepositoryImpl(
             reason = transaction.reason,
             createdAt = transaction.createdAt
         )
-        xpTransactionDao.insertTransaction(entity)
+        val rowId = xpTransactionDao.insertTransaction(entity)
+        val inserted = rowId != -1L
+        if (inserted) {
+            _newTransactions.emit(transaction)
+        }
+        return inserted
     }
 
     override suspend fun hasTransactionForEvent(eventId: String): Boolean {
@@ -45,6 +56,10 @@ class XpTransactionRepositoryImpl(
         return xpTransactionDao.getTotalXp().map { total ->
             calculateProgress(total ?: 0)
         }
+    }
+    
+    override suspend fun deleteAllTransactions() {
+        xpTransactionDao.deleteAllTransactions()
     }
 
     private fun calculateProgress(totalXp: Int): UserProgress {

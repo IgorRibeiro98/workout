@@ -13,6 +13,7 @@ enum class GamificationEventType {
     // Treino
     WORKOUT_STARTED,
     WORKOUT_COMPLETED,
+    FIRST_WORKOUT_COMPLETED,
 
     // Exercício
     EXERCISE_COMPLETED,
