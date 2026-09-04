@@ -19,10 +19,13 @@ android {
     }
     sourceSets {
         getByName("androidTest") {
-            assets.srcDirs(files("$projectDir/schemas"))
+            assets.directories.add("$projectDir/schemas")
         }
         getByName("test") {
-            assets.srcDirs(files("$projectDir/schemas"))
+            assets.directories.add("$projectDir/schemas")
+        }
+        getByName("debug") {
+            assets.directories.add("$projectDir/schemas")
         }
     }
 
@@ -122,12 +125,4 @@ dependencies {
   "ksp"(libs.moshi.kotlin.codegen)
 }
 
-val copySchemasForUnitTest by tasks.registering(Copy::class) {
-    from(layout.projectDirectory.dir("schemas"))
-    into(layout.buildDirectory.dir("intermediates/assets/debug/mergeDebugAssets"))
-}
-
-tasks.matching { it.name.contains("UnitTest") && (it.name.startsWith("package") || it.name.startsWith("test")) }.configureEach {
-    dependsOn(copySchemasForUnitTest)
-}
 
