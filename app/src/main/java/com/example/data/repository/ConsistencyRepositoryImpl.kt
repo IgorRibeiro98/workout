@@ -27,20 +27,31 @@ class ConsistencyRepositoryImpl(
 ) : ConsistencyRepository {
 
     override suspend fun initialize() {
-        val startedAt = settingsManager?.trackingStartedAtFlow?.first()
+        val today = LocalDate.now(zoneId)
+        val currentGoal = settingsManager?.weeklyGoalFlow?.first() ?: 3
+        val currentMondayEpochDay = today.with(DayOfWeek.MONDAY).toEpochDay()
+        
+        var startedAt = settingsManager?.trackingStartedAtFlow?.first()
         if (startedAt == null) {
-            val today = LocalDate.now(zoneId)
             val todayEpochDay = today.toEpochDay()
-            
             settingsManager?.setTrackingStartedAt(todayEpochDay)
-            
-            val currentGoal = settingsManager?.weeklyGoalFlow?.first() ?: 3
-            val currentMondayEpochDay = today.with(DayOfWeek.MONDAY).toEpochDay()
-            
-            weeklyGoalDao?.let { dao ->
-                val existing = dao.getGoalForWeek(currentMondayEpochDay)
-                if (existing == null) {
+            startedAt = todayEpochDay
+        }
+        
+        val startMondayEpochDay = LocalDate.ofEpochDay(startedAt).with(DayOfWeek.MONDAY).toEpochDay()
+
+        weeklyGoalDao?.let { dao ->
+            val allGoals = dao.getAllGoals()
+            if (allGoals.isEmpty()) {
+                dao.insertGoal(WeeklyGoalHistoryEntity(startMondayEpochDay, currentGoal))
+                
+                if (currentMondayEpochDay > startMondayEpochDay) {
                     dao.insertGoal(WeeklyGoalHistoryEntity(currentMondayEpochDay, currentGoal))
+                }
+            } else {
+                val firstSnapshot = allGoals.minByOrNull { it.effectiveFromWeekStartEpochDay }
+                if (firstSnapshot == null || firstSnapshot.effectiveFromWeekStartEpochDay > startMondayEpochDay) {
+                    dao.insertGoal(WeeklyGoalHistoryEntity(startMondayEpochDay, currentGoal))
                 }
             }
         }
@@ -103,15 +114,22 @@ class ConsistencyRepositoryImpl(
         val nextMondayEpochDay = nextMonday.toEpochDay()
 
         weeklyGoalDao?.let { dao ->
+            val allGoals = dao.getAllGoals()
+            val currentSnapshot = allGoals
+                .filter { it.effectiveFromWeekStartEpochDay <= currentMondayEpochDay }
+                .maxByOrNull { it.effectiveFromWeekStartEpochDay }
+                
+            val currentGoalValue = currentSnapshot?.goal ?: settingsManager?.weeklyGoalFlow?.first() ?: 3
+            
             // If current week doesn't have an explicit record, preserve current goal
-            val currentGoalEntity = dao.getGoalForWeek(currentMondayEpochDay)
-            val currentGoalValue = currentGoalEntity?.goal ?: settingsManager?.weeklyGoalFlow?.first() ?: newGoal
-            dao.insertGoal(
-                WeeklyGoalHistoryEntity(
-                    effectiveFromWeekStartEpochDay = currentMondayEpochDay,
-                    goal = currentGoalValue
+            if (currentSnapshot?.effectiveFromWeekStartEpochDay != currentMondayEpochDay) {
+                dao.insertGoal(
+                    WeeklyGoalHistoryEntity(
+                        effectiveFromWeekStartEpochDay = currentMondayEpochDay,
+                        goal = currentGoalValue
+                    )
                 )
-            )
+            }
 
             // Set new goal for next week
             dao.insertGoal(

@@ -65,9 +65,9 @@ fun WorkoutCalendarCard(
     val titleText = "$monthName ${yearMonth.year}"
 
     val daysInMonth = yearMonth.lengthOfMonth()
-    val firstDayOfWeek = yearMonth.atDay(1).dayOfWeek.value % 7 // 0 = Domingo, 1 = Segunda, ...
+    val firstDayOfWeek = yearMonth.atDay(1).dayOfWeek.value - 1 // 0 = Segunda, 6 = Domingo
 
-    val weekHeaderLabels = listOf("D", "S", "T", "Q", "Q", "S", "S")
+    val weekHeaderLabels = listOf("S", "T", "Q", "Q", "S", "S", "D")
 
     Surface(
         color = SurfaceDark,

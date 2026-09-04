@@ -744,7 +744,7 @@ fun CalendarView(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        val daysOfWeek = listOf("D", "S", "T", "Q", "Q", "S", "S")
+        val daysOfWeek = listOf("S", "T", "Q", "Q", "S", "S", "D")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
             daysOfWeek.forEach { day ->
                 Text(
@@ -762,7 +762,8 @@ fun CalendarView(
         
         val cal = currentMonth.clone() as Calendar
         cal.set(Calendar.DAY_OF_MONTH, 1)
-        val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) - 1
+        val rawDay = cal.get(Calendar.DAY_OF_WEEK) - 1
+        val firstDayOfWeek = if (rawDay == 0) 6 else rawDay - 1
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
         
         val totalCells = firstDayOfWeek + daysInMonth

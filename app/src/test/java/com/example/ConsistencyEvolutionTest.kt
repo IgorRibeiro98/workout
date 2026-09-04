@@ -15,9 +15,11 @@ class ConsistencyEvolutionTest {
 
     @Test
     fun testNewUser_zeroWorkouts() {
+        val trackingStart = LocalDate.now(zoneId).toEpochDay()
         val summary = ConsistencyCalculator.calculateConsistencySummary(
             timestamps = emptyList(),
-            trackingStartedAtEpochDay = LocalDate.now(zoneId).toEpochDay(),
+            goalSnapshots = listOf(WeeklyGoalSnapshot(trackingStart, 3)),
+            trackingStartedAtEpochDay = trackingStart,
             zoneId = zoneId
         )
 
@@ -52,8 +54,9 @@ class ConsistencyEvolutionTest {
         val refDate = LocalDate.of(2026, 8, 22) // Inside week 3
         val weekly = ConsistencyCalculator.calculateWeeklyConsistencies(
             timestamps = w1 + w2 + w3,
-            defaultGoal = 3,
+            
             referenceDate = refDate,
+            goalSnapshots = listOf(WeeklyGoalSnapshot(LocalDate.of(2026, 8, 1).toEpochDay(), 3)),
             trackingStartedAtEpochDay = LocalDate.of(2026, 8, 1).toEpochDay(),
             zoneId = zoneId
         )
@@ -83,8 +86,9 @@ class ConsistencyEvolutionTest {
         val refDate = LocalDate.of(2026, 8, 18) // Tuesday of week 3
         val weekly = ConsistencyCalculator.calculateWeeklyConsistencies(
             timestamps = w1 + w2 + w3,
-            defaultGoal = 3,
+            
             referenceDate = refDate,
+            goalSnapshots = listOf(WeeklyGoalSnapshot(LocalDate.of(2026, 8, 1).toEpochDay(), 3)),
             trackingStartedAtEpochDay = LocalDate.of(2026, 8, 1).toEpochDay(),
             zoneId = zoneId
         )
@@ -121,9 +125,8 @@ class ConsistencyEvolutionTest {
 
         val weekly = ConsistencyCalculator.calculateWeeklyConsistencies(
             timestamps = w1 + w2,
-            goalSnapshots = goalSnapshots,
-            defaultGoal = 3,
             referenceDate = LocalDate.of(2026, 8, 16),
+            goalSnapshots = goalSnapshots,
             trackingStartedAtEpochDay = LocalDate.of(2026, 8, 3).toEpochDay(),
             zoneId = zoneId
         )
@@ -146,6 +149,7 @@ class ConsistencyEvolutionTest {
 
         val summary = ConsistencyCalculator.calculateConsistencySummary(
             timestamps = listOf(day1, day2, day3, day4),
+            goalSnapshots = listOf(WeeklyGoalSnapshot(LocalDate.of(2026, 7, 30).toEpochDay(), 3)),
             trackingStartedAtEpochDay = LocalDate.of(2026, 7, 30).toEpochDay(),
             zoneId = zoneId
         )
@@ -171,8 +175,9 @@ class ConsistencyEvolutionTest {
         val refDate = LocalDate.of(2026, 8, 16)
         val weekly = ConsistencyCalculator.calculateWeeklyConsistencies(
             timestamps = w1 + w2,
-            defaultGoal = 3,
+            
             referenceDate = refDate,
+            goalSnapshots = listOf(WeeklyGoalSnapshot(startDay.toEpochDay(), 3)),
             trackingStartedAtEpochDay = startDay.toEpochDay(),
             zoneId = zoneId
         )
@@ -199,5 +204,30 @@ class ConsistencyEvolutionTest {
         assertEquals(2, history.size)
         assertEquals(2, history[0].sessions)
         assertEquals(1, history[1].sessions)
+    }
+
+    @Test
+    fun testTimezone_workoutAtLateNight() {
+        // A workout performed at 23:30 local time on a Sunday (end of week).
+        val localSunday = LocalDate.of(2026, 8, 9)
+        val zoneIdLocal = ZoneId.of("America/Sao_Paulo")
+        val timestamp = localSunday.atTime(23, 30).atZone(zoneIdLocal).toInstant().toEpochMilli()
+
+        // Evaluated in the same timezone, it should count towards that week (Monday 2026-08-03).
+        val historyLocal = ConsistencyCalculator.calculateFrequencyHistory(
+            timestamps = listOf(timestamp),
+            zoneId = zoneIdLocal
+        )
+        val expectedWeekStartLocal = LocalDate.of(2026, 8, 3).atStartOfDay(zoneIdLocal).toInstant().toEpochMilli()
+        assertEquals(expectedWeekStartLocal, historyLocal[0].date)
+
+        // If evaluated in UTC (e.g. user traveled), it will be 02:30 on Monday 2026-08-10.
+        val zoneIdUtc = ZoneId.of("UTC")
+        val historyUtc = ConsistencyCalculator.calculateFrequencyHistory(
+            timestamps = listOf(timestamp),
+            zoneId = zoneIdUtc
+        )
+        val expectedWeekStartUtc = LocalDate.of(2026, 8, 10).atStartOfDay(zoneIdUtc).toInstant().toEpochMilli()
+        assertEquals(expectedWeekStartUtc, historyUtc[0].date)
     }
 }

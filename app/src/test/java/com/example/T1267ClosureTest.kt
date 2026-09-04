@@ -412,7 +412,7 @@ class T1267ClosureTest {
         assertEquals(1, yearStart.get(Calendar.DAY_OF_YEAR))
 
         val weekStart = Calendar.getInstance().apply { timeInMillis = HistoryPeriod.WEEK.startTimestamp(now) }
-        assertEquals(weekStart.firstDayOfWeek, weekStart.get(Calendar.DAY_OF_WEEK))
+        assertEquals(Calendar.MONDAY, weekStart.get(Calendar.DAY_OF_WEEK))
 
         // Janelas mais curtas nunca começam antes das mais longas.
         assertTrue(HistoryPeriod.WEEK.startTimestamp(now) >= HistoryPeriod.MONTH.startTimestamp(now) ||

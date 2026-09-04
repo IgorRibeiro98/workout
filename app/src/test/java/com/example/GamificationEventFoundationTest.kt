@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -84,14 +85,18 @@ class GamificationEventFoundationTest {
         repository: GamificationEventRepository,
         workoutTimestamps: List<Long> = emptyList(),
         weeklyGoal: Int = 3
-    ) = GamificationEventRecorder(
-        repository = repository,
-        xpCalculatorService = XpCalculatorService(DummyXpTransactionRepository()),
-        workoutTimestampsProvider = { workoutTimestamps },
-        weeklyGoalProvider = { weeklyGoal },
-        trackingStartedAtProvider = { 0L },
-        zoneId = zone
-    )
+    ): GamificationEventRecorder {
+        val trackingStart = workoutTimestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L
+        return GamificationEventRecorder(
+            repository = repository,
+            xpCalculatorService = XpCalculatorService(DummyXpTransactionRepository()),
+            workoutTimestampsProvider = { workoutTimestamps },
+            weeklyGoalProvider = { weeklyGoal },
+            goalSnapshotsProvider = { listOf(WeeklyGoalSnapshot(trackingStart, weeklyGoal)) },
+            trackingStartedAtProvider = { trackingStart },
+            zoneId = zone
+        )
+    }
 
     private fun timestampOf(date: LocalDate): Long =
         date.atStartOfDay(zone).toInstant().toEpochMilli()
@@ -340,6 +345,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            goalSnapshots = listOf(WeeklyGoalSnapshot(timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L, 0)),
             trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )
@@ -357,6 +363,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            goalSnapshots = listOf(WeeklyGoalSnapshot(timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L, 0)),
             trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )
@@ -374,6 +381,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            goalSnapshots = listOf(WeeklyGoalSnapshot(timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L, 0)),
             trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )

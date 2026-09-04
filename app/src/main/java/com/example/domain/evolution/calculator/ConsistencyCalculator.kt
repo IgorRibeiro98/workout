@@ -32,9 +32,9 @@ object ConsistencyCalculator {
         val currentMonday = referenceDate.with(DayOfWeek.MONDAY)
         val sortedGoalSnapshots = goalSnapshots.sortedBy { it.effectiveFromWeek }
 
-        fun resolveGoal(weekStartEpochDay: Long): Int {
+        fun resolveGoal(weekStartEpochDay: Long): Int? {
             val snapshot = sortedGoalSnapshots.lastOrNull { it.effectiveFromWeek <= weekStartEpochDay }
-            return snapshot?.goal ?: defaultGoal
+            return snapshot?.goal
         }
 
         val trackingStartDate = LocalDate.ofEpochDay(trackingStartedAtEpochDay)
@@ -63,24 +63,35 @@ object ConsistencyCalculator {
             val isFirstTrackingWeek = (epochDay == startMonday.toEpochDay())
             val isStartedMidWeek = isFirstTrackingWeek && trackingStartedAtEpochDay > startMonday.toEpochDay()
 
-            var status = if (isCurrentWeek) {
-                if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.IN_PROGRESS
-            } else {
-                if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.MISSED
-            }
-
-            if (status == WeeklyConsistencyStatus.MISSED && isStartedMidWeek) {
-                status = WeeklyConsistencyStatus.NOT_COUNTED
-            }
-
-            result.add(
-                WeeklyConsistency(
-                    weekStartEpochDay = epochDay,
-                    goal = goal,
-                    completedWorkouts = count,
-                    status = status
+            if (goal == null) {
+                result.add(
+                    WeeklyConsistency(
+                        weekStartEpochDay = epochDay,
+                        goal = 0,
+                        completedWorkouts = count,
+                        status = WeeklyConsistencyStatus.NOT_COUNTED
+                    )
                 )
-            )
+            } else {
+                var status = if (isCurrentWeek) {
+                    if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.IN_PROGRESS
+                } else {
+                    if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.MISSED
+                }
+
+                if (status == WeeklyConsistencyStatus.MISSED && isStartedMidWeek) {
+                    status = WeeklyConsistencyStatus.NOT_COUNTED
+                }
+
+                result.add(
+                    WeeklyConsistency(
+                        weekStartEpochDay = epochDay,
+                        goal = goal,
+                        completedWorkouts = count,
+                        status = status
+                    )
+                )
+            }
             week = week.plusWeeks(1)
         }
 

@@ -38,7 +38,10 @@ fun ProfileScreen(
     val settingsManager = app.settingsManager
     val coroutineScope = rememberCoroutineScope()
 
-    val weeklyGoal by settingsManager.weeklyGoalFlow.collectAsState(initial = 4)
+    val nextWeeklyGoal by settingsManager.weeklyGoalFlow.collectAsState(initial = 4)
+    val progress by app.consistencyRepository.getConsistencyProgressFlow().collectAsState(initial = null)
+    val currentWeeklyGoal = progress?.currentWeekGoal ?: nextWeeklyGoal
+    
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
     val latestMeasurement by app.bodyMeasurementRepository.latestMeasurement.collectAsState(initial = null)
@@ -181,10 +184,18 @@ fun ProfileScreen(
                                         fontSize = 15.sp
                                     )
                                     Text(
-                                        text = "$weeklyGoal treinos por semana",
+                                        text = "$currentWeeklyGoal treinos esta semana",
                                         color = TextSecondary,
                                         fontSize = 13.sp
                                     )
+                                    if (currentWeeklyGoal != nextWeeklyGoal) {
+                                        Text(
+                                            text = "Próxima semana: $nextWeeklyGoal treinos",
+                                            color = Lime400,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
 
@@ -215,7 +226,7 @@ fun ProfileScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             for (i in 1..7) {
-                                val isPartOfGoal = i <= weeklyGoal
+                                val isPartOfGoal = i <= currentWeeklyGoal
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -370,7 +381,7 @@ fun ProfileScreen(
 
     // Weekly Goal BottomSheet
     if (showGoalBottomSheet) {
-        var selectedValue by remember { mutableIntStateOf(weeklyGoal) }
+        var selectedValue by remember { mutableIntStateOf(nextWeeklyGoal) }
 
         AppModalBottomSheet(
             onDismissRequest = { showGoalBottomSheet = false },
@@ -439,7 +450,7 @@ fun ProfileScreen(
                     }
                 }
 
-                if (selectedValue != weeklyGoal) {
+                if (selectedValue != currentWeeklyGoal) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Surface(
                         color = SurfaceHighlight,
@@ -456,7 +467,7 @@ fun ProfileScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Esta semana continua com meta de $weeklyGoal ${if (weeklyGoal == 1) "treino" else "treinos"}.",
+                                text = "Esta semana continua com meta de $currentWeeklyGoal ${if (currentWeeklyGoal == 1) "treino" else "treinos"}.",
                                 color = TextSecondary,
                                 fontSize = 12.sp
                             )
@@ -480,7 +491,7 @@ fun ProfileScreen(
                         .height(48.dp)
                 ) {
                     Text(
-                        text = if (selectedValue != weeklyGoal) "SALVAR NOVA META" else "Salvar Meta",
+                        text = if (selectedValue != nextWeeklyGoal) "SALVAR NOVA META" else "Salvar Meta",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )
