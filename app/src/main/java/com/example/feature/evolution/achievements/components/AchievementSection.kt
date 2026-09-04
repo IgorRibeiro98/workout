@@ -2,6 +2,7 @@ package com.example.feature.evolution.achievements.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -218,6 +219,14 @@ fun AchievementSection(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (uiState.nextAchievement != null) {
+                        NextAchievementCard(
+                            achievement = uiState.nextAchievement,
+                            onClick = { onAchievementClick(uiState.nextAchievement) }
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+
                     uiState.displayedAchievements.forEach { achievement ->
                         AchievementCard(
                             achievement = achievement,
@@ -432,3 +441,92 @@ private fun AchievementDetailBottomSheet(
         }
     }
 }
+
+@Composable
+fun NextAchievementCard(
+    achievement: Achievement,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceHighlight)
+            .border(1.dp, Lime400.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(16.dp)
+            .testTag("next_achievement_card")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "PRÓXIMA CONQUISTA",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Lime400,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    text = "${achievement.currentProgress} / ${achievement.targetProgress}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextSecondary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(SurfaceDark),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = achievement.icon, fontSize = 22.sp)
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = achievement.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = achievement.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LinearProgressIndicator(
+                progress = { achievement.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = Lime400,
+                trackColor = Color.White.copy(alpha = 0.1f)
+            )
+        }
+    }
+}
+

@@ -46,6 +46,14 @@ class AchievementsViewModel(
                     rawList
                 }
                 val sorted = sortAchievements(filtered)
+                val nextAch = rawList
+                    .filter { it.unlockedAt == null }
+                    .sortedWith(
+                        compareByDescending<Achievement> { it.progress }
+                            .thenBy { AchievementCatalog.getDefinition(it.id)?.order ?: 0 }
+                    )
+                    .firstOrNull()
+
                 AchievementsUiState(
                     isLoading = loading,
                     allAchievements = rawList,
@@ -54,6 +62,7 @@ class AchievementsViewModel(
                     totalCount = rawList.size,
                     selectedCategory = category,
                     selectedAchievementForDetail = selectedDetail,
+                    nextAchievement = nextAch,
                     error = err
                 )
             }.collect { state ->

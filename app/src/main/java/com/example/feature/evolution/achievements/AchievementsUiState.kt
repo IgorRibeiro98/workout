@@ -11,6 +11,7 @@ data class AchievementsUiState(
     val totalCount: Int = 0,
     val selectedCategory: AchievementCategory? = null,
     val selectedAchievementForDetail: Achievement? = null,
+    val nextAchievement: Achievement? = null,
     val error: String? = null
 ) {
     val achievements: List<Achievement>

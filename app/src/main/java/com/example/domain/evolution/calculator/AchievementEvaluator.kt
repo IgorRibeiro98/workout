@@ -61,7 +61,7 @@ object AchievementEvaluator {
             for (ev in streakEvents) {
                 val valStr = ev.metadata[com.example.domain.gamification.model.GamificationEventMetadata.STREAK_WEEKS] ?: ""
                 val weeks = valStr.toIntOrNull() ?: 0
-                if (weeks >= target) {
+                if (weeks == target) {
                     reachedAt = ev.timestamp
                     triggerEventId = ev.id
                     break

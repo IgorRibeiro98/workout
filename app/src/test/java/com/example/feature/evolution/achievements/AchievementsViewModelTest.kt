@@ -123,6 +123,34 @@ class AchievementsViewModelTest {
         // workout_10 (0.5f) > streak_4 (0.25f)
         val ids = state.displayedAchievements.map { it.id }
         assertEquals(listOf("body_1", "workout_1", "workout_10", "streak_4"), ids)
+
+        // Next achievement is the locked one with best relative progress: workout_10 (50%)
+        assertEquals("workout_10", state.nextAchievement?.id)
+    }
+
+    @Test
+    fun testAllUnlockedNextAchievementIsNull() = runTest {
+        val allUnlocked = listOf(
+            Achievement(
+                id = "workout_1",
+                title = "Primeiro Treino",
+                description = "Complete 1 treino",
+                icon = "fitness_center",
+                tier = AchievementTier.BRONZE,
+                category = AchievementCategory.TRAINING,
+                unlockedAt = 1000L,
+                progress = 1.0f,
+                currentProgress = 1,
+                targetProgress = 1
+            )
+        )
+        val flow = MutableStateFlow(allUnlocked)
+        val repository = FakeAchievementRepository(flow)
+        val viewModel = AchievementsViewModel(repository)
+
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertNull(viewModel.uiState.value.nextAchievement)
     }
 
     @Test

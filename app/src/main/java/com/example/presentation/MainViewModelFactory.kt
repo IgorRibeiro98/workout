@@ -43,14 +43,9 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.achievements.AchievementsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            val achievementRepo = achievementRepository ?: com.example.data.repository.AchievementRepositoryImpl(
-                achievementDao = database.achievementDao(),
-                workoutDao = database.workoutDao(),
-                gamificationEventDao = database.gamificationEventDao(),
-                consistencyRepository = consistencyRepository!!,
-                bodyMeasurementRepository = bodyMeasurementRepository
-            )
-            return com.example.feature.evolution.achievements.AchievementsViewModel(achievementRepo) as T
+            val repository = achievementRepository
+                ?: error("AchievementRepository not provided")
+            return com.example.feature.evolution.achievements.AchievementsViewModel(repository) as T
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.timeline.TimelineViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
@@ -61,14 +56,8 @@ class MainViewModelFactory(
             val consRepo = consistencyRepository
                 ?: throw IllegalStateException("ConsistencyRepository not provided")
             val bodyRepo = bodyMeasurementRepository
-
-            val achievementRepo = achievementRepository ?: com.example.data.repository.AchievementRepositoryImpl(
-                achievementDao = database.achievementDao(),
-                workoutDao = database.workoutDao(),
-                gamificationEventDao = database.gamificationEventDao(),
-                consistencyRepository = consRepo,
-                bodyMeasurementRepository = bodyRepo
-            )
+            val achievementRepo = achievementRepository
+                ?: error("AchievementRepository not provided")
             val milestoneProvider = com.example.data.provider.WorkoutMilestoneProviderImpl(
                 consistencyRepository = consRepo
             )

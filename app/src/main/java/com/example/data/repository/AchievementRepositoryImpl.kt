@@ -73,7 +73,7 @@ class AchievementRepositoryImpl(
                     currentProgress = eval.currentProgress.coerceAtMost(eval.targetProgress),
                     targetProgress = eval.targetProgress
                 )
-            } // Wait, Achievement doesn't have definition, we can't sort by order. Let's fix mapping.
+            }
         }
     }
 
@@ -101,16 +101,7 @@ class AchievementRepositoryImpl(
 
         for (eval in evaluations) {
             if (eval.eligibleForUnlock) {
-                val unlockedTime = if (origin == AchievementEvaluationOrigin.LIVE) {
-                    eval.reachedAt ?: System.currentTimeMillis()
-                } else {
-                    eval.reachedAt
-                }
-
-                if (unlockedTime == null) {
-                    // Invariant INV-04: Sem datas históricas inventadas
-                    continue
-                }
+                val unlockedTime = eval.reachedAt ?: continue
 
                 val entity = AchievementUnlockEntity(
                     achievementId = eval.definition.id,

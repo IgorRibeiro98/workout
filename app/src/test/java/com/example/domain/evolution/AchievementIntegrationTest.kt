@@ -265,4 +265,81 @@ class AchievementIntegrationTest {
 
         db.close()
     }
+
+    @Test
+    fun testEligibleWithoutReachedAtDoesNotPersistOrEmitInLiveOrigin() = runTest {
+        // Create custom repository with consistencyProgress reporting streak = 8,
+        // but gamificationEventDao contains NO streak milestone events
+        val fakeConsistencyRepo = object : com.example.domain.evolution.repository.ConsistencyRepository {
+            override suspend fun initialize() {}
+            override suspend fun getConsistencySummary() = com.example.domain.evolution.model.consistency.WorkoutConsistencySummary(
+                totalSessions = 8,
+                currentStreak = 8,
+                longestStreak = 8,
+                averageSessionsPerWeek = 1f,
+                lastWorkoutDate = 1000L
+            )
+            override suspend fun getFrequencyHistory() = emptyList<com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint>()
+            override suspend fun getConsistencyProgress(): com.example.domain.evolution.model.consistency.ConsistencyProgress {
+                return com.example.domain.evolution.model.consistency.ConsistencyProgress(
+                    longestStreakWeeks = 8,
+                    currentStreakWeeks = 8,
+                    currentWeekCompleted = 1,
+                    currentWeekGoal = 1,
+                    currentWeekStatus = com.example.domain.evolution.model.consistency.WeeklyConsistencyStatus.COMPLETED
+                )
+            }
+            override suspend fun getWeeklyConsistencies() = emptyList<com.example.domain.evolution.model.consistency.WeeklyConsistency>()
+            override suspend fun getGoalSnapshots() = emptyList<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>()
+            override suspend fun setWeeklyGoal(newGoal: Int) {}
+
+            override fun getConsistencySummaryFlow() = kotlinx.coroutines.flow.emptyFlow<com.example.domain.evolution.model.consistency.WorkoutConsistencySummary>()
+            override fun getFrequencyHistoryFlow() = kotlinx.coroutines.flow.emptyFlow<List<com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint>>()
+            override fun getWorkoutTimestampsFlow() = kotlinx.coroutines.flow.emptyFlow<List<Long>>()
+            override fun getConsistencyProgressFlow() = kotlinx.coroutines.flow.flowOf(
+                com.example.domain.evolution.model.consistency.ConsistencyProgress(
+                    longestStreakWeeks = 8,
+                    currentStreakWeeks = 8,
+                    currentWeekCompleted = 1,
+                    currentWeekGoal = 1,
+                    currentWeekStatus = com.example.domain.evolution.model.consistency.WeeklyConsistencyStatus.COMPLETED
+                )
+            )
+            override fun getWeeklyConsistenciesFlow() = kotlinx.coroutines.flow.emptyFlow<List<com.example.domain.evolution.model.consistency.WeeklyConsistency>>()
+            override fun getGoalSnapshotsFlow() = kotlinx.coroutines.flow.emptyFlow<List<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>>()
+        }
+
+        val testRepo = AchievementRepositoryImpl(
+            achievementDao = database.achievementDao(),
+            workoutDao = database.workoutDao(),
+            gamificationEventDao = database.gamificationEventDao(),
+            consistencyRepository = fakeConsistencyRepo,
+            bodyMeasurementRepository = bodyMeasurementRepository
+        )
+
+        val liveUnlocksList = mutableListOf<com.example.domain.evolution.model.achievement.AchievementUnlock>()
+        val job = launch {
+            testRepo.liveUnlocks.collect { unlock ->
+                liveUnlocksList.add(unlock)
+            }
+        }
+
+        // Evaluate with origin = LIVE
+        // streak_2_weeks, streak_4_weeks, streak_8_weeks have eligible = true, but reachedAt = null
+        val returnedUnlocks = testRepo.evaluateAndUnlock(AchievementEvaluationOrigin.LIVE)
+        kotlinx.coroutines.delay(50)
+
+        // Expected:
+        // Zero AchievementUnlock persisted in database
+        val persistedUnlocks = database.achievementDao().getUnlocks()
+        assertTrue("No achievement unlocks should be persisted when reachedAt is null", persistedUnlocks.isEmpty())
+
+        // Zero returned in newUnlocks
+        assertTrue("evaluateAndUnlock must return empty list when reachedAt is null", returnedUnlocks.isEmpty())
+
+        // Zero liveUnlocks emitted
+        assertTrue("No liveUnlocks should be emitted when reachedAt is null", liveUnlocksList.isEmpty())
+
+        job.cancel()
+    }
 }

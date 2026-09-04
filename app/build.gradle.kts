@@ -56,6 +56,11 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  sourceSets {
+    getByName("test") {
+      assets.srcDirs(files("$projectDir/schemas", "$projectDir/src/test/assets"))
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -106,8 +111,7 @@ dependencies {
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
-    testImplementation(libs.androidx.room.testing)
-    testImplementation(libs.androidx.room.testing)
+  testImplementation(libs.androidx.room.testing)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
   testImplementation(libs.roborazzi)
