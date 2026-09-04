@@ -24,9 +24,6 @@ android {
         getByName("test") {
             assets.directories.add("$projectDir/schemas")
         }
-        getByName("debug") {
-            assets.directories.add("$projectDir/schemas")
-        }
     }
 
   namespace = "com.example"
