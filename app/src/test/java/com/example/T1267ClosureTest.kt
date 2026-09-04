@@ -419,4 +419,46 @@ class T1267ClosureTest {
                 HistoryPeriod.MONTH.startTimestamp(now) <= now)
         assertTrue(HistoryPeriod.YEAR.startTimestamp(now) <= HistoryPeriod.MONTH.startTimestamp(now))
     }
+
+    @Test
+    fun `inicio do periodo lida com domingos e virada de ano`() {
+        // Test with a specific tricky date: Sunday, Dec 31, 2023 at 23:59:59
+        // The week should start on Monday, Dec 25, 2023.
+        // The month should start on Dec 1, 2023.
+        // The year should start on Jan 1, 2023.
+        val zoneId = java.time.ZoneId.systemDefault()
+        val trickyDate = java.time.LocalDateTime.of(2023, 12, 31, 23, 59, 59)
+        val trickyMillis = trickyDate.atZone(zoneId).toInstant().toEpochMilli()
+
+        val weekStartMillis = HistoryPeriod.WEEK.startTimestamp(trickyMillis)
+        val weekStart = java.time.Instant.ofEpochMilli(weekStartMillis).atZone(zoneId).toLocalDate()
+        assertEquals(2023, weekStart.year)
+        assertEquals(12, weekStart.monthValue)
+        assertEquals(25, weekStart.dayOfMonth)
+        assertEquals(java.time.DayOfWeek.MONDAY, weekStart.dayOfWeek)
+
+        val monthStartMillis = HistoryPeriod.MONTH.startTimestamp(trickyMillis)
+        val monthStart = java.time.Instant.ofEpochMilli(monthStartMillis).atZone(zoneId).toLocalDate()
+        assertEquals(2023, monthStart.year)
+        assertEquals(12, monthStart.monthValue)
+        assertEquals(1, monthStart.dayOfMonth)
+
+        val yearStartMillis = HistoryPeriod.YEAR.startTimestamp(trickyMillis)
+        val yearStart = java.time.Instant.ofEpochMilli(yearStartMillis).atZone(zoneId).toLocalDate()
+        assertEquals(2023, yearStart.year)
+        assertEquals(1, yearStart.monthValue)
+        assertEquals(1, yearStart.dayOfMonth)
+        
+        // Test with New Year's Day: Monday, Jan 1, 2024 at 00:00:01
+        // The week should start on Monday, Jan 1, 2024.
+        val newYearDate = java.time.LocalDateTime.of(2024, 1, 1, 0, 0, 1)
+        val newYearMillis = newYearDate.atZone(zoneId).toInstant().toEpochMilli()
+        
+        val newYearWeekStartMillis = HistoryPeriod.WEEK.startTimestamp(newYearMillis)
+        val newYearWeekStart = java.time.Instant.ofEpochMilli(newYearWeekStartMillis).atZone(zoneId).toLocalDate()
+        assertEquals(2024, newYearWeekStart.year)
+        assertEquals(1, newYearWeekStart.monthValue)
+        assertEquals(1, newYearWeekStart.dayOfMonth)
+        assertEquals(java.time.DayOfWeek.MONDAY, newYearWeekStart.dayOfWeek)
+    }
 }

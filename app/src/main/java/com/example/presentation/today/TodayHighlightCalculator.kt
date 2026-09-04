@@ -80,18 +80,14 @@ object TodayHighlightCalculator {
     }
 
     /**
-     * Weeks elapsed since the epoch for the week containing [timestamp], using the locale's own
-     * first day of week so the count matches the weekly goal shown right above it.
+     * Weeks elapsed since the epoch for the week containing [timestamp], forcing
+     * Monday as the first day of the week so the count matches the weekly goal.
      */
     private fun weekIndexOf(timestamp: Long): Long {
-        val cal = Calendar.getInstance().apply {
-            timeInMillis = timestamp
-            set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        return Math.floorDiv(cal.timeInMillis, WEEK_MS)
+        val zoneId = java.time.ZoneId.systemDefault()
+        val date = java.time.Instant.ofEpochMilli(timestamp).atZone(zoneId).toLocalDate()
+        val monday = date.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+        val weekStartMillis = monday.atStartOfDay(zoneId).toInstant().toEpochMilli()
+        return Math.floorDiv(weekStartMillis, WEEK_MS)
     }
 }

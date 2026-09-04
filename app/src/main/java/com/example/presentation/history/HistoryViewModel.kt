@@ -26,20 +26,18 @@ enum class HistoryPeriod(val label: String) {
     /** Start of this period, in millis. */
     fun startTimestamp(now: Long = System.currentTimeMillis()): Long {
         if (this == ALL) return 0L
-        val cal = Calendar.getInstance().apply {
-            timeInMillis = now
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
+        
+        val zoneId = java.time.ZoneId.systemDefault()
+        val date = java.time.Instant.ofEpochMilli(now).atZone(zoneId).toLocalDate()
+        
+        val startDate = when (this) {
+            WEEK -> date.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+            MONTH -> date.withDayOfMonth(1)
+            YEAR -> date.withDayOfYear(1)
+            ALL -> date // won't be reached
         }
-        when (this) {
-            WEEK -> cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-            MONTH -> cal.set(Calendar.DAY_OF_MONTH, 1)
-            YEAR -> cal.set(Calendar.DAY_OF_YEAR, 1)
-            ALL -> Unit
-        }
-        return cal.timeInMillis
+        
+        return startDate.atStartOfDay(zoneId).toInstant().toEpochMilli()
     }
 }
 
