@@ -1,5 +1,7 @@
 package com.example.domain.gamification
 
+import com.example.domain.evolution.calculator.ConsistencyCalculator
+import com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot
 import com.example.domain.gamification.model.GamificationEvent
 import java.time.DayOfWeek
 import java.time.Instant
@@ -14,38 +16,45 @@ import java.time.ZoneId
  */
 object ConsistencyMilestoneEvaluator {
 
-    /** Marcos de consistência medidos em semanas consecutivas com pelo menos um treino. */
-    val STREAK_MILESTONES_IN_WEEKS = listOf(4, 8, 12, 16, 24, 52)
+    /** Marcos de consistência medidos em semanas consecutivas cumprindo a meta semanal. */
+    val STREAK_MILESTONES_IN_WEEKS = listOf(2, 4, 8, 12, 24, 52)
 
     fun evaluate(
         workoutTimestamps: List<Long>,
-        weeklyGoal: Int,
+        weeklyGoal: Int = 3,
+        goalSnapshots: List<WeeklyGoalSnapshot> = emptyList(),
         referenceTimestamp: Long,
         zoneId: ZoneId = ZoneId.systemDefault()
     ): List<GamificationEvent> {
         if (workoutTimestamps.isEmpty()) return emptyList()
 
-        val referenceWeekStart = weekStartOf(referenceTimestamp, zoneId)
-        val sessionsByWeek = workoutTimestamps
-            .groupingBy { weekStartOf(it, zoneId) }
-            .eachCount()
+        val referenceDate = Instant.ofEpochMilli(referenceTimestamp).atZone(zoneId).toLocalDate()
+        val referenceWeekStart = referenceDate.with(DayOfWeek.MONDAY)
+
+        val weeklyConsistencies = ConsistencyCalculator.calculateWeeklyConsistencies(
+            timestamps = workoutTimestamps,
+            goalSnapshots = goalSnapshots,
+            defaultGoal = weeklyGoal,
+            referenceDate = referenceDate,
+            zoneId = zoneId
+        )
 
         val events = mutableListOf<GamificationEvent>()
 
-        val completedThisWeek = sessionsByWeek[referenceWeekStart] ?: 0
-        if (weeklyGoal > 0 && completedThisWeek >= weeklyGoal) {
+        val refWeek = weeklyConsistencies.firstOrNull { it.weekStartEpochDay == referenceWeekStart.toEpochDay() }
+        if (refWeek != null && refWeek.goal > 0 && refWeek.completedWorkouts >= refWeek.goal) {
             events += GamificationEvents.weeklyGoalCompleted(
-                weekStartEpochDay = referenceWeekStart.toEpochDay(),
-                weeklyGoal = weeklyGoal,
-                completedSessions = completedThisWeek,
+                weekStartEpochDay = refWeek.weekStartEpochDay,
+                weeklyGoal = refWeek.goal,
+                completedSessions = refWeek.completedWorkouts,
                 timestamp = referenceTimestamp
             )
         }
 
-        val streakWeeks = consecutiveWeeksEndingAt(referenceWeekStart, sessionsByWeek.keys)
-        if (streakWeeks in STREAK_MILESTONES_IN_WEEKS) {
+        val progress = ConsistencyCalculator.calculateProgress(weeklyConsistencies, referenceDate)
+        if (progress.currentStreakWeeks in STREAK_MILESTONES_IN_WEEKS) {
             events += GamificationEvents.streakMilestoneReached(
-                streakWeeks = streakWeeks,
+                streakWeeks = progress.currentStreakWeeks,
                 weekStartEpochDay = referenceWeekStart.toEpochDay(),
                 timestamp = referenceTimestamp
             )
@@ -53,18 +62,4 @@ object ConsistencyMilestoneEvaluator {
 
         return events
     }
-
-    /** Semanas consecutivas com treino, contadas para trás a partir da semana de referência. */
-    private fun consecutiveWeeksEndingAt(referenceWeekStart: LocalDate, trainedWeeks: Set<LocalDate>): Int {
-        var streak = 0
-        var week = referenceWeekStart
-        while (trainedWeeks.contains(week)) {
-            streak++
-            week = week.minusWeeks(1)
-        }
-        return streak
-    }
-
-    private fun weekStartOf(timestamp: Long, zoneId: ZoneId): LocalDate =
-        Instant.ofEpochMilli(timestamp).atZone(zoneId).toLocalDate().with(DayOfWeek.MONDAY)
 }

@@ -34,9 +34,10 @@ import kotlinx.coroutines.launch
         ExerciseExecutionEntity::class,
         BodyMeasurementEntity::class,
         GamificationEventEntity::class,
-        XpTransactionEntity::class
+        XpTransactionEntity::class,
+        WeeklyGoalHistoryEntity::class
     ],
-    version = 28,
+    version = 29,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -45,8 +46,22 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun gamificationEventDao(): GamificationEventDao
     abstract fun xpTransactionDao(): XpTransactionDao
+    abstract fun weeklyGoalDao(): WeeklyGoalDao
     
     companion object {
+
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `weekly_goal_history` (
+                        `effectiveFromWeekStartEpochDay` INTEGER NOT NULL,
+                        `goal` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`effectiveFromWeekStartEpochDay`)
+                    )
+                """.trimIndent())
+            }
+        }
 
         val MIGRATION_27_28 = object : Migration(27, 28) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -413,7 +428,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29
                 )
                 .addCallback(DatabaseCallback())
                 .fallbackToDestructiveMigration()

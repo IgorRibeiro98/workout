@@ -18,6 +18,7 @@ class GamificationEventRecorder(
     private val xpCalculatorService: XpCalculatorService,
     private val workoutTimestampsProvider: suspend () -> List<Long>,
     private val weeklyGoalProvider: suspend () -> Int,
+    private val goalSnapshotsProvider: (suspend () -> List<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>)? = null,
     private val zoneId: ZoneId = ZoneId.systemDefault()
 ) : GamificationEventPublisher {
 
@@ -44,9 +45,11 @@ class GamificationEventRecorder(
 
     private suspend fun evaluateConsistency(referenceTimestamp: Long) {
         try {
+            val snapshots = goalSnapshotsProvider?.invoke() ?: emptyList()
             val derived = ConsistencyMilestoneEvaluator.evaluate(
                 workoutTimestamps = workoutTimestampsProvider(),
                 weeklyGoal = weeklyGoalProvider(),
+                goalSnapshots = snapshots,
                 referenceTimestamp = referenceTimestamp,
                 zoneId = zoneId
             )

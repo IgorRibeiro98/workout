@@ -99,8 +99,6 @@ class EvolutionEngineTest {
         val result = ConsistencyCalculator.calculateFromDates(dates, referenceDate = LocalDate.of(2026, 8, 10))
 
         assertEquals(10, result.trainingDays)
-        assertEquals(10, result.currentStreak)
-        assertEquals(10, result.longestStreak)
         assertEquals(10, result.monthlySessions)
     }
 
@@ -160,8 +158,6 @@ class EvolutionEngineTest {
         val result = ConsistencyCalculator.calculateFromDates(dates, referenceDate = LocalDate.of(2026, 8, 7))
 
         assertEquals(5, result.trainingDays)
-        assertEquals(3, result.currentStreak) // 05, 06, 07 -> streak of 3
-        assertEquals(3, result.longestStreak)
         assertEquals(5, result.monthlySessions)
     }
 

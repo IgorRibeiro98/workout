@@ -8,8 +8,13 @@ import com.example.data.local.WorkoutSessionEntity
 import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
+import com.example.domain.evolution.calculator.ConsistencyCalculator
+import com.example.domain.evolution.model.consistency.ConsistencyProgress
+import com.example.domain.evolution.repository.ConsistencyRepository
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Calendar
 
 data class SequenceItemData(
@@ -34,7 +39,7 @@ data class TodayState(
     val nextTemplateExerciseCount: Int = 0,
     val predominantMuscles: List<String> = emptyList(),
     val weeklyCompleted: Int = 0,
-    val weeklyGoal: Int = 5,
+    val weeklyGoal: Int = 3,
     val allTemplates: List<WorkoutTemplateEntity> = emptyList(),
     val activeSession: WorkoutSessionEntity? = null,
     val activeCheckIn: com.example.data.local.CheckInEntity? = null,
@@ -49,7 +54,8 @@ data class TodayState(
     val weeklyVolumeKg: Float = 0f,
     val streakWeeks: Int = 0,
     val highlight: TodayHighlight? = null,
-    val userProgress: com.example.domain.gamification.model.UserProgress? = null
+    val userProgress: com.example.domain.gamification.model.UserProgress? = null,
+    val consistencyProgress: ConsistencyProgress? = null
 )
 
 class TodayViewModel(
@@ -57,7 +63,8 @@ class TodayViewModel(
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
     private val bodyMeasurementRepository: com.example.data.repository.BodyMeasurementRepository? = null,
-    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null
+    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null,
+    private val consistencyRepository: ConsistencyRepository? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(TodayState())
@@ -82,6 +89,7 @@ class TodayViewModel(
             val statsEngine = com.example.domain.engine.StatsEngine(repository.dao)
 
             val bodyMeasurementsFlow = bodyMeasurementRepository?.allMeasurements ?: flowOf(emptyList())
+            val goalSnapshotsFlow = consistencyRepository?.getGoalSnapshotsFlow() ?: flowOf(emptyList())
 
             combine(
                 repository.currentProgram,
@@ -93,7 +101,8 @@ class TodayViewModel(
                 settingsManager.overrideTemplateIdFlow,
                 repository.dao.getAllCompletedSessionsWithDetailsFlow(),
                 repository.dao.getRecentPRsFlow(),
-                bodyMeasurementsFlow
+                bodyMeasurementsFlow,
+                goalSnapshotsFlow
             ) { args ->
                 val program = args[0] as WorkoutProgramEntity?
                 val weeklyCount = args[1] as Int
@@ -105,10 +114,12 @@ class TodayViewModel(
                 val completedSessions = args[7] as List<com.example.data.local.SessionCalendarSummary>
                 val recentPRs = args[8] as List<com.example.data.local.PersonalRecordEntity>
                 val bodyMeasurements = args[9] as List<com.example.data.local.BodyMeasurementEntity>
+                @Suppress("UNCHECKED_CAST")
+                val goalSnapshots = args[10] as List<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>
 
                 val totalWorkouts = completedSessions.size
+                val timestamps = completedSessions.map { it.session.startedAt }
                 val activeWeeks = if (completedSessions.isNotEmpty()) {
-                    val timestamps = completedSessions.map { it.session.startedAt }
                     val minTs = timestamps.minOrNull() ?: System.currentTimeMillis()
                     val diffDays = ((System.currentTimeMillis() - minTs) / (1000 * 60 * 60 * 24)).coerceAtLeast(0)
                     (diffDays / 7 + 1).toInt()
@@ -117,9 +128,21 @@ class TodayViewModel(
                 }
 
                 val recentMilestone = TodayHighlightCalculator.formatRecentMilestone(recentPRs)
-                val streakWeeks = TodayHighlightCalculator.calculateStreakWeeks(
-                    completedSessions.map { it.session.startedAt }
+                
+                // Calculate weekly consistencies & progress using canonical ConsistencyCalculator
+                val weeklyConsistencies = ConsistencyCalculator.calculateWeeklyConsistencies(
+                    timestamps = timestamps,
+                    goalSnapshots = goalSnapshots,
+                    defaultGoal = goal,
+                    referenceDate = LocalDate.now(),
+                    zoneId = ZoneId.systemDefault()
                 )
+                val consistencyProgress = ConsistencyCalculator.calculateProgress(weeklyConsistencies, LocalDate.now())
+                val streakWeeks = consistencyProgress.currentStreakWeeks
+                val currentWeekConsistency = weeklyConsistencies.lastOrNull()
+                val effectiveWeeklyGoal = currentWeekConsistency?.goal ?: goal
+                val effectiveWeeklyCompleted = currentWeekConsistency?.completedWorkouts ?: weeklyCount
+
                 val highlight = TodayHighlightCalculator.buildHighlight(streakWeeks, recentMilestone)
 
                 val latestWeight = bodyMeasurements.firstOrNull()?.weightKg
@@ -181,8 +204,8 @@ class TodayViewModel(
                         nextTemplate = nextTemplate,
                         nextTemplateExerciseCount = exerciseCount,
                         predominantMuscles = predominantMuscles,
-                        weeklyCompleted = weeklyCount,
-                        weeklyGoal = goal,
+                        weeklyCompleted = effectiveWeeklyCompleted,
+                        weeklyGoal = effectiveWeeklyGoal,
                         allTemplates = templates,
                         activeSession = activeSession,
                         activeCheckIn = activeCheckIn,
@@ -196,11 +219,14 @@ class TodayViewModel(
                         recentMilestoneText = recentMilestone,
                         weeklyVolumeKg = weeklyVolume,
                         streakWeeks = streakWeeks,
-                        highlight = highlight
+                        highlight = highlight,
+                        userProgress = _state.value.userProgress,
+                        consistencyProgress = consistencyProgress
                     )
                 } else {
                     _state.value = TodayState(
-                        weeklyGoal = goal,
+                        weeklyCompleted = effectiveWeeklyCompleted,
+                        weeklyGoal = effectiveWeeklyGoal,
                         activeSession = activeSession,
                         activeCheckIn = activeCheckIn,
                         stats = stats,
@@ -211,7 +237,9 @@ class TodayViewModel(
                         recentMilestoneText = recentMilestone,
                         weeklyVolumeKg = weeklyVolume,
                         streakWeeks = streakWeeks,
-                        highlight = highlight
+                        highlight = highlight,
+                        userProgress = _state.value.userProgress,
+                        consistencyProgress = consistencyProgress
                     )
                 }
             }.collect()
@@ -258,7 +286,7 @@ class TodayViewModel(
 
     fun updateWeeklyGoal(newGoal: Int) {
         viewModelScope.launch {
-            settingsManager.setWeeklyGoal(newGoal)
+            consistencyRepository?.setWeeklyGoal(newGoal) ?: settingsManager.setWeeklyGoal(newGoal)
         }
     }
 
@@ -270,5 +298,4 @@ class TodayViewModel(
         cal.set(Calendar.SECOND, 0)
         return cal.timeInMillis
     }
-
 }

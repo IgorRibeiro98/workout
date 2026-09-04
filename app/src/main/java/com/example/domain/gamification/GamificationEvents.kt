@@ -149,7 +149,7 @@ object GamificationEvents {
         type = GamificationEventType.STREAK_MILESTONE_REACHED,
         timestamp = timestamp,
         source = GamificationEventSource.CONSISTENCY,
-        dedupeKey = "streak_milestone:$streakWeeks:$weekStartEpochDay",
+        dedupeKey = "streak_milestone:$streakWeeks",
         metadata = mapOf(
             GamificationEventMetadata.STREAK_WEEKS to streakWeeks.toString(),
             GamificationEventMetadata.WEEK_START_EPOCH_DAY to weekStartEpochDay.toString()

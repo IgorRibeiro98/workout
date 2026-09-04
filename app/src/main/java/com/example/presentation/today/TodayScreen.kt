@@ -404,46 +404,108 @@ fun TodayScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
         
-        // Meta Semanal Bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Meta Semanal", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            TextButton(
-                onClick = { showWeeklyGoalSheet = true },
-                modifier = Modifier.testTag("edit_weekly_goal_button")
-            ) {
-                Text("Alterar meta", color = Lime400, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(
+        // Bloco Compacto de Consistência Semanal
+        val consistencyProgress = state.consistencyProgress
+        val streak = consistencyProgress?.currentStreakWeeks ?: state.streakWeeks
+        val completed = consistencyProgress?.currentWeekCompleted ?: state.weeklyCompleted
+        val goal = consistencyProgress?.currentWeekGoal ?: state.weeklyGoal
+        val isGoalCompleted = completed >= goal
+
+        Surface(
+            color = SurfaceDark,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, BorderLight),
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { showWeeklyGoalSheet = true }
-                .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .testTag("today_weekly_goal_card")
         ) {
-            for (i in 1..state.weeklyGoal) {
-                val isCompleted = i <= state.weeklyCompleted
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp)
-                        .height(8.dp)
-                        .clip(CircleShape)
-                        .background(if (isCompleted) Lime400 else SurfaceDark)
-                )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (streak > 0) {
+                        Text(
+                            text = "🔥 $streak ${if (streak == 1) "semana consistente" else "semanas consistentes"}",
+                            color = Orange400,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            text = "Meta Semanal",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { showWeeklyGoalSheet = true },
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier.testTag("edit_weekly_goal_button")
+                    ) {
+                        Text("Alterar", color = Lime400, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Segmented Progress Bar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    for (i in 1..goal) {
+                        val isDone = i <= completed
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(8.dp)
+                                .clip(CircleShape)
+                                .background(if (isDone) Lime400 else SurfaceHighlight)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isGoalCompleted) {
+                        Text(
+                            text = "✓ Meta da semana concluída",
+                            color = Lime400,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    } else {
+                        val remaining = goal - completed
+                        Text(
+                            text = if (remaining == 1) "Falta 1 treino para sua meta semanal" else "Faltam $remaining treinos para sua meta semanal",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+
+                    Text(
+                        text = "$completed/$goal",
+                        color = if (isGoalCompleted) Lime400 else TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "${state.weeklyCompleted} de ${state.weeklyGoal} treinos concluídos este ciclo",
-            color = TextSecondary,
-            fontSize = 13.sp
-        )
 
         Spacer(modifier = Modifier.height(32.dp))
         
@@ -651,6 +713,9 @@ fun TodayScreen(
     }
 
     if (showWeeklyGoalSheet) {
+        var selectedGoal by remember(state.weeklyGoal) { mutableStateOf(state.weeklyGoal) }
+        val isChanged = selectedGoal != state.weeklyGoal
+
         AppModalBottomSheet(
             onDismissRequest = { showWeeklyGoalSheet = false },
             title = "Meta Semanal de Treinos"
@@ -663,12 +728,9 @@ fun TodayScreen(
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
                 (1..7).forEach { days ->
-                    val isSelected = days == state.weeklyGoal
+                    val isSelected = days == selectedGoal
                     Surface(
-                        onClick = {
-                            viewModel.updateWeeklyGoal(days)
-                            showWeeklyGoalSheet = false
-                        },
+                        onClick = { selectedGoal = days },
                         color = if (isSelected) LimeTransparent else SurfaceDark,
                         shape = RoundedCornerShape(12.dp),
                         border = if (isSelected) BorderStroke(1.dp, Lime400) else BorderStroke(1.dp, BorderLight),
@@ -701,6 +763,55 @@ fun TodayScreen(
                         }
                     }
                 }
+
+                if (isChanged) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Surface(
+                        color = SurfaceHighlight,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BorderLight),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Sua nova meta começará na próxima semana.",
+                                color = Lime400,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Esta semana continua com meta de ${state.weeklyGoal} ${if (state.weeklyGoal == 1) "treino" else "treinos"}.",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            viewModel.updateWeeklyGoal(selectedGoal)
+                            showWeeklyGoalSheet = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Lime400,
+                            contentColor = BackgroundDark
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("save_weekly_goal_button")
+                    ) {
+                        Text(
+                            text = "SALVAR NOVA META",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }

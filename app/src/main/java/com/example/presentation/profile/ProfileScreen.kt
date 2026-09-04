@@ -439,12 +439,37 @@ fun ProfileScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                if (selectedValue != weeklyGoal) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = SurfaceHighlight,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, BorderLight),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Sua nova meta começará na próxima semana.",
+                                color = Lime400,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Esta semana continua com meta de $weeklyGoal ${if (weeklyGoal == 1) "treino" else "treinos"}.",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Button(
                     onClick = {
                         coroutineScope.launch {
-                            settingsManager.setWeeklyGoal(selectedValue)
+                            app.consistencyRepository.setWeeklyGoal(selectedValue)
                         }
                         showGoalBottomSheet = false
                     },
@@ -454,7 +479,11 @@ fun ProfileScreen(
                         .fillMaxWidth()
                         .height(48.dp)
                 ) {
-                    Text("Salvar Meta", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(
+                        text = if (selectedValue != weeklyGoal) "SALVAR NOVA META" else "Salvar Meta",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
                 }
             }
         }

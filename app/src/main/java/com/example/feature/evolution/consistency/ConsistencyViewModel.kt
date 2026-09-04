@@ -26,12 +26,16 @@ class ConsistencyViewModel(
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             combine(
                 consistencyRepository.getConsistencySummaryFlow(),
+                consistencyRepository.getConsistencyProgressFlow(),
+                consistencyRepository.getWeeklyConsistenciesFlow(),
                 consistencyRepository.getFrequencyHistoryFlow(),
                 consistencyRepository.getWorkoutTimestampsFlow()
-            ) { summary, frequencyHistory, timestamps ->
+            ) { summary, progress, consistencies, frequencyHistory, timestamps ->
                 ConsistencyUiState(
                     isLoading = false,
                     summary = summary,
+                    consistencyProgress = progress,
+                    weeklyConsistencies = consistencies,
                     frequencyHistory = frequencyHistory,
                     workoutTimestamps = timestamps,
                     error = null

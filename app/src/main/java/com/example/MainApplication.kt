@@ -70,7 +70,11 @@ class MainApplication : Application(), ImageLoaderFactory {
         bodyMeasurementRepository = com.example.data.repository.BodyMeasurementRepository(database.bodyMeasurementDao())
         evolutionRepository = com.example.data.repository.EvolutionRepositoryImpl(bodyMeasurementRepository, database.workoutDao())
         performanceRepository = com.example.data.repository.PerformanceRepositoryImpl(database.workoutDao())
-        consistencyRepository = com.example.data.repository.ConsistencyRepositoryImpl(database.workoutDao())
+        consistencyRepository = com.example.data.repository.ConsistencyRepositoryImpl(
+            workoutDao = database.workoutDao(),
+            weeklyGoalDao = database.weeklyGoalDao(),
+            settingsManager = settingsManager
+        )
         getEvolutionSummaryUseCase = com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase(evolutionRepository)
         gamificationEventRepository = com.example.data.repository.GamificationEventRepositoryImpl(
             database.gamificationEventDao()
@@ -85,7 +89,8 @@ class MainApplication : Application(), ImageLoaderFactory {
             repository = gamificationEventRepository,
             xpCalculatorService = xpCalculatorService,
             workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
-            weeklyGoalProvider = { settingsManager.weeklyGoalFlow.first() }
+            weeklyGoalProvider = { settingsManager.weeklyGoalFlow.first() },
+            goalSnapshotsProvider = { consistencyRepository.getGoalSnapshots() }
         )
         workoutEngine = WorkoutEngine(
             dao = database.workoutDao(),

@@ -25,9 +25,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.evolution.model.consistency.ConsistencyProgress
 import com.example.domain.evolution.model.consistency.WorkoutConsistencySummary
 import com.example.ui.theme.Amber500
 import com.example.ui.theme.BorderLight
+import com.example.ui.theme.Lime400
 import com.example.ui.theme.Orange400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
@@ -37,10 +39,12 @@ import com.example.ui.theme.TextSecondary
 @Composable
 fun StreakCard(
     summary: WorkoutConsistencySummary?,
+    progress: ConsistencyProgress? = null,
+    currentGoal: Int = progress?.currentWeekGoal ?: 3,
     modifier: Modifier = Modifier
 ) {
-    val currentStreak = summary?.currentStreak ?: 0
-    val longestStreak = summary?.longestStreak ?: 0
+    val currentStreak = progress?.currentStreakWeeks ?: summary?.currentStreak ?: 0
+    val longestStreak = progress?.longestStreakWeeks ?: summary?.longestStreak ?: 0
 
     Surface(
         color = SurfaceDark,
@@ -79,10 +83,24 @@ fun StreakCard(
                         )
                     }
                     Text(
-                        text = "Sequência de Treino",
+                        text = "Consistência Semanal",
                         color = TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Surface(
+                    color = SurfaceHighlight,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, BorderLight)
+                ) {
+                    Text(
+                        text = "Meta: $currentGoal ${if (currentGoal == 1) "treino" else "treinos"}/sem",
+                        color = Lime400,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
@@ -111,9 +129,9 @@ fun StreakCard(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "🔥 $currentStreak ${if (currentStreak == 1) "dia" else "dias"}",
+                            text = "🔥 $currentStreak ${if (currentStreak == 1) "semana" else "semanas"}",
                             color = Orange400,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -131,15 +149,15 @@ fun StreakCard(
                         modifier = Modifier.padding(14.dp)
                     ) {
                         Text(
-                            text = "Melhor sequência",
+                            text = "Maior sequência",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "🏆 $longestStreak ${if (longestStreak == 1) "dia" else "dias"}",
+                            text = "🏆 $longestStreak ${if (longestStreak == 1) "semana" else "semanas"}",
                             color = Amber500,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -150,11 +168,11 @@ fun StreakCard(
 
             Text(
                 text = if (currentStreak > 0) {
-                    "Cada treino conta para fortalecer seu hábito e manter o ritmo!"
+                    "Você manteve sua meta semanal por $currentStreak ${if (currentStreak == 1) "semana consecutiva" else "semanas consecutivas"}!"
                 } else if (longestStreak > 0) {
-                    "Última sequência registrada: $longestStreak ${if (longestStreak == 1) "dia" else "dias"}. Continue no seu ritmo!"
+                    "Maior sequência histórica: $longestStreak ${if (longestStreak == 1) "semana" else "semanas"}. Cumpra sua meta esta semana para iniciar uma nova sequência!"
                 } else {
-                    "Inicie uma nova sequência realizando seu próximo treino."
+                    "Cumpra sua meta de treinos nesta semana para começar sua sequência de consistência."
                 },
                 color = TextSecondary,
                 fontSize = 12.sp,
