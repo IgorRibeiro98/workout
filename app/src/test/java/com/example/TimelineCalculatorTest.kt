@@ -93,7 +93,8 @@ class TimelineCalculatorTest {
             unlockedAt = 1710000000000L,
             progress = 1.0f,
             currentProgress = 1,
-            targetProgress = 1
+            targetProgress = 1,
+            tier = com.example.domain.evolution.model.achievement.AchievementTier.BRONZE
         )
 
         val snapshot = EvolutionSnapshot(

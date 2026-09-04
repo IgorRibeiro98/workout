@@ -28,46 +28,48 @@ object AchievementEvaluator {
         
         // Find exactly when the N-th workout happened
         var reachedAt: Long? = null
+        var triggerEventId: String? = null
         if (eligible) {
             val sorted = context.completedWorkoutsTimestamps.sorted()
             if (sorted.size >= target) {
                 reachedAt = sorted[target - 1]
-            } else {
-                // fallback
-                reachedAt = sorted.lastOrNull() ?: System.currentTimeMillis()
+            }
+            val workoutEvents = context.gamificationEvents
+                .filter { it.type == GamificationEventType.WORKOUT_COMPLETED }
+                .sortedBy { it.timestamp }
+            if (workoutEvents.size >= target) {
+                triggerEventId = workoutEvents[target - 1].id
             }
         }
 
-        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt)
+        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt, triggerEventId)
     }
 
     private fun evaluateConsistency(definition: com.example.domain.evolution.model.achievement.AchievementDefinition, context: AchievementEvaluationContext): AchievementEvaluation {
         val currentProgress = context.consistencyProgress?.longestStreakWeeks ?: 0
         val target = definition.target
         val eligible = currentProgress >= target
-
         var reachedAt: Long? = null
+        var triggerEventId: String? = null
+
         if (eligible) {
             // Find STREAK_MILESTONE_REACHED events
             val streakEvents = context.gamificationEvents
                 .filter { it.type == GamificationEventType.STREAK_MILESTONE_REACHED }
                 .sortedBy { it.timestamp }
             
-            // The metadata for STREAK_MILESTONE_REACHED is usually just the streak number, let's parse it if possible.
-            // For now, if we can't parse or there isn't a specific one, we just take the first event that implies >= target, or fallback.
-            var foundTs: Long? = null
             for (ev in streakEvents) {
                 val valStr = ev.metadata[com.example.domain.gamification.model.GamificationEventMetadata.STREAK_WEEKS] ?: ""
                 val weeks = valStr.toIntOrNull() ?: 0
                 if (weeks >= target) {
-                    foundTs = ev.timestamp
+                    reachedAt = ev.timestamp
+                    triggerEventId = ev.id
                     break
                 }
             }
-            reachedAt = foundTs ?: (if (streakEvents.isNotEmpty()) streakEvents.last().timestamp else System.currentTimeMillis())
         }
 
-        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt)
+        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt, triggerEventId)
     }
 
     private fun evaluatePerformance(definition: com.example.domain.evolution.model.achievement.AchievementDefinition, context: AchievementEvaluationContext): AchievementEvaluation {
@@ -79,11 +81,13 @@ object AchievementEvaluator {
         val eligible = currentProgress >= target
 
         var reachedAt: Long? = null
+        var triggerEventId: String? = null
         if (eligible && prEvents.size >= target) {
             reachedAt = prEvents[target - 1].timestamp
+            triggerEventId = prEvents[target - 1].id
         }
 
-        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt)
+        return AchievementEvaluation(definition, currentProgress, target, eligible, reachedAt, triggerEventId)
     }
 
     private fun evaluateBody(definition: com.example.domain.evolution.model.achievement.AchievementDefinition, context: AchievementEvaluationContext): AchievementEvaluation {

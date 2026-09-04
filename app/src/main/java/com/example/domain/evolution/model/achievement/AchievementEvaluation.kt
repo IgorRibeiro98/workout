@@ -5,5 +5,6 @@ data class AchievementEvaluation(
     val currentProgress: Int,
     val targetProgress: Int,
     val eligibleForUnlock: Boolean,
-    val reachedAt: Long?
+    val reachedAt: Long?,
+    val triggerEventId: String? = null
 )

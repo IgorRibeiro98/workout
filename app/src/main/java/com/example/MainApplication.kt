@@ -80,6 +80,9 @@ class MainApplication : Application(), ImageLoaderFactory {
         )
         getEvolutionSummaryUseCase = com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase(evolutionRepository)
         achievementRepository = com.example.data.repository.AchievementRepositoryImpl(achievementDao = database.achievementDao(), workoutDao = database.workoutDao(), gamificationEventDao = database.gamificationEventDao(), consistencyRepository = consistencyRepository, bodyMeasurementRepository = bodyMeasurementRepository)
+        bodyMeasurementRepository.onMeasurementChanged = {
+            achievementRepository.evaluateAndUnlock(com.example.domain.evolution.repository.AchievementEvaluationOrigin.LIVE)
+        }
         gamificationEventRepository = com.example.data.repository.GamificationEventRepositoryImpl(
             database.gamificationEventDao()
         )
@@ -129,24 +132,7 @@ class MainApplication : Application(), ImageLoaderFactory {
                 )
                 reconciler.reconcile()
 
-                val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
-                    achievementDao = database.achievementDao(),
-                    workoutDao = database.workoutDao(),
-                    gamificationEventDao = database.gamificationEventDao(),
-                    consistencyRepository = consistencyRepository,
-                    bodyMeasurementRepository = bodyMeasurementRepository
-                )
-                com.example.domain.gamification.AchievementReconciler(achievementRepo).reconcile()
-
-                // Trigger LIVE evaluation when body measurements change (since they bypass GamificationEventPublisher)
-                var isInitialLoad = true
-                bodyMeasurementRepository.allMeasurements.collect {
-                    if (isInitialLoad) {
-                        isInitialLoad = false
-                    } else {
-                        achievementRepo.evaluateAndUnlock(com.example.domain.evolution.repository.AchievementEvaluationOrigin.LIVE)
-                    }
-                }
+                com.example.domain.gamification.AchievementReconciler(achievementRepository).reconcile()
             } catch (e: Exception) {
                 e.printStackTrace()
             }

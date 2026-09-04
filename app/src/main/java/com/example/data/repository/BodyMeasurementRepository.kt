@@ -7,7 +7,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 class BodyMeasurementRepository(
-    val dao: BodyMeasurementDao
+    val dao: BodyMeasurementDao,
+    var onMeasurementChanged: (suspend () -> Unit)? = null
 ) {
     val allMeasurements: Flow<List<BodyMeasurementEntity>> = dao.getAllMeasurements()
     val latestMeasurement: Flow<BodyMeasurementEntity?> = dao.getLatestMeasurement()
@@ -21,11 +22,22 @@ class BodyMeasurementRepository(
     }
 
     suspend fun insertMeasurement(measurement: BodyMeasurementEntity): Long = withContext(Dispatchers.IO) {
-        dao.insertMeasurement(measurement)
+        val id = dao.insertMeasurement(measurement)
+        try {
+            onMeasurementChanged?.invoke()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        id
     }
 
     suspend fun updateMeasurement(measurement: BodyMeasurementEntity) = withContext(Dispatchers.IO) {
         dao.updateMeasurement(measurement)
+        try {
+            onMeasurementChanged?.invoke()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     suspend fun deleteMeasurement(measurement: BodyMeasurementEntity) = withContext(Dispatchers.IO) {

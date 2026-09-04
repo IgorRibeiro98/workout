@@ -29,7 +29,8 @@ class MainViewModelFactory(
     private val evolutionRepository: EvolutionRepository? = null,
     private val performanceRepository: PerformanceRepository? = null,
     private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null,
-    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null
+    private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null,
+    private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -42,14 +43,12 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.feature.evolution.achievements.AchievementsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
+            val achievementRepo = achievementRepository ?: com.example.data.repository.AchievementRepositoryImpl(
                 achievementDao = database.achievementDao(),
                 workoutDao = database.workoutDao(),
                 gamificationEventDao = database.gamificationEventDao(),
-                
-                
                 consistencyRepository = consistencyRepository!!,
-                bodyMeasurementRepository = bodyMeasurementRepository!!
+                bodyMeasurementRepository = bodyMeasurementRepository
             )
             return com.example.feature.evolution.achievements.AchievementsViewModel(achievementRepo) as T
         }
@@ -62,14 +61,11 @@ class MainViewModelFactory(
             val consRepo = consistencyRepository
                 ?: throw IllegalStateException("ConsistencyRepository not provided")
             val bodyRepo = bodyMeasurementRepository
-                ?: throw IllegalStateException("BodyMeasurementRepository not provided")
 
-            val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
+            val achievementRepo = achievementRepository ?: com.example.data.repository.AchievementRepositoryImpl(
                 achievementDao = database.achievementDao(),
                 workoutDao = database.workoutDao(),
                 gamificationEventDao = database.gamificationEventDao(),
-                
-                
                 consistencyRepository = consRepo,
                 bodyMeasurementRepository = bodyRepo
             )

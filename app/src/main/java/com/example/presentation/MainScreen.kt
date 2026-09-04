@@ -71,7 +71,8 @@ fun MainScreen() {
         evolutionRepository = app.evolutionRepository,
         performanceRepository = app.performanceRepository,
         consistencyRepository = app.consistencyRepository,
-        xpTransactionRepository = app.xpTransactionRepository
+        xpTransactionRepository = app.xpTransactionRepository,
+        achievementRepository = app.achievementRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)

@@ -101,10 +101,21 @@ class AchievementRepositoryImpl(
 
         for (eval in evaluations) {
             if (eval.eligibleForUnlock) {
+                val unlockedTime = if (origin == AchievementEvaluationOrigin.LIVE) {
+                    eval.reachedAt ?: System.currentTimeMillis()
+                } else {
+                    eval.reachedAt
+                }
+
+                if (unlockedTime == null) {
+                    // Invariant INV-04: Sem datas históricas inventadas
+                    continue
+                }
+
                 val entity = AchievementUnlockEntity(
                     achievementId = eval.definition.id,
-                    unlockedAt = eval.reachedAt ?: System.currentTimeMillis(),
-                    triggerEventId = null,
+                    unlockedAt = unlockedTime,
+                    triggerEventId = eval.triggerEventId,
                     definitionVersion = com.example.domain.evolution.model.achievement.AchievementCatalog.CATALOG_VERSION
                 )
                 val rowId = achievementDao.insertIfAbsent(entity)

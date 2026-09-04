@@ -2,6 +2,7 @@ package com.example.feature.evolution.achievements.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.evolution.model.achievement.Achievement
+import com.example.domain.evolution.model.achievement.AchievementCategory
+import com.example.domain.evolution.model.achievement.AchievementTier
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
@@ -38,15 +41,36 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+fun getTierColor(tier: AchievementTier): Color {
+    return when (tier) {
+        AchievementTier.BRONZE -> Color(0xFFCD7F32)
+        AchievementTier.SILVER -> Color(0xFFC0C0C0)
+        AchievementTier.GOLD -> Color(0xFFFFD700)
+        AchievementTier.PLATINUM -> Color(0xFFE5E4E2)
+    }
+}
+
+fun getTierName(tier: AchievementTier): String {
+    return when (tier) {
+        AchievementTier.BRONZE -> "Bronze"
+        AchievementTier.SILVER -> "Prata"
+        AchievementTier.GOLD -> "Ouro"
+        AchievementTier.PLATINUM -> "Platina"
+    }
+}
+
 @Composable
 fun AchievementCard(
     achievement: Achievement,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
 ) {
     val isUnlocked = achievement.unlockedAt != null
     val cardBg = if (isUnlocked) SurfaceHighlight else SurfaceDark
+    val tierColor = getTierColor(achievement.tier)
+    
     val borderModifier = if (isUnlocked) {
-        Modifier.border(1.dp, Lime400.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+        Modifier.border(1.dp, tierColor.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
     } else {
         Modifier.border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
     }
@@ -57,7 +81,9 @@ fun AchievementCard(
             .then(borderModifier)
             .testTag("achievement_card_${achievement.id}"),
         colors = CardDefaults.cardColors(containerColor = cardBg),
-        shape = RoundedCornerShape(16.dp)
+        shape = RoundedCornerShape(16.dp),
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null
     ) {
         Row(
             modifier = Modifier
@@ -70,9 +96,10 @@ fun AchievementCard(
                     .size(48.dp)
                     .clip(CircleShape)
                     .background(
-                        if (isUnlocked) Lime400.copy(alpha = 0.15f)
+                        if (isUnlocked) tierColor.copy(alpha = 0.15f)
                         else Color.White.copy(alpha = 0.05f)
-                    ),
+                    )
+                    .border(1.dp, if (isUnlocked) tierColor else Color.Transparent, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -87,15 +114,36 @@ fun AchievementCard(
                 modifier = Modifier.weight(1f)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
                         text = achievement.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = if (isUnlocked) TextPrimary else TextSecondary,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f, fill = false)
                     )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Explicit Tier Badge (RN-04 / Section 9.4: sem depender apenas de cor)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(tierColor.copy(alpha = if (isUnlocked) 0.2f else 0.08f))
+                            .border(1.dp, tierColor.copy(alpha = if (isUnlocked) 0.6f else 0.2f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = getTierName(achievement.tier),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isUnlocked) tierColor else tierColor.copy(alpha = 0.7f),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(2.dp))
@@ -112,9 +160,9 @@ fun AchievementCard(
                     val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
                         .format(Date(achievement.unlockedAt!!))
                     Text(
-                        text = "Concluído em: $dateStr",
+                        text = "Desbloqueada: $dateStr",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Lime400,
+                        color = tierColor,
                         fontWeight = FontWeight.Medium
                     )
                 } else {
@@ -124,16 +172,17 @@ fun AchievementCard(
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp)),
-                        color = Lime400,
+                        color = tierColor,
                         trackColor = Color.White.copy(alpha = 0.1f)
                     )
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    val unitLabel = when (achievement.id) {
-                        "first_week", "30_days_consistent" -> "dias"
-                        "load_evolution_10kg", "body_evolution_5kg" -> "kg"
-                        else -> "treinos"
+                    val unitLabel = when (achievement.category) {
+                        AchievementCategory.TRAINING -> if (achievement.targetProgress == 1) "treino" else "treinos"
+                        AchievementCategory.CONSISTENCY -> if (achievement.targetProgress == 1) "semana" else "semanas"
+                        AchievementCategory.PERFORMANCE -> if (achievement.targetProgress == 1) "recorde" else "recordes"
+                        AchievementCategory.BODY -> if (achievement.targetProgress == 1) "medição" else "medições"
                     }
 
                     Text(
