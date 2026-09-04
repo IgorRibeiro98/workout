@@ -18,6 +18,9 @@ android {
         }
     }
     sourceSets {
+        getByName("main") {
+            assets.srcDirs(files("src/main/assets", "$projectDir/schemas"))
+        }
         getByName("androidTest") {
             assets.srcDirs(files("$projectDir/schemas"))
         }
@@ -54,12 +57,6 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-  }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
-  sourceSets {
-    getByName("test") {
-      assets.srcDirs(files("$projectDir/schemas", "$projectDir/src/test/assets"))
-    }
   }
   dependenciesInfo {
     includeInApk = false

@@ -34,11 +34,10 @@ object AchievementEvaluator {
             if (sorted.size >= target) {
                 reachedAt = sorted[target - 1]
             }
-            val workoutEvents = context.gamificationEvents
-                .filter { it.type == GamificationEventType.WORKOUT_COMPLETED }
-                .sortedBy { it.timestamp }
-            if (workoutEvents.size >= target) {
-                triggerEventId = workoutEvents[target - 1].id
+            if (reachedAt != null) {
+                triggerEventId = context.gamificationEvents.firstOrNull {
+                    it.timestamp == reachedAt && (it.type == GamificationEventType.WORKOUT_COMPLETED || it.type == GamificationEventType.FIRST_WORKOUT_COMPLETED)
+                }?.id
             }
         }
 

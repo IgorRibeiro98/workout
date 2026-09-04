@@ -277,4 +277,50 @@ class AchievementEvaluatorTest {
         assertTrue("Should be eligible since streak is 10", eval.eligibleForUnlock)
         assertNull("Should NOT have invented a date when event is absent", eval.reachedAt)
     }
+
+    @Test
+    fun testTrainingTriggerEventIdSafeCorrelation() {
+        // Workout 1 at 1000L, Workout 2 at 2000L, Workout 3 at 3000L, ... Workout 10 at 10000L
+        val timestamps = (1..10).map { it * 1000L }
+
+        // Gamification events: only an event for workout at 1000L and an event at an unrelated timestamp 99999L
+        val events = listOf(
+            GamificationEvent(
+                id = "ev_workout_1",
+                type = GamificationEventType.WORKOUT_COMPLETED,
+                timestamp = 1000L,
+                source = com.example.domain.gamification.model.GamificationEventSource.WORKOUT_ENGINE,
+                dedupeKey = "k1",
+                metadata = emptyMap()
+            ),
+            GamificationEvent(
+                id = "ev_workout_unrelated",
+                type = GamificationEventType.WORKOUT_COMPLETED,
+                timestamp = 99999L,
+                source = com.example.domain.gamification.model.GamificationEventSource.WORKOUT_ENGINE,
+                dedupeKey = "k2",
+                metadata = emptyMap()
+            )
+        )
+
+        val context = AchievementEvaluationContext(
+            completedWorkoutsCount = 10,
+            completedWorkoutsTimestamps = timestamps,
+            gamificationEvents = events,
+            measurements = emptyList(),
+            consistencyProgress = null
+        )
+
+        val evaluations = AchievementEvaluator.evaluate(context)
+
+        // first_workout: reachedAt = 1000L, matching event at 1000L exists -> triggerEventId = "ev_workout_1"
+        val first = evaluations.find { it.definition.id == "first_workout" }!!
+        assertEquals(1000L, first.reachedAt)
+        assertEquals("ev_workout_1", first.triggerEventId)
+
+        // 10_workouts: reachedAt = 10000L, no matching event at 10000L -> triggerEventId = null (does NOT grab unrelated event)
+        val ten = evaluations.find { it.definition.id == "10_workouts" }!!
+        assertEquals(10000L, ten.reachedAt)
+        assertNull("10_workouts must not have triggerEventId when no event correlates at reachedAt", ten.triggerEventId)
+    }
 }
