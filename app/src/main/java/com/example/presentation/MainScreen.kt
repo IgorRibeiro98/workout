@@ -249,10 +249,19 @@ fun MainScreen() {
             }
             composable(Screen.History.route) { com.example.presentation.history.HistoryScreen(historyViewModel) }
             composable(Screen.Profile.route) {
+                val profileViewModel: com.example.presentation.profile.ProfileViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
+                    viewModel = profileViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
-                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
+                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) },
+                    // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
+                    onNavigateToAchievements = {
+                        navController.navigate(Screen.MyEvolution.route) {
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
             composable(Screen.Settings.route) {

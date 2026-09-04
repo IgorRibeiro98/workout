@@ -139,6 +139,15 @@ interface WorkoutDao {
     @Query("SELECT COUNT(*) FROM workout_sessions WHERE status = 'COMPLETED' AND finishedAt >= :startOfWeek")
     fun getWeeklyCompletedSessionsCount(startOfWeek: Long): Flow<Int>
 
+    /**
+     * Quantos treinos o usuário realmente concluiu.
+     *
+     * Só `COMPLETED` conta: sessões planejadas, em andamento ou canceladas não são histórico.
+     * A contagem sai do banco para que a apresentação não precise carregar o histórico inteiro.
+     */
+    @Query("SELECT COUNT(*) FROM workout_sessions WHERE status = 'COMPLETED'")
+    fun getCompletedSessionsCountFlow(): Flow<Int>
+
     @Query("""
         SELECT COALESCE(finishedAt, startedAt) FROM workout_sessions
         WHERE status = 'COMPLETED'
@@ -271,6 +280,14 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM personal_records ORDER BY date DESC LIMIT 5")
     fun getRecentPRsFlow(): Flow<List<PersonalRecordEntity>>
+
+    /**
+     * Quantos recordes pessoais foram realmente registrados.
+     *
+     * Conta as linhas persistidas por [insertPersonalRecord]; nada é reinferido a partir das séries.
+     */
+    @Query("SELECT COUNT(*) FROM personal_records")
+    fun getPersonalRecordsCountFlow(): Flow<Int>
 
     // Phase 9: Check-in and Calendar
     @Insert

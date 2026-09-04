@@ -112,6 +112,23 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return TodayViewModel(repository, settingsManager, workoutEngine, bodyMeasurementRepository, xpTransactionRepository, consistencyRepository) as T
         }
+        if (modelClass.isAssignableFrom(com.example.presentation.profile.ProfileViewModel::class.java)) {
+            val xpRepo = xpTransactionRepository
+                ?: throw IllegalStateException("XpTransactionRepository not provided")
+            val consRepo = consistencyRepository
+                ?: throw IllegalStateException("ConsistencyRepository not provided")
+            val achievementRepo = achievementRepository
+                ?: throw IllegalStateException("AchievementRepository not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.profile.ProfileViewModel(
+                xpTransactionRepository = xpRepo,
+                consistencyRepository = consRepo,
+                achievementRepository = achievementRepo,
+                workoutRepository = repository,
+                bodyMeasurementRepository = bodyMeasurementRepository,
+                settingsManager = settingsManager
+            ) as T
+        }
         if (modelClass.isAssignableFrom(ExecutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             return ExecutionViewModel(workoutEngine, notificationManager, settingsManager) as T

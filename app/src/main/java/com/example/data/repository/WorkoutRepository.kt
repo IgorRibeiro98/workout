@@ -88,6 +88,12 @@ class WorkoutRepository(
 
     fun getWeeklyCompletedSessionsCount(startOfWeek: Long) = dao.getWeeklyCompletedSessionsCount(startOfWeek)
 
+    /** Total de treinos concluídos. Apenas sessões `COMPLETED` entram na contagem. */
+    fun getCompletedSessionsCountFlow() = dao.getCompletedSessionsCountFlow()
+
+    /** Total de recordes pessoais persistidos. */
+    fun getPersonalRecordsCountFlow() = dao.getPersonalRecordsCountFlow()
+
     fun getTemplateExercises(templateId: Long) = dao.getTemplateExercisesWithDetailsFlow(templateId)
     val allOverridesFlow = dao.getAllOverridesFlow()
 
