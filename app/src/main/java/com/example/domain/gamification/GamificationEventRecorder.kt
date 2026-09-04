@@ -16,6 +16,7 @@ import java.time.ZoneId
 class GamificationEventRecorder(
     private val repository: GamificationEventRepository,
     private val xpCalculatorService: XpCalculatorService,
+    private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null,
     private val workoutTimestampsProvider: suspend () -> List<Long>,
     private val weeklyGoalProvider: suspend () -> Int,
     private val goalSnapshotsProvider: (suspend () -> List<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>)? = null,
@@ -39,6 +40,12 @@ class GamificationEventRecorder(
             }
             if (event.type == GamificationEventType.WORKOUT_COMPLETED) {
                 evaluateConsistency(event.timestamp)
+            }
+            
+            try {
+                achievementRepository?.evaluateAndUnlock(com.example.domain.evolution.repository.AchievementEvaluationOrigin.LIVE)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
         return stored

@@ -19,6 +19,7 @@ import com.example.presentation.history.HistoryViewModel
 import com.example.service.WorkoutNotificationManager
 
 class MainViewModelFactory(
+    private val database: com.example.data.local.AppDatabase,
     private val repository: WorkoutRepository,
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
@@ -42,11 +43,13 @@ class MainViewModelFactory(
         if (modelClass.isAssignableFrom(com.example.feature.evolution.achievements.AchievementsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
             val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
-                evolutionRepository = evolutionRepository,
-                getEvolutionSummaryUseCase = getEvolutionSummaryUseCase,
-                performanceRepository = performanceRepository,
-                consistencyRepository = consistencyRepository,
-                bodyMeasurementRepository = bodyMeasurementRepository
+                achievementDao = database.achievementDao(),
+                workoutDao = database.workoutDao(),
+                gamificationEventDao = database.gamificationEventDao(),
+                
+                
+                consistencyRepository = consistencyRepository!!,
+                bodyMeasurementRepository = bodyMeasurementRepository!!
             )
             return com.example.feature.evolution.achievements.AchievementsViewModel(achievementRepo) as T
         }
@@ -62,9 +65,11 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("BodyMeasurementRepository not provided")
 
             val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
-                evolutionRepository = evolutionRepository,
-                getEvolutionSummaryUseCase = summaryUseCase,
-                performanceRepository = perfRepo,
+                achievementDao = database.achievementDao(),
+                workoutDao = database.workoutDao(),
+                gamificationEventDao = database.gamificationEventDao(),
+                
+                
                 consistencyRepository = consRepo,
                 bodyMeasurementRepository = bodyRepo
             )

@@ -61,6 +61,7 @@ fun MainScreen() {
     val context = LocalContext.current
     val app = context.applicationContext as MainApplication
     val factory = MainViewModelFactory(
+        database = app.database,
         repository = app.repository,
         settingsManager = app.settingsManager,
         workoutEngine = app.workoutEngine,
@@ -120,6 +121,15 @@ fun MainScreen() {
     val isRouteSelected = { tabRoute: String ->
         currentRoute != null && topLevelDestinationMap[currentRoute] == tabRoute
     }
+    
+    val liveUnlocksFlow = app.achievementRepository.liveUnlocks
+    val unlockQueue = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateListOf<com.example.domain.evolution.model.achievement.AchievementUnlock>() }
+    
+    LaunchedEffect(Unit) {
+        liveUnlocksFlow.collect { unlock ->
+            unlockQueue.add(unlock)
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -167,11 +177,11 @@ fun MainScreen() {
             }
         }
     ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Today.route,
-            modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
-        ) {
+        androidx.compose.foundation.layout.Box(modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)) {
+            NavHost(
+                navController = navController,
+                startDestination = Screen.Today.route
+            ) {
             composable(Screen.Today.route) { 
                 TodayScreen(
                     viewModel = todayViewModel,
@@ -306,6 +316,26 @@ fun MainScreen() {
                         summary = currentSummary,
                         onClose = { navController.navigate(Screen.Today.route) { popUpTo(0) } }
                     )
+                }
+            }
+            }
+            
+            // Queue feedback visualizer
+            if (unlockQueue.isNotEmpty()) {
+                val currentUnlock = unlockQueue.first()
+                val def = com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(currentUnlock.achievementId)
+                if (def != null) {
+                    com.example.presentation.gamification.components.AchievementUnlockFeedback(
+                        title = def.title,
+                        description = def.description,
+                        icon = def.icon,
+                        onAnimationEnd = { unlockQueue.removeAt(0) },
+                        modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
+                    )
+                } else {
+                    LaunchedEffect(currentUnlock) {
+                        unlockQueue.removeAt(0)
+                    }
                 }
             }
         }

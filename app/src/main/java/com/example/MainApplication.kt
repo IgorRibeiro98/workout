@@ -38,6 +38,9 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository
         internal set
 
+    lateinit var achievementRepository: com.example.domain.evolution.repository.AchievementRepository
+        internal set
+
     lateinit var getEvolutionSummaryUseCase: com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase
         internal set
         
@@ -76,6 +79,7 @@ class MainApplication : Application(), ImageLoaderFactory {
             settingsManager = settingsManager
         )
         getEvolutionSummaryUseCase = com.example.domain.evolution.usecase.GetEvolutionSummaryUseCase(evolutionRepository)
+        achievementRepository = com.example.data.repository.AchievementRepositoryImpl(achievementDao = database.achievementDao(), workoutDao = database.workoutDao(), gamificationEventDao = database.gamificationEventDao(), consistencyRepository = consistencyRepository, bodyMeasurementRepository = bodyMeasurementRepository)
         gamificationEventRepository = com.example.data.repository.GamificationEventRepositoryImpl(
             database.gamificationEventDao()
         )
@@ -86,6 +90,7 @@ class MainApplication : Application(), ImageLoaderFactory {
             xpTransactionRepository
         )
         gamificationEventPublisher = com.example.domain.gamification.GamificationEventRecorder(
+            achievementRepository = achievementRepository,
             repository = gamificationEventRepository,
             xpCalculatorService = xpCalculatorService,
             workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
@@ -123,6 +128,25 @@ class MainApplication : Application(), ImageLoaderFactory {
                     settingsManager
                 )
                 reconciler.reconcile()
+
+                val achievementRepo = com.example.data.repository.AchievementRepositoryImpl(
+                    achievementDao = database.achievementDao(),
+                    workoutDao = database.workoutDao(),
+                    gamificationEventDao = database.gamificationEventDao(),
+                    consistencyRepository = consistencyRepository,
+                    bodyMeasurementRepository = bodyMeasurementRepository
+                )
+                com.example.domain.gamification.AchievementReconciler(achievementRepo).reconcile()
+
+                // Trigger LIVE evaluation when body measurements change (since they bypass GamificationEventPublisher)
+                var isInitialLoad = true
+                bodyMeasurementRepository.allMeasurements.collect {
+                    if (isInitialLoad) {
+                        isInitialLoad = false
+                    } else {
+                        achievementRepo.evaluateAndUnlock(com.example.domain.evolution.repository.AchievementEvaluationOrigin.LIVE)
+                    }
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }

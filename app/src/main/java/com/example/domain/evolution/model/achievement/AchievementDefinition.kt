@@ -1,14 +1,12 @@
 package com.example.domain.evolution.model.achievement
 
-data class Achievement(
+data class AchievementDefinition(
     val id: String,
     val title: String,
     val description: String,
     val icon: String,
-    val tier: AchievementTier,
     val category: AchievementCategory,
-    val unlockedAt: Long?,
-    val progress: Float,
-    val currentProgress: Int = 0,
-    val targetProgress: Int = 1
+    val tier: AchievementTier,
+    val target: Int,
+    val order: Int
 )
