@@ -121,3 +121,13 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+val copySchemasForUnitTest by tasks.registering(Copy::class) {
+    from(layout.projectDirectory.dir("schemas"))
+    into(layout.buildDirectory.dir("intermediates/assets/debug/mergeDebugAssets"))
+}
+
+tasks.matching { it.name.contains("UnitTest") && (it.name.startsWith("package") || it.name.startsWith("test")) }.configureEach {
+    dependsOn(copySchemasForUnitTest)
+}
+

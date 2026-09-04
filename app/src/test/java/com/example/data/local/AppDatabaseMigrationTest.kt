@@ -6,33 +6,14 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [Build.VERSION_CODES.TIRAMISU])
 class AppDatabaseMigrationTest {
-
-    companion object {
-        @BeforeClass
-        @JvmStatic
-        fun setupSchemas() {
-            val candidateSources = listOf(File("schemas"), File("app/schemas"))
-            val candidateTargets = listOf(
-                File("build/intermediates/assets/debug/mergeDebugAssets"),
-                File("app/build/intermediates/assets/debug/mergeDebugAssets")
-            )
-            val source = candidateSources.firstOrNull { it.exists() }
-            val target = candidateTargets.firstOrNull { it.exists() }
-            if (source != null && target != null) {
-                source.copyRecursively(target, overwrite = true)
-            }
-        }
-    }
 
     private val TEST_DB = "migration-test-db"
 
