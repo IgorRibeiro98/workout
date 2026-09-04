@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -106,6 +107,7 @@ fun WeeklyConsistencyHistoryCard(
                     val isCompleted = week.status == WeeklyConsistencyStatus.COMPLETED
                     val isInProgress = week.status == WeeklyConsistencyStatus.IN_PROGRESS
                     val isMissed = week.status == WeeklyConsistencyStatus.MISSED
+                    val isNotCounted = week.status == WeeklyConsistencyStatus.NOT_COUNTED
 
                     Surface(
                         color = SurfaceHighlight,
@@ -130,7 +132,6 @@ fun WeeklyConsistencyHistoryCard(
                                         .background(
                                             when {
                                                 isCompleted -> Lime400.copy(alpha = 0.2f)
-                                                isInProgress -> SurfaceDark
                                                 else -> SurfaceDark
                                             }
                                         ),
@@ -149,6 +150,12 @@ fun WeeklyConsistencyHistoryCard(
                                             tint = TextSecondary,
                                             modifier = Modifier.size(14.dp)
                                         )
+                                        isNotCounted -> Icon(
+                                            imageVector = Icons.Default.Remove,
+                                            contentDescription = "Não Contabilizada",
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
                                         else -> Icon(
                                             imageVector = Icons.Default.Close,
                                             contentDescription = "Incompleta",
@@ -160,7 +167,7 @@ fun WeeklyConsistencyHistoryCard(
 
                                 Text(
                                     text = dateLabel,
-                                    color = if (isInProgress) Lime400 else TextPrimary,
+                                    color = if (isInProgress) Lime400 else if (isNotCounted) TextSecondary else TextPrimary,
                                     fontSize = 13.sp,
                                     fontWeight = if (isInProgress) FontWeight.Bold else FontWeight.Medium
                                 )
@@ -172,7 +179,7 @@ fun WeeklyConsistencyHistoryCard(
                                 border = if (isCompleted) BorderStroke(1.dp, Lime400.copy(alpha = 0.4f)) else null
                             ) {
                                 Text(
-                                    text = "${week.completedWorkouts}/${week.goal}",
+                                    text = if (isNotCounted) "-" else "${week.completedWorkouts}/${week.goal}",
                                     color = if (isCompleted) Lime400 else TextSecondary,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,

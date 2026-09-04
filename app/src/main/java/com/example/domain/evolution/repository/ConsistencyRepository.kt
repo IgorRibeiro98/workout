@@ -8,6 +8,7 @@ import com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint
 import kotlinx.coroutines.flow.Flow
 
 interface ConsistencyRepository {
+    suspend fun initialize()
     suspend fun getConsistencySummary(): WorkoutConsistencySummary
     suspend fun getFrequencyHistory(): List<WorkoutFrequencyPoint>
     suspend fun getConsistencyProgress(): ConsistencyProgress

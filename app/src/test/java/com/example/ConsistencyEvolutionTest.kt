@@ -17,6 +17,7 @@ class ConsistencyEvolutionTest {
     fun testNewUser_zeroWorkouts() {
         val summary = ConsistencyCalculator.calculateConsistencySummary(
             timestamps = emptyList(),
+            trackingStartedAtEpochDay = LocalDate.now(zoneId).toEpochDay(),
             zoneId = zoneId
         )
 
@@ -53,6 +54,7 @@ class ConsistencyEvolutionTest {
             timestamps = w1 + w2 + w3,
             defaultGoal = 3,
             referenceDate = refDate,
+            trackingStartedAtEpochDay = LocalDate.of(2026, 8, 1).toEpochDay(),
             zoneId = zoneId
         )
         val progress = ConsistencyCalculator.calculateProgress(weekly, refDate)
@@ -64,9 +66,6 @@ class ConsistencyEvolutionTest {
 
     @Test
     fun testCurrentWeekInProgress_doesNotBreakStreak() {
-        // Week 1: 3 workouts (goal 3) -> COMPLETED
-        // Week 2: 3 workouts (goal 3) -> COMPLETED
-        // Week 3 (current week): 1 workout (goal 3) -> IN_PROGRESS (should preserve streak = 2)
         val w1 = listOf(
             LocalDate.of(2026, 8, 3).atStartOfDay(zoneId).toInstant().toEpochMilli(),
             LocalDate.of(2026, 8, 5).atStartOfDay(zoneId).toInstant().toEpochMilli(),
@@ -86,6 +85,7 @@ class ConsistencyEvolutionTest {
             timestamps = w1 + w2 + w3,
             defaultGoal = 3,
             referenceDate = refDate,
+            trackingStartedAtEpochDay = LocalDate.of(2026, 8, 1).toEpochDay(),
             zoneId = zoneId
         )
         val progress = ConsistencyCalculator.calculateProgress(weekly, refDate)
@@ -99,9 +99,6 @@ class ConsistencyEvolutionTest {
 
     @Test
     fun testGoalChange_historicalStability() {
-        // Week 1: goal was 3, did 3 -> COMPLETED
-        // Week 2: goal changed to 4, did 4 -> COMPLETED
-        // Week 3: did 3, but goal is 4 -> IN PROGRESS / MISSED
         val w1Start = LocalDate.of(2026, 8, 3)
         val w2Start = LocalDate.of(2026, 8, 10)
 
@@ -127,6 +124,7 @@ class ConsistencyEvolutionTest {
             goalSnapshots = goalSnapshots,
             defaultGoal = 3,
             referenceDate = LocalDate.of(2026, 8, 16),
+            trackingStartedAtEpochDay = LocalDate.of(2026, 8, 3).toEpochDay(),
             zoneId = zoneId
         )
 
@@ -148,11 +146,43 @@ class ConsistencyEvolutionTest {
 
         val summary = ConsistencyCalculator.calculateConsistencySummary(
             timestamps = listOf(day1, day2, day3, day4),
+            trackingStartedAtEpochDay = LocalDate.of(2026, 7, 30).toEpochDay(),
             zoneId = zoneId
         )
 
         assertEquals(4, summary.totalSessions)
         assertEquals(2.0f, summary.averageSessionsPerWeek, 0.1f)
+    }
+
+    @Test
+    fun testFirstWeekPartialMissed_doesNotCount() {
+        // Starts on Friday 2026-08-07, default goal is 3. Week is partial and they only do 1.
+        val startDay = LocalDate.of(2026, 8, 7)
+        val w1 = listOf(
+            LocalDate.of(2026, 8, 8).atStartOfDay(zoneId).toInstant().toEpochMilli()
+        )
+        // Next week they do 3.
+        val w2 = listOf(
+            LocalDate.of(2026, 8, 10).atStartOfDay(zoneId).toInstant().toEpochMilli(),
+            LocalDate.of(2026, 8, 12).atStartOfDay(zoneId).toInstant().toEpochMilli(),
+            LocalDate.of(2026, 8, 14).atStartOfDay(zoneId).toInstant().toEpochMilli()
+        )
+
+        val refDate = LocalDate.of(2026, 8, 16)
+        val weekly = ConsistencyCalculator.calculateWeeklyConsistencies(
+            timestamps = w1 + w2,
+            defaultGoal = 3,
+            referenceDate = refDate,
+            trackingStartedAtEpochDay = startDay.toEpochDay(),
+            zoneId = zoneId
+        )
+
+        assertEquals(2, weekly.size)
+        assertEquals(WeeklyConsistencyStatus.NOT_COUNTED, weekly[0].status)
+        assertEquals(WeeklyConsistencyStatus.COMPLETED, weekly[1].status)
+
+        val progress = ConsistencyCalculator.calculateProgress(weekly, refDate)
+        assertEquals(1, progress.currentStreakWeeks)
     }
 
     @Test

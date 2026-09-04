@@ -24,6 +24,7 @@ object ConsistencyMilestoneEvaluator {
         weeklyGoal: Int = 3,
         goalSnapshots: List<WeeklyGoalSnapshot> = emptyList(),
         referenceTimestamp: Long,
+        trackingStartedAtEpochDay: Long? = null,
         zoneId: ZoneId = ZoneId.systemDefault()
     ): List<GamificationEvent> {
         if (workoutTimestamps.isEmpty()) return emptyList()
@@ -36,6 +37,7 @@ object ConsistencyMilestoneEvaluator {
             goalSnapshots = goalSnapshots,
             defaultGoal = weeklyGoal,
             referenceDate = referenceDate,
+            trackingStartedAtEpochDay = trackingStartedAtEpochDay,
             zoneId = zoneId
         )
 

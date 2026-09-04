@@ -26,14 +26,36 @@ class ConsistencyRepositoryImpl(
     private val zoneId: ZoneId = ZoneId.systemDefault()
 ) : ConsistencyRepository {
 
+    override suspend fun initialize() {
+        val startedAt = settingsManager?.trackingStartedAtFlow?.first()
+        if (startedAt == null) {
+            val today = LocalDate.now(zoneId)
+            val todayEpochDay = today.toEpochDay()
+            
+            settingsManager?.setTrackingStartedAt(todayEpochDay)
+            
+            val currentGoal = settingsManager?.weeklyGoalFlow?.first() ?: 3
+            val currentMondayEpochDay = today.with(DayOfWeek.MONDAY).toEpochDay()
+            
+            weeklyGoalDao?.let { dao ->
+                val existing = dao.getGoalForWeek(currentMondayEpochDay)
+                if (existing == null) {
+                    dao.insertGoal(WeeklyGoalHistoryEntity(currentMondayEpochDay, currentGoal))
+                }
+            }
+        }
+    }
+
     override suspend fun getConsistencySummary(): WorkoutConsistencySummary {
         val timestamps = workoutDao.getCompletedSessionTimestamps()
         val snapshots = getGoalSnapshots()
         val defaultGoal = settingsManager?.weeklyGoalFlow?.first() ?: 3
+        val trackingStartedAt = settingsManager?.trackingStartedAtFlow?.first()
         return ConsistencyCalculator.calculateConsistencySummary(
             timestamps = timestamps,
             goalSnapshots = snapshots,
             defaultGoal = defaultGoal,
+            trackingStartedAtEpochDay = trackingStartedAt,
             zoneId = zoneId
         )
     }
@@ -52,11 +74,13 @@ class ConsistencyRepositoryImpl(
         val timestamps = workoutDao.getCompletedSessionTimestamps()
         val snapshots = getGoalSnapshots()
         val defaultGoal = settingsManager?.weeklyGoalFlow?.first() ?: 3
+        val trackingStartedAt = settingsManager?.trackingStartedAtFlow?.first()
         return ConsistencyCalculator.calculateWeeklyConsistencies(
             timestamps = timestamps,
             goalSnapshots = snapshots,
             defaultGoal = defaultGoal,
             referenceDate = LocalDate.now(zoneId),
+            trackingStartedAtEpochDay = trackingStartedAt,
             zoneId = zoneId
         )
     }
@@ -107,17 +131,20 @@ class ConsistencyRepositoryImpl(
         } ?: kotlinx.coroutines.flow.flowOf(emptyList())
 
         val defaultGoalFlow = settingsManager?.weeklyGoalFlow ?: kotlinx.coroutines.flow.flowOf(3)
+        val trackingStartedAtFlow = settingsManager?.trackingStartedAtFlow ?: kotlinx.coroutines.flow.flowOf(null)
 
         return combine(
             workoutDao.getAllCompletedSessionsWithDetailsFlow(),
             goalFlow,
-            defaultGoalFlow
-        ) { sessions, snapshots, defaultGoal ->
+            defaultGoalFlow,
+            trackingStartedAtFlow
+        ) { sessions, snapshots, defaultGoal, trackingStartedAt ->
             val timestamps = sessions.map { it.session.startedAt }
             ConsistencyCalculator.calculateConsistencySummary(
                 timestamps = timestamps,
                 goalSnapshots = snapshots,
                 defaultGoal = defaultGoal,
+                trackingStartedAtEpochDay = trackingStartedAt,
                 zoneId = zoneId
             )
         }
@@ -147,18 +174,21 @@ class ConsistencyRepositoryImpl(
         } ?: kotlinx.coroutines.flow.flowOf(emptyList())
 
         val defaultGoalFlow = settingsManager?.weeklyGoalFlow ?: kotlinx.coroutines.flow.flowOf(3)
+        val trackingStartedAtFlow = settingsManager?.trackingStartedAtFlow ?: kotlinx.coroutines.flow.flowOf(null)
 
         return combine(
             workoutDao.getAllCompletedSessionsWithDetailsFlow(),
             goalFlow,
-            defaultGoalFlow
-        ) { sessions, snapshots, defaultGoal ->
+            defaultGoalFlow,
+            trackingStartedAtFlow
+        ) { sessions, snapshots, defaultGoal, trackingStartedAt ->
             val timestamps = sessions.map { it.session.startedAt }
             ConsistencyCalculator.calculateWeeklyConsistencies(
                 timestamps = timestamps,
                 goalSnapshots = snapshots,
                 defaultGoal = defaultGoal,
                 referenceDate = LocalDate.now(zoneId),
+                trackingStartedAtEpochDay = trackingStartedAt,
                 zoneId = zoneId
             )
         }

@@ -90,7 +90,8 @@ class MainApplication : Application(), ImageLoaderFactory {
             xpCalculatorService = xpCalculatorService,
             workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
             weeklyGoalProvider = { settingsManager.weeklyGoalFlow.first() },
-            goalSnapshotsProvider = { consistencyRepository.getGoalSnapshots() }
+            goalSnapshotsProvider = { consistencyRepository.getGoalSnapshots() },
+            trackingStartedAtProvider = { settingsManager.trackingStartedAtFlow.first() }
         )
         workoutEngine = WorkoutEngine(
             dao = database.workoutDao(),
@@ -109,6 +110,12 @@ class MainApplication : Application(), ImageLoaderFactory {
 
 
         CoroutineScope(Dispatchers.IO).launch {
+            try {
+                (consistencyRepository as? com.example.data.repository.ConsistencyRepositoryImpl)?.initialize()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            
             try {
                 val reconciler = com.example.domain.gamification.XpReconciler(
                     xpTransactionRepository,

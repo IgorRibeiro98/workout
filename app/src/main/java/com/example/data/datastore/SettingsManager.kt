@@ -44,6 +44,15 @@ class SettingsManager(private val context: Context) {
         val TIMER_NOTIFICATION_ENABLED = booleanPreferencesKey("timer_notification_enabled")
         val EXERCISE_DB_V2_API_KEY = stringPreferencesKey("exercise_db_v2_api_key")
         val XP_POLICY_VERSION = intPreferencesKey("xp_policy_version")
+        val CONSISTENCY_TRACKING_STARTED_AT = longPreferencesKey("consistency_tracking_started_at")
+    }
+
+    val trackingStartedAtFlow: Flow<Long?> = context.dataStore.data.map { it[CONSISTENCY_TRACKING_STARTED_AT] }
+
+    suspend fun setTrackingStartedAt(epochDay: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[CONSISTENCY_TRACKING_STARTED_AT] = epochDay
+        }
     }
 
     val xpPolicyVersionFlow: Flow<Int> = context.dataStore.data.map { it[XP_POLICY_VERSION] ?: 0 }

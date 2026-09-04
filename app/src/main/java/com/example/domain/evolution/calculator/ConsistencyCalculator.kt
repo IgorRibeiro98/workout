@@ -24,8 +24,11 @@ object ConsistencyCalculator {
         goalSnapshots: List<WeeklyGoalSnapshot> = emptyList(),
         defaultGoal: Int = 3,
         referenceDate: LocalDate = LocalDate.now(),
+        trackingStartedAtEpochDay: Long? = null,
         zoneId: ZoneId = ZoneId.systemDefault()
     ): List<WeeklyConsistency> {
+        if (trackingStartedAtEpochDay == null) return emptyList()
+
         val currentMonday = referenceDate.with(DayOfWeek.MONDAY)
         val sortedGoalSnapshots = goalSnapshots.sortedBy { it.effectiveFromWeek }
 
@@ -34,40 +37,40 @@ object ConsistencyCalculator {
             return snapshot?.goal ?: defaultGoal
         }
 
-        if (timestamps.isEmpty()) {
-            val epochDay = currentMonday.toEpochDay()
-            return listOf(
-                WeeklyConsistency(
-                    weekStartEpochDay = epochDay,
-                    goal = resolveGoal(epochDay),
-                    completedWorkouts = 0,
-                    status = WeeklyConsistencyStatus.IN_PROGRESS
-                )
-            )
-        }
+        val trackingStartDate = LocalDate.ofEpochDay(trackingStartedAtEpochDay)
+        val startMonday = trackingStartDate.with(DayOfWeek.MONDAY)
 
-        val workoutsByWeek = timestamps
-            .map { ts ->
-                Instant.ofEpochMilli(ts).atZone(zoneId).toLocalDate().with(DayOfWeek.MONDAY)
-            }
+        // Only count workouts that happened on or after trackingStartMonday
+        val validWorkouts = timestamps.map {
+            Instant.ofEpochMilli(it).atZone(zoneId).toLocalDate()
+        }.filter { !it.isBefore(startMonday) }
+
+        val workoutsByWeek = validWorkouts
+            .map { it.with(DayOfWeek.MONDAY) }
             .groupingBy { it }
             .eachCount()
 
-        val earliestWorkoutMonday = workoutsByWeek.keys.minOrNull() ?: currentMonday
-        val startMonday = if (earliestWorkoutMonday.isBefore(currentMonday)) earliestWorkoutMonday else currentMonday
-
         val result = mutableListOf<WeeklyConsistency>()
         var week = startMonday
+
+        if (week.isAfter(currentMonday)) return emptyList()
+
         while (!week.isAfter(currentMonday)) {
             val epochDay = week.toEpochDay()
             val count = workoutsByWeek[week] ?: 0
             val goal = resolveGoal(epochDay)
             val isCurrentWeek = (week == currentMonday)
+            val isFirstTrackingWeek = (epochDay == startMonday.toEpochDay())
+            val isStartedMidWeek = isFirstTrackingWeek && trackingStartedAtEpochDay > startMonday.toEpochDay()
 
-            val status = if (isCurrentWeek) {
+            var status = if (isCurrentWeek) {
                 if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.IN_PROGRESS
             } else {
                 if (count >= goal) WeeklyConsistencyStatus.COMPLETED else WeeklyConsistencyStatus.MISSED
+            }
+
+            if (status == WeeklyConsistencyStatus.MISSED && isStartedMidWeek) {
+                status = WeeklyConsistencyStatus.NOT_COUNTED
             }
 
             result.add(
@@ -107,65 +110,47 @@ object ConsistencyCalculator {
 
         val pastWeeks = weeklyConsistencies.filter { it.weekStartEpochDay < currentWeek.weekStartEpochDay }
 
-        // Regra 8 — Primeira semana parcial não penaliza usuário se não atingiu a meta
-        val isFirstWeekPartialMissed = pastWeeks.isNotEmpty() &&
-                pastWeeks.first().status == WeeklyConsistencyStatus.MISSED
-
         // Calculate Current Streak
         var currentStreak = 0
         if (currentWeek.status == WeeklyConsistencyStatus.COMPLETED) {
             currentStreak = 1
-            for (i in (pastWeeks.size - 1) downTo 0) {
-                val past = pastWeeks[i]
-                if (past.status == WeeklyConsistencyStatus.COMPLETED) {
-                    currentStreak++
-                } else if (i == 0 && isFirstWeekPartialMissed) {
-                    // First partial week missed does not break streak
-                    break
-                } else {
-                    break
-                }
+        }
+        
+        for (i in (pastWeeks.size - 1) downTo 0) {
+            val past = pastWeeks[i]
+            if (past.status == WeeklyConsistencyStatus.COMPLETED) {
+                currentStreak++
+            } else if (past.status == WeeklyConsistencyStatus.NOT_COUNTED) {
+                continue
+            } else {
+                break
             }
-        } else {
-            // Current week is IN_PROGRESS: streak is from past closed weeks
-            for (i in (pastWeeks.size - 1) downTo 0) {
-                val past = pastWeeks[i]
-                if (past.status == WeeklyConsistencyStatus.COMPLETED) {
-                    currentStreak++
-                } else if (i == 0 && isFirstWeekPartialMissed) {
-                    break
-                } else {
-                    break
-                }
-            }
+        }
+
+        if (currentWeek.status == WeeklyConsistencyStatus.MISSED) {
+            currentStreak = 0
         }
 
         // Calculate Longest Streak
         var longestStreak = 0
         var currentRun = 0
 
-        // Evaluate past weeks (ignoring first partial if missed)
-        val weeksToEvaluate = if (isFirstWeekPartialMissed) pastWeeks.drop(1) else pastWeeks
-        for (w in weeksToEvaluate) {
+        for (w in pastWeeks) {
             if (w.status == WeeklyConsistencyStatus.COMPLETED) {
                 currentRun++
-                if (currentRun > longestStreak) {
-                    longestStreak = currentRun
-                }
+                if (currentRun > longestStreak) longestStreak = currentRun
+            } else if (w.status == WeeklyConsistencyStatus.NOT_COUNTED) {
+                // Does not break run, does not add
             } else {
                 currentRun = 0
             }
         }
 
-        // Include current week if COMPLETED
         if (currentWeek.status == WeeklyConsistencyStatus.COMPLETED) {
             currentRun++
-            if (currentRun > longestStreak) {
-                longestStreak = currentRun
-            }
+            if (currentRun > longestStreak) longestStreak = currentRun
         }
 
-        // Ensure longest streak is at least current streak
         if (currentStreak > longestStreak) {
             longestStreak = currentStreak
         }
@@ -186,6 +171,7 @@ object ConsistencyCalculator {
         timestamps: List<Long>,
         goalSnapshots: List<WeeklyGoalSnapshot> = emptyList(),
         defaultGoal: Int = 3,
+        trackingStartedAtEpochDay: Long? = null,
         zoneId: ZoneId = ZoneId.systemDefault(),
         nowMillis: Long = System.currentTimeMillis()
     ): WorkoutConsistencySummary {
@@ -205,6 +191,7 @@ object ConsistencyCalculator {
             goalSnapshots = goalSnapshots,
             defaultGoal = defaultGoal,
             referenceDate = referenceDate,
+            trackingStartedAtEpochDay = trackingStartedAtEpochDay,
             zoneId = zoneId
         )
 
@@ -265,7 +252,8 @@ object ConsistencyCalculator {
     ): ConsistencyMetrics {
         val timestamps = dates.map { it.atStartOfDay(zoneId).toInstant().toEpochMilli() }
         val nowMillis = referenceDate.atStartOfDay(zoneId).toInstant().toEpochMilli()
-        return calculate(timestamps, zoneId, nowMillis)
+        val trackingStart = dates.minOrNull()?.toEpochDay()
+        return calculate(timestamps, zoneId, nowMillis, trackingStart)
     }
 
     /**
@@ -274,11 +262,13 @@ object ConsistencyCalculator {
     fun calculate(
         timestamps: List<Long>,
         zoneId: ZoneId = ZoneId.systemDefault(),
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        trackingStartedAtEpochDay: Long? = null
     ): ConsistencyMetrics {
         val summary = calculateConsistencySummary(
             timestamps = timestamps,
             zoneId = zoneId,
+            trackingStartedAtEpochDay = trackingStartedAtEpochDay,
             nowMillis = nowMillis
         )
 

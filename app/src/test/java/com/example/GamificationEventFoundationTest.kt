@@ -19,6 +19,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -88,6 +89,7 @@ class GamificationEventFoundationTest {
         xpCalculatorService = XpCalculatorService(DummyXpTransactionRepository()),
         workoutTimestampsProvider = { workoutTimestamps },
         weeklyGoalProvider = { weeklyGoal },
+        trackingStartedAtProvider = { 0L },
         zoneId = zone
     )
 
@@ -338,6 +340,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )
 
@@ -354,6 +357,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )
 
@@ -370,6 +374,7 @@ class GamificationEventFoundationTest {
             workoutTimestamps = timestamps,
             weeklyGoal = 0,
             referenceTimestamp = timestampOf(currentWeekMonday),
+            trackingStartedAtEpochDay = timestamps.minOrNull()?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() } ?: 0L,
             zoneId = zone
         )
 
