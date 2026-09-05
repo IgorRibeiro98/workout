@@ -36,7 +36,9 @@ class MainViewModelFactory(
     private val exerciseNameResolver: (suspend (String) -> String?)? = null,
     private val generateWorkoutUseCase: com.example.domain.ai.usecase.GenerateWorkoutUseCase? = null,
     private val saveGeneratedWorkoutUseCase: com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase? = null,
-    private val workoutCandidateProvider: (suspend (com.example.domain.ai.model.WorkoutGenerationPreferences) -> List<com.example.domain.ai.model.AiCandidateExerciseContext>)? = null
+    private val workoutCandidateProvider: (suspend (com.example.domain.ai.model.WorkoutGenerationPreferences) -> List<com.example.domain.ai.model.AiCandidateExerciseContext>)? = null,
+    private val adaptWorkoutUseCase: com.example.domain.ai.usecase.AdaptWorkoutUseCase? = null,
+    private val applyWorkoutAdaptationUseCase: com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -156,6 +158,17 @@ class MainViewModelFactory(
                 generateWorkout = generate,
                 saveGeneratedWorkout = save::invoke,
                 listCandidates = candidates
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.coach.AdaptWorkoutViewModel::class.java)) {
+            val adapt = adaptWorkoutUseCase
+                ?: throw IllegalStateException("AdaptWorkoutUseCase not provided")
+            val apply = applyWorkoutAdaptationUseCase
+                ?: throw IllegalStateException("ApplyWorkoutAdaptationUseCase not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.coach.AdaptWorkoutViewModel(
+                adaptWorkout = adapt,
+                applyAdaptation = apply::invoke
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.missions.MissionViewModel::class.java)) {

@@ -80,7 +80,9 @@ fun MainScreen() {
         saveGeneratedWorkoutUseCase = app.saveGeneratedWorkoutUseCase,
         workoutCandidateProvider = { preferences ->
             app.workoutGenerationContextBuilder.candidates(preferences)
-        }
+        },
+        adaptWorkoutUseCase = app.adaptWorkoutUseCase,
+        applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -118,6 +120,7 @@ fun MainScreen() {
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
+        Screen.AdaptWorkout.route to Screen.Workouts.route,
         Screen.Settings.route to Screen.Today.route,
         Screen.Workouts.route to Screen.Workouts.route,
         Screen.ProgramDetails.route to Screen.Workouts.route,
@@ -241,7 +244,21 @@ fun MainScreen() {
                 val templateId = backStackEntry.arguments?.getString("templateId")?.toLongOrNull() ?: -1L
                 val viewModel: com.example.presentation.workouts.TemplateDetailsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 androidx.compose.runtime.LaunchedEffect(templateId) { viewModel.load(templateId) }
-                com.example.presentation.workouts.TemplateDetailsScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
+                com.example.presentation.workouts.TemplateDetailsScreen(
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onAdaptWithCoach = { navController.navigate(Screen.AdaptWorkout.createRoute(templateId)) }
+                )
+            }
+            composable(Screen.AdaptWorkout.route) { backStackEntry ->
+                val templateId = backStackEntry.arguments?.getString("templateId")?.toLongOrNull() ?: -1L
+                val adaptViewModel: com.example.presentation.coach.AdaptWorkoutViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.coach.AdaptWorkoutScreen(
+                    viewModel = adaptViewModel,
+                    templateId = templateId,
+                    onNavigateBack = { navController.popBackStack() }
+                )
             }
             composable(Screen.Exercises.route) { 
                 ExercisesScreen(

@@ -47,16 +47,14 @@ object AiCoachContextProjector {
         val plannedExercises = templateExercises.sortedBy { it.sortOrder }
         val currentWorkout = projectCurrentWorkout(exercisesById, templateName, plannedExercises)
 
-        val scannedSessions = completedSessions
-            .sortedByDescending { it.session.finishedAt ?: it.session.startedAt }
-            .take(AiModelConfig.HISTORY_SCAN_SESSIONS)
+        val scannedSessions = scan(completedSessions)
 
         val relevantRowIds = resolveRelevantExercises(plannedExercises, scannedSessions)
-        val contributingSessionIds = mutableSetOf<Long>()
-        val history = projectHistory(exercisesById, relevantRowIds, scannedSessions, contributingSessionIds)
+        val projection = projectExerciseHistory(exercisesById, relevantRowIds, scannedSessions)
+        val history = projection.history
 
         // Só conta o que realmente foi enviado: nunca mais sessões do que o modelo enxergou.
-        val sessionsAnalyzed = contributingSessionIds.size
+        val sessionsAnalyzed = projection.sessionsAnalyzed
         val idsInContext = buildSet {
             currentWorkout?.exercises?.forEach { add(it.exerciseId) }
             history.forEach { add(it.exerciseId) }
@@ -111,9 +109,7 @@ object AiCoachContextProjector {
     ): List<AiExerciseLoadEvidenceContext> {
         if (candidateExerciseIds.isEmpty()) return emptyList()
 
-        val scanned = completedSessions
-            .sortedByDescending { it.session.finishedAt ?: it.session.startedAt }
-            .take(AiModelConfig.HISTORY_SCAN_SESSIONS)
+        val scanned = scan(completedSessions)
 
         // Ordem de inserção = da execução mais recente para a mais antiga.
         val evidence = LinkedHashMap<String, AiExerciseLoadEvidenceContext>()
@@ -193,6 +189,43 @@ object AiCoachContextProjector {
         return AiWorkoutContext(templateName = templateName, exercises = exercises)
     }
 
+    /** O histórico projetado e quantas sessões concluídas realmente o sustentam. */
+    data class ExerciseHistoryProjection(
+        val history: List<AiExerciseHistoryContext>,
+        val sessionsAnalyzed: Int
+    )
+
+    /**
+     * A janela de sessões que qualquer projeção enxerga: as mais recentes, e no máximo
+     * [AiModelConfig.HISTORY_SCAN_SESSIONS].
+     */
+    private fun scan(completedSessions: List<SessionCalendarSummary>): List<SessionCalendarSummary> =
+        completedSessions
+            .sortedByDescending { it.session.finishedAt ?: it.session.startedAt }
+            .take(AiModelConfig.HISTORY_SCAN_SESSIONS)
+
+    /**
+     * A série histórica dos exercícios pedidos, com a mesma política da análise.
+     *
+     * Até [AiModelConfig.HISTORY_PER_EXERCISE_LIMIT] execuções por exercício, buscadas nas
+     * [AiModelConfig.HISTORY_SCAN_SESSIONS] sessões concluídas mais recentes. É esta a política
+     * que a adaptação reutiliza — não existe uma segunda regra de histórico no Spark.
+     */
+    fun projectExerciseHistory(
+        exercisesById: Map<Long, ExerciseEntity>,
+        exerciseRowIds: List<Long>,
+        completedSessions: List<SessionCalendarSummary>
+    ): ExerciseHistoryProjection {
+        val contributingSessionIds = mutableSetOf<Long>()
+        val history = projectHistory(
+            exercisesById = exercisesById,
+            relevantRowIds = exerciseRowIds,
+            scannedSessions = scan(completedSessions),
+            contributingSessionIds = contributingSessionIds
+        )
+        return ExerciseHistoryProjection(history = history, sessionsAnalyzed = contributingSessionIds.size)
+    }
+
     /**
      * A série histórica de cada exercício relevante, da execução mais recente para a mais antiga.
      *
@@ -245,7 +278,12 @@ object AiCoachContextProjector {
         )
     }
 
-    private fun projectPersonalRecords(
+    /**
+     * Os PRs reconhecidos pelo domínio, restritos aos exercícios que já estão no contexto.
+     *
+     * A IA nunca cria PR: o valor vem de `personal_records` e nada é reinferido das séries.
+     */
+    fun projectPersonalRecords(
         exercisesById: Map<Long, ExerciseEntity>,
         personalRecordsByExerciseId: Map<Long, PersonalRecordEntity>,
         idsInContext: Set<String>

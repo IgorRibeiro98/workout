@@ -14,6 +14,9 @@ import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiGeneratedWorkoutResponse
+import com.example.domain.ai.model.AiWorkoutAdaptationGatewayResult
+import com.example.domain.ai.model.AiWorkoutAdaptationRequest
+import com.example.domain.ai.model.AiWorkoutAdaptationResponse
 import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
 import com.example.domain.ai.model.AiWorkoutGenerationRequest
 import com.google.firebase.FirebaseApp
@@ -91,6 +94,20 @@ class FirebaseAiCoachGateway(
                 )
             } catch (e: Exception) {
                 AiWorkoutGenerationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            }
+        }
+
+    override suspend fun adaptWorkout(
+        request: AiWorkoutAdaptationRequest
+    ): AiWorkoutAdaptationGatewayResult =
+        when (val raw = generate(AiCoachRequestType.ADAPT_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+            is RawResult.Error -> AiWorkoutAdaptationGatewayResult.Error(raw.kind, raw.detail)
+            is RawResult.Text -> try {
+                AiWorkoutAdaptationGatewayResult.Success(
+                    json.decodeFromString<AiWorkoutAdaptationResponse>(raw.text)
+                )
+            } catch (e: Exception) {
+                AiWorkoutAdaptationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
         }
 

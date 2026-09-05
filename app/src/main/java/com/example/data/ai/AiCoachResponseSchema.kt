@@ -5,6 +5,7 @@ import com.example.domain.ai.AiCoachResponseValidator
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendationType
+import com.example.domain.ai.model.WorkoutAdaptationType
 
 /**
  * Schemas explícitos do structured output, um por tipo de request.
@@ -20,6 +21,7 @@ internal object AiCoachResponseSchema {
     fun forType(type: AiCoachRequestType): Schema = when (type) {
         AiCoachRequestType.ANALYZE_WORKOUT -> schema
         AiCoachRequestType.GENERATE_WORKOUT -> generatedWorkoutSchema
+        AiCoachRequestType.ADAPT_WORKOUT -> workoutAdaptationSchema
     }
 
     private fun observationSchema(description: String): Schema = Schema.array(
@@ -148,6 +150,119 @@ internal object AiCoachResponseSchema {
             "insufficientCandidates" to Schema.boolean(
                 description = "Verdadeiro quando os exercícios candidatos não sustentam o pedido. " +
                     "Nesse caso, exercises precisa estar vazio."
+            )
+        )
+    )
+
+    /**
+     * Contrato de forma de uma adaptação.
+     *
+     * Os campos numéricos são específicos por tipo e opcionais: o validador exige que apenas os
+     * campos do tipo declarado venham preenchidos, para não existir mudança ambígua.
+     */
+    val workoutAdaptationSchema: Schema = Schema.obj(
+        properties = mapOf(
+            "summary" to Schema.string(
+                description = "Resumo curto da adaptação, em português do Brasil. Explique aqui " +
+                    "quando não houver nenhuma mudança a propor."
+            ),
+            "changes" to Schema.array(
+                items = Schema.obj(
+                    properties = mapOf(
+                        "type" to Schema.enumeration(
+                            values = WorkoutAdaptationType.entries.map { it.name },
+                            description = "Tipo da mudança. Use somente os tipos listados em " +
+                                "allowedChangeTypes do contexto."
+                        ),
+                        "exerciseId" to Schema.string(
+                            description = "exerciseId de um exercício presente em template.exercises, " +
+                                "copiado exatamente."
+                        ),
+                        "currentWeightKg" to Schema.double(
+                            description = "ADJUST_LOAD: carga planejada hoje, exatamente como está no " +
+                                "contexto. Nulo quando o treino não tem carga planejada.",
+                            nullable = true
+                        ),
+                        "suggestedWeightKg" to Schema.double(
+                            description = "ADJUST_LOAD: nova carga em kg.",
+                            nullable = true
+                        ),
+                        "currentSets" to Schema.integer(
+                            description = "ADJUST_SETS: séries de hoje, exatamente como no contexto.",
+                            nullable = true
+                        ),
+                        "suggestedSets" to Schema.integer(
+                            description = "ADJUST_SETS: novo número de séries.",
+                            nullable = true
+                        ),
+                        "currentMinReps" to Schema.integer(
+                            description = "ADJUST_REPS: mínimo da faixa de hoje.",
+                            nullable = true
+                        ),
+                        "currentMaxReps" to Schema.integer(
+                            description = "ADJUST_REPS: máximo da faixa de hoje.",
+                            nullable = true
+                        ),
+                        "suggestedMinReps" to Schema.integer(
+                            description = "ADJUST_REPS: novo mínimo da faixa.",
+                            nullable = true
+                        ),
+                        "suggestedMaxReps" to Schema.integer(
+                            description = "ADJUST_REPS: novo máximo da faixa, nunca menor que o mínimo.",
+                            nullable = true
+                        ),
+                        "currentRestSeconds" to Schema.integer(
+                            description = "ADJUST_REST: descanso de hoje em segundos.",
+                            nullable = true
+                        ),
+                        "suggestedRestSeconds" to Schema.integer(
+                            description = "ADJUST_REST: novo descanso em segundos.",
+                            nullable = true
+                        ),
+                        "replacementExerciseId" to Schema.string(
+                            description = "REPLACE_EXERCISE: exerciseId do substituto, copiado de " +
+                                "replacementCandidates.",
+                            nullable = true
+                        ),
+                        "reason" to Schema.string(
+                            description = "Em uma frase, por que esta mudança."
+                        ),
+                        "evidence" to Schema.string(
+                            description = "O dado do contexto que sustenta a mudança. Obrigatório."
+                        ),
+                        "confidence" to Schema.double(
+                            description = "Confiança entre 0.0 e 1.0.",
+                            minimum = 0.0,
+                            maximum = 1.0
+                        )
+                    ),
+                    optionalProperties = listOf(
+                        "currentWeightKg",
+                        "suggestedWeightKg",
+                        "currentSets",
+                        "suggestedSets",
+                        "currentMinReps",
+                        "currentMaxReps",
+                        "suggestedMinReps",
+                        "suggestedMaxReps",
+                        "currentRestSeconds",
+                        "suggestedRestSeconds",
+                        "replacementExerciseId"
+                    )
+                ),
+                description = "Mudanças propostas. Pode ser vazia quando não há o que ajustar.",
+                maxItems = AiCoachResponseValidator.MAX_ADAPTATION_CHANGES
+            ),
+            "dataQuality" to Schema.obj(
+                properties = mapOf(
+                    "level" to Schema.enumeration(
+                        values = AiDataQualityLevel.entries.map { it.name },
+                        description = "Nunca maior que evidence.maxDataQuality do contexto."
+                    ),
+                    "description" to Schema.string(
+                        description = "Em uma frase, no que a adaptação se baseou."
+                    )
+                )
             )
         )
     )

@@ -3,6 +3,8 @@ package com.example.domain.ai
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
+import com.example.domain.ai.model.AiWorkoutAdaptationGatewayResult
+import com.example.domain.ai.model.AiWorkoutAdaptationRequest
 import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
 import com.example.domain.ai.model.AiWorkoutGenerationRequest
 
@@ -13,6 +15,9 @@ import com.example.domain.ai.model.AiWorkoutGenerationRequest
 class FakeAiCoachGateway(
     private val generationResponder: suspend (AiWorkoutGenerationRequest) -> AiWorkoutGenerationGatewayResult = {
         AiWorkoutGenerationGatewayResult.Error(AiCoachErrorKind.UNAVAILABLE, "sem responder de geração")
+    },
+    private val adaptationResponder: suspend (AiWorkoutAdaptationRequest) -> AiWorkoutAdaptationGatewayResult = {
+        AiWorkoutAdaptationGatewayResult.Error(AiCoachErrorKind.UNAVAILABLE, "sem responder de adaptação")
     },
     // Último parâmetro de propósito: os testes de análise passam este responder como lambda final.
     private val responder: suspend (AiCoachRequest) -> AiCoachGatewayResult = {
@@ -28,6 +33,10 @@ class FakeAiCoachGateway(
 
     val generationCallCount: Int get() = generationRequests.size
 
+    val adaptationRequests = mutableListOf<AiWorkoutAdaptationRequest>()
+
+    val adaptationCallCount: Int get() = adaptationRequests.size
+
     override suspend fun request(request: AiCoachRequest): AiCoachGatewayResult {
         requests += request
         return responder(request)
@@ -38,5 +47,12 @@ class FakeAiCoachGateway(
     ): AiWorkoutGenerationGatewayResult {
         generationRequests += request
         return generationResponder(request)
+    }
+
+    override suspend fun adaptWorkout(
+        request: AiWorkoutAdaptationRequest
+    ): AiWorkoutAdaptationGatewayResult {
+        adaptationRequests += request
+        return adaptationResponder(request)
     }
 }

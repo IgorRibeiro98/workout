@@ -106,6 +106,23 @@ class MainApplication : Application(), ImageLoaderFactory {
         com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase(repository)
     }
 
+    val workoutAdaptationContextBuilder: com.example.domain.ai.AiWorkoutAdaptationContextBuilder by lazy {
+        com.example.data.ai.WorkoutAiAdaptationContextBuilder(workoutDao = database.workoutDao())
+    }
+
+    val adaptWorkoutUseCase: com.example.domain.ai.usecase.AdaptWorkoutUseCase by lazy {
+        com.example.domain.ai.usecase.AdaptWorkoutUseCase(
+            contextBuilder = workoutAdaptationContextBuilder,
+            gateway = aiCoachGateway,
+            telemetry = com.example.data.ai.LogcatAiCoachTelemetry()
+        )
+    }
+
+    /** A confirmação do usuário edita o treino pelo repositório canônico, como a edição manual. */
+    val applyWorkoutAdaptationUseCase: com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase by lazy {
+        com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase(repository)
+    }
+
     /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *

@@ -10,7 +10,8 @@ import kotlinx.serialization.Serializable
  */
 enum class AiCoachRequestType {
     ANALYZE_WORKOUT,
-    GENERATE_WORKOUT
+    GENERATE_WORKOUT,
+    ADAPT_WORKOUT
 }
 
 /**

@@ -427,6 +427,17 @@ interface WorkoutDao {
     @Update
     suspend fun updateTemplateExerciseFull(templateExercise: WorkoutTemplateExerciseEntity)
 
+    /**
+     * Atualiza vários exercícios de treino em uma transação só.
+     *
+     * Sem isto, um lote de alterações pode parar no meio e deixar o treino parcialmente
+     * atualizado. Com a transação, ou todas entram ou nenhuma entra.
+     */
+    @Transaction
+    suspend fun updateTemplateExercisesTransactionally(items: List<WorkoutTemplateExerciseEntity>) {
+        items.forEach { updateTemplateExerciseFull(it) }
+    }
+
     @Query("SELECT * FROM workout_templates")
     suspend fun getAllTemplatesSync(): List<WorkoutTemplateEntity>
 

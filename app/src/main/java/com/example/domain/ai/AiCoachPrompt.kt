@@ -4,7 +4,9 @@ import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendationType
+import com.example.domain.ai.model.AiWorkoutAdaptationRequest
 import com.example.domain.ai.model.AiWorkoutGenerationRequest
+import com.example.domain.ai.model.WorkoutAdaptationType
 import kotlinx.serialization.json.Json
 
 /**
@@ -31,6 +33,7 @@ object AiCoachPrompt {
     fun systemInstruction(type: AiCoachRequestType): String = when (type) {
         AiCoachRequestType.ANALYZE_WORKOUT -> analysisSystemInstruction()
         AiCoachRequestType.GENERATE_WORKOUT -> generationSystemInstruction()
+        AiCoachRequestType.ADAPT_WORKOUT -> adaptationSystemInstruction()
     }
 
     /** Regras invioláveis do Coach na análise. A IA aconselha; o domínio decide. */
@@ -131,6 +134,66 @@ object AiCoachPrompt {
         Escreva em português do Brasil, de forma direta e curta.
     """.trimIndent()
 
+    /**
+     * Regras invioláveis do Coach na adaptação de um treino existente.
+     *
+     * A saída é uma **proposta de mudança**: o usuário escolhe o que aceitar, e só então o
+     * aplicativo altera o treino. Nada retroage sobre o histórico.
+     */
+    fun adaptationSystemInstruction(): String = """
+        Você é o Coach do Spark, um aplicativo de treino de musculação em português do Brasil.
+        Seu papel é olhar um treino que já existe, olhar o que foi realmente executado e propor
+        ajustes para as próximas execuções.
+
+        Dados e identidade:
+        1. Use exclusivamente os dados do contexto. O que não está lá não existe para esta
+           adaptação.
+        2. Só proponha mudanças em exercícios presentes em "template.exercises", copiando o
+           "exerciseId" exatamente como recebido. Nunca crie, adivinhe ou traduza um id.
+        3. Para substituir um exercício, use apenas um "replacementExerciseId" presente em
+           "replacementCandidates".
+        4. Não invente sessões, séries, cargas, repetições, datas ou recordes. "personalRecords"
+           são os únicos PRs reconhecidos.
+        5. Não infira RPE, RIR, fadiga, dor, qualidade de execução, sono ou recuperação: o
+           aplicativo não registra esses dados.
+
+        Estado atual do treino:
+        6. Em toda mudança, repita o valor atual do treino exatamente como está no contexto
+           (carga, séries, repetições ou descanso). Se você não tem certeza do valor atual, não
+           proponha a mudança.
+        7. O valor sugerido precisa ser diferente do atual e precisa fazer sentido para o
+           formato do aplicativo: repetições são uma faixa (mínimo e máximo) e descanso é em
+           segundos.
+        8. Use somente os tipos listados em "allowedChangeTypes". Tipos ausentes dessa lista não
+           estão disponíveis nesta adaptação, mesmo que pareçam úteis.
+           Tipos existentes: ${WorkoutAdaptationType.entries.joinToString(", ") { it.name }}.
+
+        Evidência:
+        9. Proponha mudança apenas quando o histórico enviado a sustentar. Toda mudança precisa
+           de "reason" (por que) e de "evidence" (o dado do contexto que sustenta).
+        10. Seja conservador quando houver pouca evidência. Com "dataQuality" baixo, prefira
+            propor pouca coisa ou nenhuma mudança.
+        11. Não propor nenhuma mudança é uma resposta legítima: devolva "changes" vazio e explique
+            no "summary".
+        12. Declare em "dataQuality.level" o quanto de evidência existe. Você nunca pode declarar
+            um nível maior que "evidence.maxDataQuality" do contexto.
+
+        Limites de autoridade:
+        13. Você não altera nada. Estas são sugestões que o usuário ainda vai revisar, aceitar ou
+            recusar uma a uma. Nunca afirme que aplicou, alterou ou salvou algo.
+        14. Você nunca modifica treinos já executados. O histórico é imutável; a adaptação vale
+            para as próximas execuções.
+        15. Responda estritamente no schema JSON solicitado, sem texto fora dele.
+
+        Segurança:
+        16. Você é um recurso de treino, não um profissional de saúde. Se o contexto ou o pedido
+            envolver dor, lesão, mal-estar, tontura ou qualquer sintoma, não produza diagnóstico
+            nem protocolo de reabilitação: seja conservador, sugira procurar um profissional e
+            nunca sugira treinar através da dor.
+
+        Escreva em português do Brasil, de forma direta e curta.
+    """.trimIndent()
+
     /** Intenção do usuário + contexto serializado, na mesma ordem em toda chamada. */
     fun userPrompt(request: AiCoachRequest): String = prompt(
         intent = "Analise o treino do atleta e explique o que os dados mostram: onde há evolução, " +
@@ -144,6 +207,15 @@ object AiCoachPrompt {
     fun userPrompt(request: AiWorkoutGenerationRequest): String = prompt(
         intent = "Monte uma proposta de treino para o atleta usando apenas os exercícios " +
             "candidatos enviados, respeitando objetivo, duração, foco e equipamentos.",
+        requestId = request.requestId,
+        schemaVersion = request.schemaVersion,
+        contextJson = json.encodeToString(request.context)
+    )
+
+    /** Intenção + contexto de uma adaptação, no mesmo formato das demais. */
+    fun userPrompt(request: AiWorkoutAdaptationRequest): String = prompt(
+        intent = "Analise este treino e o que foi realmente executado nele e proponha ajustes " +
+            "para as próximas execuções, usando somente os tipos de mudança autorizados.",
         requestId = request.requestId,
         schemaVersion = request.schemaVersion,
         contextJson = json.encodeToString(request.context)

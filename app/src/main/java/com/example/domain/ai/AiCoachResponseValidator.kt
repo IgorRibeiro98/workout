@@ -5,12 +5,21 @@ import com.example.domain.ai.model.AiCoachContext
 import com.example.domain.ai.model.AiCoachDataQuality
 import com.example.domain.ai.model.AiCoachObservation
 import com.example.domain.ai.model.AiCoachResponse
+import com.example.domain.ai.model.AiCoachResponseDataQuality
 import com.example.domain.ai.model.AiCoachResponseObservation
 import com.example.domain.ai.model.AiDataQualityLevel
+import com.example.domain.ai.model.AiPlannedExerciseContext
 import com.example.domain.ai.model.AiGeneratedWorkoutResponse
 import com.example.domain.ai.model.AiRecommendation
 import com.example.domain.ai.model.AiRecommendationType
+import com.example.domain.ai.model.AiWorkoutAdaptationChangeResponse
+import com.example.domain.ai.model.AiWorkoutAdaptationContext
+import com.example.domain.ai.model.AiWorkoutAdaptationResponse
 import com.example.domain.ai.model.AiWorkoutGenerationContext
+import com.example.domain.ai.model.WorkoutAdaptationChange
+import com.example.domain.ai.model.WorkoutAdaptationDraft
+import com.example.domain.ai.model.WorkoutAdaptationType
+import com.example.domain.ai.model.WorkoutAdaptationValue
 import com.example.domain.ai.model.GeneratedWorkoutDraft
 import com.example.domain.ai.model.GeneratedWorkoutDraftExercise
 
@@ -18,6 +27,12 @@ import com.example.domain.ai.model.GeneratedWorkoutDraftExercise
 sealed interface AiCoachValidation {
     data class Valid(val advice: AiCoachAdvice) : AiCoachValidation
     data class Invalid(val reason: String) : AiCoachValidation
+}
+
+/** O que a validação decidiu sobre uma adaptação proposta pelo modelo. */
+sealed interface AiWorkoutAdaptationValidation {
+    data class Valid(val draft: WorkoutAdaptationDraft) : AiWorkoutAdaptationValidation
+    data class Invalid(val reason: String) : AiWorkoutAdaptationValidation
 }
 
 /** O que a validação decidiu sobre um treino proposto pelo modelo. */
@@ -215,6 +230,398 @@ object AiCoachResponseValidator {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Adaptação de treino (T14.3)
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Teto de mudanças por resposta.
+     *
+     * Reaproveita o teto de exercícios de um treino real
+     * ([AiModelConfig.MAX_EXERCISES_IN_CONTEXT]): mais de uma dúzia de alterações de uma vez não é
+     * adaptação, é outro treino.
+     */
+    const val MAX_ADAPTATION_CHANGES: Int = AiModelConfig.MAX_EXERCISES_IN_CONTEXT
+
+    /** Tolerância ao comparar carga: `Float` não fecha em igualdade exata. */
+    const val WEIGHT_TOLERANCE_KG: Double = 0.001
+
+    /**
+     * Uma proposta de adaptação também é entrada não confiável.
+     *
+     * Mesma política das outras duas: **uma violação invalida a proposta inteira**. As regras
+     * próprias da adaptação:
+     *
+     * - o exercício alterado precisa estar no treino;
+     * - o tipo precisa estar entre os autorizados nesta requisição (sem evidência de desempenho,
+     *   os tipos de progressão nem são oferecidos);
+     * - o **valor atual** declarado precisa bater com o que o template tem hoje — se não bate, o
+     *   modelo raciocinou sobre outro treino;
+     * - o valor sugerido precisa ser diferente do atual e válido no domínio;
+     * - substituto só entre os candidatos enviados;
+     * - toda mudança precisa de razão e evidência.
+     */
+    fun validateWorkoutAdaptation(
+        requestId: String,
+        templateId: Long,
+        sourceRevision: String,
+        context: AiWorkoutAdaptationContext,
+        response: AiWorkoutAdaptationResponse
+    ): AiWorkoutAdaptationValidation {
+        val summary = response.summary.trim()
+        if (summary.isEmpty()) {
+            return AiWorkoutAdaptationValidation.Invalid("summary vazio")
+        }
+        if (summary.length > MAX_SUMMARY_LENGTH) {
+            return AiWorkoutAdaptationValidation.Invalid("summary excede $MAX_SUMMARY_LENGTH caracteres")
+        }
+        if (response.changes.size > MAX_ADAPTATION_CHANGES) {
+            return AiWorkoutAdaptationValidation.Invalid("mais de $MAX_ADAPTATION_CHANGES mudanças")
+        }
+
+        val dataQuality = when (
+            val result = validateDataQuality(context.evidence.maxDataQuality, response.dataQuality)
+        ) {
+            is DataQualityResult.Invalid -> return AiWorkoutAdaptationValidation.Invalid(result.reason)
+            is DataQualityResult.Valid -> result.dataQuality
+        }
+
+        val allowedTypes = context.allowedChangeTypes.toSet()
+        val seenIds = mutableSetOf<String>()
+        val seenReplacements = mutableSetOf<String>()
+        val changes = mutableListOf<WorkoutAdaptationChange>()
+
+        response.changes.forEachIndexed { index, raw ->
+            val type = WorkoutAdaptationType.entries.firstOrNull { it.name == raw.type.trim() }
+                ?: return AiWorkoutAdaptationValidation.Invalid("tipo desconhecido em [$index]: '${raw.type}'")
+            if (type.name !in allowedTypes) {
+                return AiWorkoutAdaptationValidation.Invalid("tipo não autorizado nesta adaptação em [$index]: ${type.name}")
+            }
+
+            val exerciseId = raw.exerciseId.trim()
+            if (exerciseId.isEmpty()) {
+                return AiWorkoutAdaptationValidation.Invalid("exerciseId vazio em [$index]")
+            }
+            val planned = context.plannedExercise(exerciseId)
+                ?: return AiWorkoutAdaptationValidation.Invalid(
+                    "exerciseId fora do treino em [$index]: '$exerciseId'"
+                )
+
+            val changeId = WorkoutAdaptationChange.idOf(type, exerciseId)
+            if (!seenIds.add(changeId)) {
+                return AiWorkoutAdaptationValidation.Invalid("mudança repetida em [$index]: $changeId")
+            }
+
+            extraneousField(type, raw)?.let { field ->
+                return AiWorkoutAdaptationValidation.Invalid(
+                    "campo '$field' não pertence a ${type.name} em [$index]"
+                )
+            }
+
+            val reason = raw.reason.trim()
+            if (reason.isEmpty()) {
+                return AiWorkoutAdaptationValidation.Invalid("reason vazio em [$index]")
+            }
+            if (reason.length > MAX_REASON_LENGTH) {
+                return AiWorkoutAdaptationValidation.Invalid("reason excede $MAX_REASON_LENGTH caracteres em [$index]")
+            }
+
+            // Evidência é obrigatória em toda mudança: uma alteração de treino sem o dado que a
+            // sustenta é opinião, e opinião não altera plano.
+            val evidence = raw.evidence.trim()
+            if (evidence.isEmpty()) {
+                return AiWorkoutAdaptationValidation.Invalid("evidence vazia em [$index]")
+            }
+            if (evidence.length > MAX_EVIDENCE_LENGTH) {
+                return AiWorkoutAdaptationValidation.Invalid("evidence excede $MAX_EVIDENCE_LENGTH caracteres em [$index]")
+            }
+
+            val confidence = raw.confidence
+            if (confidence.isNaN() || confidence.isInfinite()) {
+                return AiWorkoutAdaptationValidation.Invalid("confidence não numérico em [$index]")
+            }
+            if (confidence < 0.0 || confidence > 1.0) {
+                return AiWorkoutAdaptationValidation.Invalid("confidence fora de 0..1 em [$index]: $confidence")
+            }
+
+            val values = when (type) {
+                WorkoutAdaptationType.ADJUST_LOAD -> validateLoadChange(index, planned, raw)
+                WorkoutAdaptationType.ADJUST_SETS -> validateSetsChange(index, planned, raw)
+                WorkoutAdaptationType.ADJUST_REPS -> validateRepsChange(index, planned, raw)
+                WorkoutAdaptationType.ADJUST_REST -> validateRestChange(index, planned, raw)
+                WorkoutAdaptationType.REPLACE_EXERCISE ->
+                    validateReplacement(index, planned, raw, context, seenReplacements)
+            }
+            val (currentValue, suggestedValue) = when (values) {
+                is ChangeValues.Invalid -> return AiWorkoutAdaptationValidation.Invalid(values.reason)
+                is ChangeValues.Valid -> values.current to values.suggested
+            }
+
+            changes += WorkoutAdaptationChange(
+                id = changeId,
+                type = type,
+                exerciseId = exerciseId,
+                // O nome vem do catálogo do app, nunca do texto do modelo.
+                exerciseName = planned.name,
+                currentValue = currentValue,
+                suggestedValue = suggestedValue,
+                reason = reason,
+                evidence = evidence,
+                confidence = confidence
+            )
+        }
+
+        return AiWorkoutAdaptationValidation.Valid(
+            WorkoutAdaptationDraft(
+                requestId = requestId,
+                templateId = templateId,
+                templateName = context.templateName,
+                sourceRevision = sourceRevision,
+                summary = summary,
+                dataQuality = dataQuality,
+                changes = changes
+            )
+        )
+    }
+
+    private sealed interface ChangeValues {
+        data class Valid(
+            val current: WorkoutAdaptationValue,
+            val suggested: WorkoutAdaptationValue
+        ) : ChangeValues
+
+        data class Invalid(val reason: String) : ChangeValues
+    }
+
+    /**
+     * O primeiro campo preenchido que não pertence ao tipo declarado, ou `null`.
+     *
+     * Uma mudança que traz carga **e** repetições é ambígua: o app não adivinha qual delas o
+     * usuário estaria aceitando.
+     */
+    private fun extraneousField(
+        type: WorkoutAdaptationType,
+        raw: AiWorkoutAdaptationChangeResponse
+    ): String? {
+        val hasLoad = raw.currentWeightKg != null || raw.suggestedWeightKg != null
+        val hasSets = raw.currentSets != null || raw.suggestedSets != null
+        val hasReps = raw.currentMinReps != null || raw.currentMaxReps != null ||
+            raw.suggestedMinReps != null || raw.suggestedMaxReps != null
+        val hasRest = raw.currentRestSeconds != null || raw.suggestedRestSeconds != null
+        val hasReplacement = raw.replacementExerciseId != null
+
+        return when (type) {
+            WorkoutAdaptationType.ADJUST_LOAD -> when {
+                hasSets -> "sets"
+                hasReps -> "reps"
+                hasRest -> "restSeconds"
+                hasReplacement -> "replacementExerciseId"
+                else -> null
+            }
+
+            WorkoutAdaptationType.ADJUST_SETS -> when {
+                hasLoad -> "weightKg"
+                hasReps -> "reps"
+                hasRest -> "restSeconds"
+                hasReplacement -> "replacementExerciseId"
+                else -> null
+            }
+
+            WorkoutAdaptationType.ADJUST_REPS -> when {
+                hasLoad -> "weightKg"
+                hasSets -> "sets"
+                hasRest -> "restSeconds"
+                hasReplacement -> "replacementExerciseId"
+                else -> null
+            }
+
+            WorkoutAdaptationType.ADJUST_REST -> when {
+                hasLoad -> "weightKg"
+                hasSets -> "sets"
+                hasReps -> "reps"
+                hasReplacement -> "replacementExerciseId"
+                else -> null
+            }
+
+            WorkoutAdaptationType.REPLACE_EXERCISE -> when {
+                hasLoad -> "weightKg"
+                hasSets -> "sets"
+                hasReps -> "reps"
+                hasRest -> "restSeconds"
+                else -> null
+            }
+        }
+    }
+
+    private fun validateLoadChange(
+        index: Int,
+        planned: AiPlannedExerciseContext,
+        raw: AiWorkoutAdaptationChangeResponse
+    ): ChangeValues {
+        val currentInTemplate = planned.plannedWeightKg
+        val declaredCurrent = raw.currentWeightKg
+        if (declaredCurrent != null && (declaredCurrent.isNaN() || declaredCurrent.isInfinite())) {
+            return ChangeValues.Invalid("currentWeightKg não numérico em [$index]")
+        }
+        if (!sameWeight(declaredCurrent, currentInTemplate)) {
+            return ChangeValues.Invalid(
+                "currentWeightKg não corresponde ao treino em [$index]: " +
+                    "modelo=${declaredCurrent ?: "null"}, treino=${currentInTemplate ?: "null"}"
+            )
+        }
+
+        val suggested = raw.suggestedWeightKg
+            ?: return ChangeValues.Invalid("suggestedWeightKg ausente em [$index]")
+        if (suggested.isNaN() || suggested.isInfinite()) {
+            return ChangeValues.Invalid("suggestedWeightKg não numérico em [$index]")
+        }
+        if (suggested <= 0.0 || suggested > MAX_WEIGHT_KG) {
+            return ChangeValues.Invalid("suggestedWeightKg fora de 0..$MAX_WEIGHT_KG em [$index]: $suggested")
+        }
+        if (sameWeight(suggested, currentInTemplate)) {
+            return ChangeValues.Invalid("suggestedWeightKg igual ao atual em [$index]")
+        }
+
+        return ChangeValues.Valid(
+            current = WorkoutAdaptationValue.Load(currentInTemplate),
+            suggested = WorkoutAdaptationValue.Load(suggested.toFloat())
+        )
+    }
+
+    private fun validateSetsChange(
+        index: Int,
+        planned: AiPlannedExerciseContext,
+        raw: AiWorkoutAdaptationChangeResponse
+    ): ChangeValues {
+        val current = planned.targetSets
+            ?: return ChangeValues.Invalid("treino sem séries configuradas em [$index]")
+        if (raw.currentSets != current) {
+            return ChangeValues.Invalid(
+                "currentSets não corresponde ao treino em [$index]: modelo=${raw.currentSets}, treino=$current"
+            )
+        }
+
+        val suggested = raw.suggestedSets
+            ?: return ChangeValues.Invalid("suggestedSets ausente em [$index]")
+        if (suggested < MIN_SETS || suggested > MAX_SETS) {
+            return ChangeValues.Invalid("suggestedSets fora de $MIN_SETS..$MAX_SETS em [$index]: $suggested")
+        }
+        if (suggested == current) {
+            return ChangeValues.Invalid("suggestedSets igual ao atual em [$index]")
+        }
+
+        return ChangeValues.Valid(
+            current = WorkoutAdaptationValue.Sets(current),
+            suggested = WorkoutAdaptationValue.Sets(suggested)
+        )
+    }
+
+    private fun validateRepsChange(
+        index: Int,
+        planned: AiPlannedExerciseContext,
+        raw: AiWorkoutAdaptationChangeResponse
+    ): ChangeValues {
+        val currentMin = planned.minReps
+        val currentMax = planned.maxReps
+        if (currentMin == null || currentMax == null) {
+            return ChangeValues.Invalid("treino sem faixa de repetições em [$index]")
+        }
+        if (raw.currentMinReps != currentMin || raw.currentMaxReps != currentMax) {
+            return ChangeValues.Invalid(
+                "repetições atuais não correspondem ao treino em [$index]: " +
+                    "modelo=${raw.currentMinReps}-${raw.currentMaxReps}, treino=$currentMin-$currentMax"
+            )
+        }
+
+        val suggestedMin = raw.suggestedMinReps
+            ?: return ChangeValues.Invalid("suggestedMinReps ausente em [$index]")
+        val suggestedMax = raw.suggestedMaxReps
+            ?: return ChangeValues.Invalid("suggestedMaxReps ausente em [$index]")
+        if (suggestedMin < MIN_REPS || suggestedMin > MAX_REPS) {
+            return ChangeValues.Invalid("suggestedMinReps fora de $MIN_REPS..$MAX_REPS em [$index]: $suggestedMin")
+        }
+        if (suggestedMax < suggestedMin || suggestedMax > MAX_REPS) {
+            return ChangeValues.Invalid("suggestedMaxReps inválido em [$index]: $suggestedMax")
+        }
+        if (suggestedMin == currentMin && suggestedMax == currentMax) {
+            return ChangeValues.Invalid("repetições sugeridas iguais às atuais em [$index]")
+        }
+
+        return ChangeValues.Valid(
+            current = WorkoutAdaptationValue.Reps(currentMin, currentMax),
+            suggested = WorkoutAdaptationValue.Reps(suggestedMin, suggestedMax)
+        )
+    }
+
+    private fun validateRestChange(
+        index: Int,
+        planned: AiPlannedExerciseContext,
+        raw: AiWorkoutAdaptationChangeResponse
+    ): ChangeValues {
+        val current = planned.restSeconds
+            ?: return ChangeValues.Invalid("treino sem descanso configurado em [$index]")
+        if (raw.currentRestSeconds != current) {
+            return ChangeValues.Invalid(
+                "currentRestSeconds não corresponde ao treino em [$index]: " +
+                    "modelo=${raw.currentRestSeconds}, treino=$current"
+            )
+        }
+
+        val suggested = raw.suggestedRestSeconds
+            ?: return ChangeValues.Invalid("suggestedRestSeconds ausente em [$index]")
+        if (suggested < MIN_REST_SECONDS || suggested > MAX_REST_SECONDS) {
+            return ChangeValues.Invalid(
+                "suggestedRestSeconds fora de $MIN_REST_SECONDS..$MAX_REST_SECONDS em [$index]: $suggested"
+            )
+        }
+        if (suggested == current) {
+            return ChangeValues.Invalid("suggestedRestSeconds igual ao atual em [$index]")
+        }
+
+        return ChangeValues.Valid(
+            current = WorkoutAdaptationValue.Rest(current),
+            suggested = WorkoutAdaptationValue.Rest(suggested)
+        )
+    }
+
+    private fun validateReplacement(
+        index: Int,
+        planned: AiPlannedExerciseContext,
+        raw: AiWorkoutAdaptationChangeResponse,
+        context: AiWorkoutAdaptationContext,
+        seenReplacements: MutableSet<String>
+    ): ChangeValues {
+        val replacementId = raw.replacementExerciseId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return ChangeValues.Invalid("replacementExerciseId ausente em [$index]")
+        if (replacementId == planned.exerciseId) {
+            return ChangeValues.Invalid("replacementExerciseId igual ao exercício atual em [$index]")
+        }
+        // Id que o app não ofereceu é invenção — inclusive um id real do catálogo que não entrou
+        // nos candidatos desta requisição.
+        val candidate = context.replacementCandidates.firstOrNull { it.exerciseId == replacementId }
+            ?: return ChangeValues.Invalid(
+                "replacementExerciseId fora dos candidatos em [$index]: '$replacementId'"
+            )
+        if (replacementId in context.templateExerciseIds) {
+            return ChangeValues.Invalid("replacementExerciseId já está no treino em [$index]")
+        }
+        if (!seenReplacements.add(replacementId)) {
+            return ChangeValues.Invalid("mesmo substituto usado duas vezes em [$index]: '$replacementId'")
+        }
+
+        return ChangeValues.Valid(
+            current = WorkoutAdaptationValue.Exercise(planned.exerciseId, planned.name),
+            suggested = WorkoutAdaptationValue.Exercise(candidate.exerciseId, candidate.name)
+        )
+    }
+
+    /** Comparação de carga tolerante a `Float`, tratando ausência como valor. */
+    private fun sameWeight(declared: Double?, inTemplate: Float?): Boolean = when {
+        declared == null && inTemplate == null -> true
+        declared == null || inTemplate == null -> false
+        else -> kotlin.math.abs(declared - inTemplate.toDouble()) <= WEIGHT_TOLERANCE_KG
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Geração de treino (T14.2)
     // ---------------------------------------------------------------------------------------
 
@@ -394,16 +801,24 @@ object AiCoachResponseValidator {
     private fun validateDataQuality(
         context: AiCoachContext,
         response: AiCoachResponse
+    ): DataQualityResult = validateDataQuality(context.evidence.maxDataQuality, response.dataQuality)
+
+    /**
+     * O nível declarado pelo modelo, conferido contra o teto que o app calculou.
+     *
+     * Uma implementação só: análise e adaptação usam a mesma regra — o modelo pode ser mais
+     * conservador que o app, nunca mais confiante.
+     */
+    private fun validateDataQuality(
+        ceiling: AiDataQualityLevel,
+        raw: AiCoachResponseDataQuality?
     ): DataQualityResult {
-        val raw = response.dataQuality
-            ?: return DataQualityResult.Invalid("dataQuality ausente")
+        if (raw == null) return DataQualityResult.Invalid("dataQuality ausente")
 
         val level = AiDataQualityLevel.entries.firstOrNull { it.name == raw.level.trim() }
             ?: return DataQualityResult.Invalid("dataQuality desconhecido: '${raw.level}'")
 
-        // O teto foi calculado por AiDataQualityPolicy quando o contexto foi montado. O modelo
-        // pode ser mais conservador do que o app; nunca mais confiante.
-        val ceiling = context.evidence.maxDataQuality
+        // O teto foi calculado por AiDataQualityPolicy quando o contexto foi montado.
         if (level.ordinal > ceiling.ordinal) {
             return DataQualityResult.Invalid(
                 "dataQuality ${level.name} acima da evidência enviada (${ceiling.name})"

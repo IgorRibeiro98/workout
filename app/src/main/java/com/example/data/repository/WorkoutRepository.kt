@@ -137,9 +137,15 @@ class WorkoutRepository(
         dao.updateTemplateExerciseFull(templateExercise)
     }
 
+    /** Lote de atualizações do treino: todas entram juntas ou nenhuma entra. */
     suspend fun updateTemplateExercises(items: List<WorkoutTemplateExerciseEntity>) {
-        items.forEach { dao.updateTemplateExerciseFull(it) }
+        if (items.isEmpty()) return
+        dao.updateTemplateExercisesTransactionally(items)
     }
+
+    /** Os exercícios do treino como estão persistidos agora, fora de qualquer Flow. */
+    suspend fun getTemplateExercisesSync(templateId: Long) =
+        dao.getTemplateExercisesWithDetails(templateId)
 
     suspend fun removeExerciseFromTemplate(templateExercise: WorkoutTemplateExerciseEntity) {
         dao.deleteTemplateExercise(templateExercise)

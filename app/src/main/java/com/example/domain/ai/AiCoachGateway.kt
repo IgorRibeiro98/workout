@@ -2,6 +2,8 @@ package com.example.domain.ai
 
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
+import com.example.domain.ai.model.AiWorkoutAdaptationGatewayResult
+import com.example.domain.ai.model.AiWorkoutAdaptationRequest
 import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
 import com.example.domain.ai.model.AiWorkoutGenerationRequest
 
@@ -21,4 +23,7 @@ interface AiCoachGateway {
 
     /** Geração de uma proposta de treino (T14.2). O gateway não persiste nada. */
     suspend fun generateWorkout(request: AiWorkoutGenerationRequest): AiWorkoutGenerationGatewayResult
+
+    /** Adaptação de um treino existente (T14.3). O gateway não altera nenhum treino. */
+    suspend fun adaptWorkout(request: AiWorkoutAdaptationRequest): AiWorkoutAdaptationGatewayResult
 }

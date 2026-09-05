@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -44,7 +45,8 @@ import com.example.ui.components.ActionItemData
 @Composable
 fun TemplateDetailsScreen(
     viewModel: TemplateDetailsViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onAdaptWithCoach: () -> Unit = {}
 ) {
     val template by viewModel.template.collectAsState()
     val exercises by viewModel.exercises.collectAsState()
@@ -73,6 +75,16 @@ fun TemplateDetailsScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = TextPrimary)
+                    }
+                },
+                actions = {
+                    // O Coach entra a partir do treino aberto; ele sugere, quem altera é o usuário.
+                    IconButton(onClick = onAdaptWithCoach, enabled = exercises.isNotEmpty()) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Adaptar com Coach IA",
+                            tint = if (exercises.isNotEmpty()) Lime400 else TextSecondary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
