@@ -31,7 +31,9 @@ class MainViewModelFactory(
     private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null,
     private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null,
     private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null,
-    private val missionRepository: com.example.domain.gamification.repository.MissionRepository? = null
+    private val missionRepository: com.example.domain.gamification.repository.MissionRepository? = null,
+    private val analyzeWorkoutUseCase: com.example.domain.ai.usecase.AnalyzeWorkoutUseCase? = null,
+    private val exerciseNameResolver: (suspend (String) -> String?)? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -128,6 +130,15 @@ class MainViewModelFactory(
                 workoutRepository = repository,
                 bodyMeasurementRepository = bodyMeasurementRepository,
                 settingsManager = settingsManager
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {
+            val useCase = analyzeWorkoutUseCase
+                ?: throw IllegalStateException("AnalyzeWorkoutUseCase not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.coach.AiCoachViewModel(
+                analyzeWorkout = useCase,
+                exerciseNameResolver = exerciseNameResolver ?: { null }
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.missions.MissionViewModel::class.java)) {

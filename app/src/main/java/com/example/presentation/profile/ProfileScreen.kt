@@ -46,7 +46,8 @@ fun ProfileScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
-    onNavigateToMissions: () -> Unit
+    onNavigateToMissions: () -> Unit,
+    onNavigateToAiCoach: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -57,6 +58,7 @@ fun ProfileScreen(
         onNavigateToBodyEvolution = onNavigateToBodyEvolution,
         onNavigateToAchievements = onNavigateToAchievements,
         onNavigateToMissions = onNavigateToMissions,
+        onNavigateToAiCoach = onNavigateToAiCoach,
         onWeeklyGoalChange = viewModel::setWeeklyGoal
     )
 }
@@ -70,6 +72,7 @@ private fun ProfileScreenContent(
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
     onNavigateToMissions: () -> Unit,
+    onNavigateToAiCoach: () -> Unit,
     onWeeklyGoalChange: (Int) -> Unit
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
@@ -133,6 +136,8 @@ private fun ProfileScreenContent(
             StatsGrid(uiState = uiState)
 
             MissionsSection(onClick = onNavigateToMissions)
+
+            AiCoachSection(onClick = onNavigateToAiCoach)
 
             AchievementsPreviewSection(
                 achievements = uiState.recentAchievements,
@@ -585,6 +590,31 @@ private fun MissionsSection(onClick: () -> Unit) {
             icon = Icons.Default.Flag,
             title = "Missões e Desafios",
             subtitle = "Objetivos da semana e marcos do seu treino",
+            onClick = onClick
+        )
+    }
+}
+
+/**
+ * Porta de entrada do Coach IA.
+ *
+ * A análise só acontece dentro da tela do Coach, por toque explícito: navegar até aqui não fala
+ * com o modelo.
+ */
+@Composable
+private fun AiCoachSection(onClick: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Coach IA",
+            color = Lime400,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp
+        )
+
+        ProfileNavigationCard(
+            icon = Icons.Default.AutoAwesome,
+            title = "Analisar meu treino",
+            subtitle = "Uma leitura do seu treino a partir do histórico real",
             onClick = onClick
         )
     }

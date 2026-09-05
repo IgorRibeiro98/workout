@@ -4,6 +4,7 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
+  alias(libs.plugins.kotlin.serialization)
 }
 
 ksp {
@@ -99,6 +100,14 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.coil.gif)
   implementation(libs.converter.moshi)
+  // Coach IA (T14.0): Firebase AI Logic + Gemini Developer API é o único provider do Coach.
+  // O plugin `com.google.gms.google-services` NÃO é aplicado ainda porque exige
+  // `app/google-services.json`, que depende do console Firebase. Sem esse arquivo o app
+  // compila e roda normalmente: o gateway responde `UNAVAILABLE` e o core segue local-first.
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.ai)
+  implementation(libs.firebase.appcheck.playintegrity)
+  implementation(libs.kotlinx.serialization.json)
   // Uncomment to use Firestore:
 
   // Sign-In via Credential Manager:

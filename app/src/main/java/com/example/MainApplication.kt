@@ -68,6 +68,47 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var notificationManager: WorkoutNotificationManager
         internal set
 
+    /**
+     * Coach IA (T14.0).
+     *
+     * `by lazy` de propósito: o Spark é local-first e não pode pagar inicialização de Firebase
+     * no startup. Nada de IA é tocado enquanto o usuário não pedir uma análise.
+     */
+    val aiCoachGateway: com.example.domain.ai.AiCoachGateway by lazy {
+        com.example.data.ai.FirebaseAiCoachGateway(this)
+    }
+
+    val analyzeWorkoutUseCase: com.example.domain.ai.usecase.AnalyzeWorkoutUseCase by lazy {
+        com.example.domain.ai.usecase.AnalyzeWorkoutUseCase(
+            contextBuilder = com.example.data.ai.WorkoutAiCoachContextBuilder(
+                workoutDao = database.workoutDao(),
+                settingsManager = settingsManager,
+                bodyMeasurementRepository = bodyMeasurementRepository
+            ),
+            gateway = aiCoachGateway,
+            telemetry = com.example.data.ai.LogcatAiCoachTelemetry()
+        )
+    }
+
+    /**
+     * Traduz um `exerciseId` do Coach de volta para o nome exibido.
+     *
+     * A identidade continua sendo o id: isto existe só para a leitura da recomendação.
+     */
+    suspend fun resolveExerciseDisplayName(exerciseId: String): String? {
+        val dao = database.workoutDao()
+        val localId = exerciseId
+            .removePrefix(com.example.domain.ai.AiCoachContextProjector.LOCAL_ID_PREFIX)
+            .takeIf { it != exerciseId }
+            ?.toLongOrNull()
+        val exercise = if (localId != null) {
+            dao.getExerciseById(localId)
+        } else {
+            dao.getExerciseByCanonicalId(exerciseId)
+        }
+        return exercise?.name
+    }
+
     override fun onCreate() {
         super.onCreate()
         database = AppDatabase.getDatabase(this)

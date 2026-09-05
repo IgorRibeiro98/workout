@@ -73,7 +73,9 @@ fun MainScreen() {
         consistencyRepository = app.consistencyRepository,
         xpTransactionRepository = app.xpTransactionRepository,
         achievementRepository = app.achievementRepository,
-        missionRepository = app.missionRepository
+        missionRepository = app.missionRepository,
+        analyzeWorkoutUseCase = app.analyzeWorkoutUseCase,
+        exerciseNameResolver = { exerciseId -> app.resolveExerciseDisplayName(exerciseId) }
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -109,6 +111,7 @@ fun MainScreen() {
         Screen.Summary.route to Screen.Today.route,
         Screen.Profile.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
+        Screen.AiCoach.route to Screen.Today.route,
         Screen.Settings.route to Screen.Today.route,
         Screen.Workouts.route to Screen.Workouts.route,
         Screen.ProgramDetails.route to Screen.Workouts.route,
@@ -270,6 +273,7 @@ fun MainScreen() {
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
+                    onNavigateToAiCoach = { navController.navigate(Screen.AiCoach.route) },
                     onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) },
                     // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
                     onNavigateToAchievements = {
@@ -284,6 +288,14 @@ fun MainScreen() {
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.missions.MissionsScreen(
                     viewModel = missionViewModel,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.AiCoach.route) {
+                val aiCoachViewModel: com.example.presentation.coach.AiCoachViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.coach.AiCoachScreen(
+                    viewModel = aiCoachViewModel,
                     onNavigateBack = { navController.popBackStack() }
                 )
             }

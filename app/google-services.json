@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "638822756779",
+    "project_id": "spark-36b11",
+    "storage_bucket": "spark-36b11.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:638822756779:android:3cd9d02c9fbaa5342fa2ee",
+        "android_client_info": {
+          "package_name": "com.aistudio.workout.v2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD5y3HrGeQBWHC5vuxhDzhXj2LVj9ZIq2g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
