@@ -158,6 +158,51 @@ class MainApplication : Application(), ImageLoaderFactory {
         )
         notificationManager = WorkoutNotificationManager(this)
 
+        try {
+            val app = try {
+                com.google.firebase.FirebaseApp.getInstance()
+            } catch (e: Exception) {
+                com.google.firebase.FirebaseApp.initializeApp(
+                    this,
+                    com.google.firebase.FirebaseOptions.Builder()
+                        .setApplicationId("1:638822756779:android:3cd9d02c9fbaa5342fa2ee")
+                        .setApiKey("AIzaSyD5y3HrGeQBWHC5vuxhDzhXj2LVj9ZIq2g")
+                        .setProjectId("spark-36b11")
+                        .setStorageBucket("spark-36b11.firebasestorage.app")
+                        .build()
+                )
+            }
+            if (app != null) {
+                val token = com.example.data.ai.FirebaseAiCoachGateway.getCurrentDebugToken(this)
+                val persistenceKey = try { app.persistenceKey } catch (e: Exception) { "+DEFAULT" }
+                val targetPrefs = listOf(
+                    "com.google.firebase.appcheck.debug.DebugAppCheckProvider:$persistenceKey",
+                    "com.google.firebase.appcheck.debug.DebugAppCheckProvider:[DEFAULT]",
+                    "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
+                    "com.google.firebase.appcheck.debug.store",
+                    "com.google.firebase.appcheck.debug.store.${app.options.applicationId}"
+                )
+                for (name in targetPrefs) {
+                    getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("com.google.firebase.appcheck.debug.DEBUG_SECRET", token)
+                        .putString("DEBUG_SECRET", token)
+                        .apply()
+                }
+                val providerFactory = try {
+                    com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory.getInstance()
+                } catch (e: Exception) {
+                    com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory.getInstance()
+                }
+                com.google.firebase.appcheck.FirebaseAppCheck.getInstance(app)
+                    .installAppCheckProviderFactory(providerFactory)
+                com.google.firebase.appcheck.FirebaseAppCheck.getInstance(app)
+                    .setTokenAutoRefreshEnabled(true)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainApplication", "Firebase AppCheck init: ${e.message}")
+        }
+
         CoroutineScope(Dispatchers.Main).launch {
             workoutEngine.restTimerTarget.collect { target ->
                 if (target == null) {

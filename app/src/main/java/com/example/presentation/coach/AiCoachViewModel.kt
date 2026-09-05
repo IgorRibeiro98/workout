@@ -64,8 +64,11 @@ class AiCoachViewModel(
 
     private fun AiCoachResult.Failure.toUiState(): AiCoachUiState = when (kind) {
         AiCoachErrorKind.UNAVAILABLE -> AiCoachUiState.Unavailable(
-            "O Coach IA ainda não está disponível neste aparelho. O restante do Spark continua " +
-                "funcionando normalmente."
+            if (!detail.isNullOrBlank()) {
+                "O Coach IA não está disponível: $detail"
+            } else {
+                "O Coach IA ainda não está disponível neste aparelho. O restante do Spark continua funcionando normalmente."
+            }
         )
 
         AiCoachErrorKind.NETWORK -> AiCoachUiState.Unavailable(
@@ -74,7 +77,7 @@ class AiCoachViewModel(
         )
 
         AiCoachErrorKind.RATE_LIMITED -> AiCoachUiState.Error(
-            message = "O Coach atingiu o limite de uso. Tente novamente mais tarde.",
+            message = "O Coach atingiu o limite de uso. Tente novamente mais tarde." + (detail?.let { " ($it)" } ?: ""),
             canRetry = false
         )
 
@@ -85,12 +88,12 @@ class AiCoachViewModel(
 
         AiCoachErrorKind.INVALID_RESPONSE -> AiCoachUiState.Error(
             message = "A resposta do Coach não passou na validação e foi descartada. " +
-                "Nada no seu treino foi alterado.",
+                "Nada no seu treino foi alterado." + (detail?.let { " Detalhes: $it" } ?: ""),
             canRetry = true
         )
 
         AiCoachErrorKind.PROVIDER -> AiCoachUiState.Error(
-            message = "O Coach falhou ao responder.",
+            message = "O Coach falhou ao responder." + (detail?.let { " ($it)" } ?: ""),
             canRetry = true
         )
     }

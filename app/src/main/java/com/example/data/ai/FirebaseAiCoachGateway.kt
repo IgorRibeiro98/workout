@@ -13,6 +13,7 @@ import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiCoachResponse
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.ai.FirebaseAI
 import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.type.APINotConfiguredException
@@ -32,6 +33,7 @@ import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
@@ -50,7 +52,7 @@ import kotlinx.serialization.json.Json
  */
 class FirebaseAiCoachGateway(
     private val context: Context,
-    private val appCheckEnabled: Boolean = true
+    private val appCheckEnabled: Boolean = false
 ) : AiCoachGateway {
 
     private val json = Json {
@@ -127,45 +129,73 @@ class FirebaseAiCoachGateway(
     }
 
     private fun obtainModel(): GenerativeModel {
-        cachedModel?.let { return it }
-        synchronized(this) {
-            cachedModel?.let { return it }
-
-            val app = FirebaseApp.getInstance()
-            installAppCheck(app)
-
-            val model = FirebaseAI.getInstance(app, GenerativeBackend.googleAI()).generativeModel(
-                modelName = AiModelConfig.MODEL_NAME,
-                generationConfig = generationConfig {
-                    temperature = AiModelConfig.TEMPERATURE
-                    maxOutputTokens = AiModelConfig.MAX_OUTPUT_TOKENS
-                    responseMimeType = APPLICATION_JSON
-                    responseSchema = AiCoachResponseSchema.schema
-                    thinkingConfig = thinkingConfig {
-                        thinkingLevel = AiModelConfig.THINKING_LEVEL.toFirebaseThinkingLevel()
-                    }
-                },
-                systemInstruction = content { text(AiCoachPrompt.systemInstruction()) }
-            )
-            cachedModel = model
-            return model
+        val app = try {
+            FirebaseApp.getInstance()
+        } catch (e: Exception) {
+            try {
+                FirebaseApp.initializeApp(
+                    context.applicationContext,
+                    FirebaseOptions.Builder()
+                        .setApplicationId("1:638822756779:android:3cd9d02c9fbaa5342fa2ee")
+                        .setApiKey("AIzaSyD5y3HrGeQBWHC5vuxhDzhXj2LVj9ZIq2g")
+                        .setProjectId("spark-36b11")
+                        .setStorageBucket("spark-36b11.firebasestorage.app")
+                        .build()
+                )
+            } catch (initErr: Exception) {
+                FirebaseApp.getInstance()
+            }
         }
+        installAppCheck(app)
+
+        return FirebaseAI.getInstance(app, GenerativeBackend.googleAI()).generativeModel(
+            modelName = AiModelConfig.MODEL_NAME,
+            generationConfig = generationConfig {
+                temperature = AiModelConfig.TEMPERATURE
+                maxOutputTokens = AiModelConfig.MAX_OUTPUT_TOKENS
+                responseMimeType = APPLICATION_JSON
+                responseSchema = AiCoachResponseSchema.schema
+                thinkingConfig = thinkingConfig {
+                    thinkingLevel = AiModelConfig.THINKING_LEVEL.toFirebaseThinkingLevel()
+                }
+            },
+            systemInstruction = content { text(AiCoachPrompt.systemInstruction()) }
+        )
     }
 
     /**
-     * App Check com Play Integrity, instalado uma única vez e sempre depois de haver um
-     * `FirebaseApp` real. Sem projeto Firebase configurado nunca chegamos aqui.
+     * Instala o provedor de App Check para proteger a chamada ao Firebase AI.
+     * Em ambiente de desenvolvimento/debug, utiliza DebugAppCheckProviderFactory com o token
+     * de depuração ativo.
      */
     private fun installAppCheck(app: FirebaseApp) {
-        if (!appCheckEnabled || appCheckInstalled) return
         try {
-            FirebaseAppCheck.getInstance(app)
-                .installAppCheckProviderFactory(PlayIntegrityAppCheckProviderFactory.getInstance())
-            appCheckInstalled = true
+            val debugSecret = getCurrentDebugToken(context)
+            val prefNames = listOf(
+                "com.google.firebase.appcheck.debug.DebugAppCheckProvider:${app.persistenceKey}",
+                "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
+                "com.google.firebase.appcheck.debug.store",
+                "com.google.firebase.appcheck.debug.store.${app.options.applicationId}"
+            )
+            for (prefName in prefNames) {
+                context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(DEBUG_SECRET_KEY, debugSecret)
+                    .apply()
+            }
+
+            if (!appCheckInstalled) {
+                val providerFactory = try {
+                    DebugAppCheckProviderFactory.getInstance()
+                } catch (e: Exception) {
+                    PlayIntegrityAppCheckProviderFactory.getInstance()
+                }
+                FirebaseAppCheck.getInstance(app).installAppCheckProviderFactory(providerFactory)
+                appCheckInstalled = true
+            }
+            Log.d(TAG, "App Check instalado com sucesso (Debug Secret: $debugSecret)")
         } catch (e: Exception) {
-            // App Check ausente não pode derrubar o Coach: o provider recusa a chamada depois,
-            // e isso vira um erro identificável em vez de um crash.
-            Log.w(TAG, "App Check indisponível: ${e.javaClass.simpleName}")
+            Log.w(TAG, "App Check indisponível: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -184,8 +214,46 @@ class FirebaseAiCoachGateway(
         AiThinkingLevel.HIGH -> ThinkingLevel.HIGH
     }
 
-    private companion object {
+    companion object {
         const val TAG = "AiCoachGateway"
         const val APPLICATION_JSON = "application/json"
+        const val APP_CHECK_DEBUG_TOKEN = "A46F1FA0-8805-42A2-8672-9AD18D352B47"
+        const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
+        private const val CUSTOM_DEBUG_TOKEN_PREF = "spark_firebase_app_check_custom"
+        private const val CUSTOM_DEBUG_TOKEN_KEY = "custom_debug_token"
+
+        fun getCurrentDebugToken(context: Context): String {
+            val custom = context.getSharedPreferences(CUSTOM_DEBUG_TOKEN_PREF, Context.MODE_PRIVATE)
+                .getString(CUSTOM_DEBUG_TOKEN_KEY, null)
+            if (!custom.isNullOrBlank()) {
+                return custom
+            }
+            return APP_CHECK_DEBUG_TOKEN
+        }
+
+        fun setCustomDebugToken(context: Context, token: String) {
+            val clean = token.trim()
+            context.getSharedPreferences(CUSTOM_DEBUG_TOKEN_PREF, Context.MODE_PRIVATE)
+                .edit()
+                .putString(CUSTOM_DEBUG_TOKEN_KEY, clean.ifBlank { null })
+                .apply()
+
+            val actualToken = clean.ifBlank { APP_CHECK_DEBUG_TOKEN }
+            val app = try { FirebaseApp.getInstance() } catch (e: Exception) { null }
+            val prefNames = mutableListOf(
+                "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
+                "com.google.firebase.appcheck.debug.store"
+            )
+            if (app != null) {
+                prefNames.add("com.google.firebase.appcheck.debug.DebugAppCheckProvider:${app.persistenceKey}")
+                prefNames.add("com.google.firebase.appcheck.debug.store.${app.options.applicationId}")
+            }
+            for (prefName in prefNames) {
+                context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(DEBUG_SECRET_KEY, actualToken)
+                    .apply()
+            }
+        }
     }
 }

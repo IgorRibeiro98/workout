@@ -16,8 +16,8 @@ enum class AiThinkingLevel {
  */
 object AiModelConfig {
 
-    /** Modelo inicial do Coach (Firebase AI Logic / Gemini Developer API). */
-    const val MODEL_NAME: String = "gemini-3.7-flash"
+    /** Modelo do Coach (Firebase AI Logic / Gemini Developer API). */
+    const val MODEL_NAME: String = "gemini-3.6-flash"
 
     /** Versão do contrato de conversa entre o Spark e o modelo. */
     const val SCHEMA_VERSION: Int = 1

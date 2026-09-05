@@ -35,7 +35,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Check
+import com.example.data.ai.FirebaseAiCoachGateway
+import com.example.domain.ai.AiModelConfig
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.BackgroundDark
@@ -115,6 +127,28 @@ internal fun AiCoachScreenContent(
                 fontSize = 13.sp
             )
 
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(SurfaceDark)
+                    .border(1.dp, BorderLight, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "Modelo ativo:",
+                    color = TextSecondary,
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = AiModelConfig.MODEL_NAME,
+                    color = Lime400,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                )
+            }
+
             Button(
                 onClick = onAnalyze,
                 enabled = uiState !is AiCoachUiState.Loading,
@@ -154,7 +188,8 @@ internal fun AiCoachScreenContent(
                 is AiCoachUiState.Unavailable -> MessageCard(
                     message = uiState.message,
                     accent = Orange400,
-                    isWarning = true
+                    isWarning = true,
+                    onRetry = onAnalyze
                 )
 
                 is AiCoachUiState.Error -> MessageCard(
@@ -164,7 +199,8 @@ internal fun AiCoachScreenContent(
                         uiState.message
                     },
                     accent = Red400,
-                    isWarning = false
+                    isWarning = false,
+                    onRetry = onAnalyze
                 )
             }
         }
@@ -226,19 +262,127 @@ private fun Card(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun MessageCard(message: String, accent: Color, isWarning: Boolean) {
+private fun MessageCard(
+    message: String,
+    accent: Color,
+    isWarning: Boolean,
+    onRetry: () -> Unit = {}
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val isAppCheckError = message.contains("App Check", ignoreCase = true) || message.contains("token is invalid", ignoreCase = true)
+
+    var currentToken by remember {
+        mutableStateOf(FirebaseAiCoachGateway.getCurrentDebugToken(context))
+    }
+    var inputToken by remember { mutableStateOf("") }
+    var tokenSavedSuccess by remember { mutableStateOf(false) }
+
     Card {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(
-                imageVector = if (isWarning) Icons.Default.CloudOff else Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(20.dp)
-            )
-            Text(text = message, color = TextSecondary, fontSize = 13.sp)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = if (isWarning) Icons.Default.CloudOff else Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(text = message, color = TextSecondary, fontSize = 13.sp)
+            }
+
+            if (isAppCheckError) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BackgroundDark)
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Token de depuração ativo no app:",
+                        color = Lime400,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = currentToken,
+                        color = TextPrimary,
+                        fontSize = 11.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(currentToken))
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SurfaceDark,
+                            contentColor = TextPrimary
+                        ),
+                        modifier = Modifier.border(1.dp, BorderLight, RoundedCornerShape(6.dp))
+                    ) {
+                        Text(text = "Copiar este Token", fontSize = 11.sp)
+                    }
+
+                    Text(
+                        text = "Se o Firebase Console gerou outro token, cole aqui:",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = inputToken,
+                        onValueChange = {
+                            inputToken = it
+                            tokenSavedSuccess = false
+                        },
+                        placeholder = {
+                            Text(text = "Cole o token do Firebase...", fontSize = 11.sp, color = TextSecondary)
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Lime400,
+                            unfocusedBorderColor = BorderLight,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Button(
+                        onClick = {
+                            if (inputToken.isNotBlank()) {
+                                FirebaseAiCoachGateway.setCustomDebugToken(context, inputToken)
+                                currentToken = inputToken.trim()
+                                tokenSavedSuccess = true
+                                onRetry()
+                            }
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Lime400,
+                            contentColor = BackgroundDark
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = if (tokenSavedSuccess) Icons.Default.Check else Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (tokenSavedSuccess) "  Token Salvo! Reanalisando..." else "  Salvar Token e Reanalisar",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }

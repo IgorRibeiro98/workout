@@ -5,6 +5,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.google.services)
 }
 
 ksp {
@@ -107,6 +108,7 @@ dependencies {
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.ai)
   implementation(libs.firebase.appcheck.playintegrity)
+  implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.serialization.json)
   // Uncomment to use Firestore:
 
