@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -71,13 +72,15 @@ import com.example.ui.theme.TextTertiary
 @Composable
 fun AiCoachScreen(
     viewModel: AiCoachViewModel,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onNavigateToGenerateWorkout: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     AiCoachScreenContent(
         uiState = uiState,
         onAnalyze = viewModel::analyze,
-        onNavigateBack = onNavigateBack
+        onNavigateBack = onNavigateBack,
+        onNavigateToGenerateWorkout = onNavigateToGenerateWorkout
     )
 }
 
@@ -86,7 +89,8 @@ fun AiCoachScreen(
 internal fun AiCoachScreenContent(
     uiState: AiCoachUiState,
     onAnalyze: () -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onNavigateToGenerateWorkout: () -> Unit = {}
 ) {
     Scaffold(
         containerColor = BackgroundDark,
@@ -169,6 +173,31 @@ internal fun AiCoachScreenContent(
                 )
                 Text(
                     text = "  Analisar meu treino",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+
+            // Segunda capacidade do mesmo Coach, não uma segunda área de IA.
+            Button(
+                onClick = onNavigateToGenerateWorkout,
+                enabled = uiState !is AiCoachUiState.Loading,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SurfaceDark,
+                    contentColor = TextPrimary,
+                    disabledContainerColor = SurfaceDark,
+                    disabledContentColor = TextTertiary
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AddCircleOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = "  Criar treino com IA",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )

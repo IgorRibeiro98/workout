@@ -66,14 +66,26 @@ class WorkoutRepository(
         return dao.getTemplatesForProgram(programId)
     }
 
-    suspend fun addTemplate(programId: Long, name: String, shortId: String, order: Int, dayOfWeek: String? = null) {
-        dao.insertTemplate(WorkoutTemplateEntity(
+    /** Devolve o id gerado pelo Room, para quem precisa continuar montando o treino recém-criado. */
+    suspend fun addTemplate(programId: Long, name: String, shortId: String, order: Int, dayOfWeek: String? = null): Long {
+        return dao.insertTemplate(WorkoutTemplateEntity(
             programId = programId,
             name = name,
             shortIdentifier = shortId,
             orderInProgram = order,
             dayOfWeek = dayOfWeek
         ))
+    }
+
+    /**
+     * O programa que deve receber um treino novo: o atual, ou o primeiro existente.
+     *
+     * Mesma escolha que a tela de treinos faz ao criar um template manualmente; `null` significa
+     * que ainda não existe programa nenhum.
+     */
+    suspend fun getProgramForNewTemplate(): WorkoutProgramEntity? {
+        val programs = dao.getAllProgramsSync()
+        return programs.firstOrNull { it.isCurrent } ?: programs.firstOrNull()
     }
 
     suspend fun deleteTemplate(template: WorkoutTemplateEntity) {
@@ -102,6 +114,24 @@ class WorkoutRepository(
     suspend fun addExerciseToTemplate(templateId: Long, exerciseId: Long, sortOrder: Int) {
         dao.insertTemplateExercise(WorkoutTemplateExerciseEntity(templateId = templateId, exerciseId = exerciseId, sortOrder = sortOrder))
     }
+
+    /**
+     * Insere um exercício de template já com séries, repetições, descanso e carga definidos.
+     *
+     * É o mesmo insert de [addExerciseToTemplate] seguido de [updateTemplateExerciseFull] que o
+     * editor faz em dois passos, em uma escrita só — útil para quem já chega com os valores
+     * prontos.
+     */
+    suspend fun addTemplateExercise(templateExercise: WorkoutTemplateExerciseEntity) {
+        dao.insertTemplateExercise(templateExercise)
+    }
+
+    /** Exercício do catálogo pelo id canônico. A identidade nunca é o nome. */
+    suspend fun getExerciseByCanonicalId(canonicalId: String): ExerciseEntity? =
+        dao.getExerciseByCanonicalId(canonicalId)
+
+    /** Exercício do catálogo pela linha do Room. */
+    suspend fun getExerciseByRowId(rowId: Long): ExerciseEntity? = dao.getExerciseById(rowId)
 
     suspend fun updateTemplateExerciseFull(templateExercise: WorkoutTemplateExerciseEntity) {
         dao.updateTemplateExerciseFull(templateExercise)

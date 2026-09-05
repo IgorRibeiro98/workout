@@ -89,6 +89,23 @@ class MainApplication : Application(), ImageLoaderFactory {
         )
     }
 
+    val workoutGenerationContextBuilder: com.example.domain.ai.AiWorkoutGenerationContextBuilder by lazy {
+        com.example.data.ai.WorkoutAiGenerationContextBuilder(workoutDao = database.workoutDao())
+    }
+
+    val generateWorkoutUseCase: com.example.domain.ai.usecase.GenerateWorkoutUseCase by lazy {
+        com.example.domain.ai.usecase.GenerateWorkoutUseCase(
+            contextBuilder = workoutGenerationContextBuilder,
+            gateway = aiCoachGateway,
+            telemetry = com.example.data.ai.LogcatAiCoachTelemetry()
+        )
+    }
+
+    /** A confirmação do usuário escreve pelo repositório canônico de treinos, como a criação manual. */
+    val saveGeneratedWorkoutUseCase: com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase by lazy {
+        com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase(repository)
+    }
+
     /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
@@ -96,10 +113,7 @@ class MainApplication : Application(), ImageLoaderFactory {
      */
     suspend fun resolveExerciseDisplayName(exerciseId: String): String? {
         val dao = database.workoutDao()
-        val localId = exerciseId
-            .removePrefix(com.example.domain.ai.AiCoachContextProjector.LOCAL_ID_PREFIX)
-            .takeIf { it != exerciseId }
-            ?.toLongOrNull()
+        val localId = com.example.domain.ai.AiCoachContextProjector.localRowIdOf(exerciseId)
         val exercise = if (localId != null) {
             dao.getExerciseById(localId)
         } else {

@@ -34,6 +34,7 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object Profile : Screen("profile", R.string.nav_profile, Icons.Default.Person)
     object Missions : Screen("missions", R.string.nav_missions, Icons.Default.Flag)
     object AiCoach : Screen("ai_coach", R.string.nav_ai_coach, Icons.Default.AutoAwesome)
+    object GenerateWorkout : Screen("generate_workout", R.string.nav_ai_coach, Icons.Default.AutoAwesome)
     object Settings : Screen("settings", R.string.nav_settings, Icons.Default.Settings)
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {

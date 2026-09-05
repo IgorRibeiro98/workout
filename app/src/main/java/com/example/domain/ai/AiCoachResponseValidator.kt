@@ -7,13 +7,26 @@ import com.example.domain.ai.model.AiCoachObservation
 import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiCoachResponseObservation
 import com.example.domain.ai.model.AiDataQualityLevel
+import com.example.domain.ai.model.AiGeneratedWorkoutResponse
 import com.example.domain.ai.model.AiRecommendation
 import com.example.domain.ai.model.AiRecommendationType
+import com.example.domain.ai.model.AiWorkoutGenerationContext
+import com.example.domain.ai.model.GeneratedWorkoutDraft
+import com.example.domain.ai.model.GeneratedWorkoutDraftExercise
 
 /** O que a validação decidiu sobre a resposta do modelo. */
 sealed interface AiCoachValidation {
     data class Valid(val advice: AiCoachAdvice) : AiCoachValidation
     data class Invalid(val reason: String) : AiCoachValidation
+}
+
+/** O que a validação decidiu sobre um treino proposto pelo modelo. */
+sealed interface AiGeneratedWorkoutValidation {
+    data class Valid(val draft: GeneratedWorkoutDraft) : AiGeneratedWorkoutValidation
+    data class Invalid(val reason: String) : AiGeneratedWorkoutValidation
+
+    /** O modelo admitiu que os candidatos enviados não sustentam o pedido. */
+    data object InsufficientCandidates : AiGeneratedWorkoutValidation
 }
 
 /**
@@ -199,6 +212,183 @@ object AiCoachResponseValidator {
     private sealed interface DataQualityResult {
         data class Valid(val dataQuality: AiCoachDataQuality) : DataQualityResult
         data class Invalid(val reason: String) : DataQualityResult
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Geração de treino (T14.2)
+    // ---------------------------------------------------------------------------------------
+
+    /** Nome de treino é rótulo, não frase. */
+    const val MAX_WORKOUT_NAME_LENGTH: Int = 60
+
+    /** A explicação é curta e serve à leitura; ela nunca é persistida. */
+    const val MAX_EXPLANATION_LENGTH: Int = 600
+
+    /** A justificativa de um exercício é uma frase. */
+    const val MAX_EXERCISE_REASON_LENGTH: Int = 240
+
+    /** Um treino proposto precisa de pelo menos um exercício. */
+    const val MIN_GENERATED_EXERCISES: Int = 1
+
+    /**
+     * Teto de exercícios propostos.
+     *
+     * Reaproveita o teto que o app já declara para um treino real
+     * ([AiModelConfig.MAX_EXERCISES_IN_CONTEXT]); o editor manual não tem limite próprio e nenhum
+     * limite novo foi inventado aqui.
+     */
+    const val MAX_GENERATED_EXERCISES: Int = AiModelConfig.MAX_EXERCISES_IN_CONTEXT
+
+    /** Faixa de séries aceitável em uma proposta. O domínio não tem limite; o contrato tem. */
+    const val MIN_SETS: Int = 1
+    const val MAX_SETS: Int = 10
+
+    /** Faixa de repetições do app, a mesma do seletor de repetições da execução (1..100). */
+    const val MIN_REPS: Int = 1
+    const val MAX_REPS: Int = 100
+
+    /** Descanso: 0 é "sem descanso", já oferecido nas configurações; 600 s é o teto de sanidade. */
+    const val MIN_REST_SECONDS: Int = 0
+    const val MAX_REST_SECONDS: Int = 600
+
+    /** Teto de carga do app, o mesmo do seletor de carga da execução. */
+    const val MAX_WEIGHT_KG: Double = 500.0
+
+    /**
+     * Structured output de um treino também é entrada não confiável.
+     *
+     * Mesma política da análise: **uma violação invalida a proposta inteira**. Nada é removido em
+     * silêncio, nada é corrigido por aproximação e nenhum `exerciseId` desconhecido é resolvido
+     * por nome. As regras próprias da geração:
+     *
+     * - todo `exerciseId` precisa estar entre os candidatos daquela requisição;
+     * - nenhum exercício pode se repetir;
+     * - a ordem precisa ser exatamente 1..n, sem repetição e sem buraco;
+     * - carga só pode existir onde o app enviou carga registrada.
+     */
+    fun validateGeneratedWorkout(
+        requestId: String,
+        context: AiWorkoutGenerationContext,
+        response: AiGeneratedWorkoutResponse
+    ): AiGeneratedWorkoutValidation {
+        if (response.insufficientCandidates && response.exercises.isEmpty()) {
+            return AiGeneratedWorkoutValidation.InsufficientCandidates
+        }
+        if (response.insufficientCandidates) {
+            return AiGeneratedWorkoutValidation.Invalid(
+                "insufficientCandidates com ${response.exercises.size} exercícios propostos"
+            )
+        }
+
+        val name = response.name.trim()
+        if (name.isEmpty()) return AiGeneratedWorkoutValidation.Invalid("name vazio")
+        if (name.length > MAX_WORKOUT_NAME_LENGTH) {
+            return AiGeneratedWorkoutValidation.Invalid("name excede $MAX_WORKOUT_NAME_LENGTH caracteres")
+        }
+
+        val explanation = response.explanation.trim()
+        if (explanation.length > MAX_EXPLANATION_LENGTH) {
+            return AiGeneratedWorkoutValidation.Invalid(
+                "explanation excede $MAX_EXPLANATION_LENGTH caracteres"
+            )
+        }
+
+        val exercises = response.exercises
+        if (exercises.size < MIN_GENERATED_EXERCISES) {
+            return AiGeneratedWorkoutValidation.Invalid("treino sem exercícios")
+        }
+        if (exercises.size > MAX_GENERATED_EXERCISES) {
+            return AiGeneratedWorkoutValidation.Invalid("mais de $MAX_GENERATED_EXERCISES exercícios")
+        }
+
+        val candidatesById = context.candidateExercises.associateBy { it.exerciseId }
+        val idsWithLoadEvidence = context.exerciseIdsWithLoadEvidence
+        val seenIds = mutableSetOf<String>()
+        val seenOrders = mutableSetOf<Int>()
+        val draftExercises = mutableListOf<GeneratedWorkoutDraftExercise>()
+
+        exercises.forEachIndexed { index, raw ->
+            val exerciseId = raw.exerciseId.trim()
+            if (exerciseId.isEmpty()) {
+                return AiGeneratedWorkoutValidation.Invalid("exerciseId vazio em [$index]")
+            }
+            // Id que o app não ofereceu é invenção — inclusive um id real do catálogo que não
+            // entrou nos candidatos desta requisição.
+            val candidate = candidatesById[exerciseId]
+                ?: return AiGeneratedWorkoutValidation.Invalid(
+                    "exerciseId fora dos candidatos em [$index]: '$exerciseId'"
+                )
+            if (!seenIds.add(exerciseId)) {
+                return AiGeneratedWorkoutValidation.Invalid("exercício repetido em [$index]: '$exerciseId'")
+            }
+
+            if (raw.order < 1 || raw.order > exercises.size) {
+                return AiGeneratedWorkoutValidation.Invalid("order fora de 1..${exercises.size} em [$index]: ${raw.order}")
+            }
+            if (!seenOrders.add(raw.order)) {
+                return AiGeneratedWorkoutValidation.Invalid("order repetida em [$index]: ${raw.order}")
+            }
+
+            if (raw.sets < MIN_SETS || raw.sets > MAX_SETS) {
+                return AiGeneratedWorkoutValidation.Invalid("sets fora de $MIN_SETS..$MAX_SETS em [$index]: ${raw.sets}")
+            }
+            if (raw.minReps < MIN_REPS || raw.minReps > MAX_REPS) {
+                return AiGeneratedWorkoutValidation.Invalid("minReps fora de $MIN_REPS..$MAX_REPS em [$index]: ${raw.minReps}")
+            }
+            if (raw.maxReps < raw.minReps || raw.maxReps > MAX_REPS) {
+                return AiGeneratedWorkoutValidation.Invalid("maxReps inválido em [$index]: ${raw.maxReps}")
+            }
+            if (raw.restSeconds < MIN_REST_SECONDS || raw.restSeconds > MAX_REST_SECONDS) {
+                return AiGeneratedWorkoutValidation.Invalid(
+                    "restSeconds fora de $MIN_REST_SECONDS..$MAX_REST_SECONDS em [$index]: ${raw.restSeconds}"
+                )
+            }
+
+            val weight = raw.weightKg
+            if (weight != null) {
+                if (weight.isNaN() || weight.isInfinite()) {
+                    return AiGeneratedWorkoutValidation.Invalid("weightKg não numérico em [$index]")
+                }
+                if (weight <= 0.0 || weight > MAX_WEIGHT_KG) {
+                    return AiGeneratedWorkoutValidation.Invalid("weightKg fora de 0..$MAX_WEIGHT_KG em [$index]: $weight")
+                }
+                // Sem carga registrada no contexto, propor um número é invenção.
+                if (exerciseId !in idsWithLoadEvidence) {
+                    return AiGeneratedWorkoutValidation.Invalid(
+                        "weightKg sem carga registrada em [$index]: '$exerciseId'"
+                    )
+                }
+            }
+
+            val reason = raw.reason.trim()
+            if (reason.length > MAX_EXERCISE_REASON_LENGTH) {
+                return AiGeneratedWorkoutValidation.Invalid(
+                    "reason excede $MAX_EXERCISE_REASON_LENGTH caracteres em [$index]"
+                )
+            }
+
+            draftExercises += GeneratedWorkoutDraftExercise(
+                exerciseId = exerciseId,
+                // O nome vem do catálogo do app, nunca do texto do modelo.
+                name = candidate.name,
+                sortOrder = raw.order - 1,
+                sets = raw.sets,
+                minReps = raw.minReps,
+                maxReps = raw.maxReps,
+                restSeconds = raw.restSeconds,
+                weightKg = weight?.toFloat(),
+                reason = reason
+            )
+        }
+
+        return AiGeneratedWorkoutValidation.Valid(
+            GeneratedWorkoutDraft(
+                requestId = requestId,
+                name = name,
+                explanation = explanation,
+                exercises = draftExercises.sortedBy { it.sortOrder }
+            )
+        )
     }
 
     private fun validateDataQuality(

@@ -11,7 +11,11 @@ import com.example.domain.ai.AiThinkingLevel
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
+import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiCoachResponse
+import com.example.domain.ai.model.AiGeneratedWorkoutResponse
+import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
+import com.example.domain.ai.model.AiWorkoutGenerationRequest
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.ai.FirebaseAI
@@ -66,9 +70,43 @@ class FirebaseAiCoachGateway(
     @Volatile
     private var appCheckInstalled: Boolean = false
 
-    override suspend fun request(request: AiCoachRequest): AiCoachGatewayResult {
+    override suspend fun request(request: AiCoachRequest): AiCoachGatewayResult =
+        when (val raw = generate(AiCoachRequestType.ANALYZE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+            is RawResult.Error -> AiCoachGatewayResult.Error(raw.kind, raw.detail)
+            is RawResult.Text -> try {
+                AiCoachGatewayResult.Success(json.decodeFromString<AiCoachResponse>(raw.text))
+            } catch (e: Exception) {
+                AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            }
+        }
+
+    override suspend fun generateWorkout(
+        request: AiWorkoutGenerationRequest
+    ): AiWorkoutGenerationGatewayResult =
+        when (val raw = generate(AiCoachRequestType.GENERATE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+            is RawResult.Error -> AiWorkoutGenerationGatewayResult.Error(raw.kind, raw.detail)
+            is RawResult.Text -> try {
+                AiWorkoutGenerationGatewayResult.Success(
+                    json.decodeFromString<AiGeneratedWorkoutResponse>(raw.text)
+                )
+            } catch (e: Exception) {
+                AiWorkoutGenerationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            }
+        }
+
+    /** O texto cru do modelo, ou o erro já traduzido para a taxonomia do Coach. */
+    private sealed interface RawResult {
+        data class Text(val text: String) : RawResult
+        data class Error(val kind: AiCoachErrorKind, val detail: String?) : RawResult
+    }
+
+    /**
+     * Uma chamada ao provider: mesmo timeout, mesmo tratamento de erro, mesma ausência de retry
+     * para os dois tipos de request. O que muda por tipo é o schema e a instrução de sistema.
+     */
+    private suspend fun generate(type: AiCoachRequestType, prompt: String): RawResult {
         val model = try {
-            obtainModel()
+            obtainModel(type)
         } catch (e: IllegalStateException) {
             // FirebaseApp não inicializado: falta a configuração do console.
             return unavailable(e)
@@ -80,14 +118,14 @@ class FirebaseAiCoachGateway(
 
         val call = try {
             AiCoachCall.withTimeout {
-                model.generateContent(AiCoachPrompt.userPrompt(request)).text
+                model.generateContent(prompt).text
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: RequestTimeoutException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.TIMEOUT, e.message)
+            return RawResult.Error(AiCoachErrorKind.TIMEOUT, e.message)
         } catch (e: QuotaExceededException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.RATE_LIMITED, e.message)
+            return RawResult.Error(AiCoachErrorKind.RATE_LIMITED, e.message)
         } catch (e: ServiceDisabledException) {
             return unavailable(e)
         } catch (e: APINotConfiguredException) {
@@ -99,36 +137,34 @@ class FirebaseAiCoachGateway(
         } catch (e: InvalidStateException) {
             return unavailable(e)
         } catch (e: PromptBlockedException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            return RawResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
         } catch (e: ResponseStoppedException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            return RawResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
         } catch (e: ContentBlockedException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            return RawResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
         } catch (e: ServerException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.PROVIDER, e.message)
+            return RawResult.Error(AiCoachErrorKind.PROVIDER, e.message)
         } catch (e: IOException) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.NETWORK, e.message)
+            return RawResult.Error(AiCoachErrorKind.NETWORK, e.message)
         } catch (e: Exception) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.PROVIDER, e.message)
+            return RawResult.Error(AiCoachErrorKind.PROVIDER, e.message)
         }
 
         call.exceptionOrNull()?.let { error ->
-            if (error is AiCoachTimeoutException) return AiCoachCall.timeoutError(error)
+            if (error is AiCoachTimeoutException) {
+                val timeout = AiCoachCall.timeoutError(error)
+                return RawResult.Error(timeout.kind, timeout.detail)
+            }
         }
 
         val rawText = call.getOrNull()
         if (rawText.isNullOrBlank()) {
-            return AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, "resposta vazia")
+            return RawResult.Error(AiCoachErrorKind.INVALID_RESPONSE, "resposta vazia")
         }
-
-        return try {
-            AiCoachGatewayResult.Success(json.decodeFromString<AiCoachResponse>(rawText))
-        } catch (e: Exception) {
-            AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
-        }
+        return RawResult.Text(rawText)
     }
 
-    private fun obtainModel(): GenerativeModel {
+    private fun obtainModel(type: AiCoachRequestType): GenerativeModel {
         val app = try {
             FirebaseApp.getInstance()
         } catch (e: Exception) {
@@ -154,12 +190,12 @@ class FirebaseAiCoachGateway(
                 temperature = AiModelConfig.TEMPERATURE
                 maxOutputTokens = AiModelConfig.MAX_OUTPUT_TOKENS
                 responseMimeType = APPLICATION_JSON
-                responseSchema = AiCoachResponseSchema.schema
+                responseSchema = AiCoachResponseSchema.forType(type)
                 thinkingConfig = thinkingConfig {
                     thinkingLevel = AiModelConfig.THINKING_LEVEL.toFirebaseThinkingLevel()
                 }
             },
-            systemInstruction = content { text(AiCoachPrompt.systemInstruction()) }
+            systemInstruction = content { text(AiCoachPrompt.systemInstruction(type)) }
         )
     }
 
@@ -199,12 +235,9 @@ class FirebaseAiCoachGateway(
         }
     }
 
-    private fun unavailable(error: Throwable): AiCoachGatewayResult.Error {
+    private fun unavailable(error: Throwable): RawResult.Error {
         Log.w(TAG, "Coach indisponível: ${error.javaClass.simpleName}")
-        return AiCoachGatewayResult.Error(
-            kind = AiCoachErrorKind.UNAVAILABLE,
-            detail = error.message
-        )
+        return RawResult.Error(kind = AiCoachErrorKind.UNAVAILABLE, detail = error.message)
     }
 
     private fun AiThinkingLevel.toFirebaseThinkingLevel(): ThinkingLevel = when (this) {

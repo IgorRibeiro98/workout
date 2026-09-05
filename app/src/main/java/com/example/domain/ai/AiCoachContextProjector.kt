@@ -8,6 +8,7 @@ import com.example.data.local.WorkoutTemplateExerciseEntity
 import com.example.domain.ai.model.AiAthleteContext
 import com.example.domain.ai.model.AiCoachContext
 import com.example.domain.ai.model.AiEvidenceContext
+import com.example.domain.ai.model.AiExerciseLoadEvidenceContext
 import com.example.domain.ai.model.AiExerciseExecutionContext
 import com.example.domain.ai.model.AiExerciseHistoryContext
 import com.example.domain.ai.model.AiPersonalRecordContext
@@ -84,6 +85,69 @@ object AiCoachContextProjector {
     /** Id canônico do catálogo; sem ele, a identidade local determinística do app. */
     fun exerciseIdOf(exercise: ExerciseEntity): String =
         exercise.canonicalId?.trim()?.takeIf { it.isNotEmpty() } ?: "$LOCAL_ID_PREFIX${exercise.id}"
+
+    /**
+     * A linha do catálogo por trás de um id local, ou `null` quando o id não é local.
+     *
+     * O caminho de volta de [exerciseIdOf]: quem precisa resolver um id do Coach para a linha do
+     * Room usa isto e, quando dá `null`, procura pelo `canonicalId`. Nunca pelo nome.
+     */
+    fun localRowIdOf(exerciseId: String): Long? {
+        if (!exerciseId.startsWith(LOCAL_ID_PREFIX)) return null
+        return exerciseId.removePrefix(LOCAL_ID_PREFIX).toLongOrNull()
+    }
+
+    /**
+     * Carga registrada dos exercícios candidatos a uma geração.
+     *
+     * Só olha o que está persistido em séries concluídas de sessões `COMPLETED`, e só para os
+     * exercícios que já foram oferecidos como candidatos. Serve para o modelo **não** inventar
+     * carga; não autoriza progressão — isso é assunto da T14.3.
+     */
+    fun projectLoadEvidence(
+        exercisesById: Map<Long, ExerciseEntity>,
+        candidateExerciseIds: Set<String>,
+        completedSessions: List<SessionCalendarSummary>
+    ): List<AiExerciseLoadEvidenceContext> {
+        if (candidateExerciseIds.isEmpty()) return emptyList()
+
+        val scanned = completedSessions
+            .sortedByDescending { it.session.finishedAt ?: it.session.startedAt }
+            .take(AiModelConfig.HISTORY_SCAN_SESSIONS)
+
+        // Ordem de inserção = da execução mais recente para a mais antiga.
+        val evidence = LinkedHashMap<String, AiExerciseLoadEvidenceContext>()
+        for (summary in scanned) {
+            for (executed in summary.sortedExercises) {
+                val rowId = executed.exerciseRowId() ?: continue
+                val exercise = exercisesById[rowId] ?: continue
+                val exerciseId = exerciseIdOf(exercise)
+                if (exerciseId !in candidateExerciseIds) continue
+
+                val completedSets = executed.sets.filter { it.completed }
+                if (completedSets.isEmpty()) continue
+
+                val existing = evidence[exerciseId]
+                if (existing != null) {
+                    evidence[exerciseId] = existing.copy(
+                        sessionsWithHistory = existing.sessionsWithHistory + 1
+                    )
+                    continue
+                }
+
+                val heaviest = completedSets
+                    .filter { it.weight > 0f && !it.isDurationMode }
+                    .maxByOrNull { it.weight }
+                evidence[exerciseId] = AiExerciseLoadEvidenceContext(
+                    exerciseId = exerciseId,
+                    lastWeightKg = heaviest?.weight,
+                    lastReps = heaviest?.repetitions,
+                    sessionsWithHistory = 1
+                )
+            }
+        }
+        return evidence.values.take(AiModelConfig.MAX_LOAD_EVIDENCE_EXERCISES)
+    }
 
     /**
      * Quais exercícios a análise pode olhar.

@@ -33,7 +33,10 @@ class MainViewModelFactory(
     private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null,
     private val missionRepository: com.example.domain.gamification.repository.MissionRepository? = null,
     private val analyzeWorkoutUseCase: com.example.domain.ai.usecase.AnalyzeWorkoutUseCase? = null,
-    private val exerciseNameResolver: (suspend (String) -> String?)? = null
+    private val exerciseNameResolver: (suspend (String) -> String?)? = null,
+    private val generateWorkoutUseCase: com.example.domain.ai.usecase.GenerateWorkoutUseCase? = null,
+    private val saveGeneratedWorkoutUseCase: com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase? = null,
+    private val workoutCandidateProvider: (suspend (com.example.domain.ai.model.WorkoutGenerationPreferences) -> List<com.example.domain.ai.model.AiCandidateExerciseContext>)? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -139,6 +142,20 @@ class MainViewModelFactory(
             return com.example.presentation.coach.AiCoachViewModel(
                 analyzeWorkout = useCase,
                 exerciseNameResolver = exerciseNameResolver ?: { null }
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.coach.GenerateWorkoutViewModel::class.java)) {
+            val generate = generateWorkoutUseCase
+                ?: throw IllegalStateException("GenerateWorkoutUseCase not provided")
+            val save = saveGeneratedWorkoutUseCase
+                ?: throw IllegalStateException("SaveGeneratedWorkoutUseCase not provided")
+            val candidates = workoutCandidateProvider
+                ?: throw IllegalStateException("Workout candidate provider not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.coach.GenerateWorkoutViewModel(
+                generateWorkout = generate,
+                saveGeneratedWorkout = save::invoke,
+                listCandidates = candidates
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.missions.MissionViewModel::class.java)) {

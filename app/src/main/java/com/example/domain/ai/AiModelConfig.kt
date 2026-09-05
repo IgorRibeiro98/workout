@@ -55,4 +55,33 @@ object AiModelConfig {
 
     /** Teto de PRs enviados, sempre restrito aos exercícios que já estão no contexto. */
     const val PERSONAL_RECORDS_LIMIT: Int = 10
+
+    /**
+     * Quantos exercícios do catálogo podem ser oferecidos ao modelo em uma geração.
+     *
+     * O catálogo canônico tem ~400 exercícios; enviá-lo inteiro seria custo e ruído. Um treino
+     * real cabe em [MAX_EXERCISES_IN_CONTEXT] exercícios, então 40 candidatos deixam o modelo
+     * com cerca de três a cinco alternativas por vaga — variedade suficiente para escolher, longe
+     * do catálogo inteiro.
+     */
+    const val MAX_CANDIDATE_EXERCISES: Int = 40
+
+    /**
+     * Teto por grupo muscular do foco.
+     *
+     * Sem ele, um grupo grande (peitoral tem ~50 exercícios) consumiria todas as vagas e o outro
+     * grupo pedido chegaria vazio ao modelo.
+     */
+    const val MAX_CANDIDATES_PER_MUSCLE_GROUP: Int = 12
+
+    /** Até quantos grupos musculares um foco aceita. Acima disso não é mais foco. */
+    const val MAX_FOCUS_MUSCLE_GROUPS: Int = 4
+
+    /**
+     * De quantos candidatos o app envia carga registrada.
+     *
+     * Só entra exercício que o usuário realmente executou; este é o teto de quantos desses
+     * cabem no contexto, escolhidos pela execução mais recente.
+     */
+    const val MAX_LOAD_EVIDENCE_EXERCISES: Int = 12
 }

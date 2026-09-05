@@ -75,7 +75,12 @@ fun MainScreen() {
         achievementRepository = app.achievementRepository,
         missionRepository = app.missionRepository,
         analyzeWorkoutUseCase = app.analyzeWorkoutUseCase,
-        exerciseNameResolver = { exerciseId -> app.resolveExerciseDisplayName(exerciseId) }
+        exerciseNameResolver = { exerciseId -> app.resolveExerciseDisplayName(exerciseId) },
+        generateWorkoutUseCase = app.generateWorkoutUseCase,
+        saveGeneratedWorkoutUseCase = app.saveGeneratedWorkoutUseCase,
+        workoutCandidateProvider = { preferences ->
+            app.workoutGenerationContextBuilder.candidates(preferences)
+        }
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -112,6 +117,7 @@ fun MainScreen() {
         Screen.Profile.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
+        Screen.GenerateWorkout.route to Screen.Today.route,
         Screen.Settings.route to Screen.Today.route,
         Screen.Workouts.route to Screen.Workouts.route,
         Screen.ProgramDetails.route to Screen.Workouts.route,
@@ -296,7 +302,20 @@ fun MainScreen() {
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.coach.AiCoachScreen(
                     viewModel = aiCoachViewModel,
-                    onNavigateBack = { navController.popBackStack() }
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToGenerateWorkout = { navController.navigate(Screen.GenerateWorkout.route) }
+                )
+            }
+            composable(Screen.GenerateWorkout.route) {
+                val generateWorkoutViewModel: com.example.presentation.coach.GenerateWorkoutViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.coach.GenerateWorkoutScreen(
+                    viewModel = generateWorkoutViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    // Editar um treino gerado é editar um treino: o editor canônico assume a partir daqui.
+                    onOpenTemplate = { templateId ->
+                        navController.navigate(Screen.TemplateDetails.createRoute(templateId))
+                    }
                 )
             }
             composable(Screen.Settings.route) {
