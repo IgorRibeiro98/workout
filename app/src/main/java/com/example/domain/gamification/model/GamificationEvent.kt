@@ -24,7 +24,10 @@ enum class GamificationEventType {
 
     // Consistência
     WEEKLY_GOAL_COMPLETED,
-    STREAK_MILESTONE_REACHED
+    STREAK_MILESTONE_REACHED,
+
+    // Missões
+    MISSION_COMPLETED
 }
 
 /**
@@ -51,6 +54,7 @@ data class GamificationEvent(
 object GamificationEventSource {
     const val WORKOUT_ENGINE = "WORKOUT_ENGINE"
     const val CONSISTENCY = "CONSISTENCY"
+    const val MISSIONS = "MISSIONS"
     const val UNKNOWN = "UNKNOWN"
 }
 
@@ -72,4 +76,9 @@ object GamificationEventMetadata {
     const val WEEKLY_GOAL = "weeklyGoal"
     const val WEEKLY_COMPLETED = "weeklyCompleted"
     const val STREAK_WEEKS = "streakWeeks"
+    const val MISSION_ID = "missionId"
+    const val MISSION_PERIOD_KEY = "missionPeriodKey"
+    const val MISSION_TARGET = "missionTarget"
+    const val MISSION_REWARD_XP = "missionRewardXp"
+    const val MISSION_CATALOG_VERSION = "missionCatalogVersion"
 }

@@ -156,6 +156,35 @@ object GamificationEvents {
         )
     )
 
+    /**
+     * Missão cumprida em um período.
+     *
+     * A identidade do acontecimento é `missão + período`: repetir a avaliação, reabrir o app ou
+     * rodar uma reconciliação sempre produz a mesma `dedupeKey` e, portanto, no máximo uma
+     * recompensa. Alvo e recompensa ficam gravados no fato para que uma mudança futura de catálogo
+     * não reescreva o que já aconteceu.
+     */
+    fun missionCompleted(
+        missionId: String,
+        periodKey: String,
+        target: Int,
+        rewardXp: Int,
+        catalogVersion: Int,
+        timestamp: Long
+    ): GamificationEvent = GamificationEvent(
+        type = GamificationEventType.MISSION_COMPLETED,
+        timestamp = timestamp,
+        source = GamificationEventSource.MISSIONS,
+        dedupeKey = "mission_completed:$missionId:$periodKey",
+        metadata = mapOf(
+            GamificationEventMetadata.MISSION_ID to missionId,
+            GamificationEventMetadata.MISSION_PERIOD_KEY to periodKey,
+            GamificationEventMetadata.MISSION_TARGET to target.toString(),
+            GamificationEventMetadata.MISSION_REWARD_XP to rewardXp.toString(),
+            GamificationEventMetadata.MISSION_CATALOG_VERSION to catalogVersion.toString()
+        )
+    )
+
     /** Valores viram texto estável para que a chave de idempotência não dependa de formatação local. */
     private fun formatValue(value: Float): String = String.format(java.util.Locale.US, "%.2f", value)
 }

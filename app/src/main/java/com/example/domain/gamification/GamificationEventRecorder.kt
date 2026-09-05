@@ -17,6 +17,7 @@ class GamificationEventRecorder(
     private val repository: GamificationEventRepository,
     private val xpCalculatorService: XpCalculatorService,
     private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null,
+    private val missionRepository: com.example.domain.gamification.repository.MissionRepository? = null,
     private val workoutTimestampsProvider: suspend () -> List<Long>,
     private val weeklyGoalProvider: suspend () -> Int,
     private val goalSnapshotsProvider: (suspend () -> List<com.example.domain.evolution.model.consistency.WeeklyGoalSnapshot>)? = null,
@@ -44,6 +45,19 @@ class GamificationEventRecorder(
             
             try {
                 achievementRepository?.evaluateAndUnlock(com.example.domain.evolution.repository.AchievementEvaluationOrigin.LIVE)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // As missões observam o mesmo histórico persistido; avaliá-las aqui apenas antecipa o
+            // que a reconciliação faria na próxima abertura, com a mesma garantia de idempotência.
+            // Só o fim de um treino pode mover uma missão, então nada é reavaliado a cada série.
+            try {
+                if (event.type == GamificationEventType.WORKOUT_COMPLETED) {
+                    missionRepository?.evaluateAndComplete(
+                        com.example.domain.gamification.repository.MissionEvaluationOrigin.LIVE
+                    )
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }

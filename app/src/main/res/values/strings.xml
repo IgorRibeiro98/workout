@@ -100,6 +100,7 @@
 
     <!-- T11 Body Evolution Strings -->
     <string name="nav_profile">Perfil</string>
+    <string name="nav_missions">Missões</string>
     <string name="body_evolution_title">Evolução corporal</string>
     <string name="body_evolution_empty_title">Ainda não existem medições.</string>
     <string name="body_evolution_empty_desc">Registre seu primeiro acompanhamento\npara acompanhar sua evolução.</string>

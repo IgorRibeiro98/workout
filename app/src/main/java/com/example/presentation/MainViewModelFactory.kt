@@ -30,7 +30,8 @@ class MainViewModelFactory(
     private val performanceRepository: PerformanceRepository? = null,
     private val consistencyRepository: com.example.domain.evolution.repository.ConsistencyRepository? = null,
     private val xpTransactionRepository: com.example.domain.gamification.repository.XpTransactionRepository? = null,
-    private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null
+    private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository? = null,
+    private val missionRepository: com.example.domain.gamification.repository.MissionRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -128,6 +129,12 @@ class MainViewModelFactory(
                 bodyMeasurementRepository = bodyMeasurementRepository,
                 settingsManager = settingsManager
             ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.missions.MissionViewModel::class.java)) {
+            val missionRepo = missionRepository
+                ?: throw IllegalStateException("MissionRepository not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.missions.MissionViewModel(missionRepo) as T
         }
         if (modelClass.isAssignableFrom(ExecutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

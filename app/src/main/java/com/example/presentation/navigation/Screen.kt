@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -30,6 +31,7 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object History : Screen("history", R.string.nav_history, Icons.Default.History)
     object MyEvolution : Screen("my_evolution", R.string.nav_evolution, Icons.Default.TrendingUp)
     object Profile : Screen("profile", R.string.nav_profile, Icons.Default.Person)
+    object Missions : Screen("missions", R.string.nav_missions, Icons.Default.Flag)
     object Settings : Screen("settings", R.string.nav_settings, Icons.Default.Settings)
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {

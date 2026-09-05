@@ -72,7 +72,8 @@ fun MainScreen() {
         performanceRepository = app.performanceRepository,
         consistencyRepository = app.consistencyRepository,
         xpTransactionRepository = app.xpTransactionRepository,
-        achievementRepository = app.achievementRepository
+        achievementRepository = app.achievementRepository,
+        missionRepository = app.missionRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -107,6 +108,7 @@ fun MainScreen() {
         Screen.Today.route to Screen.Today.route,
         Screen.Summary.route to Screen.Today.route,
         Screen.Profile.route to Screen.Today.route,
+        Screen.Missions.route to Screen.Today.route,
         Screen.Settings.route to Screen.Today.route,
         Screen.Workouts.route to Screen.Workouts.route,
         Screen.ProgramDetails.route to Screen.Workouts.route,
@@ -129,6 +131,18 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         liveUnlocksFlow.collect { unlock ->
             unlockQueue.add(unlock)
+        }
+    }
+
+    // Só conclusões ao vivo chegam aqui: a reconciliação não reemite este fluxo.
+    val liveMissionCompletions = app.missionRepository.liveCompletions
+    val missionQueue = androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateListOf<com.example.domain.gamification.model.mission.MissionCompletion>()
+    }
+
+    LaunchedEffect(Unit) {
+        liveMissionCompletions.collect { completion ->
+            missionQueue.add(completion)
         }
     }
 
@@ -255,6 +269,7 @@ fun MainScreen() {
                     viewModel = profileViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                    onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
                     onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) },
                     // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
                     onNavigateToAchievements = {
@@ -262,6 +277,14 @@ fun MainScreen() {
                             launchSingleTop = true
                         }
                     }
+                )
+            }
+            composable(Screen.Missions.route) {
+                val missionViewModel: com.example.presentation.missions.MissionViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.missions.MissionsScreen(
+                    viewModel = missionViewModel,
+                    onNavigateBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.Settings.route) {
@@ -345,6 +368,24 @@ fun MainScreen() {
                 } else {
                     LaunchedEffect(currentUnlock) {
                         unlockQueue.removeAt(0)
+                    }
+                }
+            }
+
+            if (unlockQueue.isEmpty() && missionQueue.isNotEmpty()) {
+                val currentCompletion = missionQueue.first()
+                val definition = com.example.domain.gamification.model.mission.MissionCatalog
+                    .getDefinition(currentCompletion.missionId)
+                if (definition != null) {
+                    com.example.presentation.gamification.components.MissionCompletionFeedback(
+                        title = definition.title,
+                        rewardXp = currentCompletion.rewardXp,
+                        onAnimationEnd = { missionQueue.removeAt(0) },
+                        modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
+                    )
+                } else {
+                    LaunchedEffect(currentCompletion) {
+                        missionQueue.removeAt(0)
                     }
                 }
             }

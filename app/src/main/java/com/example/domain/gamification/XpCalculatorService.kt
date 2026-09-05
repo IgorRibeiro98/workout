@@ -15,12 +15,22 @@ import com.example.domain.gamification.repository.XpTransactionRepository
 class XpCalculatorService(
     private val repository: XpTransactionRepository
 ) {
-    /** Caminho LIVE: o usuário acabou de conquistar o XP e deve receber o feedback. */
-    suspend fun processEvent(event: GamificationEvent) {
+    /**
+     * Converte o fato em XP.
+     *
+     * [origin] decide apenas a visibilidade: em [XpTransactionOrigin.LIVE] o ganho vira feedback
+     * imediato; em [XpTransactionOrigin.RECONCILIATION] o mesmo XP é gravado em silêncio, porque
+     * reconstruir o passado não é conquistar XP agora. Em qualquer origem a gravação é idempotente
+     * por evento.
+     */
+    suspend fun processEvent(
+        event: GamificationEvent,
+        origin: XpTransactionOrigin = XpTransactionOrigin.LIVE
+    ) {
         val transaction = transactionFor(event) ?: return
         val hasTransaction = repository.hasTransactionForEvent(event.id)
         if (!hasTransaction) {
-            repository.saveTransaction(transaction, XpTransactionOrigin.LIVE)
+            repository.saveTransaction(transaction, origin)
         }
     }
 

@@ -45,7 +45,8 @@ fun ProfileScreen(
     onNavigateBack: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToBodyEvolution: () -> Unit,
-    onNavigateToAchievements: () -> Unit
+    onNavigateToAchievements: () -> Unit,
+    onNavigateToMissions: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -55,6 +56,7 @@ fun ProfileScreen(
         onNavigateToSettings = onNavigateToSettings,
         onNavigateToBodyEvolution = onNavigateToBodyEvolution,
         onNavigateToAchievements = onNavigateToAchievements,
+        onNavigateToMissions = onNavigateToMissions,
         onWeeklyGoalChange = viewModel::setWeeklyGoal
     )
 }
@@ -67,6 +69,7 @@ private fun ProfileScreenContent(
     onNavigateToSettings: () -> Unit,
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
+    onNavigateToMissions: () -> Unit,
     onWeeklyGoalChange: (Int) -> Unit
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
@@ -128,6 +131,8 @@ private fun ProfileScreenContent(
             AthleteHeaderCard(uiState = uiState)
 
             StatsGrid(uiState = uiState)
+
+            MissionsSection(onClick = onNavigateToMissions)
 
             AchievementsPreviewSection(
                 achievements = uiState.recentAchievements,
@@ -559,6 +564,29 @@ private fun WeeklyGoalSection(
                 )
             }
         }
+    }
+}
+
+/**
+ * Porta de entrada para as missões. O Perfil continua sendo o hub de progressão: as missões vivem
+ * na própria área, com sua autoridade de avaliação.
+ */
+@Composable
+private fun MissionsSection(onClick: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Missões",
+            color = Lime400,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp
+        )
+
+        ProfileNavigationCard(
+            icon = Icons.Default.Flag,
+            title = "Missões e Desafios",
+            subtitle = "Objetivos da semana e marcos do seu treino",
+            onClick = onClick
+        )
     }
 }
 

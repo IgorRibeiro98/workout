@@ -56,6 +56,9 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var xpCalculatorService: com.example.domain.gamification.XpCalculatorService
         internal set
 
+    lateinit var missionRepository: com.example.domain.gamification.repository.MissionRepository
+        internal set
+
     lateinit var settingsManager: SettingsManager
         internal set
         
@@ -92,8 +95,14 @@ class MainApplication : Application(), ImageLoaderFactory {
         xpCalculatorService = com.example.domain.gamification.XpCalculatorService(
             xpTransactionRepository
         )
+        missionRepository = com.example.data.repository.MissionRepositoryImpl(
+            consistencyRepository = consistencyRepository,
+            gamificationEventRepository = gamificationEventRepository,
+            xpCalculatorService = xpCalculatorService
+        )
         gamificationEventPublisher = com.example.domain.gamification.GamificationEventRecorder(
             achievementRepository = achievementRepository,
+            missionRepository = missionRepository,
             repository = gamificationEventRepository,
             xpCalculatorService = xpCalculatorService,
             workoutTimestampsProvider = { database.workoutDao().getCompletedSessionTimestamps() },
@@ -144,6 +153,10 @@ class MainApplication : Application(), ImageLoaderFactory {
                 reconciler.reconcile()
 
                 com.example.domain.gamification.AchievementReconciler(achievementRepository).reconcile()
+
+                // Missões perdidas por um encerramento no meio do caminho voltam ao estado correto
+                // aqui, sem recompensa nem comemoração repetidas.
+                com.example.domain.gamification.mission.MissionReconciler(missionRepository).reconcile()
             } catch (e: Exception) {
                 e.printStackTrace()
             }

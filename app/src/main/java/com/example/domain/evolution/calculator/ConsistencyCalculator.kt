@@ -17,6 +17,18 @@ import kotlin.math.max
 object ConsistencyCalculator {
 
     /**
+     * Segunda-feira da semana que contém [date]: a definição de semana usada por toda a consistência.
+     *
+     * Exposta para que outras camadas (missões, por exemplo) compartilhem exatamente esta regra em
+     * vez de recriarem um segundo conceito de início de semana.
+     */
+    fun weekStart(date: LocalDate): LocalDate = date.with(DayOfWeek.MONDAY)
+
+    /** Mesma regra de [weekStart] a partir de um instante. */
+    fun weekStartEpochDay(timestamp: Long, zoneId: ZoneId = ZoneId.systemDefault()): Long =
+        weekStart(Instant.ofEpochMilli(timestamp).atZone(zoneId).toLocalDate()).toEpochDay()
+
+    /**
      * Builds weekly consistencies from workout timestamps and historical goal snapshots.
      */
     fun calculateWeeklyConsistencies(
