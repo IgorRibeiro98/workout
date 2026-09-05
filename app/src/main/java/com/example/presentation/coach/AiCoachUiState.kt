@@ -1,5 +1,6 @@
 package com.example.presentation.coach
 
+import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendationType
 
 /**
@@ -16,7 +17,10 @@ sealed interface AiCoachUiState {
 
     data class Success(
         val summary: String,
-        val recommendations: List<AiRecommendationUi>
+        val positiveSignals: List<AiObservationUi>,
+        val attentionPoints: List<AiObservationUi>,
+        val recommendations: List<AiRecommendationUi>,
+        val dataQuality: AiDataQualityUi
     ) : AiCoachUiState
 
     /** O Coach não está disponível, mas o resto do Spark continua funcionando normalmente. */
@@ -25,11 +29,31 @@ sealed interface AiCoachUiState {
     data class Error(val message: String, val canRetry: Boolean) : AiCoachUiState
 }
 
+/** Um fato observado, pronto para render. */
+data class AiObservationUi(
+    val title: String,
+    val description: String,
+    val exerciseName: String?
+)
+
 /** Uma sugestão pronta para render. Continua sendo sugestão: a tela não aplica nada. */
 data class AiRecommendationUi(
     val type: AiRecommendationType,
     val label: String,
     val exerciseName: String?,
     val reason: String,
+    val evidence: String?,
     val confidencePercent: Int
+)
+
+/**
+ * A base da análise, para o usuário saber o peso do que está lendo.
+ *
+ * [sessionsAnalyzed] é contagem do app, não número escrito pelo modelo.
+ */
+data class AiDataQualityUi(
+    val level: AiDataQualityLevel,
+    val label: String,
+    val description: String,
+    val sessionsAnalyzed: Int
 )

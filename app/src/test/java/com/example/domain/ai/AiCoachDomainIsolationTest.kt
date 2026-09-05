@@ -18,12 +18,11 @@ import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutSessionEntity
 import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.local.WorkoutTemplateExerciseEntity
-import com.example.data.repository.BodyMeasurementRepository
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachGatewayResult
-import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiCoachResponseRecommendation
 import com.example.domain.ai.model.AiCoachResult
+import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendationType
 import com.example.domain.ai.usecase.AnalyzeWorkoutUseCase
 import kotlinx.coroutines.test.runTest
@@ -51,6 +50,7 @@ class AiCoachDomainIsolationTest {
     private lateinit var contextBuilder: WorkoutAiCoachContextBuilder
     private var sessionId: Long = 0L
     private var exerciseRowId: Long = 0L
+    private var templateId: Long = 0L
 
     @Before
     fun setUp() = runTest {
@@ -70,7 +70,7 @@ class AiCoachDomainIsolationTest {
         )
 
         val programId = dao.insertProgram(WorkoutProgramEntity(name = "Programa"))
-        val templateId = dao.insertTemplate(
+        templateId = dao.insertTemplate(
             WorkoutTemplateEntity(programId = programId, name = "Treino A")
         )
         dao.insertTemplateExercise(
@@ -122,14 +122,61 @@ class AiCoachDomainIsolationTest {
 
         contextBuilder = WorkoutAiCoachContextBuilder(
             workoutDao = dao,
-            settingsManager = settingsManager,
-            bodyMeasurementRepository = BodyMeasurementRepository(database.bodyMeasurementDao())
+            settingsManager = settingsManager
         )
     }
 
     @After
     fun tearDown() {
         database.close()
+    }
+
+    /** O treino planejado, exatamente como está persistido. */
+    private suspend fun templateSnapshot(): String {
+        val dao = database.workoutDao()
+        return buildString {
+            append(dao.getTemplateById(templateId))
+            dao.getTemplateExercisesWithDetails(templateId).forEach { append(it.templateExercise) }
+        }
+    }
+
+    /** Insere uma sessão com o status pedido e uma série concluída de [exerciseId]. */
+    private suspend fun insertSession(
+        status: SessionStatus,
+        exerciseId: Long,
+        weight: Float,
+        startedAt: Long,
+        finishedAt: Long?
+    ): Long {
+        val dao = database.workoutDao()
+        val id = dao.insertSession(
+            WorkoutSessionEntity(
+                templateId = templateId,
+                startedAt = startedAt,
+                finishedAt = finishedAt,
+                status = status.name
+            )
+        )
+        val exerciseSessionId = dao.insertExerciseSession(
+            ExerciseSessionEntity(
+                sessionId = id,
+                plannedExerciseId = exerciseId,
+                actualExerciseId = exerciseId,
+                exerciseNameSnapshot = "snapshot"
+            )
+        )
+        dao.insertSetLogs(
+            listOf(
+                SetLogEntity(
+                    exerciseSessionId = exerciseSessionId,
+                    setNumber = 1,
+                    weight = weight,
+                    repetitions = 10,
+                    completed = true
+                )
+            )
+        )
+        return id
     }
 
     private suspend fun snapshot(): String {
@@ -152,9 +199,12 @@ class AiCoachDomainIsolationTest {
 
         assertEquals("Treino A", context.currentWorkout?.templateName)
         assertEquals("supino-reto-barra", context.currentWorkout?.exercises?.single()?.exerciseId)
-        assertEquals("supino-reto-barra", context.recentSessions.single().exercises.single().exerciseId)
+        assertEquals("supino-reto-barra", context.exerciseHistory.single().exerciseId)
         assertEquals("supino-reto-barra", context.personalRecords.single().exerciseId)
+        // O PR vem de personal_records, a autoridade persistida; nada é reinferido das séries.
         assertEquals(70f, context.personalRecords.single().value)
+        assertEquals(1, context.evidence.sessionsAnalyzed)
+        assertEquals(AiDataQualityLevel.LIMITED, context.evidence.maxDataQuality)
     }
 
     @Test
@@ -163,16 +213,18 @@ class AiCoachDomainIsolationTest {
 
         val gateway = FakeAiCoachGateway {
             AiCoachGatewayResult.Success(
-                AiCoachResponse(
+                AiCoachTestData.response(
                     summary = "Boa progressão de carga no supino.",
                     recommendations = listOf(
                         AiCoachResponseRecommendation(
                             type = AiRecommendationType.REVIEW_LOAD.name,
                             exerciseId = "supino-reto-barra",
                             reason = "A carga subiu de 60kg para 70kg.",
-                            confidence = 0.9
+                            confidence = 0.9,
+                            evidence = "60 kg e 70 kg na sessão analisada"
                         )
-                    )
+                    ),
+                    dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.LIMITED)
                 )
             )
         }
@@ -189,14 +241,15 @@ class AiCoachDomainIsolationTest {
 
         val gateway = FakeAiCoachGateway {
             AiCoachGatewayResult.Success(
-                AiCoachResponse(
+                AiCoachTestData.response(
                     summary = "Resumo.",
                     recommendations = listOf(
                         AiCoachResponseRecommendation(
                             type = "APPLY_NEW_LOAD",
                             exerciseId = "exercicio-inventado",
                             reason = "Motivo.",
-                            confidence = 42.0
+                            confidence = 42.0,
+                            evidence = "Inventada."
                         )
                     )
                 )
@@ -221,5 +274,115 @@ class AiCoachDomainIsolationTest {
         assertEquals(1, dao.getAllCompletedSessionsWithDetails().size)
         assertEquals(1, dao.getAllExercisesList().size)
         assertNotNull(dao.getHighestPR(exerciseRowId, PRType.MAX_WEIGHT.name))
+    }
+
+    @Test
+    fun `template permanece identico depois da analise`() = runTest {
+        val before = templateSnapshot()
+
+        val gateway = FakeAiCoachGateway {
+            AiCoachGatewayResult.Success(
+                AiCoachTestData.response(
+                    summary = "Vale revisar a carga do supino.",
+                    recommendations = listOf(
+                        AiCoachResponseRecommendation(
+                            type = AiRecommendationType.REVIEW_LOAD.name,
+                            exerciseId = "supino-reto-barra",
+                            reason = "A carga ficou igual.",
+                            confidence = 0.7,
+                            evidence = "70 kg na última sessão"
+                        )
+                    ),
+                    dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.LIMITED)
+                )
+            )
+        }
+
+        val result = AnalyzeWorkoutUseCase(contextBuilder, gateway)()
+
+        assertTrue(result is AiCoachResult.Success)
+        assertEquals("a IA recomenda, não altera o treino", before, templateSnapshot())
+    }
+
+    @Test
+    fun `so sessao concluida sustenta o desempenho historico`() = runTest {
+        val now = System.currentTimeMillis()
+        insertSession(SessionStatus.CANCELLED, exerciseRowId, 200f, now - 7_200_000L, now - 6_000_000L)
+        insertSession(SessionStatus.PLANNED, exerciseRowId, 300f, now + 3_600_000L, null)
+        insertSession(SessionStatus.PAUSED, exerciseRowId, 400f, now - 1_000L, null)
+        insertSession(SessionStatus.COMPLETED, exerciseRowId, 75f, now - 90_000_000L, now - 86_400_000L)
+
+        val context = contextBuilder.build()
+
+        val executions = context.exerciseHistory.single().executions
+        // Apenas as duas COMPLETED: a de 70 kg do setUp e a de 75 kg inserida aqui.
+        assertEquals(2, executions.size)
+        assertEquals(listOf(70f, 75f), executions.mapNotNull { it.maxWeightKg }.sorted())
+        assertEquals(2, context.evidence.sessionsAnalyzed)
+        // A sessão IN_PROGRESS do app não pode virar histórico nem carga de 400 kg.
+        assertTrue(executions.none { (it.maxWeightKg ?: 0f) > 100f })
+    }
+
+    @Test
+    fun `historico de exercicio fora do treino analisado nao vai para o modelo`() = runTest {
+        val dao = database.workoutDao()
+        val squatId = dao.insertExercise(
+            ExerciseEntity(
+                name = "Agachamento livre",
+                canonicalId = "agachamento-livre",
+                primaryMuscle = "Quadríceps"
+            )
+        )
+        dao.insertPersonalRecord(
+            PersonalRecordEntity(
+                exerciseId = squatId,
+                date = System.currentTimeMillis(),
+                prType = PRType.MAX_WEIGHT,
+                value = 180f
+            )
+        )
+        repeat(3) { index ->
+            insertSession(
+                status = SessionStatus.COMPLETED,
+                exerciseId = squatId,
+                weight = 100f + index,
+                startedAt = System.currentTimeMillis() - (index + 2) * 86_400_000L,
+                finishedAt = System.currentTimeMillis() - (index + 2) * 86_400_000L + 3_600_000L
+            )
+        }
+
+        val context = contextBuilder.build()
+
+        assertEquals(listOf("supino-reto-barra"), context.exerciseHistory.map { it.exerciseId })
+        assertTrue("agachamento-livre" !in context.knownExerciseIds)
+        assertTrue(context.personalRecords.none { it.exerciseId == "agachamento-livre" })
+        assertEquals(1, context.evidence.sessionsAnalyzed)
+    }
+
+    @Test
+    fun `usuario sem historico recebe analise com qualidade insuficiente`() = runTest {
+        val dao = database.workoutDao()
+        dao.deleteWorkoutSession(dao.getSessionById(sessionId)!!)
+
+        val context = contextBuilder.build()
+
+        assertEquals("Treino A", context.currentWorkout?.templateName)
+        assertEquals(0, context.evidence.sessionsAnalyzed)
+        assertEquals(AiDataQualityLevel.INSUFFICIENT, context.evidence.maxDataQuality)
+        assertTrue(context.exerciseHistory.single().executions.isEmpty())
+
+        val gateway = FakeAiCoachGateway {
+            AiCoachGatewayResult.Success(
+                AiCoachTestData.response(
+                    summary = "Ainda não há sessões concluídas para avaliar evolução.",
+                    dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.INSUFFICIENT)
+                )
+            )
+        }
+
+        // Falta de histórico é resposta conservadora, não erro de infraestrutura.
+        val result = AnalyzeWorkoutUseCase(contextBuilder, gateway)() as AiCoachResult.Success
+        assertEquals(AiDataQualityLevel.INSUFFICIENT, result.advice.dataQuality.level)
+        assertEquals(0, result.advice.sessionsAnalyzed)
     }
 }

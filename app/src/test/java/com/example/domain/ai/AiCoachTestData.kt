@@ -10,6 +10,12 @@ import com.example.data.local.SessionStatus
 import com.example.data.local.SetLogEntity
 import com.example.data.local.WorkoutSessionEntity
 import com.example.data.local.WorkoutTemplateExerciseEntity
+import com.example.domain.ai.model.AiCoachResponse
+import com.example.domain.ai.model.AiCoachResponseDataQuality
+import com.example.domain.ai.model.AiCoachResponseObservation
+import com.example.domain.ai.model.AiCoachResponseRecommendation
+import com.example.domain.ai.model.AiDataQualityLevel
+import com.example.domain.ai.model.AiRecommendationType
 
 /** Fixtures compartilhadas pelos testes do Coach. */
 object AiCoachTestData {
@@ -41,6 +47,24 @@ object AiCoachTestData {
         plannedWeight = plannedWeight
     )
 
+    /** Um exercício executado dentro de uma sessão, com suas séries. */
+    fun executedExercise(
+        exerciseSessionId: Long,
+        sessionId: Long,
+        exerciseRowId: Long,
+        exerciseName: String,
+        sets: List<SetLogEntity>
+    ) = ExerciseSessionWithSets(
+        exerciseSession = ExerciseSessionEntity(
+            id = exerciseSessionId,
+            sessionId = sessionId,
+            plannedExerciseId = exerciseRowId,
+            actualExerciseId = exerciseRowId,
+            exerciseNameSnapshot = exerciseName
+        ),
+        sets = sets
+    )
+
     fun completedSession(
         sessionId: Long,
         startedAt: Long,
@@ -48,27 +72,37 @@ object AiCoachTestData {
         exerciseRowId: Long,
         exerciseName: String,
         sets: List<SetLogEntity>
+    ) = session(
+        sessionId = sessionId,
+        startedAt = startedAt,
+        finishedAt = finishedAt,
+        exercises = listOf(
+            executedExercise(
+                exerciseSessionId = sessionId * 100,
+                sessionId = sessionId,
+                exerciseRowId = exerciseRowId,
+                exerciseName = exerciseName,
+                sets = sets
+            )
+        )
+    )
+
+    fun session(
+        sessionId: Long,
+        startedAt: Long,
+        finishedAt: Long?,
+        status: SessionStatus = SessionStatus.COMPLETED,
+        exercises: List<ExerciseSessionWithSets>
     ) = SessionCalendarSummary(
         session = WorkoutSessionEntity(
             id = sessionId,
             templateId = 1L,
             startedAt = startedAt,
             finishedAt = finishedAt,
-            status = SessionStatus.COMPLETED.name
+            status = status.name
         ),
         checkIn = null,
-        exercises = listOf(
-            ExerciseSessionWithSets(
-                exerciseSession = ExerciseSessionEntity(
-                    id = sessionId * 100,
-                    sessionId = sessionId,
-                    plannedExerciseId = exerciseRowId,
-                    actualExerciseId = exerciseRowId,
-                    exerciseNameSnapshot = exerciseName
-                ),
-                sets = sets
-            )
-        )
+        exercises = exercises
     )
 
     fun setLog(
@@ -93,4 +127,41 @@ object AiCoachTestData {
         prType = PRType.MAX_WEIGHT,
         value = value
     )
+
+    fun observation(
+        exerciseId: String? = null,
+        title: String = "Carga estável",
+        description: String = "A carga registrada não mudou nas últimas sessões."
+    ) = AiCoachResponseObservation(exerciseId = exerciseId, title = title, description = description)
+
+    fun recommendation(
+        type: String = AiRecommendationType.REVIEW_LOAD.name,
+        exerciseId: String? = "supino-reto-barra",
+        reason: String = "A carga não subiu nas últimas sessões.",
+        confidence: Double = 0.8,
+        evidence: String? = "60 kg em 3 sessões consecutivas"
+    ) = AiCoachResponseRecommendation(type, exerciseId, reason, confidence, evidence)
+
+    /** Uma resposta completa e válida, para o teste alterar só o que ele quer testar. */
+    fun response(
+        summary: String = "Progressão estável.",
+        positiveSignals: List<AiCoachResponseObservation> = emptyList(),
+        attentionPoints: List<AiCoachResponseObservation> = emptyList(),
+        recommendations: List<AiCoachResponseRecommendation> = emptyList(),
+        dataQuality: AiCoachResponseDataQuality? = dataQuality(AiDataQualityLevel.LIMITED)
+    ) = AiCoachResponse(
+        summary = summary,
+        positiveSignals = positiveSignals,
+        attentionPoints = attentionPoints,
+        recommendations = recommendations,
+        dataQuality = dataQuality
+    )
+
+    fun dataQuality(
+        level: AiDataQualityLevel,
+        description: String = "Análise baseada nas sessões concluídas enviadas."
+    ) = AiCoachResponseDataQuality(level = level.name, description = description)
+
+    fun dataQuality(level: String, description: String = "Base da análise.") =
+        AiCoachResponseDataQuality(level = level, description = description)
 }

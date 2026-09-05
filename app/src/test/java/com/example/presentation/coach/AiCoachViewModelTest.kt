@@ -1,6 +1,7 @@
 package com.example.presentation.coach
 
 import com.example.domain.ai.AiCoachContextBuilder
+import com.example.domain.ai.AiCoachTestData
 import com.example.domain.ai.FakeAiCoachGateway
 import com.example.domain.ai.model.AiAthleteContext
 import com.example.domain.ai.model.AiCoachContext
@@ -8,6 +9,8 @@ import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiCoachResponseRecommendation
+import com.example.domain.ai.model.AiDataQualityLevel
+import com.example.domain.ai.model.AiEvidenceContext
 import com.example.domain.ai.model.AiPlannedExerciseContext
 import com.example.domain.ai.model.AiRecommendationType
 import com.example.domain.ai.model.AiWorkoutContext
@@ -43,6 +46,11 @@ class AiCoachViewModelTest {
             exercises = listOf(
                 AiPlannedExerciseContext(exerciseId = "supino-reto-barra", name = "Supino reto com barra")
             )
+        ),
+        evidence = AiEvidenceContext(
+            sessionsAnalyzed = 6,
+            exercisesWithHistory = 1,
+            maxDataQuality = AiDataQualityLevel.GOOD
         )
     )
 
@@ -66,16 +74,32 @@ class AiCoachViewModelTest {
     )
 
     private fun successResponse() = AiCoachGatewayResult.Success(
-        AiCoachResponse(
+        AiCoachTestData.response(
             summary = "Progressão consistente.",
+            positiveSignals = listOf(
+                AiCoachTestData.observation(
+                    exerciseId = "supino-reto-barra",
+                    title = "Frequência consistente",
+                    description = "O supino apareceu em todas as sessões analisadas."
+                )
+            ),
+            attentionPoints = listOf(
+                AiCoachTestData.observation(
+                    exerciseId = "supino-reto-barra",
+                    title = "Carga sem alteração",
+                    description = "A carga registrada permaneceu em 60 kg."
+                )
+            ),
             recommendations = listOf(
                 AiCoachResponseRecommendation(
                     type = AiRecommendationType.REVIEW_LOAD.name,
                     exerciseId = "supino-reto-barra",
                     reason = "A carga está parada há três sessões.",
-                    confidence = 0.9
+                    confidence = 0.9,
+                    evidence = "60 kg em 3 sessões consecutivas"
                 )
-            )
+            ),
+            dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.GOOD)
         )
     )
 
@@ -103,7 +127,107 @@ class AiCoachViewModelTest {
         val recommendation = state.recommendations.single()
         assertEquals(AiRecommendationType.REVIEW_LOAD, recommendation.type)
         assertEquals("Supino reto com barra", recommendation.exerciseName)
+        assertEquals("60 kg em 3 sessões consecutivas", recommendation.evidence)
         assertEquals(90, recommendation.confidencePercent)
+    }
+
+    @Test
+    fun `pontos positivos e de atencao sao projetados em secoes separadas`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeAiCoachGateway { successResponse() })
+
+        viewModel.analyze()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value as AiCoachUiState.Success
+        val positive = state.positiveSignals.single()
+        assertEquals("Frequência consistente", positive.title)
+        assertEquals("Supino reto com barra", positive.exerciseName)
+        val attention = state.attentionPoints.single()
+        assertEquals("Carga sem alteração", attention.title)
+        assertEquals("A carga registrada permaneceu em 60 kg.", attention.description)
+    }
+
+    @Test
+    fun `a qualidade dos dados aparece na UI com a contagem do app`() = runTest(dispatcher) {
+        val viewModel = viewModel(FakeAiCoachGateway { successResponse() })
+
+        viewModel.analyze()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value as AiCoachUiState.Success
+        assertEquals(AiDataQualityLevel.GOOD, state.dataQuality.level)
+        assertEquals("Dados suficientes", state.dataQuality.label)
+        assertEquals(6, state.dataQuality.sessionsAnalyzed)
+    }
+
+    @Test
+    fun `conclusao forte com pouca evidencia nao chega na UI como analise valida`() = runTest(dispatcher) {
+        val poorContext = context.copy(
+            evidence = AiEvidenceContext(
+                sessionsAnalyzed = 1,
+                exercisesWithHistory = 1,
+                maxDataQuality = AiDataQualityLevel.LIMITED
+            )
+        )
+        val poorBuilder = object : AiCoachContextBuilder {
+            override suspend fun build() = poorContext
+        }
+        val gateway = FakeAiCoachGateway {
+            AiCoachGatewayResult.Success(
+                AiCoachTestData.response(
+                    summary = "Você entrou em platô e precisa mudar tudo.",
+                    dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.GOOD)
+                )
+            )
+        }
+        val viewModel = AiCoachViewModel(
+            analyzeWorkout = AnalyzeWorkoutUseCase(poorBuilder, gateway),
+            exerciseNameResolver = { null }
+        )
+
+        viewModel.analyze()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value as AiCoachUiState.Error
+        assertTrue(state.message.contains("Nada no seu treino foi alterado"))
+    }
+
+    @Test
+    fun `usuario sem historico recebe analise com qualidade insuficiente`() = runTest(dispatcher) {
+        val emptyContext = context.copy(
+            evidence = AiEvidenceContext(
+                sessionsAnalyzed = 0,
+                exercisesWithHistory = 0,
+                maxDataQuality = AiDataQualityLevel.INSUFFICIENT
+            )
+        )
+        val emptyBuilder = object : AiCoachContextBuilder {
+            override suspend fun build() = emptyContext
+        }
+        val gateway = FakeAiCoachGateway {
+            AiCoachGatewayResult.Success(
+                AiCoachTestData.response(
+                    summary = "Ainda não há sessões concluídas para avaliar evolução.",
+                    dataQuality = AiCoachTestData.dataQuality(
+                        level = AiDataQualityLevel.INSUFFICIENT,
+                        description = ""
+                    )
+                )
+            )
+        }
+        val viewModel = AiCoachViewModel(
+            analyzeWorkout = AnalyzeWorkoutUseCase(emptyBuilder, gateway),
+            exerciseNameResolver = { null }
+        )
+
+        viewModel.analyze()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value as AiCoachUiState.Success
+        assertEquals(AiDataQualityLevel.INSUFFICIENT, state.dataQuality.level)
+        assertEquals(0, state.dataQuality.sessionsAnalyzed)
+        // Sem descrição do modelo, o app diz com o que realmente contou.
+        assertTrue(state.dataQuality.description.contains("Nenhuma sessão concluída"))
     }
 
     @Test

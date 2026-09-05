@@ -69,7 +69,7 @@ class MainApplication : Application(), ImageLoaderFactory {
         internal set
 
     /**
-     * Coach IA (T14.0).
+     * Coach IA (T14.0/T14.1).
      *
      * `by lazy` de propósito: o Spark é local-first e não pode pagar inicialização de Firebase
      * no startup. Nada de IA é tocado enquanto o usuário não pedir uma análise.
@@ -82,8 +82,7 @@ class MainApplication : Application(), ImageLoaderFactory {
         com.example.domain.ai.usecase.AnalyzeWorkoutUseCase(
             contextBuilder = com.example.data.ai.WorkoutAiCoachContextBuilder(
                 workoutDao = database.workoutDao(),
-                settingsManager = settingsManager,
-                bodyMeasurementRepository = bodyMeasurementRepository
+                settingsManager = settingsManager
             ),
             gateway = aiCoachGateway,
             telemetry = com.example.data.ai.LogcatAiCoachTelemetry()

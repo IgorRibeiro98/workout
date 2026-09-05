@@ -45,6 +45,11 @@ Do not:
 
 ### Active workout execution
 
+> **Status (verificado em 2026-09-05):** o modelo de rota/navegação persistida descrito abaixo
+> ainda não existe no código (`NavigationRepository`, `WorkoutRoute`, `NavigationCursor` — 0
+> ocorrências). A autoridade de execução hoje é `WorkoutEngine` + `ExecutionViewModel` sobre as
+> entidades de sessão em Room. Trate o texto abaixo como direção pretendida.
+
 The persisted workout route/navigation model is the canonical execution authority.
 
 Prefer the flow:
@@ -55,7 +60,9 @@ Do not allow legacy execution engines, UI-local state or duplicated state machin
 
 ### User preferences
 
-`UserPreferencesDataStore` is the source of truth for persistent workout preferences such as:
+`SettingsManager` (DataStore) is the source of truth for persistent workout preferences. (Este
+documento citava `UserPreferencesDataStore`, que não existe no código — verificado em
+2026-09-05.) Preferências como:
 
 - party mode / number of participants;
 - available workout duration;
@@ -102,7 +109,9 @@ Rules:
 - Recovery/rest timing must be derived from canonical timestamps/anchors, not duplicated UI timers.
 - Do not add hardcoded timing shortcuts such as fixed 45/60/90-second logic when the domain already provides planned/learned timing.
 
-Relevant existing concepts that must be reused or preserved when present:
+Conceitos abaixo **não existem no código hoje** (verificado em 2026-09-05); a lista descreve o
+desenho pretendido. Reutilize-os se e quando existirem — não os invente para satisfazer o
+documento:
 
 - `NavigationEventProcessor`
 - `RecoveryTimeCalculator`

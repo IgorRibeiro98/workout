@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Check
 import com.example.data.ai.FirebaseAiCoachGateway
 import com.example.domain.ai.AiModelConfig
+import com.example.domain.ai.model.AiDataQualityLevel
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.BackgroundDark
@@ -176,11 +177,18 @@ internal fun AiCoachScreenContent(
             when (uiState) {
                 AiCoachUiState.Idle -> Unit
 
-                AiCoachUiState.Loading -> Box(
+                AiCoachUiState.Loading -> Column(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CircularProgressIndicator(color = Lime400, strokeWidth = 3.dp)
+                    // Uma etapa só, porque é isso que está acontecendo de verdade.
+                    Text(
+                        text = "Analisando seu treino...",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
                 }
 
                 is AiCoachUiState.Success -> AdviceSection(uiState)
@@ -215,6 +223,16 @@ private fun AdviceSection(state: AiCoachUiState.Success) {
             Text(text = state.summary, color = TextPrimary, fontSize = 14.sp)
         }
 
+        if (state.positiveSignals.isNotEmpty()) {
+            SectionTitle("Pontos positivos")
+            state.positiveSignals.forEach { ObservationCard(it, marker = "✓", markerColor = Lime400) }
+        }
+
+        if (state.attentionPoints.isNotEmpty()) {
+            SectionTitle("Pontos de atenção")
+            state.attentionPoints.forEach { ObservationCard(it, marker = "!", markerColor = Orange400) }
+        }
+
         if (state.recommendations.isNotEmpty()) {
             SectionTitle("Recomendações")
             state.recommendations.forEach { recommendation ->
@@ -230,6 +248,14 @@ private fun AdviceSection(state: AiCoachUiState.Success) {
                             Text(text = name, color = TextSecondary, fontSize = 12.sp)
                         }
                         Text(text = recommendation.reason, color = TextPrimary, fontSize = 14.sp)
+                        // A evidência fica visível: o usuário vê de onde a sugestão saiu.
+                        recommendation.evidence?.let { evidence ->
+                            Text(
+                                text = "Base: $evidence",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
                         Text(
                             text = "Confiança: ${recommendation.confidencePercent}%",
                             color = TextTertiary,
@@ -238,6 +264,67 @@ private fun AdviceSection(state: AiCoachUiState.Success) {
                     }
                 }
             }
+        }
+
+        SectionTitle("Base da análise")
+        Card {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = state.dataQuality.label,
+                    color = state.dataQuality.level.accentColor(),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+                Text(
+                    text = state.dataQuality.description,
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+                Text(
+                    text = sessionsLabel(state.dataQuality.sessionsAnalyzed),
+                    color = TextTertiary,
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = "O Coach apenas recomenda. Nada aqui foi aplicado ao seu treino.",
+                    color = TextTertiary,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+}
+
+private fun sessionsLabel(sessionsAnalyzed: Int): String = when (sessionsAnalyzed) {
+    0 -> "Nenhuma sessão concluída utilizada"
+    1 -> "1 sessão concluída utilizada"
+    else -> "$sessionsAnalyzed sessões concluídas utilizadas"
+}
+
+@Composable
+private fun AiDataQualityLevel.accentColor(): Color = when (this) {
+    AiDataQualityLevel.INSUFFICIENT -> Red400
+    AiDataQualityLevel.LIMITED -> Orange400
+    AiDataQualityLevel.GOOD -> Lime400
+}
+
+@Composable
+private fun ObservationCard(observation: AiObservationUi, marker: String, markerColor: Color) {
+    Card {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                Text(text = marker, color = markerColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    text = observation.title,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+            observation.exerciseName?.let { name ->
+                Text(text = name, color = TextSecondary, fontSize = 12.sp)
+            }
+            Text(text = observation.description, color = TextSecondary, fontSize = 13.sp)
         }
     }
 }

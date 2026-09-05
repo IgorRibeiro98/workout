@@ -1,26 +1,29 @@
 package com.example.domain.ai
 
 import com.example.data.local.ExerciseEntity
+import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.PersonalRecordEntity
 import com.example.data.local.SessionCalendarSummary
 import com.example.data.local.WorkoutTemplateExerciseEntity
 import com.example.domain.ai.model.AiAthleteContext
 import com.example.domain.ai.model.AiCoachContext
-import com.example.domain.ai.model.AiExecutedExerciseContext
+import com.example.domain.ai.model.AiEvidenceContext
+import com.example.domain.ai.model.AiExerciseExecutionContext
+import com.example.domain.ai.model.AiExerciseHistoryContext
 import com.example.domain.ai.model.AiPersonalRecordContext
 import com.example.domain.ai.model.AiPlannedExerciseContext
-import com.example.domain.ai.model.AiSessionContext
 import com.example.domain.ai.model.AiWorkoutContext
 
 /**
  * Projeção pura: entidades canônicas do Spark viram [AiCoachContext].
  *
- * Aqui não há IO nem regra de negócio — só recorte e preservação de identidade. Duas garantias
+ * Aqui não há IO nem regra de negócio — só recorte e preservação de identidade. Três garantias
  * são o motivo desta classe existir:
  *
  * - a identidade enviada ao modelo é sempre o id canônico do exercício, nunca o nome;
- * - o histórico é limitado por [AiModelConfig.RECENT_SESSIONS_LIMIT], então o prompt não cresce
- *   com o banco.
+ * - o histórico é **relevante**: só entram os exercícios do treino em foco;
+ * - o histórico é **limitado**: até [AiModelConfig.HISTORY_PER_EXERCISE_LIMIT] execuções por
+ *   exercício, buscadas em no máximo [AiModelConfig.HISTORY_SCAN_SESSIONS] sessões concluídas.
  */
 object AiCoachContextProjector {
 
@@ -36,35 +39,44 @@ object AiCoachContextProjector {
         exercisesById: Map<Long, ExerciseEntity>,
         templateName: String?,
         templateExercises: List<WorkoutTemplateExerciseEntity>,
-        recentSessions: List<SessionCalendarSummary>,
+        completedSessions: List<SessionCalendarSummary>,
         personalRecordsByExerciseId: Map<Long, PersonalRecordEntity>,
-        weeklyGoal: Int?,
-        bodyWeightKg: Float?
+        weeklyGoal: Int?
     ): AiCoachContext {
-        val limitedSessions = recentSessions
+        val plannedExercises = templateExercises.sortedBy { it.sortOrder }
+        val currentWorkout = projectCurrentWorkout(exercisesById, templateName, plannedExercises)
+
+        val scannedSessions = completedSessions
             .sortedByDescending { it.session.finishedAt ?: it.session.startedAt }
-            .take(AiModelConfig.RECENT_SESSIONS_LIMIT)
+            .take(AiModelConfig.HISTORY_SCAN_SESSIONS)
 
-        val currentWorkout = projectCurrentWorkout(exercisesById, templateName, templateExercises)
-        val sessions = limitedSessions.map { projectSession(exercisesById, it) }
+        val relevantRowIds = resolveRelevantExercises(plannedExercises, scannedSessions)
+        val contributingSessionIds = mutableSetOf<Long>()
+        val history = projectHistory(exercisesById, relevantRowIds, scannedSessions, contributingSessionIds)
 
+        // Só conta o que realmente foi enviado: nunca mais sessões do que o modelo enxergou.
+        val sessionsAnalyzed = contributingSessionIds.size
         val idsInContext = buildSet {
             currentWorkout?.exercises?.forEach { add(it.exerciseId) }
-            sessions.forEach { session -> session.exercises.forEach { add(it.exerciseId) } }
+            history.forEach { add(it.exerciseId) }
         }
 
         return AiCoachContext(
             athlete = AiAthleteContext(
                 weeklyGoal = weeklyGoal,
-                completedSessionsInWindow = sessions.size,
-                bodyWeightKg = bodyWeightKg
+                completedSessionsInWindow = sessionsAnalyzed
             ),
             currentWorkout = currentWorkout,
-            recentSessions = sessions,
+            exerciseHistory = history,
             personalRecords = projectPersonalRecords(
                 exercisesById = exercisesById,
                 personalRecordsByExerciseId = personalRecordsByExerciseId,
                 idsInContext = idsInContext
+            ),
+            evidence = AiEvidenceContext(
+                sessionsAnalyzed = sessionsAnalyzed,
+                exercisesWithHistory = history.count { it.executions.isNotEmpty() },
+                maxDataQuality = AiDataQualityPolicy.ceilingFor(sessionsAnalyzed)
             )
         )
     }
@@ -73,70 +85,99 @@ object AiCoachContextProjector {
     fun exerciseIdOf(exercise: ExerciseEntity): String =
         exercise.canonicalId?.trim()?.takeIf { it.isNotEmpty() } ?: "$LOCAL_ID_PREFIX${exercise.id}"
 
+    /**
+     * Quais exercícios a análise pode olhar.
+     *
+     * O treino em foco manda. Sem treino em foco, o recorte é o último treino realmente
+     * concluído — analisar "o que você acabou de treinar" é a leitura honesta desse caso, e
+     * evita transformar o prompt no histórico inteiro do usuário.
+     */
+    private fun resolveRelevantExercises(
+        plannedExercises: List<WorkoutTemplateExerciseEntity>,
+        scannedSessions: List<SessionCalendarSummary>
+    ): List<Long> {
+        val planned = plannedExercises.map { it.exerciseId }.distinct()
+        if (planned.isNotEmpty()) return planned.take(AiModelConfig.MAX_EXERCISES_IN_CONTEXT)
+
+        val lastSession = scannedSessions.firstOrNull() ?: return emptyList()
+        return lastSession.sortedExercises
+            .mapNotNull { it.exerciseRowId() }
+            .distinct()
+            .take(AiModelConfig.MAX_EXERCISES_IN_CONTEXT)
+    }
+
     private fun projectCurrentWorkout(
         exercisesById: Map<Long, ExerciseEntity>,
         templateName: String?,
-        templateExercises: List<WorkoutTemplateExerciseEntity>
+        plannedExercises: List<WorkoutTemplateExerciseEntity>
     ): AiWorkoutContext? {
-        if (templateName == null && templateExercises.isEmpty()) return null
+        if (templateName == null && plannedExercises.isEmpty()) return null
 
-        val exercises = templateExercises
-            .sortedBy { it.sortOrder }
-            .mapNotNull { planned ->
-                val exercise = exercisesById[planned.exerciseId] ?: return@mapNotNull null
-                AiPlannedExerciseContext(
-                    exerciseId = exerciseIdOf(exercise),
-                    name = exercise.name,
-                    targetSets = planned.targetSets,
-                    minReps = planned.minReps,
-                    maxReps = planned.maxReps,
-                    plannedWeightKg = planned.plannedWeight,
-                    restSeconds = planned.restDurationSeconds
-                )
-            }
+        val exercises = plannedExercises.mapNotNull { planned ->
+            val exercise = exercisesById[planned.exerciseId] ?: return@mapNotNull null
+            AiPlannedExerciseContext(
+                exerciseId = exerciseIdOf(exercise),
+                name = exercise.name,
+                targetSets = planned.targetSets,
+                minReps = planned.minReps,
+                maxReps = planned.maxReps,
+                plannedWeightKg = planned.plannedWeight,
+                restSeconds = planned.restDurationSeconds
+            )
+        }
 
         return AiWorkoutContext(templateName = templateName, exercises = exercises)
     }
 
-    private fun projectSession(
+    /**
+     * A série histórica de cada exercício relevante, da execução mais recente para a mais antiga.
+     *
+     * Só entra série concluída: `completed = 1` dentro de sessão `COMPLETED`. O que ficou
+     * planejado, em andamento ou cancelado não é desempenho realizado.
+     */
+    private fun projectHistory(
         exercisesById: Map<Long, ExerciseEntity>,
-        summary: SessionCalendarSummary
-    ): AiSessionContext {
-        val session = summary.session
-        val finishedAt = session.finishedAt
-        val durationMinutes = if (finishedAt != null && finishedAt > session.startedAt) {
-            ((finishedAt - session.startedAt) / 60_000L).toInt()
-        } else {
-            null
+        relevantRowIds: List<Long>,
+        scannedSessions: List<SessionCalendarSummary>,
+        contributingSessionIds: MutableSet<Long>
+    ): List<AiExerciseHistoryContext> = relevantRowIds.mapNotNull { rowId ->
+        val exercise = exercisesById[rowId] ?: return@mapNotNull null
+
+        val executions = mutableListOf<AiExerciseExecutionContext>()
+        for (summary in scannedSessions) {
+            if (executions.size >= AiModelConfig.HISTORY_PER_EXERCISE_LIMIT) break
+            val execution = summary.sortedExercises
+                .firstOrNull { it.exerciseRowId() == rowId }
+                ?.let { projectExecution(summary, it) }
+            if (execution != null) {
+                executions += execution
+                contributingSessionIds += summary.session.id
+            }
         }
 
-        val exercises = summary.sortedExercises.mapNotNull { executed ->
-            // Sem id do exercício não há identidade canônica para preservar; enviar apenas o nome
-            // convidaria o modelo a tratar o nome como identificador.
-            val rowId = executed.exerciseSession.actualExerciseId
-                ?: executed.exerciseSession.plannedExerciseId
-                ?: return@mapNotNull null
-            val exercise = exercisesById[rowId] ?: return@mapNotNull null
+        AiExerciseHistoryContext(
+            exerciseId = exerciseIdOf(exercise),
+            name = exercise.name,
+            sessionsAnalyzed = executions.size,
+            executions = executions
+        )
+    }
 
-            val completedSets = executed.sets.filter { it.completed }
-            if (completedSets.isEmpty()) return@mapNotNull null
+    private fun projectExecution(
+        summary: SessionCalendarSummary,
+        executed: ExerciseSessionWithSets
+    ): AiExerciseExecutionContext? {
+        val completedSets = executed.sets.filter { it.completed }
+        if (completedSets.isEmpty()) return null
 
-            val weightedSets = completedSets.filter { it.weight > 0f && !it.isDurationMode }
-            val repSets = completedSets.filter { !it.isDurationMode }
+        val weightedSets = completedSets.filter { it.weight > 0f && !it.isDurationMode }
+        val repSets = completedSets.filter { !it.isDurationMode }
 
-            AiExecutedExerciseContext(
-                exerciseId = exerciseIdOf(exercise),
-                name = exercise.name,
-                completedSets = completedSets.size,
-                maxWeightKg = weightedSets.maxOfOrNull { it.weight },
-                totalReps = repSets.takeIf { it.isNotEmpty() }?.sumOf { it.repetitions }
-            )
-        }
-
-        return AiSessionContext(
-            finishedAtEpochMs = finishedAt,
-            durationMinutes = durationMinutes,
-            exercises = exercises
+        return AiExerciseExecutionContext(
+            finishedAtEpochMs = summary.session.finishedAt,
+            completedSets = completedSets.size,
+            maxWeightKg = weightedSets.maxOfOrNull { it.weight },
+            totalReps = repSets.takeIf { it.isNotEmpty() }?.sumOf { it.repetitions }
         )
     }
 
@@ -162,4 +203,14 @@ object AiCoachContextProjector {
             .sortedByDescending { it.achievedAtEpochMs ?: 0L }
             .take(AiModelConfig.PERSONAL_RECORDS_LIMIT)
     }
+
+    /**
+     * Identidade do exercício executado.
+     *
+     * O substituído durante a execução conta como o exercício que foi realmente feito; sem id
+     * não há identidade canônica para preservar, e enviar só o nome convidaria o modelo a tratar
+     * nome como identificador.
+     */
+    private fun ExerciseSessionWithSets.exerciseRowId(): Long? =
+        exerciseSession.actualExerciseId ?: exerciseSession.plannedExerciseId
 }

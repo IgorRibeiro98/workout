@@ -3,18 +3,25 @@ package com.example.domain.ai.model
 import kotlinx.serialization.Serializable
 
 /**
- * Contexto que o Spark envia ao Coach IA.
+ * Contexto que o Spark envia ao Coach IA para uma **análise de treino**.
  *
- * Este é um DTO próprio da fronteira de IA: nenhuma entidade Room atravessa daqui para fora.
- * Ele é deliberadamente pequeno — só o necessário para uma análise do treino — e todo campo
- * ausente permanece `null`, nunca preenchido com suposição.
+ * Este é o contexto específico da análise, não um contexto universal: ele carrega o treino em
+ * foco, o histórico dos exercícios desse treino e os PRs desses exercícios — nada além disso.
+ * Nenhuma entidade Room atravessa daqui para fora e todo campo ausente permanece `null`, nunca
+ * preenchido com suposição.
+ *
+ * Peso corporal e medidas não entram aqui: analisar carga e volume não depende deles, e enviar
+ * dado corporal em toda análise seria exposição sem finalidade.
  */
 @Serializable
 data class AiCoachContext(
     val athlete: AiAthleteContext,
     val currentWorkout: AiWorkoutContext? = null,
-    val recentSessions: List<AiSessionContext> = emptyList(),
-    val personalRecords: List<AiPersonalRecordContext> = emptyList()
+    /** Histórico por exercício, já recortado por relevância e recência. */
+    val exerciseHistory: List<AiExerciseHistoryContext> = emptyList(),
+    val personalRecords: List<AiPersonalRecordContext> = emptyList(),
+    /** Quanta evidência o app conseguiu reunir. Fato do app, não opinião do modelo. */
+    val evidence: AiEvidenceContext = AiEvidenceContext()
 ) {
     /**
      * Todos os `exerciseId` que o modelo tem permissão de citar.
@@ -25,7 +32,7 @@ data class AiCoachContext(
     val knownExerciseIds: Set<String>
         get() = buildSet {
             currentWorkout?.exercises?.forEach { add(it.exerciseId) }
-            recentSessions.forEach { session -> session.exercises.forEach { add(it.exerciseId) } }
+            exerciseHistory.forEach { add(it.exerciseId) }
             personalRecords.forEach { add(it.exerciseId) }
         }
 }
@@ -40,10 +47,8 @@ data class AiCoachContext(
 data class AiAthleteContext(
     /** Meta semanal de treinos configurada pelo usuário. */
     val weeklyGoal: Int? = null,
-    /** Treinos concluídos na janela recente projetada — origem: histórico real. */
-    val completedSessionsInWindow: Int = 0,
-    /** Última medição corporal registrada, quando existir. */
-    val bodyWeightKg: Float? = null
+    /** Sessões concluídas que sustentam esta análise — origem: histórico real. */
+    val completedSessionsInWindow: Int = 0
 )
 
 /** O treino planejado que está em foco na análise. */
@@ -65,19 +70,26 @@ data class AiPlannedExerciseContext(
     val restSeconds: Int? = null
 )
 
-/** Uma sessão concluída, já resumida. O histórico bruto nunca sai do Room. */
+/**
+ * A série histórica de um exercício do treino em foco.
+ *
+ * Só entra exercício relevante para a análise pedida, e só o suficiente para o modelo enxergar
+ * a tendência — o histórico bruto nunca sai do Room.
+ */
 @Serializable
-data class AiSessionContext(
-    val finishedAtEpochMs: Long? = null,
-    val durationMinutes: Int? = null,
-    val exercises: List<AiExecutedExerciseContext> = emptyList()
-)
-
-/** O que foi efetivamente executado de um exercício em uma sessão. */
-@Serializable
-data class AiExecutedExerciseContext(
+data class AiExerciseHistoryContext(
     val exerciseId: String,
     val name: String,
+    /** Quantas execuções concluídas deste exercício estão nesta lista. */
+    val sessionsAnalyzed: Int,
+    /** Da execução mais recente para a mais antiga. */
+    val executions: List<AiExerciseExecutionContext> = emptyList()
+)
+
+/** O que foi efetivamente executado de um exercício em uma sessão concluída. */
+@Serializable
+data class AiExerciseExecutionContext(
+    val finishedAtEpochMs: Long? = null,
     val completedSets: Int,
     val maxWeightKg: Float? = null,
     val totalReps: Int? = null
@@ -91,4 +103,18 @@ data class AiPersonalRecordContext(
     val type: String,
     val value: Float,
     val achievedAtEpochMs: Long? = null
+)
+
+/**
+ * Quanta evidência o app reuniu para esta análise.
+ *
+ * [maxDataQuality] é o teto que o modelo pode declarar: ele não pode afirmar mais evidência do
+ * que recebeu. Quem calcula é [com.example.domain.ai.AiDataQualityPolicy], contando sessões —
+ * nenhuma regra de progressão é decidida aqui.
+ */
+@Serializable
+data class AiEvidenceContext(
+    val sessionsAnalyzed: Int = 0,
+    val exercisesWithHistory: Int = 0,
+    val maxDataQuality: AiDataQualityLevel = AiDataQualityLevel.INSUFFICIENT
 )

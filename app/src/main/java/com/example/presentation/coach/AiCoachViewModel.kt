@@ -2,8 +2,11 @@ package com.example.presentation.coach
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.domain.ai.model.AiCoachDataQuality
 import com.example.domain.ai.model.AiCoachErrorKind
+import com.example.domain.ai.model.AiCoachObservation
 import com.example.domain.ai.model.AiCoachResult
+import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendation
 import com.example.domain.ai.model.AiRecommendationType
 import com.example.domain.ai.usecase.AnalyzeWorkoutUseCase
@@ -46,7 +49,10 @@ class AiCoachViewModel(
             _uiState.value = when (val result = analyzeWorkout()) {
                 is AiCoachResult.Success -> AiCoachUiState.Success(
                     summary = result.advice.summary,
-                    recommendations = result.advice.recommendations.map { it.toUi() }
+                    positiveSignals = result.advice.positiveSignals.map { it.toUi() },
+                    attentionPoints = result.advice.attentionPoints.map { it.toUi() },
+                    recommendations = result.advice.recommendations.map { it.toUi() },
+                    dataQuality = result.advice.dataQuality.toUi(result.advice.sessionsAnalyzed)
                 )
 
                 is AiCoachResult.Failure -> result.toUiState()
@@ -59,7 +65,21 @@ class AiCoachViewModel(
         label = type.label(),
         exerciseName = exerciseId?.let { exerciseNameResolver(it) },
         reason = reason,
+        evidence = evidence,
         confidencePercent = (confidence * 100).toInt().coerceIn(0, 100)
+    )
+
+    private suspend fun AiCoachObservation.toUi(): AiObservationUi = AiObservationUi(
+        title = title,
+        description = description,
+        exerciseName = exerciseId?.let { exerciseNameResolver(it) }
+    )
+
+    private fun AiCoachDataQuality.toUi(sessionsAnalyzed: Int): AiDataQualityUi = AiDataQualityUi(
+        level = level,
+        label = level.label(),
+        description = description.ifBlank { level.fallbackDescription(sessionsAnalyzed) },
+        sessionsAnalyzed = sessionsAnalyzed
     )
 
     private fun AiCoachResult.Failure.toUiState(): AiCoachUiState = when (kind) {
@@ -102,6 +122,22 @@ class AiCoachViewModel(
         AiRecommendationType.GENERAL -> "Observação geral"
         AiRecommendationType.KEEP_CURRENT_PLAN -> "Manter o plano atual"
         AiRecommendationType.REVIEW_LOAD -> "Revisar carga"
+        AiRecommendationType.REVIEW_REPS -> "Revisar repetições"
         AiRecommendationType.REVIEW_VOLUME -> "Revisar volume"
+        AiRecommendationType.REVIEW_EXERCISE -> "Revisar exercício"
+    }
+
+    private fun AiDataQualityLevel.label(): String = when (this) {
+        AiDataQualityLevel.INSUFFICIENT -> "Dados insuficientes"
+        AiDataQualityLevel.LIMITED -> "Dados limitados"
+        AiDataQualityLevel.GOOD -> "Dados suficientes"
+    }
+
+    /** Quando o modelo não descreve a base, o app descreve com o que realmente contou. */
+    private fun AiDataQualityLevel.fallbackDescription(sessionsAnalyzed: Int): String = when {
+        sessionsAnalyzed <= 0 ->
+            "Nenhuma sessão concluída foi encontrada para este treino; a análise olhou só a estrutura planejada."
+        sessionsAnalyzed == 1 -> "Análise baseada em 1 sessão concluída."
+        else -> "Análise baseada nas últimas $sessionsAnalyzed sessões concluídas."
     }
 }

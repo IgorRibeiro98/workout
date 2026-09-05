@@ -60,14 +60,15 @@ Examples:
 
 Before designing a new component/service, search for an existing owner.
 
-Examples:
+Examples (os quatro primeiros descrevem o desenho pretendido e **não existem no código hoje**,
+verificado em 2026-09-05 — confirme no repositório antes de assumir que um deles é reutilizável):
 
 - workout progression -> persisted route/navigation;
 - recovery -> `RecoveryTimeCalculator`;
 - remaining duration -> `RemainingRouteDurationCalculator`;
 - ETA -> existing ETA estimator;
 - party route generation -> `PartyRouteBuilder`;
-- user defaults -> `UserPreferencesDataStore`;
+- user defaults -> `SettingsManager`;
 - start orchestration -> current centralized workout start flow;
 - durable order -> template/domain persistence.
 

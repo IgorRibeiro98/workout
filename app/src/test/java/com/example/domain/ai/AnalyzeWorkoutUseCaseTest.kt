@@ -8,6 +8,8 @@ import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiCoachResponseRecommendation
 import com.example.domain.ai.model.AiCoachResult
+import com.example.domain.ai.model.AiDataQualityLevel
+import com.example.domain.ai.model.AiEvidenceContext
 import com.example.domain.ai.model.AiPlannedExerciseContext
 import com.example.domain.ai.model.AiRecommendationType
 import com.example.domain.ai.model.AiWorkoutContext
@@ -33,6 +35,11 @@ class AnalyzeWorkoutUseCaseTest {
                     name = "Supino reto com barra"
                 )
             )
+        ),
+        evidence = AiEvidenceContext(
+            sessionsAnalyzed = 3,
+            exercisesWithHistory = 1,
+            maxDataQuality = AiDataQualityLevel.GOOD
         )
     )
 
@@ -47,16 +54,18 @@ class AnalyzeWorkoutUseCaseTest {
     fun `provider falso com resposta valida produz Success`() = runTest {
         val gateway = FakeAiCoachGateway {
             AiCoachGatewayResult.Success(
-                AiCoachResponse(
+                AiCoachTestData.response(
                     summary = "Progressão consistente.",
                     recommendations = listOf(
                         AiCoachResponseRecommendation(
                             type = AiRecommendationType.KEEP_CURRENT_PLAN.name,
                             exerciseId = "supino-reto-barra",
                             reason = "A carga vem subindo de forma estável.",
-                            confidence = 0.87
+                            confidence = 0.87,
+                            evidence = "60 kg, 62,5 kg e 65 kg nas últimas 3 sessões"
                         )
-                    )
+                    ),
+                    dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.GOOD)
                 )
             )
         }
@@ -71,7 +80,7 @@ class AnalyzeWorkoutUseCaseTest {
     @Test
     fun `requisicao carrega requestId schemaVersion e tipo`() = runTest {
         val gateway = FakeAiCoachGateway {
-            AiCoachGatewayResult.Success(AiCoachResponse(summary = "Resumo."))
+            AiCoachGatewayResult.Success(AiCoachTestData.response(summary = "Resumo."))
         }
 
         useCase(gateway)()
@@ -88,6 +97,14 @@ class AnalyzeWorkoutUseCaseTest {
         val raw = """
             {
               "summary": "Seu treino apresenta progressão consistente.",
+              "positiveSignals": [
+                {
+                  "exerciseId": "supino-reto-barra",
+                  "title": "Carga em evolução",
+                  "description": "A carga registrada subiu nas últimas sessões."
+                }
+              ],
+              "attentionPoints": [],
               "recommendations": [
                 {
                   "type": "GENERAL",
@@ -95,7 +112,11 @@ class AnalyzeWorkoutUseCaseTest {
                   "reason": "Mantenha a estrutura atual.",
                   "confidence": 0.87
                 }
-              ]
+              ],
+              "dataQuality": {
+                "level": "GOOD",
+                "description": "Análise baseada nas últimas 3 sessões concluídas."
+              }
             }
         """.trimIndent()
 
@@ -105,6 +126,9 @@ class AnalyzeWorkoutUseCaseTest {
 
         val result = useCase(gateway)() as AiCoachResult.Success
         assertEquals(AiRecommendationType.GENERAL, result.advice.recommendations.single().type)
+        assertEquals("Carga em evolução", result.advice.positiveSignals.single().title)
+        assertEquals(AiDataQualityLevel.GOOD, result.advice.dataQuality.level)
+        assertEquals(3, result.advice.sessionsAnalyzed)
     }
 
     @Test
@@ -121,14 +145,15 @@ class AnalyzeWorkoutUseCaseTest {
     fun `exerciseId inventado e rejeitado`() = runTest {
         val gateway = FakeAiCoachGateway {
             AiCoachGatewayResult.Success(
-                AiCoachResponse(
+                AiCoachTestData.response(
                     summary = "Resumo.",
                     recommendations = listOf(
                         AiCoachResponseRecommendation(
                             type = AiRecommendationType.REVIEW_LOAD.name,
                             exerciseId = "invalid-id",
                             reason = "Motivo.",
-                            confidence = 0.5
+                            confidence = 0.5,
+                            evidence = "Alguma coisa."
                         )
                     )
                 )
@@ -163,7 +188,7 @@ class AnalyzeWorkoutUseCaseTest {
         val failingBuilder = object : AiCoachContextBuilder {
             override suspend fun build(): AiCoachContext = throw IllegalStateException("sem banco")
         }
-        val gateway = FakeAiCoachGateway { AiCoachGatewayResult.Success(AiCoachResponse("x")) }
+        val gateway = FakeAiCoachGateway { AiCoachGatewayResult.Success(AiCoachTestData.response()) }
 
         val result = AnalyzeWorkoutUseCase(failingBuilder, gateway)() as AiCoachResult.Failure
 
@@ -187,7 +212,7 @@ class AnalyzeWorkoutUseCaseTest {
             }
         }
         val gateway = FakeAiCoachGateway {
-            AiCoachGatewayResult.Success(AiCoachResponse(summary = "Resumo."))
+            AiCoachGatewayResult.Success(AiCoachTestData.response(summary = "Resumo."))
         }
 
         AnalyzeWorkoutUseCase(contextBuilder, gateway, telemetry)()

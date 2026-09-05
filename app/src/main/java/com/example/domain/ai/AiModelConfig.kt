@@ -28,18 +28,30 @@ object AiModelConfig {
     /** Análise pede consistência, não criatividade. */
     const val TEMPERATURE: Float = 0.2f
 
-    /** A resposta desta fase é curta por contrato; o teto evita custo acidental. */
-    const val MAX_OUTPUT_TOKENS: Int = 1024
+    /** A análise tem resumo, sinais, pontos de atenção e sugestões; o teto evita custo acidental. */
+    const val MAX_OUTPUT_TOKENS: Int = 2048
 
     /** Nenhuma chamada pode ficar em loading indefinidamente. */
     const val REQUEST_TIMEOUT_MS: Long = 30_000L
 
     /**
-     * Quantas sessões concluídas recentes entram no contexto.
+     * Quantas execuções concluídas de **cada** exercício entram no contexto.
      *
-     * Cinco cobrem o ciclo semanal típico do Spark sem transformar o prompt no banco inteiro.
+     * Seis cobrem mais de um ciclo semanal típico do Spark: o suficiente para o modelo enxergar
+     * uma tendência de carga/reps sem transformar o prompt no banco inteiro.
      */
-    const val RECENT_SESSIONS_LIMIT: Int = 5
+    const val HISTORY_PER_EXERCISE_LIMIT: Int = 6
+
+    /**
+     * Até quantas sessões concluídas o app percorre para encontrar essas execuções.
+     *
+     * Teto de custo da montagem do contexto: quem treina 4x por semana tem ~7 semanas de
+     * histórico dentro desta janela.
+     */
+    const val HISTORY_SCAN_SESSIONS: Int = 30
+
+    /** Teto de exercícios analisados por vez; um treino real não passa disso. */
+    const val MAX_EXERCISES_IN_CONTEXT: Int = 12
 
     /** Teto de PRs enviados, sempre restrito aos exercícios que já estão no contexto. */
     const val PERSONAL_RECORDS_LIMIT: Int = 10

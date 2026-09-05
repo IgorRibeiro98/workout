@@ -108,6 +108,13 @@ For exercise replacement during a session, preserve traceability such as origina
 
 ## 4. Canonical navigation/execution model
 
+> **Status (verificado em 2026-09-05): não implementado.** Nenhum dos nomes desta seção existe
+> no código (`WorkoutRoute`, `WorkoutRouteNode`, `NavigationCursor`, `NavigationEventProcessor`,
+> `NavigationRepository` — 0 ocorrências). Hoje a execução ativa é conduzida por
+> `WorkoutEngine` + `ExecutionViewModel` sobre `WorkoutSessionEntity` / `ExerciseSessionEntity` /
+> `SetLogEntity`. Esta seção descreve o destino pretendido, não o estado atual: não a use como
+> prova de que um componente existe, e não crie um destes só para satisfazer o documento.
+
 The active workout uses a persisted "Workout GPS" style route/navigation model.
 
 Relevant concepts include:
@@ -175,6 +182,10 @@ If legacy states remain internally for migration, do not expose or expand them w
 
 ## 7. Recovery/rest architecture
 
+> **Status (verificado em 2026-09-05): não implementado.** `RecoveryTimeCalculator` não existe no
+> código. O descanso hoje é controlado pelo estado de timer do `ExecutionViewModel` com os
+> valores persistidos em `SettingsManager` (`restTimerDeadline`, `defaultRestSeconds`).
+
 Recovery timing should be centralized.
 
 Relevant concept:
@@ -188,6 +199,10 @@ Do not compute competing recovery timers separately in different Composables/Vie
 Party mode may require simultaneous recovery information for multiple participants, but all timers should derive from persisted/canonical anchors.
 
 ## 8. ETA architecture
+
+> **Status (verificado em 2026-09-05): não implementado.** `CurrentNodeTimeEstimator`,
+> `RemainingRouteDurationCalculator` e `ETAEstimator` não existem no código. Não há ETA
+> canônico implementado hoje.
 
 Relevant concepts include:
 
@@ -216,6 +231,9 @@ A fresh session must get a fresh `workoutStartedAt`.
 
 ## 9. Party route architecture
 
+> **Status (verificado em 2026-09-05): não implementado.** `PartyRouteBuilder` não existe no
+> código.
+
 Relevant concept:
 
 - `PartyRouteBuilder`
@@ -242,7 +260,8 @@ When modifying that subsystem, first map its current classes and protocol. Prese
 
 ## 10. Preferences and workout start
 
-`UserPreferencesDataStore` is the canonical preference authority for values such as:
+`SettingsManager` (DataStore) é a autoridade canônica de preferências — o nome
+`UserPreferencesDataStore` aparecia neste documento, mas não existe no código. Valores como:
 
 - party mode / participant count;
 - available duration;
