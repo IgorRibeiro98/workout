@@ -23,7 +23,6 @@ import com.example.domain.ai.model.AiWorkoutAdaptationResponse
 import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
 import com.example.domain.ai.model.AiWorkoutGenerationRequest
 import com.google.firebase.FirebaseApp
-import com.google.firebase.FirebaseOptions
 import com.google.firebase.ai.FirebaseAI
 import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.type.APINotConfiguredException
@@ -43,8 +42,6 @@ import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
-import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
-import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -56,13 +53,15 @@ import kotlinx.serialization.json.Json
  * [AiCoachGatewayResult]. Não persiste nada, não conhece Room e não toca em nenhuma autoridade
  * do domínio.
  *
- * Enquanto a configuração externa do Firebase não existir (`google-services.json` + plugin
+ * Sem a configuração externa do Firebase (`google-services.json` + plugin
  * `com.google.gms.google-services`), toda chamada responde
  * [AiCoachErrorKind.UNAVAILABLE] e o resto do Spark segue funcionando offline.
+ *
+ * A inicialização é sempre tardia: o Firebase só é tocado dentro de uma chamada que o usuário
+ * pediu. Abrir o app, navegar ou recompor não inicializa provider nenhum.
  */
 class FirebaseAiCoachGateway(
-    private val context: Context,
-    private val appCheckEnabled: Boolean = false
+    private val context: Context
 ) : AiCoachGateway {
 
     private val json = Json {
@@ -71,13 +70,13 @@ class FirebaseAiCoachGateway(
     }
 
     @Volatile
-    private var cachedModel: GenerativeModel? = null
-
-    @Volatile
     private var appCheckInstalled: Boolean = false
 
-    override suspend fun request(request: AiCoachRequest): AiCoachGatewayResult =
-        when (val raw = generate(AiCoachRequestType.ANALYZE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+    override suspend fun request(request: AiCoachRequest): AiCoachGatewayResult {
+        unsupportedSchema(request.schemaVersion)?.let {
+            return AiCoachGatewayResult.Error(it.kind, it.detail)
+        }
+        return when (val raw = generate(AiCoachRequestType.ANALYZE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
             is RawResult.Error -> AiCoachGatewayResult.Error(raw.kind, raw.detail)
             is RawResult.Text -> try {
                 AiCoachGatewayResult.Success(json.decodeFromString<AiCoachResponse>(raw.text))
@@ -85,11 +84,15 @@ class FirebaseAiCoachGateway(
                 AiCoachGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
         }
+    }
 
     override suspend fun generateWorkout(
         request: AiWorkoutGenerationRequest
-    ): AiWorkoutGenerationGatewayResult =
-        when (val raw = generate(AiCoachRequestType.GENERATE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+    ): AiWorkoutGenerationGatewayResult {
+        unsupportedSchema(request.schemaVersion)?.let {
+            return AiWorkoutGenerationGatewayResult.Error(it.kind, it.detail)
+        }
+        return when (val raw = generate(AiCoachRequestType.GENERATE_WORKOUT, AiCoachPrompt.userPrompt(request))) {
             is RawResult.Error -> AiWorkoutGenerationGatewayResult.Error(raw.kind, raw.detail)
             is RawResult.Text -> try {
                 AiWorkoutGenerationGatewayResult.Success(
@@ -99,11 +102,15 @@ class FirebaseAiCoachGateway(
                 AiWorkoutGenerationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
         }
+    }
 
     override suspend fun adaptWorkout(
         request: AiWorkoutAdaptationRequest
-    ): AiWorkoutAdaptationGatewayResult =
-        when (val raw = generate(AiCoachRequestType.ADAPT_WORKOUT, AiCoachPrompt.userPrompt(request))) {
+    ): AiWorkoutAdaptationGatewayResult {
+        unsupportedSchema(request.schemaVersion)?.let {
+            return AiWorkoutAdaptationGatewayResult.Error(it.kind, it.detail)
+        }
+        return when (val raw = generate(AiCoachRequestType.ADAPT_WORKOUT, AiCoachPrompt.userPrompt(request))) {
             is RawResult.Error -> AiWorkoutAdaptationGatewayResult.Error(raw.kind, raw.detail)
             is RawResult.Text -> try {
                 AiWorkoutAdaptationGatewayResult.Success(
@@ -113,11 +120,15 @@ class FirebaseAiCoachGateway(
                 AiWorkoutAdaptationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
         }
+    }
 
     override suspend fun explain(
         request: AiCoachExplanationRequest
-    ): AiCoachExplanationGatewayResult =
-        when (val raw = generate(request.type, AiCoachPrompt.userPrompt(request))) {
+    ): AiCoachExplanationGatewayResult {
+        unsupportedSchema(request.schemaVersion)?.let {
+            return AiCoachExplanationGatewayResult.Error(it.kind, it.detail)
+        }
+        return when (val raw = generate(request.type, AiCoachPrompt.userPrompt(request))) {
             is RawResult.Error -> AiCoachExplanationGatewayResult.Error(raw.kind, raw.detail)
             is RawResult.Text -> try {
                 AiCoachExplanationGatewayResult.Success(
@@ -126,6 +137,25 @@ class FirebaseAiCoachGateway(
             } catch (e: Exception) {
                 AiCoachExplanationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
+        }
+    }
+
+    /**
+     * A guarda de contrato, antes de qualquer chamada ao provider.
+     *
+     * Uma versão de schema que este build não conhece não é enviada "para ver no que dá": o
+     * schema de saída, o validador e os contextos andam juntos com ela, e conversar em um
+     * contrato que o app não sabe interpretar produziria resposta que ninguém pode validar.
+     * Recusar aqui é determinístico, custa zero cota e mantém o core intacto.
+     */
+    private fun unsupportedSchema(schemaVersion: Int): RawResult.Error? =
+        if (AiModelConfig.isSupportedSchemaVersion(schemaVersion)) {
+            null
+        } else {
+            RawResult.Error(
+                kind = AiCoachErrorKind.INVALID_RESPONSE,
+                detail = "schemaVersion não suportada neste build: $schemaVersion"
+            )
         }
 
     /** O texto cru do modelo, ou o erro já traduzido para a taxonomia do Coach. */
@@ -199,23 +229,11 @@ class FirebaseAiCoachGateway(
     }
 
     private fun obtainModel(type: AiCoachRequestType): GenerativeModel {
-        val app = try {
-            FirebaseApp.getInstance()
-        } catch (e: Exception) {
-            try {
-                FirebaseApp.initializeApp(
-                    context.applicationContext,
-                    FirebaseOptions.Builder()
-                        .setApplicationId("1:638822756779:android:3cd9d02c9fbaa5342fa2ee")
-                        .setApiKey("AIzaSyD5y3HrGeQBWHC5vuxhDzhXj2LVj9ZIq2g")
-                        .setProjectId("spark-36b11")
-                        .setStorageBucket("spark-36b11.firebasestorage.app")
-                        .build()
-                )
-            } catch (initErr: Exception) {
-                FirebaseApp.getInstance()
-            }
-        }
+        // A configuração vem de `google-services.json`, processado pelo plugin do Gradle e
+        // inicializado pelo `FirebaseInitProvider`. Nenhuma chave de projeto vive no código:
+        // duplicá-la aqui criaria uma segunda autoridade de configuração, silenciosamente
+        // divergente do arquivo real. Sem configuração, isto lança e a chamada vira UNAVAILABLE.
+        val app = FirebaseApp.getInstance()
         installAppCheck(app)
 
         return FirebaseAI.getInstance(app, GenerativeBackend.googleAI()).generativeModel(
@@ -234,38 +252,22 @@ class FirebaseAiCoachGateway(
     }
 
     /**
-     * Instala o provedor de App Check para proteger a chamada ao Firebase AI.
-     * Em ambiente de desenvolvimento/debug, utiliza DebugAppCheckProviderFactory com o token
-     * de depuração ativo.
+     * Instala o provedor de App Check da variante de build, uma vez por processo.
+     *
+     * Qual provedor é decidido em tempo de **compilação** por [AiCoachAppCheck]: debug usa o
+     * provedor de depuração, release usa Play Integrity, e nenhum dos dois consegue aparecer no
+     * outro APK. Nenhum segredo é registrado em log.
      */
     private fun installAppCheck(app: FirebaseApp) {
+        if (appCheckInstalled) return
         try {
-            val debugSecret = getCurrentDebugToken(context)
-            val prefNames = listOf(
-                "com.google.firebase.appcheck.debug.DebugAppCheckProvider:${app.persistenceKey}",
-                "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
-                "com.google.firebase.appcheck.debug.store",
-                "com.google.firebase.appcheck.debug.store.${app.options.applicationId}"
-            )
-            for (prefName in prefNames) {
-                context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(DEBUG_SECRET_KEY, debugSecret)
-                    .apply()
-            }
-
-            if (!appCheckInstalled) {
-                val providerFactory = try {
-                    DebugAppCheckProviderFactory.getInstance()
-                } catch (e: Exception) {
-                    PlayIntegrityAppCheckProviderFactory.getInstance()
-                }
-                FirebaseAppCheck.getInstance(app).installAppCheckProviderFactory(providerFactory)
-                appCheckInstalled = true
-            }
-            Log.d(TAG, "App Check instalado com sucesso (Debug Secret: $debugSecret)")
+            AiCoachAppCheck.publishDebugToken(context)
+            FirebaseAppCheck.getInstance(app)
+                .installAppCheckProviderFactory(AiCoachAppCheck.providerFactory())
+            appCheckInstalled = true
+            Log.i(TAG, "App Check instalado: provider=${AiCoachAppCheck.PROVIDER_NAME}")
         } catch (e: Exception) {
-            Log.w(TAG, "App Check indisponível: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "App Check indisponível: ${e.javaClass.simpleName}")
         }
     }
 
@@ -284,43 +286,5 @@ class FirebaseAiCoachGateway(
     companion object {
         const val TAG = "AiCoachGateway"
         const val APPLICATION_JSON = "application/json"
-        const val APP_CHECK_DEBUG_TOKEN = "A46F1FA0-8805-42A2-8672-9AD18D352B47"
-        const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
-        private const val CUSTOM_DEBUG_TOKEN_PREF = "spark_firebase_app_check_custom"
-        private const val CUSTOM_DEBUG_TOKEN_KEY = "custom_debug_token"
-
-        fun getCurrentDebugToken(context: Context): String {
-            val custom = context.getSharedPreferences(CUSTOM_DEBUG_TOKEN_PREF, Context.MODE_PRIVATE)
-                .getString(CUSTOM_DEBUG_TOKEN_KEY, null)
-            if (!custom.isNullOrBlank()) {
-                return custom
-            }
-            return APP_CHECK_DEBUG_TOKEN
-        }
-
-        fun setCustomDebugToken(context: Context, token: String) {
-            val clean = token.trim()
-            context.getSharedPreferences(CUSTOM_DEBUG_TOKEN_PREF, Context.MODE_PRIVATE)
-                .edit()
-                .putString(CUSTOM_DEBUG_TOKEN_KEY, clean.ifBlank { null })
-                .apply()
-
-            val actualToken = clean.ifBlank { APP_CHECK_DEBUG_TOKEN }
-            val app = try { FirebaseApp.getInstance() } catch (e: Exception) { null }
-            val prefNames = mutableListOf(
-                "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
-                "com.google.firebase.appcheck.debug.store"
-            )
-            if (app != null) {
-                prefNames.add("com.google.firebase.appcheck.debug.DebugAppCheckProvider:${app.persistenceKey}")
-                prefNames.add("com.google.firebase.appcheck.debug.store.${app.options.applicationId}")
-            }
-            for (prefName in prefNames) {
-                context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(DEBUG_SECRET_KEY, actualToken)
-                    .apply()
-            }
-        }
     }
 }

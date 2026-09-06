@@ -109,6 +109,7 @@ class AdaptWorkoutUseCase(
             requestId = requestId,
             type = AiCoachRequestType.ADAPT_WORKOUT,
             model = AiModelConfig.MODEL_NAME,
+            promptVersion = AiModelConfig.PROMPT_VERSION,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (result) {

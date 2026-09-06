@@ -84,6 +84,7 @@ class AnalyzeWorkoutUseCase(
             requestId = requestId,
             type = AiCoachRequestType.ANALYZE_WORKOUT,
             model = AiModelConfig.MODEL_NAME,
+            promptVersion = AiModelConfig.PROMPT_VERSION,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (result) {

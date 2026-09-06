@@ -102,13 +102,16 @@ dependencies {
   implementation(libs.coil.gif)
   implementation(libs.converter.moshi)
   // Coach IA (T14.0): Firebase AI Logic + Gemini Developer API é o único provider do Coach.
-  // O plugin `com.google.gms.google-services` NÃO é aplicado ainda porque exige
-  // `app/google-services.json`, que depende do console Firebase. Sem esse arquivo o app
-  // compila e roda normalmente: o gateway responde `UNAVAILABLE` e o core segue local-first.
+  // O plugin `com.google.gms.google-services` está aplicado e exige `app/google-services.json`
+  // (configuração do console, não versionada). Em runtime, sem configuração válida o gateway
+  // responde `UNAVAILABLE` e o core segue local-first.
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.ai)
+  // App Check por variante: Play Integrity em release, provedor de depuração só em debug.
+  // `debugImplementation` é o que garante que o provedor de depuração não entra no APK
+  // publicado — a escolha vive em `src/debug` / `src/release` (`AiCoachAppCheck`).
   implementation(libs.firebase.appcheck.playintegrity)
-  implementation(libs.firebase.appcheck.debug)
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.serialization.json)
   // Uncomment to use Firestore:
 

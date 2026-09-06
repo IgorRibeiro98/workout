@@ -372,7 +372,113 @@ The architecture should support recovery across:
 
 When returning to an unfinished session, the UX should be driven from durable session state rather than reconstructed guesses.
 
-## 15. Important known regression patterns
+## 15. Coach IA (T14)
+
+> **Status (verificado em 2026-09-05): implementado.** Diferente das seções 4, 7, 8 e 9, tudo
+> descrito aqui existe no código. O provider é Firebase AI Logic + Gemini Developer API, e ele é
+> opcional: sem configuração válida o Coach responde `UNAVAILABLE` e o restante do Spark continua
+> funcionando offline.
+
+### 15.1 Fluxo canônico
+
+```text
+Autoridades locais (WorkoutDao/Room, catálogo canônico, SettingsManager)
+  -> Context Builder do tipo de request
+  -> Use Case (Analyze / Generate / Adapt / Explain)
+  -> AiCoachGateway
+  -> Firebase AI Logic -> Gemini
+  -> Structured Output (AiCoachResponseSchema)
+  -> AiCoachResponseValidator  (validação semântica determinística)
+  -> Advice / Draft / Explanation
+  -> confirmação explícita do usuário
+  -> WorkoutRepository (o mesmo caminho da criação/edição manual)
+```
+
+O modelo é **consumidor e proponente**, nunca fonte de verdade. Structured output garante a
+forma; o validador garante a semântica. Uma violação invalida a resposta inteira — nada é
+adivinhado, corrigido por aproximação ou resolvido por nome.
+
+### 15.2 Componentes reais
+
+| Papel | Classe |
+| --- | --- |
+| Fronteira com o provider | `AiCoachGateway` / `FirebaseAiCoachGateway` |
+| Configuração (modelo, versões, tetos) | `AiModelConfig` |
+| Prompts (único lugar do app com prompt) | `AiCoachPrompt` |
+| Schemas de saída | `AiCoachResponseSchema` |
+| Validação semântica | `AiCoachResponseValidator` |
+| Contexto de análise | `AiCoachContextBuilder` / `WorkoutAiCoachContextBuilder` |
+| Contexto de geração | `AiWorkoutGenerationContextBuilder` / `WorkoutAiGenerationContextBuilder` |
+| Contexto de adaptação | `AiWorkoutAdaptationContextBuilder` / `WorkoutAiAdaptationContextBuilder` |
+| Contexto de explicação | `AiCoachExplanationContextBuilder` |
+| Recorte do catálogo | `ExerciseCandidateBuilder` |
+| Teto de evidência | `AiDataQualityPolicy` |
+| Observabilidade | `AiCoachTelemetry` / `LogcatAiCoachTelemetry` |
+| App Check por variante | `AiCoachAppCheck` (`src/debug` e `src/release`) |
+
+### 15.3 Tipos de request
+
+`ANALYZE_WORKOUT`, `GENERATE_WORKOUT`, `ADAPT_WORKOUT` e os quatro `EXPLAIN_*`
+(`EXPLAIN_RECOMMENDATION`, `EXPLAIN_WORKOUT`, `EXPLAIN_ADAPTATION`, `EXPLAIN_PROGRESS`).
+
+- `ANALYZE_*` e `EXPLAIN_*` são **read-only**: não criam nem alteram treino, sessão, XP, PR,
+  conquista ou missão.
+- `GENERATE_WORKOUT` é **draft-first**: só a confirmação explícita cria um `WorkoutTemplate`.
+- `ADAPT_WORKOUT` é **confirmation-first**: o usuário seleciona mudança a mudança, e a aplicação
+  revalida a revisão do template (proposta obsoleta não sobrescreve edição mais nova).
+- Nenhum fluxo altera `WorkoutSession` concluída. Histórico é imutável.
+
+### 15.4 Versionamento
+
+Autoridade única em `AiModelConfig`:
+
+- `MODEL_NAME` — o único lugar do app onde existe nome de modelo;
+- `PROMPT_VERSION` — versão dos prompts; suba a cada mudança de instrução ou de formato;
+- `SCHEMA_VERSION` + `SUPPORTED_SCHEMA_VERSIONS` — versão do contrato de conversa. Uma versão
+  desconhecida é recusada no gateway, antes de qualquer chamada.
+
+Toda chamada carrega `requestId`, `schemaVersion` e `promptVersion` no prompt, e registra
+`requestId`, tipo, modelo, `promptVersion`, `schemaVersion`, duração e classe do resultado na
+telemetria.
+
+### 15.5 Política de contexto
+
+Regra: **o menor contexto suficiente**, nunca "todo dado disponível do usuário". Gamificação
+(XP, nível, streak, conquistas, missões) e medidas corporais não entram em nenhum contexto de
+análise, geração ou adaptação; os números de progressão só aparecem, prontos, no contexto de
+`EXPLAIN_PROGRESS`. Os tetos vivem em `AiModelConfig` (histórico por exercício, sessões
+percorridas, exercícios, PRs, candidatos, candidatos por grupo, grupos de foco).
+
+### 15.6 Custo e resiliência
+
+- Nenhuma chamada acontece em `init`, ao abrir tela ou em recomposição — só em ação explícita.
+- Enquanto uma chamada está em andamento, novos toques são ignorados (um request por pedido).
+- Não existe retry automático, polling nem chamada em background.
+- `RATE_LIMITED` não convida a repetir; `TIMEOUT` permite nova tentativa manual.
+- Explicação com razão e evidência suficientes é montada **localmente**, sem provider; quando o
+  provider falha, o app cai para essa explicação local e declara a limitação.
+
+### 15.7 Segurança
+
+- Texto livre do usuário (`notes`, da geração) é dado, nunca instrução: é saneado na fronteira e
+  o prompt declara que o bloco de contexto não altera as regras. A garantia, porém, é o
+  validador — prompt é orientação.
+- `exerciseId` inexistente é rejeitado em todos os fluxos; nos fluxos com candidate set, um id
+  real que não estava autorizado naquela requisição também é.
+- App Check é escolhido por variante de build: `src/debug` usa o provedor de depuração,
+  `src/release` usa Play Integrity. Não há token de depuração no código nem no APK de release.
+- A configuração do Firebase vem de `app/google-services.json` (não versionado). Nenhuma chave
+  vive no código.
+
+### 15.8 Suíte de avaliação
+
+`app/src/test/java/com/example/domain/ai/eval/` contém a suíte determinística
+(`AiCoachEvaluationSuiteTest` + cenários), os testes de prompt injection, de versionamento, de
+observabilidade e de configuração de segurança. Ela roda **offline**, com `FakeAiCoachGateway`,
+e não consome cota. Avaliação com provider real é opt-in e instrumentada
+(`app/src/androidTest/.../RealProviderEvaluationTest`).
+
+## 16. Important known regression patterns
 
 Be especially cautious around:
 

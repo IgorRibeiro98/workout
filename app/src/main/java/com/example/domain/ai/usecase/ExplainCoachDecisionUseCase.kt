@@ -216,6 +216,7 @@ class ExplainCoachDecisionUseCase(
             requestId = requestId,
             type = plan.target.requestType,
             model = AiModelConfig.MODEL_NAME,
+            promptVersion = AiModelConfig.PROMPT_VERSION,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (gatewayResult) {

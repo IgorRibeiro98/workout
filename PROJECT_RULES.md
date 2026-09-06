@@ -219,7 +219,43 @@ It must:
 - remain usable offline after import;
 - avoid silently replacing a canonical exercise with an incorrectly classified or media-less variant.
 
-## 13. Tests and build are part of implementation
+## 13. Coach IA
+
+O Coach IA (T14) é opcional e local-first: o núcleo do Spark — Home, treinos, criação e edição
+manual, execução, histórico, perfil, gamificação e evolução — precisa continuar funcionando com o
+provider fora do ar, sem internet ou sem configuração de Firebase.
+
+Regras obrigatórias ao mexer em qualquer parte do Coach:
+
+- **Saída do modelo é entrada não confiável.** Structured output e `AiCoachResponseValidator` são
+  ambos obrigatórios: o schema garante a forma, o validador garante a semântica. Não remova o
+  validador porque "o modelo já segue o schema".
+- **Uma autoridade por coisa.** Um gateway (`AiCoachGateway`), um lugar com prompt
+  (`AiCoachPrompt`), um validador, uma configuração (`AiModelConfig`). Nome de modelo não aparece
+  em ViewModel, tela, caso de uso ou prompt.
+- **Versionamento.** Mudou instrução ou formato de prompt, suba `AiModelConfig.PROMPT_VERSION`.
+  Mudou o contrato de conversa, suba `SCHEMA_VERSION` e ajuste `SUPPORTED_SCHEMA_VERSIONS`,
+  schemas, contextos e validador juntos.
+- **Identificadores.** `exerciseId` inexistente é sempre rejeitado; onde há candidate set, id fora
+  dos candidatos daquela requisição também.
+- **Escrita.** Geração é draft-first, adaptação é confirmation-first, `EXPLAIN_*` é read-only.
+  Sessão concluída é imutável. A IA não altera XP, streak, conquistas, missões ou PRs.
+- **Custo.** Nenhuma chamada por `init`, abertura de tela, recomposição, polling ou background.
+  Ação explícita do usuário, uma chamada; toque repetido durante uma chamada não vira outra. Sem
+  retry automático.
+- **Contexto.** O menor contexto suficiente, com limites explícitos em `AiModelConfig`. Nada de
+  gamificação ou medidas corporais em análise, geração ou adaptação.
+- **Texto do usuário é dado.** Ele nunca vira instrução de sistema, e a proteção efetiva contra
+  injeção é o validador, não a redação do prompt.
+- **Logs.** Só metadata técnica (`requestId`, tipo, modelo, versões, duração, resultado). Prompt,
+  contexto, resposta, histórico, medidas e texto do usuário não vão para log — nem em debug.
+- **App Check.** A escolha do provedor é por variante de build (`src/debug` / `src/release`).
+  Nenhum token de depuração no código, no Git ou no APK de release.
+- **Testes.** Toda mudança no Coach roda a suíte de avaliação
+  (`./gradlew :app:testDebugUnitTest --tests "com.example.domain.ai.eval.*"`), que é offline e não
+  consome cota. Avaliação com provider real é opt-in e nunca entra no build padrão.
+
+## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.
 
@@ -239,7 +275,7 @@ Known useful command:
 
 Also run an appropriate build/assemble task for the project when available.
 
-## 14. Preserve learned corrections
+## 15. Preserve learned corrections
 
 When the user reports that code from a previous delivery required manual compilation/code fixes, treat the corrected codebase as the new authority.
 
@@ -253,7 +289,7 @@ Before the next related change:
 - do not weaken real tests to make an implementation pass;
 - prefer testing real domain behavior over artificial mocks that hide integration problems.
 
-## 15. Forbidden completion behavior
+## 16. Forbidden completion behavior
 
 Never claim "done", "fixed" or "implemented" when:
 

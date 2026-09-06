@@ -204,11 +204,12 @@ class AnalyzeWorkoutUseCaseTest {
                 requestId: String,
                 type: AiCoachRequestType,
                 model: String,
+                promptVersion: Int,
                 schemaVersion: Int,
                 durationMs: Long,
                 result: String
             ) {
-                recorded += "$type|$model|$schemaVersion|$result"
+                recorded += "$type|$model|$promptVersion|$schemaVersion|$result"
             }
         }
         val gateway = FakeAiCoachGateway {
@@ -218,7 +219,10 @@ class AnalyzeWorkoutUseCaseTest {
         AnalyzeWorkoutUseCase(contextBuilder, gateway, telemetry)()
 
         assertEquals(
-            listOf("ANALYZE_WORKOUT|${AiModelConfig.MODEL_NAME}|${AiModelConfig.SCHEMA_VERSION}|SUCCESS"),
+            listOf(
+                "ANALYZE_WORKOUT|${AiModelConfig.MODEL_NAME}|${AiModelConfig.PROMPT_VERSION}|" +
+                    "${AiModelConfig.SCHEMA_VERSION}|SUCCESS"
+            ),
             recorded
         )
     }

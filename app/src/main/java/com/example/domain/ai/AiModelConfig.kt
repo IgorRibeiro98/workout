@@ -22,6 +22,29 @@ object AiModelConfig {
     /** Versão do contrato de conversa entre o Spark e o modelo. */
     const val SCHEMA_VERSION: Int = 1
 
+    /**
+     * As versões de contrato que este build sabe interpretar.
+     *
+     * Existe para que uma versão desconhecida seja **recusada**, e não enviada em silêncio: se
+     * [SCHEMA_VERSION] avançar sem que schema, validador e contextos acompanhem, a chamada falha
+     * de forma determinística antes de tocar o provider.
+     */
+    val SUPPORTED_SCHEMA_VERSIONS: Set<Int> = setOf(1)
+
+    /**
+     * Versão dos prompts do Coach — autoridade única, como o nome do modelo.
+     *
+     * Uma versão só para todos os tipos de request: as instruções mudam juntas (são o mesmo
+     * contrato de comportamento em quatro recortes) e um número por prompt só produziria
+     * combinações que ninguém consegue reproduzir depois. Suba este número sempre que qualquer
+     * instrução de sistema ou o formato do prompt do usuário mudar.
+     */
+    const val PROMPT_VERSION: Int = 1
+
+    /** Se este build sabe conversar na versão de contrato pedida. */
+    fun isSupportedSchemaVersion(schemaVersion: Int): Boolean =
+        schemaVersion in SUPPORTED_SCHEMA_VERSIONS
+
     /** Configuração conservadora para a primeira versão. */
     val THINKING_LEVEL: AiThinkingLevel = AiThinkingLevel.MEDIUM
 

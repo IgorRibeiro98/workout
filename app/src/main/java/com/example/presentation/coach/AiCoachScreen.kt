@@ -47,7 +47,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Check
-import com.example.data.ai.FirebaseAiCoachGateway
+import com.example.data.ai.AiCoachAppCheck
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.model.AiDataQualityLevel
 import androidx.compose.ui.unit.dp
@@ -434,11 +434,13 @@ private fun MessageCard(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val isAppCheckError = message.contains("App Check", ignoreCase = true) || message.contains("token is invalid", ignoreCase = true)
+    // O bloco de token de depuração é ferramenta de desenvolvimento: em release a variante não
+    // suporta token de depuração e ele simplesmente não aparece.
+    val isAppCheckError = AiCoachAppCheck.SUPPORTS_DEBUG_TOKEN &&
+        (message.contains("App Check", ignoreCase = true) ||
+            message.contains("token is invalid", ignoreCase = true))
 
-    var currentToken by remember {
-        mutableStateOf(FirebaseAiCoachGateway.getCurrentDebugToken(context))
-    }
+    var currentToken by remember { mutableStateOf(AiCoachAppCheck.customDebugToken(context)) }
     var inputToken by remember { mutableStateOf("") }
     var tokenSavedSuccess by remember { mutableStateOf(false) }
 
@@ -467,29 +469,29 @@ private fun MessageCard(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Token de depuração ativo no app:",
+                        text = "Token de depuração deste aparelho:",
                         color = Lime400,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = currentToken,
+                        text = currentToken ?: GENERATED_DEBUG_TOKEN_HINT,
                         color = TextPrimary,
                         fontSize = 11.sp
                     )
 
-                    Button(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(currentToken))
-                        },
-                        shape = RoundedCornerShape(6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SurfaceDark,
-                            contentColor = TextPrimary
-                        ),
-                        modifier = Modifier.border(1.dp, BorderLight, RoundedCornerShape(6.dp))
-                    ) {
-                        Text(text = "Copiar este Token", fontSize = 11.sp)
+                    currentToken?.let { token ->
+                        Button(
+                            onClick = { clipboardManager.setText(AnnotatedString(token)) },
+                            shape = RoundedCornerShape(6.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SurfaceDark,
+                                contentColor = TextPrimary
+                            ),
+                            modifier = Modifier.border(1.dp, BorderLight, RoundedCornerShape(6.dp))
+                        ) {
+                            Text(text = "Copiar este Token", fontSize = 11.sp)
+                        }
                     }
 
                     Text(
@@ -521,7 +523,7 @@ private fun MessageCard(
                     Button(
                         onClick = {
                             if (inputToken.isNotBlank()) {
-                                FirebaseAiCoachGateway.setCustomDebugToken(context, inputToken)
+                                AiCoachAppCheck.setCustomDebugToken(context, inputToken)
                                 currentToken = inputToken.trim()
                                 tokenSavedSuccess = true
                                 onRetry()
@@ -550,3 +552,12 @@ private fun MessageCard(
         }
     }
 }
+
+/**
+ * O que mostrar quando nenhum token de depuração foi configurado neste aparelho.
+ *
+ * Nenhum token vive no código: sem um token colado aqui, o provedor de depuração do Firebase gera
+ * o dele e o registra no Logcat para ser cadastrado no console.
+ */
+private const val GENERATED_DEBUG_TOKEN_HINT: String =
+    "gerado pelo provedor — procure \"DebugAppCheckProvider\" no Logcat"
