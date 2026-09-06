@@ -116,7 +116,7 @@ class AccountSectionTest {
     }
 
     @Test
-    fun `logado mostra identidade e a saida, sem prometer backup ou sync`() {
+    fun `logado mostra identidade e a saida, sem prometer sincronizacao`() {
         composeRule.setContent {
             AccountSection(
                 uiState = AccountUiState(
@@ -132,11 +132,15 @@ class AccountSectionTest {
         composeRule.onNodeWithText("joao@example.com").assertExists()
         composeRule.onNodeWithText("Conectado").assertExists()
         composeRule.onNodeWithText("Sair da conta").assertExists()
-        composeRule.onNodeWithText("Backup e sincronização chegam nas próximas etapas.").assertExists()
+        // Desde a T16.4 o backup existe e é ativado na seção logo abaixo. Sincronização entre
+        // dispositivos continua sendo etapa futura, e esta área não pode prometer o contrário.
+        composeRule.onNodeWithText("Sincronização entre dispositivos chega nas próximas etapas.")
+            .assertExists()
 
-        // Nada pode dizer que backup ou sync já funcionam — eles não existem na T16.1.
-        composeRule.onNodeWithText("Backup ativo").assertDoesNotExist()
         composeRule.onNodeWithText("Sincronizado").assertDoesNotExist()
+        composeRule.onNodeWithText("Todos os seus dispositivos estão sincronizados")
+            .assertDoesNotExist()
+        composeRule.onNodeWithText("Seus dados estão totalmente protegidos").assertDoesNotExist()
     }
 
     @Test

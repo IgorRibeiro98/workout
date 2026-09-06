@@ -3,16 +3,17 @@
 Fronteira online do Spark. Monólito modular em NestJS sobre SQLite, pensado para rodar em **uma**
 VPS com Docker Compose.
 
-> **Estado (T16.2): fundação + identidade + Coach IA.** Existe verificação de Firebase ID Token
-> (`GET /v1/auth/me`) e a fronteira com o Gemini (`POST /v1/ai/coach`). **Não** existe
-> sincronização, backup, restore nem qualquer persistência de dado de treino — sob `/v1` há
-> `auth` e `ai`, e a única tabela de produto é `ai_usage_daily` (contagem de uso, sem conteúdo).
-> Ver [ADR-0001](../docs/architecture/ADR-0001-spark-online-architecture.md).
+> **Estado (T16.4): fundação + identidade + Coach IA + backup.** Existe verificação de Firebase ID
+> Token (`GET /v1/auth/me`), a fronteira com o Gemini (`POST /v1/ai/coach`) e o **backup
+> estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`). **Não** existe restore, download do
+> conteúdo do backup, sincronização incremental, pull, conflito nem tombstone — sob `/v1` há
+> `auth`, `ai` e `backups`. Ver
+> [ADR-0001](../docs/architecture/ADR-0001-spark-online-architecture.md).
 
 O Spark Android **não depende deste backend**. Sem ele — e sem internet — treino, execução,
 histórico, templates e gamificação continuam funcionando normalmente sobre Room. O que passa a
 depender dele, desde a T16.2, é o **Coach IA**: ele é uma capacidade online autenticada, e o
-núcleo não é.
+núcleo não é. Desde a T16.4, o **backup** também: ele exige conta, e não é requisito para treinar.
 
 ## Stack
 
@@ -102,6 +103,7 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `AI_MAX_REQUESTS_PER_USER_DAY` | não | `50` | Quota diária por conta (UTC) |
 | `AI_MAX_REQUESTS_GLOBAL_DAY` | não | `500` | Quota diária do servidor inteiro |
 | `AI_MAX_CONCURRENT_REQUESTS_PER_USER` | não | `1` | Chamadas simultâneas ao provider por conta |
+| `BACKUP_RETENTION_COUNT` | não | `5` | Quantos snapshots guardar por conta. Cinco porque cada backup já basta sozinho para restaurar — guardar vários é janela de arrependimento, não redundância |
 
 Nenhuma credencial é versionada. `.env`, chaves, service accounts e Caddyfile real estão no
 `.gitignore` e no `.dockerignore`, e há teste que varre a árvore procurando chave privada,
@@ -119,6 +121,12 @@ A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive for
 | `GET /health/ready` | pública | Configuração carregada + SQLite acessível + migrations aplicadas. `503` quando algo falta. |
 | `GET /v1/auth/me` | **Bearer** | Devolve `{ "uid": ... }` derivado do token verificado. |
 | `POST /v1/ai/coach` | **Bearer** | Coach IA: recebe contexto + intenção, decide prompt e modelo, chama o Gemini e devolve a resposta validada. |
+| `POST /v1/backups` | **Bearer** | Recebe um snapshot completo do estado pessoal, valida por inteiro, guarda em uma transação e devolve **metadata**. |
+| `GET /v1/backups/latest` | **Bearer** | Metadata do backup mais recente **daquela conta**. `404` quando não há nenhum. |
+
+Não existe `GET /v1/backups/{id}/content`. Devolver o snapshot já seria metade do restore, sem a
+validação, o preview e a escrita transacional que a T16.5 precisa desenhar — e há teste que exige
+`404` nessa rota.
 
 Health é infraestrutura e fica **fora** de `/v1`. Toda API de produto futura nasce sob `/v1` —
 o versionamento por URI já está configurado, então um `@Controller('sync')` responde em `/v1/sync`
@@ -218,7 +226,42 @@ eles.
 **O que o servidor não faz.** Ele não decide nem persiste alteração de treino: geração continua
 *draft-first*, adaptação continua *confirmation-first*, `EXPLAIN_*` é read-only e a sessão
 concluída é imutável. Não existe tabela de treino, sessão ou série aqui — e há teste que verifica
-isso.
+isso. O backup da T16.4 não muda essa regra: ele guarda o snapshot como payload opaco, e não
+transforma treino em tabela consultável.
+
+### Backup (T16.4)
+
+```text
+POST /v1/backups          snapshot completo, autocontido, imutável
+GET  /v1/backups/latest   metadata — nunca o conteúdo
+```
+
+O caminho é o mesmo do Coach até o guard: `Bearer <Firebase ID Token>` → `AuthenticatedPrincipal`.
+Depois dele:
+
+```text
+teto de corpo → forma canônica → envelope → item a item (registry fechado)
+→ identidade portátil → duplicidade → relações → hash → idempotência → transação → retenção
+```
+
+Cinco decisões que valem ser sabidas antes de mexer aqui:
+
+1. **O dono sai do token.** O contrato não tem `ownerUid`, e campo desconhecido no corpo é
+   recusado. Query string com `uid` não influencia nada.
+2. **Ou tudo, ou nada.** A validação é integral e acontece **antes** de qualquer escrita; snapshot
+   e itens entram na mesma transação. Não existe caminho que grave 97 itens e recuse 3.
+3. **Idempotência é do banco.** `UNIQUE (owner_uid, client_backup_id)`. Mesmo id + mesmo conteúdo
+   devolve `200` com o backup existente; mesmo id + conteúdo diferente é `409`.
+4. **O hash é calculado aqui.** SHA-256 sobre a forma canônica do **texto recebido**, com tokens
+   escalares copiados verbatim — é o que faz Kotlin e TypeScript fecharem o mesmo valor sem que um
+   precise imitar o formatador de ponto flutuante do outro. Hash declarado pelo cliente não existe
+   no contrato.
+5. **Retenção vem depois do commit.** O backup novo é gravado e confirmado antes de qualquer
+   limpeza; uma limpeza que falhe deixa backup a mais, nunca a menos.
+
+Log: `requestId`, prefixo do uid, `clientBackupId`, `itemCount`, `sizeBytes`, duração e status.
+Corpo, payload, nome de treino, nota, medida e token **não** aparecem — e há teste que envia uma
+fixture com marcas reconhecíveis e varre a saída do logger procurando por elas.
 
 ## Estrutura
 
@@ -232,13 +275,19 @@ backend/
 │   ├── common/                  logger, request ID, log de acesso, envelope de erro
 │   ├── modules/health/          liveness e readiness
 │   ├── modules/auth/            verificação de Firebase ID Token, guard e principal
-│   └── modules/ai/              Coach IA: contrato, prompts, validação, quota e provider
+│   ├── modules/ai/              Coach IA: contrato, prompts, validação, quota e provider
+│   └── modules/backup/          Backup: contrato, registry, forma canônica, validação, retenção
 ├── migrations/                  NNNN_nome.sql, versionadas
 └── test/
 ```
 
-Os módulos futuros (`sync` T16.3+, `backup` T16.4, `social` T17) entram em `src/modules/`, no
-mesmo processo e no mesmo banco. Não haverá `auth-service`, `sync-service` etc.
+Os módulos futuros (`sync` T16.6+, `social` T17) entram em `src/modules/`, no mesmo processo e no
+mesmo banco. Não haverá `auth-service`, `sync-service` etc.
+
+O contrato de backup é compartilhado com o Android em
+[`contracts/backup/v1/`](../contracts/backup/v1/README.md): o README é a definição, e as fixtures
+de lá são lidas pelos testes dos **dois** lados. Mudar o formato de um lado só quebra os dois
+testes juntos, que é o objetivo.
 
 ## Banco
 
@@ -258,6 +307,12 @@ migration já aplicada é erro, não reaplicação silenciosa.
 precisa de ownership, versionamento, idempotência e tombstones. Cada fase da T16 cria o que precisa.
 Ver a [matriz de dados](../docs/architecture/data-classification-matrix.md).
 
+Hoje são quatro tabelas: `server_metadata` (estado técnico), `ai_usage_daily` (contagem de uso do
+Coach, sem conteúdo) e, desde a T16.4, `backup_snapshots` + `backup_items`. As duas de backup
+guardam o payload do agregado como texto — o servidor **não** desmonta treino em colunas
+consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que o Room já
+possui.
+
 ## Produção (ainda não provisionada)
 
 ```text
@@ -265,7 +320,12 @@ Internet → Caddy (TLS / Let's Encrypt) → Spark Backend → SQLite
 ```
 
 [`Caddyfile.example`](./Caddyfile.example) traz o exemplo. A T16.0 **não** provisiona VPS, domínio,
-DNS nem certificado, e não cria nenhum recurso pago.
+DNS nem certificado, e não cria nenhum recurso pago — e isso continua verdade na T16.4.
+
+> **Backup do usuário ≠ backup do servidor.** A T16.4 protege contra a perda do **aparelho**: o
+> dado do usuário passa a existir também aqui. Ela **não** protege contra a perda desta VPS — hoje
+> um `docker compose down -v` destrói os backups de todo mundo. Backup off-site do SQLite é a
+> **T16.8**, e está registrado como pendência, não esquecido.
 
 ## Documentação
 
@@ -273,4 +333,5 @@ DNS nem certificado, e não cria nenhum recurso pago.
 - [Matriz de dados](../docs/architecture/data-classification-matrix.md)
 - [Contrato de identidade](../docs/architecture/identity-contract.md)
 - [Protocolo de sincronização](../docs/architecture/sync-protocol.md)
+- [Contrato de backup v1](../contracts/backup/v1/README.md)
 - [Configuração do Firebase Auth](../docs/FIREBASE_AUTH_SETUP.md)

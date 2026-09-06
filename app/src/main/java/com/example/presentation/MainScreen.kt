@@ -85,7 +85,8 @@ fun MainScreen() {
         applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase,
         explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
         authGateway = app.authGateway,
-        sparkBackendClient = app.sparkBackendClient
+        sparkBackendClient = app.sparkBackendClient,
+        backupRepository = app.backupRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -307,9 +308,14 @@ fun MainScreen() {
                 // existente). Não inicia autenticação: o seletor de contas só abre no toque.
                 val accountViewModel: com.example.presentation.account.AccountViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // Criar o ViewModel de backup **lê** o vínculo e a última tentativa para saber o
+                // que mostrar. Ele não envia nada: só um toque explícito produz backup.
+                val backupViewModel: com.example.presentation.account.BackupViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
                     accountViewModel = accountViewModel,
+                    backupViewModel = backupViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },

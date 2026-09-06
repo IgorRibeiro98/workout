@@ -78,12 +78,24 @@ describe('Health (liveness e readiness)', () => {
     expect((await request(app.getHttpServer()).get('/v1/health/live')).status).toBe(404);
   });
 
-  it('sync, IA e backup continuam ausentes de /v1 — só `auth` existe na T16.1', async () => {
-    for (const path of ['/v1/sync/push', '/v1/sync/pull', '/v1/ai/analyze', '/v1/backup']) {
+  it('sync continua ausente de /v1; auth, IA e backup existem e nasceram fechados', async () => {
+    // Sync incremental é T16.6/T16.7. Backup (T16.4) **não** é sync: ele sobe um snapshot
+    // completo e não tem push, pull, cursor nem merge.
+    for (const path of ['/v1/sync/push', '/v1/sync/pull', '/v1/ai/analyze']) {
       expect((await request(app.getHttpServer()).get(path)).status).toBe(404);
     }
 
-    // `/v1/auth/me` existe e é protegido: 401 (e não 404) é a prova de que a rota nasceu fechada.
+    // 401 (e não 404) é a prova de que a rota existe e nasceu protegida.
     expect((await request(app.getHttpServer()).get('/v1/auth/me')).status).toBe(401);
+    expect((await request(app.getHttpServer()).get('/v1/backups/latest')).status).toBe(401);
+    expect((await request(app.getHttpServer()).post('/v1/backups').send({})).status).toBe(401);
+  });
+
+  it('não existe endpoint de conteúdo de backup — restore é T16.5', async () => {
+    // Devolver o snapshot já seria metade do restore, sem a validação, o preview e a escrita
+    // transacional que a T16.5 precisa desenhar. A T16.4 entrega metadata e nada além disso.
+    for (const path of ['/v1/backups/latest/content', '/v1/backups/abc/content', '/v1/backups']) {
+      expect((await request(app.getHttpServer()).get(path)).status).toBe(404);
+    }
   });
 });

@@ -1,0 +1,12 @@
+{
+  "backupSchemaVersion": 1,
+  "capturedAt": 1788700000000,
+  "clientBackupId": "3f2a1c88-0e1b-4a52-9c31-6b7d5e2f0a11",
+  "deviceId": "b1d4a6f2-7c33-4a51-9f0e-2d5c8b7a1e44",
+  "items": [],
+  "source": {
+    "appVersionCode": 1,
+    "appVersionName": "1.0",
+    "databaseVersion": 32
+  }
+}

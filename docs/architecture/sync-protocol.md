@@ -4,8 +4,10 @@
 - **Status (verificado em 2026-09-06):**
   - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
     `clientMutationId`, `deviceId` e os DTOs de agregado;
-  - **não implementado:** tudo o que envolve rede. Não existe endpoint de sync, worker, push, pull,
-    ack, `revision`, `cursor`, tombstone remoto nem tabela de mudanças no servidor. O teste
+  - **implementado na T16.4:** o **backup completo**, que não é sync — `POST /v1/backups` sobe um
+    snapshot autocontido e `GET /v1/backups/latest` devolve metadata. Nada desce;
+  - **não implementado:** o protocolo de sync. Não existe push incremental, pull, worker, ack,
+    `revision`, `cursor`, tombstone remoto nem tabela de mudanças no servidor. O teste
     automatizado do backend continua garantindo que `/v1/sync/push` e `/v1/sync/pull` respondem 404.
 
 Este documento existe para que as decisões difíceis do sync estejam tomadas antes de a primeira
@@ -152,7 +154,31 @@ do estado atual, não a reprodução de uma fila histórica desde a instalação
 
 ---
 
-## Push (T16.4 / T16.6)
+## Backup completo (T16.4) — o que existe hoje
+
+Antes do push incremental veio o backup, e ele **não** consome a Outbox como fila de envio:
+
+```text
+Room transaction
+ ├── vincula o dataset (adoção explícita)
+ ├── captura o snapshot completo
+ ├── lê coveredOutboxSequence = MAX(sync_outbox.id)
+ └── cria a BackupAttempt (payload congelado)
+COMMIT  →  POST /v1/backups  →  o servidor confirma
+ ↓
+Room transaction: entradas com id <= coveredOutboxSequence são liberadas
+```
+
+O corte é o ponto: uma alteração feita **durante** o upload recebe `id` maior e continua pendente,
+porque o snapshot não a contém. Falha no upload não libera nada. Formato, identidades, hash,
+idempotência e erros em [`contracts/backup/v1/README.md`](../../contracts/backup/v1/README.md).
+
+Consequência para a T16.6: quando o push incremental existir, ele precisa **partir do estado
+coberto pelo último backup**, e não da instalação do app. E três agregados que hoje entram só no
+snapshot completo — `EXERCISE_OVERRIDE`, `WEEKLY_GOAL`, `USER_PREFERENCES` — precisarão de mutação
+própria na Outbox.
+
+## Push incremental (T16.6)
 
 ```text
 ação do usuário
@@ -192,8 +218,9 @@ O servidor precisa conseguir distinguir quatro situações:
 O `Outbox` só remove uma mutação depois da confirmação do servidor. Uma resposta perdida deixa a
 mutação na fila, e o reenvio é seguro — é exatamente o que a idempotência garante.
 
-Nada disso existe hoje: não há worker, HTTP, retry, ack nem `revision`. A T16.3 entregou a fila
-durável e o montador de payload; o transporte é da T16.6.
+Nada disso existe hoje: não há worker, push por mutação, retry, ack nem `revision`. A T16.3
+entregou a fila durável e o montador de payload, a T16.4 entregou o transporte autenticado e o
+snapshot completo; o push incremental é da T16.6.
 
 ### Versão de payload
 

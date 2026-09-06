@@ -37,9 +37,11 @@ import kotlinx.coroutines.launch
         XpTransactionEntity::class,
         WeeklyGoalHistoryEntity::class,
         AchievementUnlockEntity::class,
-        com.example.data.sync.SyncOutboxEntryEntity::class
+        com.example.data.sync.SyncOutboxEntryEntity::class,
+        com.example.data.backup.CloudDataBindingEntity::class,
+        com.example.data.backup.BackupAttemptEntity::class
     ],
-    version = 31,
+    version = 32,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -51,8 +53,19 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun weeklyGoalDao(): WeeklyGoalDao
     abstract fun achievementDao(): AchievementDao
     abstract fun syncOutboxDao(): com.example.data.sync.SyncOutboxDao
+    abstract fun cloudDataBindingDao(): com.example.data.backup.CloudDataBindingDao
+    abstract fun backupAttemptDao(): com.example.data.backup.BackupAttemptDao
 
     companion object {
+
+        /**
+         * A versão do schema local, como número.
+         *
+         * Existe para que o backup possa registrar de qual banco o snapshot saiu sem duplicar o
+         * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
+         * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
+         */
+        const val SCHEMA_VERSION: Int = 32
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -78,6 +91,72 @@ abstract class AppDatabase : RoomDatabase() {
          * `defaultValue` de coluna que a entidade não declara com `@ColumnInfo(defaultValue = ...)`,
          * então o schema exportado continua batendo.
          */
+        /**
+         * T16.4 — adoção explícita do dataset por uma Conta Spark + tentativa de backup durável.
+         *
+         * Aditiva: duas tabelas novas, nenhuma existente é tocada. Nenhum treino, sessão, série ou
+         * medida muda — o backup **lê** o domínio e não o reescreve.
+         *
+         * `cloud_data_binding` substitui as preferências `cloud_sync_state`/`cloud_sync_owner_uid`
+         * da T16.3, que nunca chegaram a ser gravadas: a adoção não existia, então não há estado a
+         * migrar. A informação passa para o Room porque ela é sobre **este banco**, e porque é o
+         * que permite vincular, capturar o snapshot, ler o corte da Outbox e registrar a tentativa
+         * na mesma transação.
+         */
+        val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Uma linha, sempre `id = 1`: um banco tem um dono, não uma lista deles.
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `cloud_data_binding` (
+                        `id` INTEGER PRIMARY KEY NOT NULL,
+                        `ownerUid` TEXT NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `boundAt` INTEGER NOT NULL,
+                        `deviceId` TEXT NOT NULL,
+                        `lastSuccessfulBackupId` TEXT,
+                        `lastSuccessfulBackupAt` INTEGER
+                    )
+                    """.trimIndent()
+                )
+
+                // A tentativa guarda o payload inteiro: é ela que sobrevive a process death e
+                // permite reenviar **os mesmos bytes** com o mesmo `clientBackupId`.
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `backup_attempts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `clientBackupId` TEXT NOT NULL,
+                        `ownerUid` TEXT NOT NULL,
+                        `deviceId` TEXT NOT NULL,
+                        `backupSchemaVersion` INTEGER NOT NULL,
+                        `coveredOutboxSequence` INTEGER NOT NULL,
+                        `payloadHash` TEXT NOT NULL,
+                        `payload` TEXT NOT NULL,
+                        `itemCount` INTEGER NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `lastAttemptAt` INTEGER,
+                        `failureReason` TEXT,
+                        `serverBackupId` TEXT,
+                        `serverCreatedAt` INTEGER,
+                        `serverPayloadHash` TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_backup_attempts_clientBackupId` " +
+                        "ON `backup_attempts` (`clientBackupId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_backup_attempts_ownerUid_status_id` " +
+                        "ON `backup_attempts` (`ownerUid`, `status`, `id`)"
+                )
+            }
+        }
+
         val MIGRATION_30_31 = object : Migration(30, 31) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // ---- Identidade global das raízes de agregado pessoais -----------------------
@@ -536,7 +615,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32
                 )
                 .addCallback(DatabaseCallback())
                 .build()

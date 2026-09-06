@@ -526,14 +526,17 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação, identidade, Coach online e a fundação local de
-> sync implementados; dados online, não.** A T16.0 criou o backend em `backend/` com configuração,
-> SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1 acrescentou
-> **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de Firebase ID
-> Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**: `POST /v1/ai/coach`,
-> prompt/modelo/credencial server-side, quota e validação no servidor. A T16.3 acrescentou
-> **identidade global dos dados e a Outbox transacional** no Android. **Não existe** sincronização,
-> backup, restore, upload, download, ownership remoto ou tabela de domínio no servidor.
+> **Status (verificado em 2026-09-06): fundação, identidade, Coach online, fundação de sync e
+> backup implementados; restore e sincronização, não.** A T16.0 criou o backend em `backend/` com
+> configuração, SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
+> acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
+> Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
+> `POST /v1/ai/coach`, prompt/modelo/credencial server-side, quota e validação no servidor. A T16.3
+> acrescentou **identidade global dos dados e a Outbox transacional** no Android. A T16.4
+> acrescentou **backup estruturado**: adoção explícita do conjunto de dados por uma Conta Spark,
+> snapshot completo, `POST /v1/backups` e `GET /v1/backups/latest`. **Não existe** restore,
+> download do conteúdo, sincronização incremental, pull, convergência multi-device, conflito,
+> tombstone remoto, backup automático ou backup off-site da VPS.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -655,7 +658,7 @@ persistência do domínio        validação da resposta
 | T16.1 | Conta opcional + Firebase Auth | **implementado** |
 | T16.2 | Migração do Coach IA para o Spark Backend | **implementado** |
 | T16.3 | Identidade global dos dados + Outbox | **implementado** |
-| T16.4 | Backup estruturado | planejado |
+| T16.4 | Backup estruturado | **implementado** |
 | T16.5 | Restore seguro | planejado |
 | T16.6 | Sync incremental multi-device | planejado |
 | T16.7 | Conflitos, deletes e consistência offline | planejado |
@@ -708,13 +711,18 @@ Room Transaction
 COMMIT
 ```
 
-#### Futuro (T16.4 / T16.6) — não existe ainda
+#### O que mudou na T16.4 — e o que continua não existindo
 
 ```text
 Outbox
- -X→  Sync Worker      ← não existe
- -X→  Spark Backend    ← não recebe dado de treino
+ ──→  baseline por snapshot completo   ← existe desde a T16.4 (§ backup, abaixo)
+ -X→  Sync Worker                      ← não existe
+ -X→  push incremental                 ← não existe (T16.6)
 ```
+
+O backup **não** consome a Outbox como fila de envio: ele sobe um snapshot completo e, depois da
+confirmação do servidor, marca como cobertas as entradas anteriores ao corte. Não há worker, não há
+retry automático e não há push por mutação.
 
 #### Agregados, não tabelas
 
@@ -740,7 +748,7 @@ Tabela completa em
 | Agregados e operações | `SyncEntityType`, `SyncOperation`, `SyncOutboxStatus` |
 | Entrada da Outbox | `SyncOutboxEntryEntity` + `SyncOutboxDao` (tabela `sync_outbox`) |
 | Fronteira transacional | `SyncMutationCoordinator` + `SyncMutationScope` + `TransactionRunner` |
-| Estado da nuvem | `CloudSyncScope` / `CloudSyncScopeProvider` / `SettingsCloudSyncScopeProvider` |
+| Estado da nuvem | `CloudSyncScope` / `CloudSyncScopeProvider` / `CloudDataBindingScopeProvider` (T16.4 — era `SettingsCloudSyncScopeProvider`, no DataStore, onde nunca chegou a ser gravado) |
 | Identidade da instalação | `DeviceIdProvider` (DataStore) |
 | Contratos de payload | `com.example.data.sync.dto.*` + `SyncAggregateEnvelope` |
 | Montagem de snapshot | `SyncAggregateSnapshotBuilder` |
@@ -758,7 +766,8 @@ Tabela completa em
 5. **Identidade canônica não é substituída.** Exercício de catálogo continua identificado por
    `canonicalId` e **não** ganha `syncId`.
 6. **Login não liga a nuvem.** O padrão é `CloudSyncScope.Disabled`, dado local é `LOCAL_UNOWNED`,
-   e nenhuma entrada de Outbox é produzida. A adoção é explícita, na T16.4.
+   e nenhuma entrada de Outbox é produzida. A adoção é explícita e aconteceu na T16.4 — continua
+   exigindo toque **e** confirmação, e continua sendo o único caminho que dá dono a um dado local.
 7. **Troca de conta não transfere nada.** Sair com A e entrar com B deixa identidade e dados
    exatamente como estavam.
 8. **Nada sai do aparelho.** Sem worker, sem HTTP, sem retry, sem ack.
@@ -787,6 +796,148 @@ A adoção acontece só quando o usuário ativar a nuvem explicitamente (T16.4):
 será associado, o usuário confirma, o snapshot inicial sobe, o ownership remoto nasce e só então a
 Outbox passa a operar no escopo daquela conta. É o que evita a Conta B receber dados criados pela
 Conta A no mesmo aparelho.
+
+### Backup estruturado (T16.4)
+
+> **Status (verificado em 2026-09-06): implementado.** Room `version = 32`. O Spark envia um
+> snapshot completo do estado pessoal ao Spark Backend, que o guarda imutável sob o `uid` do token
+> verificado. **Não existe** restore, download do conteúdo, sync incremental, pull, convergência
+> multi-device, conflito, tombstone remoto, backup automático nem backup off-site da VPS.
+
+#### Backup não é sincronização
+
+```text
+T16.4     Spark Android  ──snapshot completo──▶  Spark Backend  ──▶  SQLite (imutável)
+
+AINDA NÃO EXISTE
+          Spark Android  ◀──X──────────────────  Spark Backend
+          sem restore · sem download · sem pull · sem merge · sem conflito
+```
+
+Cada backup é **autocontido**: ele não depende de backup anterior, de delta, da Outbox nem de
+servidor antigo. É isso que permite ao restore da T16.5 pegar um snapshot e reconstruir o estado.
+
+**A T16.4 protege contra a perda do aparelho.** Ela não protege contra a perda da VPS — backup
+off-site do servidor é a T16.8, e a UI não promete o que não existe.
+
+#### Adoção explícita: login ≠ adotar
+
+```text
+Google login
+   ↓
+dados continuam locais e sem dono              ← nada mudou
+   ↓  o usuário toca "Ativar backup"
+o Spark mostra QUANTO será associado
+   ↓  o usuário confirma
+CloudDataBinding(ownerUid) + snapshot + upload ← a adoção acontece aqui, e só aqui
+```
+
+Depois disso: **sair da conta não remove o vínculo**, reiniciar não remove, e entrar com outra
+conta **não** o transfere — o resultado é um estado de descompasso em que só a nuvem fica
+indisponível. Treino, execução, histórico, templates e gamificação continuam completos.
+
+#### O fluxo, com o corte
+
+```text
+Room transaction
+ ├── estabelece o vínculo (se ainda não houver dono)
+ ├── captura o snapshot consistente
+ ├── lê coveredOutboxSequence = MAX(sync_outbox.id)
+ └── cria a BackupAttempt (payload já congelado)
+COMMIT
+ ↓
+POST /v1/backups   (Bearer <Firebase ID Token>)
+ ↓  o servidor confirma
+Room transaction
+ ├── marca a tentativa como confirmada
+ ├── libera a Outbox com id <= coveredOutboxSequence
+ └── registra o último backup (hora do SERVIDOR)
+```
+
+Uma alteração feita **durante** o upload recebe `id > coveredOutboxSequence` e continua pendente:
+o snapshot não a contém, e alegar o contrário seria perder a alteração. Falha no upload não libera
+nada — nem a fila, nem a tentativa, nem dado local.
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Contrato compartilhado | [`contracts/backup/v1/`](contracts/backup/v1/README.md) — README + fixtures lidas pelos testes dos dois lados |
+| Registry de agregados (app) | `BackupContract` / `BackupEntityType` |
+| DTOs do envelope e dos três agregados só-de-backup | `com.example.data.backup.BackupDtos` |
+| Forma canônica + SHA-256 | `BackupCanonicalJson` (espelho de `canonical-json.ts`) |
+| Vínculo do dataset | `CloudDataBindingEntity` + `CloudDataBindingDao` + `CloudDataBindingScopeProvider` |
+| Tentativa durável | `BackupAttemptEntity` + `BackupAttemptDao` (tabela `backup_attempts`) |
+| Montagem do snapshot | `BackupSnapshotBuilder` (reusa `SyncAggregateSnapshotBuilder`) |
+| Transporte | `BackupApi` / `SparkBackupApi` sobre o `SparkBackendClient` da T16.1 |
+| Caso de uso | `BackupRepository` |
+| UI | `BackupViewModel` + `BackupSection`, dentro do Perfil |
+| Migração local | `AppDatabase.MIGRATION_31_32` |
+| Registry, validação e persistência (servidor) | `backend/src/modules/backup/` |
+| Migração remota | `backend/migrations/0003_backups.sql` |
+
+#### Formato
+
+```text
+backupSchemaVersion    versão do FORMATO DE BACKUP — não é Room, não é /v1, não é entitySchemaVersion
+clientBackupId         identidade da tentativa lógica, gerada no aparelho, estável entre reenvios
+deviceId               qual instalação produziu o snapshot
+capturedAt             relógio do aparelho — INFORMATIVO; quem ordena é o servidor
+items[]                { entityType, entitySchemaVersion, syncId, payload }
+```
+
+Nove `entityType` no registry fechado: os seis agregados da T16.3 mais `EXERCISE_OVERRIDE`,
+`WEEKLY_GOAL` e `USER_PREFERENCES`. Detalhes, identidades derivadas, tetos e erros em
+[`contracts/backup/v1/README.md`](contracts/backup/v1/README.md).
+
+#### Hash determinístico entre Kotlin e TypeScript
+
+O `payloadHash` é o SHA-256 de uma **forma canônica do texto**: chaves ordenadas, sem espaço, e
+todo token escalar copiado verbatim. A regra do token é o ponto: `Float.toString()` do Kotlin e
+`JSON.stringify` do JavaScript não formatam o mesmo número igual, e canonicalizar a partir do valor
+faria a idempotência do backup depender de os dois lados imitarem o formatador do outro.
+
+O servidor calcula **o seu próprio** hash e não aceita hash declarado pelo cliente.
+
+#### Endpoints
+
+```text
+POST /v1/backups          → 201 (criado) | 200 (mesma tentativa) | 409 (mesmo id, outro conteúdo)
+GET  /v1/backups/latest   → 200 metadata | 404 BACKUP_NOT_FOUND
+```
+
+Os dois exigem Bearer e o dono sai do token. **Não existe** endpoint de conteúdo: devolver o
+snapshot já seria metade do restore, sem a validação, o preview e a escrita transacional que a
+T16.5 precisa desenhar.
+
+#### Invariantes da T16.4
+
+1. **Login não adota.** Só toque explícito + confirmação vinculam dado a uma conta.
+2. **O escopo é o vínculo, não o `FirebaseUser` atual.** Trocar de conta no aparelho não transfere
+   dado; produz descompasso, que bloqueia só a nuvem.
+3. **O dono sai do token.** O contrato de backup não tem campo `ownerUid`, e um campo desconhecido
+   no corpo é recusado — não ignorado.
+4. **A tentativa é imutável.** Um retry manda os mesmos bytes, com o mesmo `clientBackupId`, e o
+   servidor devolve o backup que já existia em vez de criar outro.
+5. **Nada parcial é persistido.** O servidor valida o snapshot inteiro antes de escrever, e
+   snapshot + itens entram na mesma transação.
+6. **A Outbox só é liberada depois da confirmação.** Falha mantém tudo; alteração posterior ao
+   corte permanece pendente.
+7. **Backup só observa.** Histórico concluído, templates, PRs e gamificação não são alterados,
+   recalculados nem premiados pela serialização — há teste comparando o antes e o depois.
+8. **Nada automático.** Sem `WorkManager`, sem agendador, sem retry automático, sem backup ao abrir
+   o app, ao entrar na conta ou ao concluir treino.
+9. **Sem mídia e sem segredo.** `content://`, `file://`, Base64 de binário, token, credencial e
+   payload de Outbox não entram no snapshot.
+10. **Retenção não pode custar o backup novo.** O snapshot é gravado e confirmado **antes** de
+    qualquer limpeza; uma limpeza que falhe deixa backup a mais, nunca a menos.
+
+#### Pendência registrada
+
+`EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES` entram no snapshot completo e **não**
+produzem entrada de Outbox. Enquanto só existir backup completo isso é consistente: todo "Fazer
+backup agora" recaptura os três. Quando a T16.6 trouxer push incremental, eles precisam ganhar
+mutação própria — senão uma alteração neles deixaria de ser propagada.
 
 ### Conta opcional e identidade (T16.1)
 

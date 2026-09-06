@@ -135,11 +135,27 @@ O que a T16.1 **não** fez, deliberadamente: nenhum dado pessoal é enviado ou b
 não tocam em Room ou DataStore, trocar de conta não reassocia nada, e não existe tabela de usuários
 no servidor.
 
+### IMPLEMENTADO EM T16.4
+
+- **Adoção explícita** do conjunto de dados local por uma Conta Spark: `cloud_data_binding` no Room
+  (`version = 32`). Login, sozinho, continua não adotando nada; trocar de conta não transfere.
+- **Snapshot completo e autocontido** do estado pessoal, com registry fechado de nove agregados,
+  identidades portáteis e `entitySchemaVersion` por agregado.
+- **Tentativa durável e imutável** (`backup_attempts`): `clientBackupId` estável, payload congelado,
+  corte da Outbox capturado na mesma transação.
+- **`POST /v1/backups`** e **`GET /v1/backups/latest`**, com ownership derivado do token, validação
+  integral antes de qualquer escrita, transação única para snapshot + itens, idempotência por
+  `(ownerUid, clientBackupId)`, tetos de tamanho e retenção configurável.
+- **Contrato compartilhado** em `contracts/backup/v1/`: README, JSON de fixtures e a forma canônica
+  cujo SHA-256 os dois lados reproduzem — com teste em Kotlin e em TypeScript fixando os mesmos
+  hashes.
+
+O que a T16.4 **não** fez, deliberadamente: restore, download do conteúdo do backup, sync
+incremental, pull, convergência multi-device, conflito, tombstone remoto, backup automático em
+background e backup off-site da VPS.
+
 ### PLANEJADO — ainda **não** existe
 
-- **T16.2** — Migração do Coach IA para o Spark Backend (proxy do Gemini).
-- **T16.3** — Identidade global dos dados + Outbox no Android.
-- **T16.4** — Backup estruturado.
 - **T16.5** — Restore seguro.
 - **T16.6** — Sync incremental multi-device.
 - **T16.7** — Conflitos, deletes e consistência offline.
@@ -148,6 +164,22 @@ no servidor.
 
 Nada acima está implementado. Não existe endpoint de sync, backup ou IA no backend hoje — sob
 `/v1` existe apenas `auth`, e há teste que garante isso.
+
+## Backup dos dados do usuário ≠ backup do servidor
+
+Duas coisas diferentes, e confundi-las daria uma falsa sensação de segurança:
+
+```text
+T16.4  protege contra perder o APARELHO
+       o dado do usuário está no Spark Backend
+
+T16.8  protege contra perder a VPS
+       o SQLite do servidor está em outro lugar        ← NÃO EXISTE
+```
+
+Hoje, um `docker compose down -v` na VPS destrói os backups de todo mundo. Isso é uma pendência
+registrada da fase de hardening, não um detalhe operacional esquecido — e a UI do app não promete
+o contrário.
 
 ## Coach IA — migração prevista, não executada
 

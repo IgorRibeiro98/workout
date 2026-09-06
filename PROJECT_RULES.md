@@ -289,13 +289,53 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
   que não muda estado não registra nada.
 - **Login não liga a nuvem.** O padrão é `CloudSyncScope.Disabled`, e nesse estado nenhuma entrada
   é produzida. Entrar, sair e trocar de conta não regeneram `syncId`, não dão dono a dado local e
-  não criam mutação. A adoção é explícita e é da T16.4.
-- **Nada consome a Outbox.** Não introduza `WorkManager`, HTTP, polling, retry ou worker de sync.
-- **Migrations.** Room é `version = 31` com schema exportado versionado em `app/schemas`. Toda
-  mudança de schema precisa de migration explícita e teste com banco da versão anterior;
-  `fallbackToDestructiveMigration` é proibido.
+  não criam mutação. A adoção é explícita, aconteceu na T16.4 e mora em `cloud_data_binding`
+  (Room) — ver §13.2.
+- **Nada consome a Outbox como fila de envio.** O backup da T16.4 a usa apenas para marcar o que
+  um snapshot completo já cobriu, **depois** da confirmação do servidor. Não introduza
+  `WorkManager`, polling, retry automático ou worker de sync.
+- **Migrations.** Room é `version = 32` (era 31 na T16.3) com schema exportado versionado em
+  `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da versão
+  anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
   abreviado).
+
+## 13.2 Backup estruturado (T16.4)
+
+O Spark envia um **snapshot completo** do estado pessoal ao Spark Backend. Ele **não** sincroniza,
+não baixa e não restaura. As regras abaixo são o que impede o backup de virar sync por acidente —
+ou de virar perda de dado.
+
+- **Login não adota.** Entrar na conta não associa nada. A adoção exige toque em "Ativar backup"
+  **mais** confirmação explícita, e é ela que grava `cloud_data_binding`. Nenhum outro caminho pode
+  criar vínculo — nem `LaunchedEffect`, nem listener de login, nem abertura de tela.
+- **O escopo é o vínculo, não o `FirebaseUser` atual.** Depois da adoção, mutações e backups usam
+  `CloudDataBinding.ownerUid`. Sair da conta não remove o vínculo; entrar com outra conta não o
+  transfere — produz descompasso, que bloqueia **só** a nuvem. Treino, execução e histórico
+  continuam.
+- **O dono sai do token.** O contrato de backup não tem `ownerUid`. Não adicione um "para validar".
+- **A tentativa é imutável.** `clientBackupId` + payload congelado nascem juntos, em transação, e
+  um retry manda os mesmos bytes. Precisar de estado mais novo é **outra** tentativa.
+- **A Outbox só é liberada depois da confirmação do servidor**, e só até `coveredOutboxSequence`.
+  Alteração feita durante o upload permanece pendente. Limpar antes é perda de dado sem conserto.
+- **Backup só lê.** Nada de corrigir PR, recalcular XP, normalizar sessão ou salvar template no
+  caminho da serialização. Sessão concluída continua imutável.
+- **Fora do snapshot:** dado derivado (XP, conquistas, PRs, streak), catálogo e conteúdo premium,
+  preferências de aparelho, estado do timer, `deviceId`, estado da nuvem, credenciais, a Outbox e
+  **mídia local** (`content://` não é referência portátil, e Base64 não é a saída).
+- **Nada automático.** Sem `WorkManager`, agendador, polling, retry automático ou backup em
+  background. Ação explícita do usuário, uma operação — e toque repetido não vira operação nova.
+- **Versionamento.** Mudou o envelope, suba `BackupContract.SCHEMA_VERSION` **e**
+  `BACKUP_SCHEMA_VERSION` no backend. Mudou o payload de um agregado, suba a
+  `entitySchemaVersion` dele nos dois lados e atualize as fixtures em `contracts/backup/v1/`.
+- **Forma canônica.** O hash é SHA-256 sobre texto canônico com tokens escalares copiados
+  verbatim. Não "melhore" isso reserializando a partir do valor: Kotlin e TypeScript formatam
+  ponto flutuante de formas diferentes, e o hash deixaria de fechar.
+- **Logs.** `requestId`, prefixo de uid, `clientBackupId`, `itemCount`, `sizeBytes`, duração e
+  status. Nunca corpo, payload, nome de treino, nota, medida ou token.
+- **Testes.** Toda mudança no backup roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.backup.*"` e `npm test` em
+  `backend/`. As duas são offline e não dependem de Firebase, VPS ou internet.
 
 ## 14. Tests and build are part of implementation
 

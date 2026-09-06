@@ -51,8 +51,6 @@ class SettingsManager(private val context: Context) {
         // Estado da **instalação**, não do domínio. Por isso mora no DataStore e não no Room: não
         // é dado do usuário, não entra em backup e não sincroniza.
         val DEVICE_ID = stringPreferencesKey("device_id")
-        val CLOUD_SYNC_STATE = stringPreferencesKey("cloud_sync_state")
-        val CLOUD_SYNC_OWNER_UID = stringPreferencesKey("cloud_sync_owner_uid")
     }
 
     /**
@@ -73,21 +71,10 @@ class SettingsManager(private val context: Context) {
         return stored
     }
 
-    /**
-     * O estado da nuvem para este aparelho: nome de `CloudSyncScope` e, quando houver, o `uid` dono.
-     *
-     * Ausente significa desligado — é o padrão do Spark e continua sendo ao final da T16.3.
-     * **Login não escreve aqui.** Só a ativação explícita de backup (T16.4) muda este valor.
-     */
-    val cloudSyncStateFlow: Flow<String?> = context.dataStore.data.map { it[CLOUD_SYNC_STATE] }
-    val cloudSyncOwnerUidFlow: Flow<String?> = context.dataStore.data.map { it[CLOUD_SYNC_OWNER_UID] }
-
-    suspend fun setCloudSyncScope(state: String?, ownerUid: String?) {
-        context.dataStore.edit { prefs ->
-            if (state == null) prefs.remove(CLOUD_SYNC_STATE) else prefs[CLOUD_SYNC_STATE] = state
-            if (ownerUid == null) prefs.remove(CLOUD_SYNC_OWNER_UID) else prefs[CLOUD_SYNC_OWNER_UID] = ownerUid
-        }
-    }
+    // O estado da nuvem **não** mora aqui desde a T16.4. Ele é sobre o conjunto de dados, não
+    // sobre o aparelho, e vive no Room (`cloud_data_binding`) para que a adoção, a captura do
+    // snapshot, o corte da Outbox e a tentativa de backup caibam na mesma transação.
+    // Ver `com.example.data.backup.CloudDataBindingEntity`.
 
     val trackingStartedAtFlow: Flow<Long?> = context.dataStore.data.map { it[CONSISTENCY_TRACKING_STARTED_AT] }
 

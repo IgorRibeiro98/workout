@@ -128,8 +128,11 @@ class SyncIdentityOwnershipTest {
 
     @Test
     fun `o estado padrao da nuvem e desligado e ele nao deriva do login`() = runTest {
-        val settings = com.example.data.datastore.SettingsManager(context)
-        val provider = SettingsCloudSyncScopeProvider(settings)
+        // Desde a T16.4 quem responde "de quem é este banco" é o vínculo do dataset, no Room.
+        // A pergunta e a resposta são as mesmas da T16.3; o que mudou é onde o estado mora.
+        val provider = com.example.data.backup.CloudDataBindingScopeProvider(
+            database.cloudDataBindingDao()
+        )
 
         assertEquals(CloudSyncScope.Disabled, provider.current())
 
@@ -144,22 +147,54 @@ class SyncIdentityOwnershipTest {
 
     @Test
     fun `so a ativacao explicita associa o dado a uma conta`() = runTest {
-        val settings = com.example.data.datastore.SettingsManager(context)
-        val provider = SettingsCloudSyncScopeProvider(settings)
+        val dao = database.cloudDataBindingDao()
+        val provider = com.example.data.backup.CloudDataBindingScopeProvider(dao)
 
-        settings.setCloudSyncScope(CloudSyncState.PREPARING.name, "uid-A")
+        dao.insertIfAbsent(
+            com.example.data.backup.CloudDataBindingEntity(
+                ownerUid = "uid-A",
+                state = CloudSyncState.PREPARING.name,
+                boundAt = 1L,
+                deviceId = "device"
+            )
+        )
         assertEquals(CloudSyncScope.Preparing("uid-A"), provider.current())
 
-        settings.setCloudSyncScope(CloudSyncState.ENABLED.name, "uid-A")
+        dao.markBackupSucceeded(
+            ownerUid = "uid-A",
+            state = CloudSyncState.ENABLED.name,
+            backupId = "backup-1",
+            backupAt = 2L
+        )
         assertEquals(CloudSyncScope.Enabled("uid-A"), provider.current())
+    }
 
-        // Estado gravado sem dono não vira scope: preferir não registrar a registrar sem saber
-        // quem poderá enviar.
-        settings.setCloudSyncScope(CloudSyncState.ENABLED.name, null)
-        assertEquals(CloudSyncScope.Disabled, provider.current())
+    @Test
+    fun `um vinculo existente nao e sobrescrito por outra conta`() = runTest {
+        val dao = database.cloudDataBindingDao()
+        val provider = com.example.data.backup.CloudDataBindingScopeProvider(dao)
 
-        settings.setCloudSyncScope(null, null)
-        assertEquals(CloudSyncScope.Disabled, provider.current())
+        dao.insertIfAbsent(
+            com.example.data.backup.CloudDataBindingEntity(
+                ownerUid = "uid-A",
+                state = CloudSyncState.ENABLED.name,
+                boundAt = 1L,
+                deviceId = "device"
+            )
+        )
+        // A conta B tentando adotar o mesmo banco não substitui o dono: trocar de conta no
+        // aparelho não pode transferir o histórico de A para B.
+        dao.insertIfAbsent(
+            com.example.data.backup.CloudDataBindingEntity(
+                ownerUid = "uid-B",
+                state = CloudSyncState.ENABLED.name,
+                boundAt = 2L,
+                deviceId = "device"
+            )
+        )
+
+        assertEquals(CloudSyncScope.Enabled("uid-A"), provider.current())
+        assertEquals("uid-A", dao.get()?.ownerUid)
     }
 
     @Test

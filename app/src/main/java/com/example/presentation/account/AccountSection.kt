@@ -60,8 +60,9 @@ import com.example.ui.theme.TextSecondary
  * A área de Conta Spark dentro do Perfil.
  *
  * A conta é **opcional**, e o texto diz isso: nada aqui sugere que o usuário precise entrar para
- * continuar usando o Spark. Também não anuncia o que ainda não existe — backup e sincronização
- * aparecem como etapas futuras, nunca como "backup ativo" ou "sincronizado".
+ * continuar usando o Spark. Também não anuncia o que ainda não existe — desde a T16.4 o backup é
+ * real e mora na seção logo abaixo, mas sincronização entre dispositivos continua sendo etapa
+ * futura, e a tela nunca diz "sincronizado".
  */
 @Composable
 fun AccountSection(
@@ -139,8 +140,8 @@ private fun SignedOutContent(
             fontSize = 15.sp
         )
         Text(
-            text = "Uma conta vai habilitar backup e sincronização entre dispositivos " +
-                "nas próximas etapas do Spark.",
+            text = "Uma conta habilita o backup dos seus dados neste servidor. " +
+                "Sincronização entre dispositivos chega nas próximas etapas.",
             color = TextSecondary,
             fontSize = 13.sp
         )
@@ -233,8 +234,9 @@ private fun SignedInContent(
         }
     }
 
+    // O backup vive na seção logo abaixo, e é onde ele é ativado. Aqui a conta só diz o que é.
     Text(
-        text = "Backup e sincronização chegam nas próximas etapas.",
+        text = "Sincronização entre dispositivos chega nas próximas etapas.",
         color = TextSecondary,
         fontSize = 12.sp
     )

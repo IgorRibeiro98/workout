@@ -47,4 +47,8 @@ interface BodyMeasurementDao {
 
     @Query("SELECT syncId FROM body_measurements WHERE id = :id LIMIT 1")
     suspend fun getMeasurementSyncId(id: Long): String?
+
+    /** Todas as medidas pela identidade global — a enumeração do snapshot de backup (T16.4). */
+    @Query("SELECT syncId FROM body_measurements ORDER BY id ASC")
+    suspend fun getAllMeasurementSyncIds(): List<String>
 }

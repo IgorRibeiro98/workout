@@ -44,7 +44,9 @@ class MainViewModelFactory(
     /** Conta Spark (T16.1). `null` remove a área de conta do Perfil, e nada mais muda. */
     private val authGateway: com.example.domain.auth.AuthGateway? = null,
     /** Cliente do Spark Backend (T16.1). `null` quando não há endereço configurado neste build. */
-    private val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? = null
+    private val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? = null,
+    /** Backup estruturado (T16.4). `null` remove a seção de backup do Perfil, e nada mais muda. */
+    private val backupRepository: com.example.data.backup.BackupRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -151,6 +153,17 @@ class MainViewModelFactory(
             return com.example.presentation.account.AccountViewModel(
                 authGateway = gateway,
                 backendClient = sparkBackendClient
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.BackupViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val backup = backupRepository
+                ?: throw IllegalStateException("BackupRepository not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.BackupViewModel(
+                repository = backup,
+                authGateway = gateway
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {

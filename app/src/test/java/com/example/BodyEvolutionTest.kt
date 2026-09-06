@@ -64,6 +64,8 @@ class BodyEvolutionTest {
                 flow.value.find { it.syncId == syncId }
             override suspend fun getMeasurementSyncId(id: Long): String? =
                 flow.value.find { it.id == id }?.syncId
+            override suspend fun getAllMeasurementSyncIds(): List<String> =
+                flow.value.map { it.syncId }
         }
     }
 

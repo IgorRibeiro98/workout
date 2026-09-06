@@ -1,11 +1,13 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, PayloadTooLargeException, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import type { RequestWithRawBody } from '../../common/raw-body';
 import type { RequestWithId } from '../../common/request-id.middleware';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { Principal } from '../auth/principal.decorator';
 import { AiCoachService } from './ai-coach.service';
-import type { AiCoachHttpResponse } from './ai-coach.contract';
+import { AI_ERROR_CODES, type AiCoachHttpResponse } from './ai-coach.contract';
+import { MAX_AI_REQUEST_BODY_BYTES } from './ai-coach.limits';
 
 /**
  * `POST /v1/ai/coach` — a nova fronteira online do Coach IA.
@@ -38,6 +40,19 @@ export class AiCoachController {
     @Body() body: unknown,
   ): Promise<AiCoachHttpResponse> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
+
+    // O teto de corpo do Coach é dele, e é bem menor que o global — que desde a T16.4 precisa
+    // caber um snapshot de backup inteiro. Um contexto do Coach com todos os tetos internos
+    // preenchidos não chega perto de 128 KB, então um corpo acima disso é recusado aqui, antes de
+    // virar trabalho e antes de qualquer coisa custar dinheiro.
+    const rawBody = (request as RequestWithRawBody).rawBody;
+    if (rawBody !== undefined && Buffer.byteLength(rawBody, 'utf8') > MAX_AI_REQUEST_BODY_BYTES) {
+      throw new PayloadTooLargeException({
+        code: AI_ERROR_CODES.INVALID_AI_REQUEST,
+        message: 'corpo da requisição acima do teto do Coach',
+      });
+    }
+
     return this.service.handle(principal, requestId, body);
   }
 }

@@ -96,6 +96,36 @@ class SparkBackendClient(
             }
         }
 
+    /**
+     * `GET` autenticado, devolvendo status e corpo crus.
+     *
+     * Existe pelo mesmo motivo que [postJson]: o backup (T16.4) precisa **distinguir** 404 (não há
+     * backup ainda, que é um estado normal e não um erro) de 401 e de 5xx, e [SparkBackendResult]
+     * colapsa isso de propósito.
+     *
+     * Continua sendo um cliente, um interceptor, um lugar montando `Authorization: Bearer`.
+     */
+    suspend fun getJson(path: String): SparkHttpOutcome = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
+
+        val url = "${baseUrl.trimEnd('/')}/$path"
+        val request = Request.Builder().url(url).get().build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                SparkHttpOutcome.Response(
+                    code = response.code,
+                    body = response.body?.string().orEmpty()
+                )
+            }
+        } catch (e: MissingAuthTokenException) {
+            SparkHttpOutcome.SignedOut
+        } catch (e: IOException) {
+            Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+            SparkHttpOutcome.NetworkFailure
+        }
+    }
+
     private suspend fun <T> get(
         path: String,
         parse: (String) -> T?

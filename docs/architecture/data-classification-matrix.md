@@ -1,10 +1,47 @@
 # Matriz de dados do Spark — classificação para sincronização
 
-- **Tarefa:** T16.0 (classificação) — **revisada contra o código na T16.3**
-- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 31` desde a
-  T16.3) e `SettingsManager` (DataStore), relidos em 2026-09-06.
-- **Status:** a coluna `syncId` **está implementada** para as raízes de agregado do Grupo A. A
-  Outbox existe e é transacional. Nada é enviado, baixado ou associado a uma conta.
+- **Tarefa:** T16.0 (classificação) — revisada contra o código na T16.3 e **na T16.4**
+- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 32` desde a
+  T16.4) e `SettingsManager` (DataStore), relidos em 2026-09-06.
+- **Status:** a coluna `syncId` **está implementada** para as raízes de agregado do Grupo A, a
+  Outbox existe e é transacional, e desde a **T16.4** o Grupo A **sobe** para o Spark Backend como
+  snapshot completo, depois de adoção explícita. Nada é **baixado**: restore é T16.5.
+
+## Matriz de backup (T16.4)
+
+A coluna que faltava. Para cada dado, uma de quatro decisões — e a decisão é esta tabela, não o
+código do montador de snapshot.
+
+| Dado / agregado | Backup? | Motivo | ID portátil | Schema version | Estratégia de restore (T16.5) |
+| --- | --- | --- | --- | --- | --- |
+| `workout_programs` | **BACKUP** | criado pelo usuário, insuperável se perdido | `syncId` (UUID) | `entitySchemaVersion` 1 | recriar por `syncId` |
+| `workout_templates` (+ `workout_template_exercises`) | **BACKUP** | idem; filhos viajam no snapshot da raiz | `syncId` da raiz | 1 | recriar o agregado inteiro |
+| `workout_sessions` `COMPLETED` (+ `exercise_sessions`, `set_logs`) | **BACKUP** | histórico do que aconteceu | `syncId` da raiz | 1 | inserir se ausente; divergência = conflito de integridade, nunca sobrescrita |
+| `workout_sessions` `PLANNED` | **DERIVED** | derivável do template e da agenda | — | — | recalcular |
+| `workout_sessions` `IN_PROGRESS` / `PAUSED` | **LOCAL_ONLY** | execução **neste** aparelho; sincronizar faria dois aparelhos disputarem o mesmo cursor | — | — | não restaura |
+| `workout_sessions` `CANCELLED` | **LOCAL_ONLY** (T16.4) | decisão adiada para a T16.6 pela própria matriz | — | — | decisão pendente |
+| `exercises` com `isUserCreated = 1` | **BACKUP** | criado pelo usuário | `syncId` (UUID) | 1 | recriar por `syncId` |
+| `exercises` de catálogo | **LOCAL_ONLY** | conteúdo do app, vem do manifesto versionado | `canonicalId` (já global) | — | reinstalar pelo manifesto |
+| `exercise_user_overrides` | **BACKUP** (sem `customPhotoUri`) | customização pessoal | identidade **do exercício alvo**: `canonical:<id>` ou `custom:<uuid>` | 1 | aplicar sobre o exercício resolvido |
+| `body_measurements` | **BACKUP** | dado pessoal insubstituível | `syncId` (UUID) | 1 | inserir por `syncId` |
+| `check_ins` | **BACKUP** | dado pessoal | `syncId` (UUID) | 1 | inserir por `syncId` |
+| `weekly_goal_history` | **BACKUP** | histórico de meta do atleta | `week:<epochDay>` (PK natural, já global) | 1 | inserir por semana |
+| Preferências do atleta (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | **BACKUP** | descrevem a pessoa, não o aparelho | `preferences` (singleton) | 1 | aplicar no DataStore |
+| Preferências do aparelho (tema, som, vibração, tela ligada, notificação de timer, GIFs) | **LOCAL_ONLY** | dependem da tela, do hardware e do contexto de uso | — | — | não restaura |
+| Estado do timer de descanso | **LOCAL_ONLY** | estado transitório de execução; restaurar dispararia timer em outro aparelho | — | — | não restaura |
+| `gamification_events`, `xp_transactions`, `achievement_unlocks`, `personal_records`, nível/XP/streak | **DERIVED** | reconstruíveis do histórico pelas regras que já existem | — | — | **recalcular** a partir do histórico restaurado |
+| `exercise_alternatives` e catálogo premium | **LOCAL_ONLY** | conteúdo do app, do manifesto | — | — | reinstalar pelo manifesto |
+| Fotos personalizadas (`customPhotoUri` em `exercises` e `exercise_user_overrides`) | **LOCAL_ONLY** | é `content://` deste aparelho; sem object storage na T16.4, e Base64 no snapshot seria contornar a decisão | — | — | permanece local — a UI avisa |
+| Chave da ExerciseDB | **LOCAL_ONLY** | credencial | — | — | não restaura |
+| `deviceId`, estado da nuvem, versões de conteúdo instaladas | **LOCAL_ONLY** | identidade/estado da instalação | — | — | não restaura |
+| `sync_outbox`, `backup_attempts`, `cloud_data_binding` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura |
+| Firebase ID Token, credencial Google, App Check, credencial/prompt/contexto/resposta do Gemini | **nunca** | segredo ou estado transitório | — | — | — |
+| Vínculo `uid` ↔ dataset no servidor, sequência/cursor de mudanças, registro de `clientMutationId`, tombstones, quota de IA | **FUTURE_SERVER_ONLY** | só faz sentido com identidade autenticada | — | — | — |
+
+**Três agregados entram no backup e ainda não produzem mutação incremental** —
+`EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES`. O snapshot completo os cobre, e a T16.6
+precisa lhes dar mutação própria quando o push incremental existir. Está registrado como pendência
+em `ARCHITECTURE.md`.
 
 ## Correções feitas na T16.3 contra o código real
 
@@ -130,9 +167,10 @@ das cinco linhas abaixo recebeu identidade global.
 partir do histórico restaurado, não copiada. É mais lento e é o comportamento correto: o XP passa a
 ser sempre consistente com a política vigente, e não um número herdado que ninguém consegue auditar.
 
-**Revisão prevista para a T16.4:** se a recomputação em massa se mostrar cara no restore, a saída é
-um *snapshot* de conveniência explicitamente marcado como cache — nunca promover estes dados a
-autoridade remota.
+**Revisão feita na T16.4:** os cinco continuam **fora** do backup. Há teste que varre o payload
+real procurando por PR, XP, conquista e streak. Se a recomputação em massa se mostrar cara no
+restore (T16.5), a saída continua sendo um *snapshot* de conveniência explicitamente marcado como
+cache — nunca promover estes dados a autoridade remota.
 
 ---
 
@@ -150,9 +188,10 @@ seria ativamente ruim (o timer de descanso de um aparelho não deve tocar em out
 | Cache e estado de importação | DataStore (`INSTALLED_CATALOG_CONTENT_VERSION`, `INSTALLED_PREMIUM_CONTENT_VERSION`, `LAST_MEDIA_SYNC_AT`, `MEDIA_SYNC_CONTENT_VERSION`, `LAST_SYNC_STATUS`) | `SettingsManager` | Descreve o estado local de instalação de conteúdo. |
 | Chave de API do ExerciseDB | DataStore (`EXERCISE_DB_V2_API_KEY`) | `SettingsManager` | **Credencial.** Não sai do aparelho, não vai para backup, não vai para o servidor. |
 | Token de depuração do App Check | não persistido — provedor escolhido por variante em `AiCoachAppCheck` (`src/debug`) | build variant | Nunca sai de debug, nunca entra em release, nunca é versionado. |
-| Preferências de treino candidatas a sync futuro | DataStore (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | `SettingsManager` | Hoje local. **Candidatas** a sync em T16.4 (backup), porque descrevem a preferência do atleta e não do aparelho. Decisão adiada de propósito — e nada foi movido de DataStore para Room só para poder sincronizar: a T16.4 terá um snapshot próprio de preferências. |
+| Preferências de treino do atleta | DataStore (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | `SettingsManager` | **Entram no backup desde a T16.4**, como previsto: elas descrevem a preferência do atleta, não do aparelho. Nada foi movido de DataStore para Room para isso — o snapshot tem DTO próprio (`UserPreferencesBackupDto`). Continuam **fora** do sync incremental, que não existe. |
 | `deviceId` | DataStore (`DEVICE_ID`) — **T16.3** | `DeviceIdProvider` | Identidade da **instalação**, não do usuário. Reinstalar gera outro, e isso é correto. Não vai para backup: o que identifica dado é `syncId`. |
-| Estado da nuvem | DataStore (`CLOUD_SYNC_STATE`, `CLOUD_SYNC_OWNER_UID`) — **T16.3** | `SettingsCloudSyncScopeProvider` | Diz se **este aparelho** já teve backup ativado e para qual conta. Ausente = desligado, que é o padrão. Login não escreve aqui. |
+| Estado da nuvem | Room, tabela `cloud_data_binding` — **T16.4** (era DataStore na T16.3, e nunca foi gravado lá) | `CloudDataBindingScopeProvider` | Diz a que Conta Spark este **conjunto de dados** pertence. Ausente = sem dono, que é o padrão. Login não escreve aqui; só a adoção explícita. Mudou de lugar para que adoção, captura do snapshot, corte da Outbox e criação da tentativa caibam na mesma transação. |
+| Tentativa de backup | Room, tabela `backup_attempts` — **T16.4** | `BackupRepository` | O snapshot congelado de uma tentativa em andamento. Mecanismo interno: não é dado do usuário, não entra em backup e some quando a tentativa é confirmada. |
 
 ---
 
@@ -171,8 +210,14 @@ autenticada e visão entre usuários.
 | Rate limit e controle de uso da IA | server-only | T16.2 |
 | Amizades, convites, desafios | server-only | T17 |
 
-Nenhum destes está implementado. O schema atual do backend tem exatamente uma tabela
-(`server_metadata`, estado técnico do servidor) e nenhuma tabela de domínio do Spark.
+Destes, a T16.4 implementou o **vínculo `uid` ↔ dados**, na forma de snapshots pertencentes a um
+`ownerUid`: `backup_snapshots` e `backup_items`. Sequência de mudanças, cursor, registro de
+`clientMutationId`, tombstones e social continuam sem existir.
+
+O schema do backend tem hoje quatro tabelas: `server_metadata` (estado técnico), `ai_usage_daily`
+(proteção de custo do Coach) e as duas de backup. Nenhuma delas é uma tabela de domínio do Spark —
+o servidor guarda o snapshot como payload, e **não** desmonta treino em colunas consultáveis. Ele
+não é uma segunda autoridade operacional.
 
 ---
 

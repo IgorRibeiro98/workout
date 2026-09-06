@@ -77,6 +77,16 @@ class MainApplication : Application(), ImageLoaderFactory {
 
     lateinit var syncAggregateSnapshotBuilder: com.example.data.sync.SyncAggregateSnapshotBuilder
         internal set
+
+    /**
+     * Backup estruturado (T16.4).
+     *
+     * Nada aqui dispara sozinho. Criar o repositório não vincula dado, não captura snapshot e não
+     * abre conexão: a única coisa que produz um backup é o usuário tocar no botão do Perfil, e a
+     * adoção do conjunto de dados por uma Conta Spark exige confirmação explícita antes disso.
+     */
+    lateinit var backupRepository: com.example.data.backup.BackupRepository
+        internal set
         
     lateinit var workoutEngine: WorkoutEngine
         internal set
@@ -236,12 +246,40 @@ class MainApplication : Application(), ImageLoaderFactory {
         syncMutationCoordinator = com.example.data.sync.SyncMutationCoordinator(
             transactions = com.example.data.sync.RoomTransactionRunner(database),
             outboxDao = database.syncOutboxDao(),
-            scopeProvider = com.example.data.sync.SettingsCloudSyncScopeProvider(settingsManager)
+            scopeProvider = com.example.data.backup.CloudDataBindingScopeProvider(
+                database.cloudDataBindingDao()
+            )
         )
         deviceIdProvider = com.example.data.sync.DeviceIdProvider(settingsManager)
         syncAggregateSnapshotBuilder = com.example.data.sync.SyncAggregateSnapshotBuilder(
             workoutDao = database.workoutDao(),
             bodyMeasurementDao = database.bodyMeasurementDao()
+        )
+
+        // Backup estruturado (T16.4) — Android → snapshot completo → Spark Backend → SQLite.
+        //
+        // O montador de agregados é o **mesmo** da T16.3: não existe um segundo serializador de
+        // treino no Spark. O que a T16.4 acrescenta é o envelope, a identidade da tentativa, o
+        // corte da Outbox e o transporte.
+        backupRepository = com.example.data.backup.BackupRepository(
+            bindingDao = database.cloudDataBindingDao(),
+            attemptDao = database.backupAttemptDao(),
+            outboxDao = database.syncOutboxDao(),
+            snapshotBuilder = com.example.data.backup.BackupSnapshotBuilder(
+                workoutDao = database.workoutDao(),
+                bodyMeasurementDao = database.bodyMeasurementDao(),
+                weeklyGoalDao = database.weeklyGoalDao(),
+                aggregates = syncAggregateSnapshotBuilder
+            ),
+            api = com.example.data.backup.SparkBackupApi(sparkBackendClient),
+            settingsManager = settingsManager,
+            deviceIdProvider = deviceIdProvider,
+            transactions = com.example.data.sync.RoomTransactionRunner(database),
+            source = com.example.data.backup.BackupSourceDto(
+                appVersionName = BuildConfig.VERSION_NAME,
+                appVersionCode = BuildConfig.VERSION_CODE,
+                databaseVersion = com.example.data.local.AppDatabase.SCHEMA_VERSION
+            )
         )
 
         repository = WorkoutRepository(

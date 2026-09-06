@@ -5,7 +5,8 @@ import { AllExceptionsFilter } from '../common/all-exceptions.filter';
 import { SparkLogger } from '../common/logger';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { SqliteService } from '../database/sqlite.service';
-import { MAX_AI_REQUEST_BODY_BYTES } from '../modules/ai/ai-coach.limits';
+import { MAX_BACKUP_REQUEST_BODY_BYTES } from '../modules/backup/backup.limits';
+import type { RequestWithRawBody } from '../common/raw-body';
 
 export interface CreatedApp {
   readonly app: INestApplication;
@@ -42,12 +43,30 @@ export function configureApp(app: INestApplication, config: AppConfig): CreatedA
   app.getHttpAdapter().getInstance().disable('x-powered-by');
 
   // Teto de corpo declarado, e não herdado do default do Express: o backend não pode supor que só
-  // o APK oficial faz requisições (T16.2 §46). Um contexto do Coach com todos os tetos internos
-  // preenchidos não chega perto disso.
+  // o APK oficial faz requisições (T16.2 §46).
+  //
+  // O teto global é o do **backup**, que é a maior coisa que o Spark envia — um snapshot completo
+  // do estado pessoal. O Coach continua com o teto dele, bem menor, aplicado no próprio módulo:
+  // um teto global apertado o bastante para o Coach recusaria backups legítimos, e um teto único
+  // largo deixaria o Coach aceitar payload que ele não tem por que aceitar.
+  //
+  // `verify` guarda o corpo cru para o hash canônico do backup (T16.4). Ele nunca vai para log:
+  // o `SparkLogger` redige `req.body`/`body` e nenhum ponto do código registra `rawBody`.
   const withBodyParser = app as INestApplication & {
-    useBodyParser?: (parser: 'json', options: { limit: number }) => unknown;
+    useBodyParser?: (
+      parser: 'json',
+      options: {
+        limit: number;
+        verify?: (req: unknown, res: unknown, buf: Buffer, encoding: string) => void;
+      },
+    ) => unknown;
   };
-  withBodyParser.useBodyParser?.('json', { limit: MAX_AI_REQUEST_BODY_BYTES });
+  withBodyParser.useBodyParser?.('json', {
+    limit: MAX_BACKUP_REQUEST_BODY_BYTES,
+    verify: (req, _res, buf) => {
+      (req as RequestWithRawBody).rawBody = buf.toString('utf8');
+    },
+  });
 
   // Toda API de produto nasce sob `/v1`: um `@Controller('sync')` futuro responde em `/v1/sync`
   // sem que ninguém precise lembrar de escrever o prefixo. Health é VERSION_NEUTRAL.

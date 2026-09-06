@@ -94,6 +94,19 @@ export const envSchema = z.object({
    * duplo, corrida e resultado fora de ordem.
    */
   AI_MAX_CONCURRENT_REQUESTS_PER_USER: z.coerce.number().int().min(1).max(8).default(1),
+
+  /**
+   * Quantos snapshots de backup guardar **por conta** (T16.4).
+   *
+   * Cinco, e o número tem razão: um backup do Spark é um snapshot completo, então cada um já
+   * basta sozinho para restaurar. Guardar vários não é redundância de armazenamento, é janela de
+   * arrependimento — recuperar um estado anterior a uma exclusão acidental que só foi percebida
+   * dois backups depois. Cinco cobre essa janela com um custo de disco irrelevante para o público
+   * do projeto (ADR-0001) e não deixa o banco crescer sem limite.
+   *
+   * Central de propósito: nenhum outro ponto do código escolhe esse valor.
+   */
+  BACKUP_RETENTION_COUNT: z.coerce.number().int().min(1).max(100).default(5),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

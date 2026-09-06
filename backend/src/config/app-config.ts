@@ -102,6 +102,13 @@ export class AppConfig {
   get aiMaxConcurrentRequestsPerUser(): number {
     return this.env.AI_MAX_CONCURRENT_REQUESTS_PER_USER;
   }
+
+  // --- Backup (T16.4) -------------------------------------------------------------------
+
+  /** Quantos snapshots guardar por conta antes de a retenção remover os mais antigos. */
+  get backupRetentionCount(): number {
+    return this.env.BACKUP_RETENTION_COUNT;
+  }
 }
 
 export const APP_CONFIG = Symbol('APP_CONFIG');

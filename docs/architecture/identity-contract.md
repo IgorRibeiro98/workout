@@ -8,8 +8,11 @@
   - **implementado na T16.3:** a identidade dos **dados**. `syncId` nas raízes de agregado
     pessoais (Room `version = 31`), `deviceId` no DataStore e `clientMutationId` por mutação na
     Outbox;
-  - **não implementado:** `ownerUid` persistido. Não existe tabela de ownership no servidor,
-    nenhum dado local tem dono, e nada sobe ou desce.
+  - **implementado na T16.4:** o `ownerUid` persistido. O conjunto de dados local ganha dono por
+    adoção explícita (`cloud_data_binding`, Room `version = 32`), e o servidor guarda snapshots
+    sob o `uid` do token verificado (`backup_snapshots`);
+  - **não implementado:** qualquer caminho de volta. Nada **desce** do servidor: restore é T16.5,
+    sync incremental é T16.6.
 
 ---
 
@@ -22,9 +25,25 @@ Firebase UID          → quem é o usuário          (conta online)
 deviceId              → qual instalação do app    (aparelho)
 syncId                → qual entidade             (dado pessoal, global)
 clientMutationId      → qual alteração            (uma tentativa de mutação)
+clientBackupId        → qual tentativa de backup  (T16.4)
 localId               → qual linha no Room        (só dentro deste aparelho)
 canonicalExerciseId   → qual exercício de catálogo (conteúdo versionado)
 ```
+
+### `clientBackupId` — identidade de uma tentativa de backup (T16.4)
+
+UUID por tentativa lógica, gerado no aparelho e **estável entre reenvios**. Não é `syncId` (que é
+"qual entidade") nem `clientMutationId` (que é "qual alteração"): é "qual tentativa de proteger o
+estado inteiro".
+
+Com o `ownerUid`, é a chave de idempotência do servidor: mesma dupla + mesmo conteúdo devolve o
+backup que já existe; mesma dupla + conteúdo diferente é `409`. É isso que faz uma resposta perdida
+ser resolvida por reenvio em vez de virar dois backups.
+
+Alguns agregados do backup não têm UUID e usam a identidade portátil que já lhes pertence:
+`canonical:<canonicalId>` ou `custom:<syncId>` para a customização de exercício,
+`week:<epochDay>` para a meta semanal, e `preferences` para as preferências do atleta. Nenhuma
+delas é um `localId` disfarçado — ver [a matriz](./data-classification-matrix.md#matriz-de-backup-t164).
 
 ### `localId` — identidade dentro do aparelho
 
@@ -159,14 +178,17 @@ Se o corpo da requisição trouxer um `ownerUid`, ele é **ignorado**, não vali
 `ownerUid` "conferindo se bate com o token" já seria um caminho a mais para errar. O único `uid` que
 existe no servidor é o que veio do token.
 
-Consequências, a partir da T16.4 (quando existir dado pessoal remoto):
+Consequências, **valendo desde a T16.4**, quando passou a existir dado pessoal remoto:
 
-- toda leitura é filtrada por `ownerUid` do principal;
+- toda leitura é filtrada por `ownerUid` do principal — `GET /v1/backups/latest` não tem parâmetro
+  de usuário, e não há como pedir o backup de outra conta;
 - toda escrita grava o `ownerUid` do principal;
-- uma requisição sem token válido não acessa dado pessoal nenhum.
+- uma requisição sem token válido não acessa dado pessoal nenhum;
+- o contrato de backup **não tem** campo `ownerUid`. Um campo desconhecido no corpo é recusado, e
+  não ignorado — não existir é melhor do que existir e ser ignorado.
 
-Na T16.1 a última regra já vale de forma trivial: `/v1/auth/me` é a única rota sob `/v1`, exige
-token e devolve apenas o `uid` derivado dele.
+Há teste que tenta as três portas dos fundos: `ownerUid` no corpo, `uid` na query string e token de
+outra conta.
 
 ### Adoção explícita — o contrato `LOCAL_UNOWNED` (T16.3)
 
@@ -175,17 +197,26 @@ dono remoto**. Isso é representado no código por `CloudSyncScope.Disabled`, qu
 nada foi gravado — ou seja, sempre, até a T16.4.
 
 ```text
-T16.3 (hoje)                              T16.4 (adoção explícita)
+padrão (todo aparelho nasce assim)        T16.4 — adoção explícita, implementada
 CloudSyncScope.Disabled                   usuário autenticado
-dado local = LOCAL_UNOWNED                      ↓ ativa backup
-Outbox não registra nada                  Spark mostra o que será associado
+dado local = LOCAL_UNOWNED                      ↓ toca "Ativar backup"
+Outbox não registra nada                  Spark mostra QUANTO será associado
 login não muda nada                             ↓ confirma
-                                          Preparing(uid) → snapshot inicial sobe
-                                                ↓
+                                          Preparing(uid) → snapshot completo sobe
+                                                ↓ o servidor confirma
                                           Enabled(uid) → ownership remoto estabelecido
                                                 ↓
                                           Outbox passa a registrar no escopo daquela conta
 ```
+
+**Onde esse estado mora, desde a T16.4:** no Room, em `cloud_data_binding` — uma linha, um dono.
+Na T16.3 ele era uma preferência do DataStore, e nunca chegou a ser gravado lá porque a adoção não
+existia. Ele mudou de lugar para que estabelecer o vínculo, capturar o snapshot, ler o corte da
+Outbox e criar a tentativa de backup caibam na **mesma transação**.
+
+**O vínculo é do conjunto de dados, e é persistente.** Sair da conta não o remove, reiniciar não o
+remove, e entrar com outra conta não o transfere: o resultado é um descompasso em que só os
+recursos de nuvem ficam indisponíveis.
 
 Consequências que valem hoje e são cobertas por teste:
 
@@ -263,6 +294,7 @@ precisar reconciliar nada.
 | `deviceId` | T16.0 | **T16.3 — feito** |
 | `clientMutationId` | T16.0 | **T16.3 — feito** |
 | Contrato `LOCAL_UNOWNED` / adoção explícita | T16.0 | **T16.3 — feito (contrato)** |
-| `ownerUid` gravado em dado pessoal remoto | T16.0 | T16.4 |
-| Adoção real (primeiro backup) | T16.0 | T16.4 |
+| `ownerUid` gravado em dado pessoal remoto | T16.0 | **T16.4 — feito** |
+| Adoção real (primeiro backup) | T16.0 | **T16.4 — feito** |
+| `clientBackupId` (identidade de uma tentativa de backup) | T16.4 | **T16.4 — feito** |
 | Registro de dispositivos no servidor | T16.0 | T16.6 |

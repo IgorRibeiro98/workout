@@ -491,6 +491,36 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM check_ins WHERE syncId = :syncId LIMIT 1")
     suspend fun getCheckInBySyncId(syncId: String): CheckInEntity?
+
+    // ---- Enumeração por identidade global, para o snapshot de backup (T16.4) ----------------
+    //
+    // O backup percorre o dataset **pela identidade global**, e não por `localId`: o que ele
+    // envia é `syncId`, e listar por ele deixa isso explícito no lugar onde é fácil errar.
+
+    @Query("SELECT syncId FROM workout_programs ORDER BY id ASC")
+    suspend fun getAllProgramSyncIds(): List<String>
+
+    @Query("SELECT syncId FROM workout_templates ORDER BY id ASC")
+    suspend fun getAllTemplateSyncIds(): List<String>
+
+    /**
+     * Só sessões concluídas.
+     *
+     * `IN_PROGRESS`/`PAUSED` são execução **deste** aparelho, `PLANNED` é derivável do template e
+     * da agenda, e `CANCELLED` teve a decisão adiada para a T16.6 pela matriz de dados. Backup de
+     * histórico é backup do que aconteceu.
+     */
+    @Query("SELECT syncId FROM workout_sessions WHERE status = 'COMPLETED' ORDER BY id ASC")
+    suspend fun getCompletedSessionSyncIds(): List<String>
+
+    /** Exercícios criados pelo usuário. O catálogo canônico não entra: ele vem do manifesto. */
+    @Query(
+        "SELECT syncId FROM exercises WHERE isUserCreated = 1 AND syncId IS NOT NULL ORDER BY id ASC"
+    )
+    suspend fun getCustomExerciseSyncIds(): List<String>
+
+    @Query("SELECT syncId FROM check_ins ORDER BY id ASC")
+    suspend fun getAllCheckInSyncIds(): List<String>
 }
 
 data class TemplateExerciseWithDetails(

@@ -49,11 +49,15 @@ fun ProfileScreen(
     onNavigateToMissions: () -> Unit,
     onNavigateToAiCoach: () -> Unit,
     /** Conta Spark (T16.1). `null` quando a identidade online não existe neste build. */
-    accountViewModel: com.example.presentation.account.AccountViewModel? = null
+    accountViewModel: com.example.presentation.account.AccountViewModel? = null,
+    /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
+    backupViewModel: com.example.presentation.account.BackupViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
     val accountState = accountViewModel?.uiState?.collectAsState()?.value
+    // Observar o estado é leitura: ele diz o que mostrar, e nenhum backup começa por isso.
+    val backupState = backupViewModel?.uiState?.collectAsState()?.value
 
     ProfileScreenContent(
         uiState = uiState,
@@ -71,7 +75,12 @@ fun ProfileScreen(
         onAccountSignIn = { host -> accountViewModel?.signIn(host) },
         onAccountSignOut = { accountViewModel?.signOut() },
         canVerifyWithBackend = accountViewModel?.canVerifyWithBackend == true,
-        onVerifyWithBackend = { accountViewModel?.verifyWithBackend() }
+        onVerifyWithBackend = { accountViewModel?.verifyWithBackend() },
+        backupState = backupState,
+        onActivateBackup = { backupViewModel?.startAdoption() },
+        onConfirmBackupAdoption = { backupViewModel?.confirmAdoption() },
+        onCancelBackupAdoption = { backupViewModel?.cancelAdoption() },
+        onBackupNow = { backupViewModel?.backupNow() }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -99,7 +108,13 @@ private fun ProfileScreenContent(
     onAccountSignIn: (android.content.Context) -> Unit = {},
     onAccountSignOut: () -> Unit = {},
     canVerifyWithBackend: Boolean = false,
-    onVerifyWithBackend: () -> Unit = {}
+    onVerifyWithBackend: () -> Unit = {},
+    /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
+    backupState: com.example.presentation.account.BackupUiState? = null,
+    onActivateBackup: () -> Unit = {},
+    onConfirmBackupAdoption: () -> Unit = {},
+    onCancelBackupAdoption: () -> Unit = {},
+    onBackupNow: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -193,6 +208,18 @@ private fun ProfileScreenContent(
                     onSignOut = onAccountSignOut,
                     canVerifyWithBackend = canVerifyWithBackend,
                     onVerifyWithBackend = onVerifyWithBackend
+                )
+            }
+
+            // O backup mora logo abaixo da conta, porque depende dela — e porque ativar backup é
+            // uma decisão sobre os dados, não sobre a identidade.
+            if (backupState != null) {
+                com.example.presentation.account.BackupSection(
+                    uiState = backupState,
+                    onActivate = onActivateBackup,
+                    onConfirmAdoption = onConfirmBackupAdoption,
+                    onCancelAdoption = onCancelBackupAdoption,
+                    onBackupNow = onBackupNow
                 )
             }
 
