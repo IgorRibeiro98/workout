@@ -494,3 +494,78 @@ Be especially cautious around:
 - Compose drag ghost coordinate drift;
 - exercise catalog classification/media mismatches;
 - UI that only looks correct on one screen size.
+
+## 17. Spark Backend e arquitetura online (T16)
+
+> **Status (verificado em 2026-09-06): fundação implementada, features online não.** A T16.0 criou
+> o backend em `backend/` com configuração, SQLite, migrations, health, logging, Docker e os
+> contratos arquiteturais. **Não existe** autenticação, sincronização, backup, restore, outbox,
+> `syncId` nas entidades Room ou proxy do Gemini. `/v1` está vazio, e há teste que garante isso.
+
+A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
+dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
+Firebase e sem Gemini.
+
+### Autoridades
+
+| Autoridade | Responsabilidade |
+| --- | --- |
+| Android / Room + DataStore | autoridade **operacional local** — treino, execução, histórico, templates, catálogo, gamificação, preferências |
+| Spark Backend | estado remoto da conta e convergência entre dispositivos |
+| Firebase | identidade/autenticação (`Firebase Auth`) |
+| Gemini | serviço probabilístico — nunca autoridade do domínio |
+
+### Direção de fluxo
+
+Obrigatória, quando o sync existir:
+
+```text
+ação do usuário → domínio → Room → outbox → sync → Spark Backend
+Spark Backend → sync → validação → Room → UI observa Room
+```
+
+Proibida, em qualquer fase:
+
+```text
+UI → API → servidor → "se o servidor responder, o app funciona"
+```
+
+A UI observa Room. Um dado vindo do servidor entra pelo sync, é validado e é escrito no Room.
+
+### Invariantes bloqueantes
+
+1. Conta é **opcional**. Nenhuma fase da T16 pode exigir login para iniciar ou concluir treino.
+2. `WorkoutSession` `COMPLETED` é **imutável**. Divergência no mesmo `syncId` é conflito de
+   integridade, nunca *last write wins*.
+3. O servidor **nunca** confia em `ownerUid` vindo do payload — o `uid` sai do token verificado.
+4. O schema remoto **não** é cópia 1:1 do Room.
+5. O backend não vira segunda fonte operacional de verdade.
+
+### Coach IA
+
+O `FirebaseAiCoachGateway` (seção 15) **permanece o gateway em uso**, inalterado. A migração para
+`SparkBackendAiCoachGateway` está prevista para a **T16.2** e não foi iniciada. App Check, Firebase
+AI Logic e a configuração do Gemini continuam como estão.
+
+### Roadmap
+
+| Fase | Escopo | Estado |
+| --- | --- | --- |
+| T16.0 | Fundação do backend + contratos de identidade e sync | **implementado** |
+| T16.1 | Conta opcional + Firebase Auth | planejado |
+| T16.2 | Migração do Coach IA para o Spark Backend | planejado |
+| T16.3 | Identidade global dos dados + Outbox | planejado |
+| T16.4 | Backup estruturado | planejado |
+| T16.5 | Restore seguro | planejado |
+| T16.6 | Sync incremental multi-device | planejado |
+| T16.7 | Conflitos, deletes e consistência offline | planejado |
+| T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
+| T17 | Amigos, convites, desafios e social | planejado |
+
+### Documentação detalhada
+
+- [`docs/architecture/ADR-0001-spark-online-architecture.md`](docs/architecture/ADR-0001-spark-online-architecture.md)
+- [`docs/architecture/data-classification-matrix.md`](docs/architecture/data-classification-matrix.md)
+- [`docs/architecture/identity-contract.md`](docs/architecture/identity-contract.md)
+- [`docs/architecture/sync-protocol.md`](docs/architecture/sync-protocol.md)
+- [`backend/README.md`](backend/README.md)

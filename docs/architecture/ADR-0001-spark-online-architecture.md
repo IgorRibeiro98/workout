@@ -1,0 +1,176 @@
+# ADR-0001 — Spark Online Architecture
+
+- **Status:** aceito
+- **Data:** 2026-09-06
+- **Tarefa:** T16.0 — Fundação do Spark Backend
+- **Substitui:** nada. Complementa `ARCHITECTURE.md`, que continua sendo a autoridade sobre o app Android.
+
+## Contexto
+
+Até a T15 o Spark era inteiramente local-first: Room e DataStore são as autoridades, e a única
+fronteira online era o Firebase AI Logic do Coach IA (T14), que é opcional e não participa de
+nenhum caminho crítico.
+
+A partir da T16 o Spark precisa de estado de conta que atravesse dispositivos: backup, restore,
+sync e, mais tarde, features sociais. Isso exige uma fronteira online **de verdade** — e exige que
+ela não destrua a propriedade que torna o app utilizável hoje.
+
+## Decisão
+
+Adotar três autoridades distintas, com responsabilidades que não se sobrepõem.
+
+```text
+                        FIREBASE
+                        └── Auth  ──────────────┐
+                                                │ Firebase ID Token  [T16.1]
+                                                ▼
+┌─────────────────────────┐          ┌─────────────────────────────────┐
+│ Spark Android           │          │ Spark Backend / VPS             │
+│                         │          │                                 │
+│ UI                      │          │ API HTTPS  (/v1)                │
+│ Domain                  │  futuro  │ Auth boundary       [T16.1]     │
+│ Room  ◄── autoridade    │◄────────►│ Gemini Gateway      [T16.2]     │
+│ DataStore   operacional │   sync   │ Sync                [T16.3+]    │
+│ Outbox        [T16.3]   │          │ Backup / Restore    [T16.4/5]   │
+│                         │          │ Social              [T17]       │
+│ AiCoachGateway          │          │ SQLite                          │
+└─────────────────────────┘          └─────────────────────────────────┘
+```
+
+### Autoridades
+
+| Autoridade | Responsabilidade | O que ela **não** é |
+| --- | --- | --- |
+| **Android / Room + DataStore** | Autoridade operacional local. Treino, execução, histórico, templates, catálogo, gamificação, preferências. | Não é réplica do servidor. |
+| **Spark Backend** | Estado remoto da conta e convergência entre dispositivos. | Não é a autoridade de execução. Não decide se um treino pode começar. |
+| **Firebase** | Identidade e autenticação (`Firebase Auth`). | Não é banco de dados do Spark. Nada de Firestore, RTDB, Storage ou Cloud Functions. |
+| **Gemini** | Serviço probabilístico consumido pelo Coach IA. | Nunca é autoridade de domínio. Saída do modelo é entrada não confiável. |
+
+### Direção de fluxo obrigatória
+
+O fluxo correto, quando o sync existir:
+
+```text
+ação do usuário → domínio → Room → (outbox) → sync → Spark Backend
+Spark Backend → sync → validação → Room → UI observa Room
+```
+
+O fluxo proibido, em qualquer fase da T16:
+
+```text
+UI → API → servidor → "se o servidor responder, o app funciona"
+```
+
+A UI observa Room. Sempre. Um dado que chega do servidor entra pelo sync, é validado e é escrito
+no Room; a UI reage à mudança do Room, não à resposta HTTP.
+
+### Invariantes que a T16 inteira precisa preservar
+
+1. **Conta é opcional.** Sem conta, o núcleo funciona por completo: treino, execução, histórico,
+   templates, catálogo e gamificação. Nenhuma fase da T16 pode introduzir requisito de login para
+   iniciar ou concluir um treino.
+2. **Indisponibilidade não quebra o app.** Sem internet, sem VPS, sem Firebase e sem Gemini, o
+   Spark continua funcionando exatamente como hoje.
+3. **Histórico concluído é imutável.** Uma `WorkoutSession` `COMPLETED` não é sobrescrevível por
+   sincronização. Conteúdo histórico divergente para o mesmo `syncId` é **conflito de integridade**,
+   nunca *last write wins*.
+4. **Uma autoridade por coisa.** O backend não vira segunda fonte operacional de verdade.
+5. **Ownership é decidido pelo servidor.** O `uid` vem do token verificado, nunca do payload.
+
+## Política de custo
+
+O Spark é um app privado para um grupo pequeno. A infraestrutura é deliberadamente mínima e de
+custo fixo:
+
+```text
+1 VPS + Docker Compose + 1 aplicação backend + 1 SQLite + Caddy (TLS)
+```
+
+Ficam **fora** por decisão, não por falta de tempo: Kubernetes, Redis, Kafka, RabbitMQ, PostgreSQL
+gerenciado, Cloud SQL, RDS, Cloud Functions, Cloud Run, load balancer gerenciado, fila gerenciada,
+object storage obrigatório, service mesh e microservices.
+
+Se uma necessidade futura parecer exigir qualquer um desses itens, a regra é **documentar e parar**,
+não introduzir.
+
+### Monólito modular
+
+O backend nasce como monólito modular: `auth`, `ai`, `sync`, `backup` e `social` são módulos dentro
+do mesmo processo e do mesmo banco. Não existem `auth-service`, `sync-service` etc. como processos
+separados — não há necessidade operacional que justifique o custo.
+
+## Estado: implementado x planejado
+
+### IMPLEMENTADO EM T16.0
+
+- Fundação do backend (NestJS, monólito modular) em `backend/`.
+- Configuração validada com fail-fast no startup.
+- SQLite com arquivo persistente, `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout` centralizado.
+- Migrations versionadas, transacionais e idempotentes.
+- `GET /health/live` e `GET /health/ready`.
+- Request ID, envelope de erro único, logging estruturado sem segredo.
+- Graceful shutdown (SIGTERM/SIGINT).
+- Dockerfile multi-stage não-root, Docker Compose com volume persistente, `Caddyfile.example`.
+- Versionamento de API configurado: toda API de produto futura nasce sob `/v1`.
+- Contratos arquiteturais documentados (este ADR, matriz de dados, identidade, protocolo de sync).
+
+### PLANEJADO — ainda **não** existe
+
+- **T16.1** — Conta opcional + Firebase Auth (verificação real de Firebase ID Token).
+- **T16.2** — Migração do Coach IA para o Spark Backend (proxy do Gemini).
+- **T16.3** — Identidade global dos dados + Outbox no Android.
+- **T16.4** — Backup estruturado.
+- **T16.5** — Restore seguro.
+- **T16.6** — Sync incremental multi-device.
+- **T16.7** — Conflitos, deletes e consistência offline.
+- **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
+- **T17** — Amigos, convites, desafios e social.
+
+Nada acima está implementado. Não existe endpoint de sync, backup, auth ou IA no backend hoje —
+`/v1` está deliberadamente vazio, e há teste que garante isso.
+
+## Coach IA — migração prevista, não executada
+
+O `FirebaseAiCoachGateway` (T14) **permanece funcional e inalterado**. A T16.0 não removeu, não
+migrou e não tocou em Firebase AI Logic, App Check ou configuração do Gemini.
+
+A migração prevista para a **T16.2**:
+
+```text
+AiCoachGateway                     ← a interface não muda
+├── FirebaseAiCoachGateway         ← atual, em uso
+└── SparkBackendAiCoachGateway     ← T16.2
+```
+
+Quando a implementação HTTP estiver validada, `SparkBackendAiCoachGateway` vira o default; o
+`FirebaseAiCoachGateway` só é removido depois disso, em uma tarefa própria. Não há big bang.
+
+O motivo de a migração valer a pena: hoje a chave do Gemini e a política de uso vivem no cliente.
+Com o backend no caminho, a cota, o rate limit e o prompt passam a ser controlados no servidor —
+que é também onde o `uid` autenticado existe.
+
+## Consequências
+
+**Positivas**
+
+- O app continua utilizável por completo sem backend, e isso é testável.
+- Custo previsível e operação simples: um `docker compose up -d`.
+- A fronteira de autenticação existe como desenho antes de existir como código, então a T16.1 não
+  precisa reabrir decisões de arquitetura.
+- O schema remoto nasce livre do formato do Room, que é otimizado para outra coisa.
+
+**Negativas / custos aceitos**
+
+- SQLite em uma VPS não escala horizontalmente. Aceito: o público é um grupo pequeno, e a alternativa
+  contradiz a política de custo. Se isso mudar, é uma decisão nova e documentada.
+- Dois esquemas (Room e servidor) evoluem em paralelo e exigem tradução explícita no sync. Esse é o
+  preço de não espelhar o Room — e é menor que o preço de acoplar o schema remoto à execução local.
+- Depender do Firebase Auth mantém uma dependência de terceiro na identidade. Aceito: implementar
+  autenticação própria seria pior em segurança e em custo.
+
+## Referências
+
+- [`data-classification-matrix.md`](./data-classification-matrix.md) — o que sincroniza e o que não.
+- [`identity-contract.md`](./identity-contract.md) — `localId`, `syncId`, `deviceId`, ownership.
+- [`sync-protocol.md`](./sync-protocol.md) — push/pull, cursor, idempotência, conflitos, tombstones.
+- [`../../backend/README.md`](../../backend/README.md) — como rodar o backend.

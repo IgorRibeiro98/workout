@@ -16,3 +16,6 @@
 local.properties
 .env
 debug.keystore
+
+# Configuração do Firebase: gerada no console, não versionada (ARCHITECTURE.md §15.7).
+app/google-services.json

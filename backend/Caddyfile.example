@@ -1,0 +1,25 @@
+# Spark Backend — exemplo de reverse proxy para a VPS futura.
+#
+# NÃO usado pela composição local da T16.0: emitir certificado exige domínio real, e a T16.0 não
+# provisiona domínio, DNS nem VPS. Copie para `Caddyfile` (ignorado pelo Git), troque o domínio e
+# só então coloque na frente do backend.
+#
+#   Internet -> Caddy (TLS / Let's Encrypt) -> Spark Backend -> SQLite
+#
+# O Caddy é quem termina o TLS. O processo Node fala HTTP puro e nunca vê certificado.
+
+spark.exemplo.invalid {
+	encode zstd gzip
+
+	# O backend não é publicado na internet: quem escuta na porta 443 é o Caddy.
+	reverse_proxy backend:8080 {
+		# Repassa o request ID quando o cliente já enviou um; o backend gera um se faltar.
+		header_up X-Request-Id {http.request.header.X-Request-Id}
+	}
+
+	# O log do proxy também não deve carregar credencial.
+	log {
+		output file /var/log/caddy/spark-backend.log
+		format json
+	}
+}

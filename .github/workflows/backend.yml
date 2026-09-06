@@ -1,0 +1,111 @@
+# CI do Spark Backend (T16.0).
+#
+# Escopo deliberadamente restrito a `backend/**`: o CI do Android foi removido em df63791 e esta
+# tarefa não o ressuscita. Só o backend é validado aqui.
+#
+# Nada neste workflow depende de rede além do registro do npm: sem Firebase, sem Gemini, sem VPS,
+# sem credencial. Se algum job precisar de segredo no futuro, isso é uma decisão nova.
+
+name: backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  verify:
+    name: lint + test + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # `npm ci` (e não `npm install`): instala exatamente o lockfile e falha se ele divergir
+      # do package.json. É o que torna o build reproduzível.
+      - name: Install (determinístico)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t spark-backend:ci .
+
+      # Sobe a imagem de verdade com um volume, confere o health e valida que o dado sobrevive
+      # à destruição e recriação do container — o invariante que a T16.0 precisa garantir.
+      - name: Smoke test (health + persistência)
+        run: |
+          set -euo pipefail
+          docker volume create spark-ci-data
+          docker run -d --name spark-ci -p 127.0.0.1:8080:8080 \
+            -v spark-ci-data:/data spark-backend:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health/live > /dev/null 2>&1; then break; fi
+            if [ "$i" = "30" ]; then echo "backend não subiu"; docker logs spark-ci; exit 1; fi
+            sleep 2
+          done
+
+          curl -fsS http://127.0.0.1:8080/health/live | grep -q '"status":"ok"'
+          curl -fsS http://127.0.0.1:8080/health/ready | grep -q '"status":"ok"'
+
+          docker exec spark-ci node -e "
+            const S=require('/app/node_modules/better-sqlite3');
+            const db=new S('/data/spark.db');
+            db.prepare('INSERT INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
+              .run('ci_persistencia','sobreviveu',1);
+            db.close();"
+
+          docker rm -f spark-ci
+          docker run -d --name spark-ci-2 -p 127.0.0.1:8080:8080 \
+            -v spark-ci-data:/data spark-backend:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health/ready > /dev/null 2>&1; then break; fi
+            if [ "$i" = "30" ]; then echo "backend não subiu"; docker logs spark-ci-2; exit 1; fi
+            sleep 2
+          done
+
+          docker exec spark-ci-2 node -e "
+            const S=require('/app/node_modules/better-sqlite3');
+            const db=new S('/data/spark.db');
+            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('ci_persistencia');
+            if (!row || row.value !== 'sobreviveu') {
+              console.error('dado não sobreviveu à recriação do container'); process.exit(1);
+            }
+            console.log('persistência ok');
+            db.close();"
+
+          docker rm -f spark-ci-2
+          docker volume rm spark-ci-data

@@ -1,0 +1,24 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Configuração real e qualquer credencial: nunca versionadas.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+firebase-adminsdk*.json
+
+# Banco local e artefatos do SQLite.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Caddyfile real (o exemplo é versionado).
+Caddyfile

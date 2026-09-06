@@ -1,0 +1,37 @@
+# Spark Backend — composição local (T16.0).
+#
+# `docker compose up -d` sobe a fundação inteira: um processo backend e um SQLite persistente.
+# Não há Postgres, Redis, fila, proxy gerenciado nem qualquer serviço pago: a arquitetura-alvo é
+# uma VPS com Docker Compose, e é isso que esta composição representa.
+#
+# O Caddy da produção futura não está aqui de propósito — ele precisa de domínio real para emitir
+# certificado, e a T16.0 não provisiona domínio. Veja `Caddyfile.example`.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: spark-backend:0.1.0
+    container_name: spark-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      # Dentro do container o banco vive no volume montado, nunca na camada de escrita do container.
+      DATABASE_PATH: /data/spark.db
+      LOG_LEVEL: info
+      SQLITE_BUSY_TIMEOUT_MS: 5000
+      SHUTDOWN_TIMEOUT_MS: 10000
+    ports:
+      # Só no loopback do host: em produção quem publica na internet é o Caddy, não este serviço.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - spark-data:/data
+    # Dá tempo ao graceful shutdown antes de o Docker mandar SIGKILL.
+    stop_grace_period: 15s
+
+volumes:
+  # Volume nomeado: `docker compose down` e a recriação do container preservam o banco.
+  # Só `docker compose down -v` apaga — e isso é destrutivo por definição.
+  spark-data:
