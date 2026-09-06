@@ -10,6 +10,7 @@ import androidx.credentials.exceptions.ClearCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import com.example.data.firebase.SparkAppCheck
 import com.example.domain.auth.AuthError
 import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthOutcome
@@ -20,6 +21,7 @@ import com.example.domain.auth.SparkAccount
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
@@ -77,6 +79,9 @@ class FirebaseAuthGateway(
 
     @Volatile
     private var listening = false
+
+    @Volatile
+    private var appCheckInstalled: Boolean = false
 
     override val state: StateFlow<AuthState>
         get() {
@@ -264,13 +269,38 @@ class FirebaseAuthGateway(
      * presente. Não é exceção: conta é opcional, e a ausência dela é um estado normal do app.
      */
     private fun firebaseAuthOrNull(): FirebaseAuth? = try {
-        FirebaseAuth.getInstance()
+        FirebaseAuth.getInstance().also { installAppCheck() }
     } catch (e: IllegalStateException) {
         null
     } catch (e: NoClassDefFoundError) {
         null
     } catch (e: Exception) {
         null
+    }
+
+    /**
+     * Instala o provedor de App Check da variante de build, uma vez por processo.
+     *
+     * App Check atesta o **aplicativo** perante o Firebase; Firebase Auth identifica o
+     * **usuário**. São responsabilidades diferentes, e nenhuma substitui a outra — por isso a
+     * instalação vive aqui desde a T16.2: o Coach deixou de falar com o Firebase, e o produto
+     * Firebase que resta em uso é a autenticação.
+     *
+     * Qual provedor é decidido em tempo de **compilação** por [SparkAppCheck]: debug usa o
+     * provedor de depuração, release usa Play Integrity, e nenhum dos dois consegue aparecer no
+     * outro APK. Nada aqui é feito no startup: só quando a área de conta é realmente usada.
+     * Nenhum segredo é registrado em log.
+     */
+    private fun installAppCheck() {
+        if (appCheckInstalled) return
+        try {
+            SparkAppCheck.publishDebugToken(appContext)
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(SparkAppCheck.providerFactory())
+            appCheckInstalled = true
+            Log.i(TAG, "App Check instalado: provider=${SparkAppCheck.PROVIDER_NAME}")
+        } catch (e: Exception) {
+            Log.w(TAG, "App Check indisponível: ${e.javaClass.simpleName}")
+        }
     }
 
     private fun FirebaseUser.toAccount(): SparkAccount = SparkAccount(

@@ -5,18 +5,19 @@ import { CommonModule } from './common/common.module';
 import { HttpLoggerMiddleware } from './common/http-logger.middleware';
 import { RequestIdMiddleware } from './common/request-id.middleware';
 import { DatabaseModule } from './database/database.module';
+import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 
 /**
  * Spark Backend — monólito modular.
  *
- * `auth` (T16.1) já está aqui. As features futuras da T16 (`ai`, `sync`, `backup`) e da T17
+ * `auth` (T16.1) e `ai` (T16.2) já estão aqui. As features futuras da T16 (`sync`, `backup`) e da T17
  * (`social`) entram como módulos aqui dentro, no mesmo processo e no mesmo banco. Não há necessidade operacional que
  * justifique separá-los em serviços: um grupo pequeno de usuários, uma VPS, um deploy.
  */
 @Module({
-  imports: [CommonModule, DatabaseModule, HealthModule, AuthModule],
+  imports: [CommonModule, DatabaseModule, HealthModule, AuthModule, AiModule],
 })
 export class AppModule implements NestModule {
   static forRoot(config: AppConfig) {
@@ -28,6 +29,7 @@ export class AppModule implements NestModule {
         DatabaseModule,
         HealthModule,
         AuthModule,
+        AiModule,
       ],
     };
   }

@@ -6,6 +6,7 @@ import com.example.domain.ai.AiCoachResponseValidator
 import com.example.domain.ai.AiCoachTelemetry
 import com.example.domain.ai.AiCoachValidation
 import com.example.domain.ai.AiModelConfig
+import com.example.domain.ai.model.AiCoachCallMetadata
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
@@ -56,11 +57,15 @@ class AnalyzeWorkoutUseCase(
             )
         }
 
+        var metadata = AiCoachCallMetadata.Unknown
         val result = when (val gatewayResult = gateway.request(request)) {
             is AiCoachGatewayResult.Error ->
                 AiCoachResult.Failure(gatewayResult.kind, gatewayResult.detail)
 
             is AiCoachGatewayResult.Success -> {
+                // Modelo e versão de prompt são decisão do servidor (T16.2): a telemetria
+                // registra o que ele informou, não uma constante local que poderia divergir.
+                metadata = gatewayResult.metadata
                 val validation = AiCoachResponseValidator.validate(
                     requestId = requestId,
                     context = request.context,
@@ -76,15 +81,20 @@ class AnalyzeWorkoutUseCase(
             }
         }
 
-        return finish(requestId, startedAt, result)
+        return finish(requestId, startedAt, result, metadata)
     }
 
-    private fun finish(requestId: String, startedAt: Long, result: AiCoachResult): AiCoachResult {
+    private fun finish(
+        requestId: String,
+        startedAt: Long,
+        result: AiCoachResult,
+        metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
+    ): AiCoachResult {
         telemetry.onRequestFinished(
             requestId = requestId,
             type = AiCoachRequestType.ANALYZE_WORKOUT,
-            model = AiModelConfig.MODEL_NAME,
-            promptVersion = AiModelConfig.PROMPT_VERSION,
+            model = metadata.model,
+            promptVersion = metadata.promptVersion,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (result) {

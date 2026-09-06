@@ -5,6 +5,7 @@ import { AllExceptionsFilter } from '../common/all-exceptions.filter';
 import { SparkLogger } from '../common/logger';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { SqliteService } from '../database/sqlite.service';
+import { MAX_AI_REQUEST_BODY_BYTES } from '../modules/ai/ai-coach.limits';
 
 export interface CreatedApp {
   readonly app: INestApplication;
@@ -39,6 +40,14 @@ export async function createApp(config: AppConfig): Promise<CreatedApp> {
 export function configureApp(app: INestApplication, config: AppConfig): CreatedApp {
   // Nada de anunciar o framework para quem não precisa saber.
   app.getHttpAdapter().getInstance().disable('x-powered-by');
+
+  // Teto de corpo declarado, e não herdado do default do Express: o backend não pode supor que só
+  // o APK oficial faz requisições (T16.2 §46). Um contexto do Coach com todos os tetos internos
+  // preenchidos não chega perto disso.
+  const withBodyParser = app as INestApplication & {
+    useBodyParser?: (parser: 'json', options: { limit: number }) => unknown;
+  };
+  withBodyParser.useBodyParser?.('json', { limit: MAX_AI_REQUEST_BODY_BYTES });
 
   // Toda API de produto nasce sob `/v1`: um `@Controller('sync')` futuro responde em `/v1/sync`
   // sem que ninguém precise lembrar de escrever o prefixo. Health é VERSION_NEUTRAL.

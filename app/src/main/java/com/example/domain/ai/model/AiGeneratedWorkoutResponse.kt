@@ -41,7 +41,10 @@ data class AiGeneratedWorkoutExerciseResponse(
 
 /** Resultado bruto do provider para uma geração, antes da validação semântica. */
 sealed interface AiWorkoutGenerationGatewayResult {
-    data class Success(val response: AiGeneratedWorkoutResponse) : AiWorkoutGenerationGatewayResult
+    data class Success(
+        val response: AiGeneratedWorkoutResponse,
+        val metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
+    ) : AiWorkoutGenerationGatewayResult
     data class Error(
         val kind: AiCoachErrorKind,
         val detail: String? = null

@@ -3,8 +3,8 @@ package com.example.domain.ai.eval
 import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.example.data.ai.AiCoachAppCheck
-import com.example.data.ai.FirebaseAiCoachGateway
+import com.example.data.ai.SparkBackendAiCoachGateway
+import com.example.data.firebase.SparkAppCheck
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.model.AiCoachContext
 import com.example.domain.ai.model.AiAthleteContext
@@ -33,11 +33,13 @@ import org.robolectric.annotation.Config
 /**
  * A configuração de segurança da fronteira de IA, verificada sem provider real.
  *
- * Três coisas que nenhum teste cobria antes da T14.5 e que quebram em silêncio:
+ * O que quebra em silêncio, e por isso é testado:
  *
  * - uma versão de contrato desconhecida sendo enviada ao provider;
+ * - o Firebase AI Logic voltando ao aplicativo por refatoração (T16.2);
+ * - credencial de modelo aparecendo no app — ela é exclusivamente do servidor;
  * - o provedor de App Check de depuração indo parar em release;
- * - segredo ou chave hardcoded no código do Coach.
+ * - segredo ou chave hardcoded no código.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [Build.VERSION_CODES.TIRAMISU])
@@ -47,7 +49,9 @@ class AiCoachSecurityConfigTest {
 
     private val unsupportedVersion = AiModelConfig.SCHEMA_VERSION + 1
 
-    private fun gateway() = FirebaseAiCoachGateway(context)
+    // Sem cliente de backend configurado: nenhuma requisição sai, e é assim que o Coach se
+    // comporta em um build sem endereço — indisponível, com o núcleo do Spark intacto.
+    private fun gateway() = SparkBackendAiCoachGateway(client = null)
 
     // ------------------------------------------------------------------ schemaVersion
 
@@ -113,8 +117,8 @@ class AiCoachSecurityConfigTest {
     @Test
     fun `a versao suportada passa da guarda e falha por falta de configuracao, nao por contrato`() =
         runTest {
-            // Sem Firebase configurado no ambiente de teste, a chamada vira UNAVAILABLE — o que
-            // prova que a guarda de contrato deixou passar e o core continua intacto.
+            // Sem endereço de backend, a chamada vira UNAVAILABLE — o que prova que a guarda de
+            // contrato deixou passar e o núcleo do Spark continua intacto.
             val result = gateway().request(
                 AiCoachRequest(
                     requestId = "req-5",
@@ -133,18 +137,49 @@ class AiCoachSecurityConfigTest {
     // ---------------------------------------------------------------------- App Check
 
     @Test
+    fun `o aplicativo nao conhece mais o Firebase AI Logic`() {
+        // A migração da T16.2 não é "o backend também funciona": o caminho antigo saiu. Se ele
+        // voltar por refatoração, os dois providers passariam a divergir em silêncio.
+        val offenders = (sourceSet("main") + sourceSet("debug") + sourceSet("release")).filter { file ->
+            val text = file.readText()
+            text.contains("com.google.firebase.ai") || text.contains("GenerativeModel") ||
+                text.contains("FirebaseAI")
+        }
+
+        assertTrue(
+            "Firebase AI Logic ainda é referenciado em: ${offenders.map { it.name }}",
+            offenders.isEmpty()
+        )
+    }
+
+    @Test
+    fun `nenhuma chave de provider de IA existe no aplicativo`() {
+        // A credencial do Gemini vive exclusivamente no servidor. Aqui não pode existir nem
+        // configuração para ela.
+        val offenders = (sourceSet("main") + sourceSet("debug") + sourceSet("release")).filter { file ->
+            val text = file.readText()
+            text.contains("GEMINI_API_KEY") || Regex("(?i)gemini[_a-z]*(key|token)").containsMatchIn(text)
+        }
+
+        assertTrue(
+            "referência a credencial do Gemini no aplicativo: ${offenders.map { it.name }}",
+            offenders.isEmpty()
+        )
+    }
+
+    @Test
     fun `a variante de teste usa o provedor de depuracao`() {
         // Os testes unitários rodam sobre a variante debug: aqui o provedor precisa ser o de
         // depuração, e o de release precisa ser Play Integrity (verificado por source set abaixo).
-        assertEquals("debug", AiCoachAppCheck.PROVIDER_NAME)
-        assertTrue(AiCoachAppCheck.SUPPORTS_DEBUG_TOKEN)
+        assertEquals("debug", SparkAppCheck.PROVIDER_NAME)
+        assertTrue(SparkAppCheck.SUPPORTS_DEBUG_TOKEN)
     }
 
     @Test
     fun `nenhum token de depuracao vem embutido no app`() {
         assertNull(
             "o app não pode trazer um token de depuração pronto",
-            AiCoachAppCheck.customDebugToken(context)
+            SparkAppCheck.customDebugToken(context)
         )
     }
 
@@ -171,7 +206,7 @@ class AiCoachSecurityConfigTest {
     @Test
     fun `o source set principal nao referencia provedor de App Check concreto`() {
         // A escolha é por variante de build, não por condição de runtime: `src/main` só conhece
-        // `AiCoachAppCheck`.
+        // `SparkAppCheck`.
         val offenders = sourceSet("main").filter { file ->
             val text = file.readText()
             text.contains("DebugAppCheckProviderFactory") ||

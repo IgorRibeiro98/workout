@@ -1,23 +1,17 @@
 package com.example.domain.ai
 
-/** Esforço de raciocínio pedido ao modelo, sem vazar o enum do SDK para o domínio. */
-enum class AiThinkingLevel {
-    MINIMAL,
-    LOW,
-    MEDIUM,
-    HIGH
-}
-
 /**
- * Ponto único de configuração do Coach IA.
+ * Ponto único de configuração do Coach IA **no aplicativo**.
  *
- * Trocar de modelo, de esforço de raciocínio ou de timeout acontece aqui e em nenhum outro
- * arquivo — o domínio, o ViewModel e a UI não conhecem nome de modelo.
+ * A partir da T16.2 o que sobra aqui é o que continua sendo decisão do app: a versão do contrato
+ * de conversa, os tetos de espera do transporte e os limites de contexto — porque quem monta
+ * contexto continua sendo o Android, sobre o Room.
+ *
+ * O que **saiu** daqui e agora vive no Spark Backend: nome do modelo, temperatura, esforço de
+ * raciocínio, teto de saída, timeout do provider e versão de prompt. O app não escolhe modelo, e
+ * trocar de modelo não exige publicar um APK.
  */
 object AiModelConfig {
-
-    /** Modelo do Coach (Firebase AI Logic / Gemini Developer API). */
-    const val MODEL_NAME: String = "gemini-3.6-flash"
 
     /** Versão do contrato de conversa entre o Spark e o modelo. */
     const val SCHEMA_VERSION: Int = 1
@@ -31,31 +25,27 @@ object AiModelConfig {
      */
     val SUPPORTED_SCHEMA_VERSIONS: Set<Int> = setOf(1)
 
-    /**
-     * Versão dos prompts do Coach — autoridade única, como o nome do modelo.
-     *
-     * Uma versão só para todos os tipos de request: as instruções mudam juntas (são o mesmo
-     * contrato de comportamento em quatro recortes) e um número por prompt só produziria
-     * combinações que ninguém consegue reproduzir depois. Suba este número sempre que qualquer
-     * instrução de sistema ou o formato do prompt do usuário mudar.
-     */
-    const val PROMPT_VERSION: Int = 1
-
     /** Se este build sabe conversar na versão de contrato pedida. */
     fun isSupportedSchemaVersion(schemaVersion: Int): Boolean =
         schemaVersion in SUPPORTED_SCHEMA_VERSIONS
 
-    /** Configuração conservadora para a primeira versão. */
-    val THINKING_LEVEL: AiThinkingLevel = AiThinkingLevel.MEDIUM
+    /**
+     * Teto de leitura do HTTP para uma chamada do Coach, em segundos.
+     *
+     * Maior que o timeout do provider no servidor (30 s) de propósito: assim quem responde
+     * primeiro é o backend, com um erro tipado (`AI_PROVIDER_TIMEOUT`), em vez de o socket cair
+     * e o app ter que adivinhar o que aconteceu.
+     */
+    const val HTTP_READ_TIMEOUT_SECONDS: Long = 45L
 
-    /** Análise pede consistência, não criatividade. */
-    const val TEMPERATURE: Float = 0.2f
-
-    /** A análise tem resumo, sinais, pontos de atenção e sugestões; o teto evita custo acidental. */
-    const val MAX_OUTPUT_TOKENS: Int = 2048
-
-    /** Nenhuma chamada pode ficar em loading indefinidamente. */
-    const val REQUEST_TIMEOUT_MS: Long = 30_000L
+    /**
+     * Teto absoluto de uma chamada do Coach no app.
+     *
+     * É a última linha: se nem o servidor nem o socket concluírem, a corrotina encerra e a tela
+     * sai do estado de carregamento. Nenhuma chamada fica pendurada, e não há repetição
+     * automática — quem decide tentar de novo é o usuário.
+     */
+    const val REQUEST_TIMEOUT_MS: Long = 60_000L
 
     /**
      * Quantas execuções concluídas de **cada** exercício entram no contexto.

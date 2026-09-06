@@ -67,7 +67,11 @@ internal data class AdaptWorkoutActions(
     val onNavigateBack: () -> Unit = {},
     /** Entrada contextual: explicar uma mudança. Recebe o id da mudança, nunca o texto. */
     val onExplainChange: (String) -> Unit = {},
-    val canExplain: Boolean = false
+    val canExplain: Boolean = false,
+    /** Entrar na Conta Spark (T16.1). Nunca disparado sozinho — só por toque. */
+    val onSignIn: (android.content.Context) -> Unit = {},
+    val isSignInAvailable: Boolean = true,
+    val isSigningIn: Boolean = false
 )
 
 /**
@@ -80,7 +84,10 @@ internal data class AdaptWorkoutActions(
 fun AdaptWorkoutScreen(
     viewModel: AdaptWorkoutViewModel,
     templateId: Long,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onSignIn: (android.content.Context) -> Unit = {},
+    isSignInAvailable: Boolean = true,
+    isSigningIn: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -98,7 +105,10 @@ fun AdaptWorkoutScreen(
             onReset = viewModel::reset,
             onNavigateBack = onNavigateBack,
             onExplainChange = viewModel::explainChange,
-            canExplain = viewModel.canExplain
+            canExplain = viewModel.canExplain,
+            onSignIn = onSignIn,
+            isSignInAvailable = isSignInAvailable,
+            isSigningIn = isSigningIn
         )
     )
 
@@ -219,6 +229,12 @@ internal fun AdaptWorkoutScreenContent(
                         DataQualityLine(status.dataQuality.level, status.dataQuality.description)
                     }
                 }
+
+                AdaptWorkoutStatus.AuthRequired -> CoachAccountRequiredCard(
+                    isSignInAvailable = actions.isSignInAvailable,
+                    isSigningIn = actions.isSigningIn,
+                    onSignIn = actions.onSignIn
+                )
 
                 is AdaptWorkoutStatus.Message -> MessageCard(
                     message = if (status.canRetry) {

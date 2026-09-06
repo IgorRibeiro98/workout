@@ -37,7 +37,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
 
     const status =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : (clientErrorStatusOf(exception) ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
     const isServerError = status >= SERVER_ERROR_FLOOR;
 
@@ -86,6 +88,25 @@ function declaredCode(exception: unknown): string | null {
   return null;
 }
 
+/**
+ * O status que um erro **não** nosso já carrega, quando ele é um erro do cliente.
+ *
+ * O caso real é o body-parser do Express: um corpo acima do teto vira um erro com
+ * `status = 413`, e não uma `HttpException`. Sem isto, um payload grande demais responderia 500 —
+ * dizendo ao cliente que o servidor quebrou quando quem errou foi a requisição, e registrando
+ * como falha do servidor algo que é uma defesa funcionando.
+ *
+ * Só 4xx: um erro de biblioteca que se declara 5xx não ganha nada em ser repassado.
+ */
+function clientErrorStatusOf(exception: unknown): number | null {
+  if (typeof exception !== 'object' || exception === null) {
+    return null;
+  }
+  const candidate = ('status' in exception ? exception.status : undefined) ?? undefined;
+  const status = typeof candidate === 'number' ? candidate : Number.NaN;
+  return Number.isInteger(status) && status >= 400 && status < SERVER_ERROR_FLOOR ? status : null;
+}
+
 function codeFor(exception: unknown, status: number): string {
   const declared = declaredCode(exception);
   if (declared !== null) {
@@ -126,7 +147,12 @@ function messageFor(exception: unknown, status: number, config: AppConfig): stri
     }
     return exception.message;
   }
-  return INTERNAL_ERROR_MESSAGE;
+  // Erro do cliente vindo de fora (body-parser): a resposta diz o que aconteceu, sem detalhe
+  // interno e sem a mensagem crua da biblioteca.
+  const name = HTTP_STATUS_NAMES[status];
+  return name
+    ? `Request rejected: ${name.toLowerCase().replace(/_/g, ' ')}`
+    : INTERNAL_ERROR_MESSAGE;
 }
 
 /** A mensagem declarada junto com o `code`, quando o corpo da exceção traz uma. */

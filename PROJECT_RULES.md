@@ -221,39 +221,53 @@ It must:
 
 ## 13. Coach IA
 
-O Coach IA (T14) é opcional e local-first: o núcleo do Spark — Home, treinos, criação e edição
-manual, execução, histórico, perfil, gamificação e evolução — precisa continuar funcionando com o
-provider fora do ar, sem internet ou sem configuração de Firebase.
+O núcleo do Spark — Home, treinos, criação e edição manual, execução, histórico, perfil,
+gamificação e evolução — precisa continuar funcionando com o provider fora do ar, sem internet,
+sem Spark Backend, sem conta e sem configuração de Firebase.
+
+Desde a **T16.2** o Coach é uma capacidade **online autenticada**: quem fala com o Gemini é o
+Spark Backend, e uma chamada nova ao modelo exige Conta Spark. Isso não torna a conta necessária
+para usar o Spark — torna-a necessária só para o que depende do servidor.
 
 Regras obrigatórias ao mexer em qualquer parte do Coach:
 
 - **Saída do modelo é entrada não confiável.** Structured output e `AiCoachResponseValidator` são
   ambos obrigatórios: o schema garante a forma, o validador garante a semântica. Não remova o
   validador porque "o modelo já segue o schema".
-- **Uma autoridade por coisa.** Um gateway (`AiCoachGateway`), um lugar com prompt
-  (`AiCoachPrompt`), um validador, uma configuração (`AiModelConfig`). Nome de modelo não aparece
-  em ViewModel, tela, caso de uso ou prompt.
-- **Versionamento.** Mudou instrução ou formato de prompt, suba `AiModelConfig.PROMPT_VERSION`.
-  Mudou o contrato de conversa, suba `SCHEMA_VERSION` e ajuste `SUPPORTED_SCHEMA_VERSIONS`,
-  schemas, contextos e validador juntos.
+- **Uma autoridade por coisa.** Um gateway no app (`AiCoachGateway` /
+  `SparkBackendAiCoachGateway`), um lugar com prompt (`AiCoachPromptRegistry`, **no backend**),
+  um validador de cada lado, uma configuração de cada lado (`AiModelConfig` no app;
+  `AppConfig` + registry no servidor). **Nome de modelo não existe no app** — nem em ViewModel,
+  tela, caso de uso ou configuração.
+- **A credencial do Gemini é server-only.** Ela nunca entra no APK, no `BuildConfig`, em resource,
+  em DataStore, no Git ou em teste.
+- **Versionamento.** Mudou instrução ou formato de prompt, suba `PROMPT_VERSION` no backend.
+  Mudou o contrato de conversa, suba `SCHEMA_VERSION` (app) e `AI_SCHEMA_VERSION` (backend)
+  juntos, e ajuste schemas, contextos e validadores dos dois lados.
 - **Identificadores.** `exerciseId` inexistente é sempre rejeitado; onde há candidate set, id fora
   dos candidatos daquela requisição também.
 - **Escrita.** Geração é draft-first, adaptação é confirmation-first, `EXPLAIN_*` é read-only.
   Sessão concluída é imutável. A IA não altera XP, streak, conquistas, missões ou PRs.
 - **Custo.** Nenhuma chamada por `init`, abertura de tela, recomposição, polling ou background.
-  Ação explícita do usuário, uma chamada; toque repetido durante uma chamada não vira outra. Sem
-  retry automático.
+  Ação explícita do usuário, uma chamada; toque repetido durante uma chamada não vira outra — e o
+  servidor repete a proteção (uma chamada ativa por conta, dedupe por `clientRequestId`, quota
+  diária por conta e global). Sem retry automático em nenhum dos dois lados.
 - **Contexto.** O menor contexto suficiente, com limites explícitos em `AiModelConfig`. Nada de
   gamificação ou medidas corporais em análise, geração ou adaptação.
 - **Texto do usuário é dado.** Ele nunca vira instrução de sistema, e a proteção efetiva contra
   injeção é o validador, não a redação do prompt.
 - **Logs.** Só metadata técnica (`requestId`, tipo, modelo, versões, duração, resultado). Prompt,
   contexto, resposta, histórico, medidas e texto do usuário não vão para log — nem em debug.
-- **App Check.** A escolha do provedor é por variante de build (`src/debug` / `src/release`).
-  Nenhum token de depuração no código, no Git ou no APK de release.
+- **App Check.** A escolha do provedor é por variante de build (`src/debug` / `src/release`), e
+  quem o instala é o `FirebaseAuthGateway` — ele atesta o app perante o Firebase, que hoje serve à
+  autenticação. Nenhum token de depuração no código, no Git ou no APK de release.
+- **Rede.** Comunicação em texto claro é proibida em release. A exceção de desenvolvimento é
+  nominal (`10.0.2.2`/`localhost`) e vive só no source set `debug`.
 - **Testes.** Toda mudança no Coach roda a suíte de avaliação
-  (`./gradlew :app:testDebugUnitTest --tests "com.example.domain.ai.eval.*"`), que é offline e não
-  consome cota. Avaliação com provider real é opt-in e nunca entra no build padrão.
+  (`./gradlew :app:testDebugUnitTest --tests "com.example.domain.ai.eval.*"`) e, quando tocar o
+  servidor, `npm test` em `backend/`. As duas são offline, usam dublês e não consomem cota.
+  Avaliação com o caminho real (Firebase Auth → Spark Backend → Gemini) é opt-in e nunca entra no
+  build padrão nem no CI.
 
 ## 14. Tests and build are part of implementation
 

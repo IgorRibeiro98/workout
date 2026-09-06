@@ -52,7 +52,10 @@ data class AiWorkoutAdaptationChangeResponse(
 
 /** Resultado bruto do provider para uma adaptação, antes da validação semântica. */
 sealed interface AiWorkoutAdaptationGatewayResult {
-    data class Success(val response: AiWorkoutAdaptationResponse) : AiWorkoutAdaptationGatewayResult
+    data class Success(
+        val response: AiWorkoutAdaptationResponse,
+        val metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
+    ) : AiWorkoutAdaptationGatewayResult
     data class Error(
         val kind: AiCoachErrorKind,
         val detail: String? = null

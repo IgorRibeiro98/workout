@@ -80,7 +80,11 @@ internal data class GenerateWorkoutActions(
     val onNavigateBack: () -> Unit = {},
     /** Entrada contextual: explicar a proposta na tela. Não recebe texto, não recebe domínio. */
     val onExplainDraft: () -> Unit = {},
-    val canExplain: Boolean = false
+    val canExplain: Boolean = false,
+    /** Entrar na Conta Spark (T16.1). Nunca disparado sozinho — só por toque. */
+    val onSignIn: (android.content.Context) -> Unit = {},
+    val isSignInAvailable: Boolean = true,
+    val isSigningIn: Boolean = false
 )
 
 /**
@@ -93,7 +97,10 @@ internal data class GenerateWorkoutActions(
 fun GenerateWorkoutScreen(
     viewModel: GenerateWorkoutViewModel,
     onNavigateBack: () -> Unit,
-    onOpenTemplate: (Long) -> Unit
+    onOpenTemplate: (Long) -> Unit,
+    onSignIn: (android.content.Context) -> Unit = {},
+    isSignInAvailable: Boolean = true,
+    isSigningIn: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -118,7 +125,10 @@ fun GenerateWorkoutScreen(
             onOpenTemplate = onOpenTemplate,
             onNavigateBack = onNavigateBack,
             onExplainDraft = viewModel::explainDraft,
-            canExplain = viewModel.canExplain
+            canExplain = viewModel.canExplain,
+            onSignIn = onSignIn,
+            isSignInAvailable = isSignInAvailable,
+            isSigningIn = isSigningIn
         )
     )
 
@@ -222,6 +232,12 @@ internal fun GenerateWorkoutScreenContent(
                 )
 
                 is GenerateWorkoutStatus.Saved -> SavedCard(status, actions)
+
+                GenerateWorkoutStatus.AuthRequired -> CoachAccountRequiredCard(
+                    isSignInAvailable = actions.isSignInAvailable,
+                    isSigningIn = actions.isSigningIn,
+                    onSignIn = actions.onSignIn
+                )
 
                 is GenerateWorkoutStatus.Message -> MessageCard(
                     message = if (status.canRetry) {

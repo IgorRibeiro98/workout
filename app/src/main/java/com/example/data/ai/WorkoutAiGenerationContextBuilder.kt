@@ -2,7 +2,7 @@ package com.example.data.ai
 
 import com.example.data.local.WorkoutDao
 import com.example.domain.ai.AiCoachContextProjector
-import com.example.domain.ai.AiCoachPrompt
+import com.example.domain.ai.AiUserText
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.AiWorkoutGenerationContextBuilder
 import com.example.domain.ai.ExerciseCandidateBuilder
@@ -58,7 +58,7 @@ class WorkoutAiGenerationContextBuilder(
             // O único texto livre do usuário em todo o Coach. Atravessa a fronteira como dado:
             // sem caracteres de controle, com tamanho limitado — e o prompt diz explicitamente
             // que texto do usuário não é instrução.
-            notes = AiCoachPrompt.sanitizeUserText(
+            notes = AiUserText.sanitize(
                 raw = preferences.notes,
                 maxLength = WorkoutGenerationPreferences.MAX_NOTES_LENGTH
             ),

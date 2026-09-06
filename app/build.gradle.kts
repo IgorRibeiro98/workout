@@ -51,15 +51,6 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    // Endereço do Spark Backend (T16.1). Não é segredo, mas também não é código: vem de uma
-    // propriedade do Gradle (`-PsparkBackendBaseUrl=...` ou `local.properties`) e nasce vazia.
-    // Vazio significa "backend não configurado": o cliente responde `NotConfigured` e nenhuma
-    // requisição sai. O núcleo do Spark não depende deste valor para nada.
-    buildConfigField(
-      "String",
-      "SPARK_BACKEND_BASE_URL",
-      "\"${providers.gradleProperty("sparkBackendBaseUrl").getOrElse("")}\""
-    )
   }
 
   buildTypes {
@@ -67,8 +58,28 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+
+      // Endereço do Spark Backend em produção (T16.1/T16.2). Não é segredo, mas também não é
+      // código: vem de `-PsparkBackendBaseUrl=...` ou de `local.properties`, e nasce vazio.
+      // Vazio significa "backend não configurado": o Coach responde indisponível, nenhuma
+      // requisição sai e o núcleo do Spark continua completo. Nunca há fallback para localhost.
+      buildConfigField(
+        "String",
+        "SPARK_BACKEND_BASE_URL",
+        "\"${providers.gradleProperty("sparkBackendBaseUrl").getOrElse("")}\""
+      )
     }
-    debug { }
+    debug {
+      // Endereço de desenvolvimento, separado do de produção de propósito: apontar o app de
+      // release para uma máquina local seria um acidente esperando acontecer. Em emulador,
+      // `http://10.0.2.2:8080/` alcança o host — e só o build de depuração aceita cleartext
+      // (ver `src/debug/res/xml/network_security_config.xml`).
+      buildConfigField(
+        "String",
+        "SPARK_BACKEND_BASE_URL",
+        "\"${providers.gradleProperty("sparkBackendBaseUrlDebug").getOrElse("")}\""
+      )
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -111,15 +122,15 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.coil.gif)
   implementation(libs.converter.moshi)
-  // Coach IA (T14.0): Firebase AI Logic + Gemini Developer API é o único provider do Coach.
-  // O plugin `com.google.gms.google-services` está aplicado e exige `app/google-services.json`
-  // (configuração do console, não versionada). Em runtime, sem configuração válida o gateway
-  // responde `UNAVAILABLE` e o core segue local-first.
+  // Firebase (T14 → T16.2). O SDK do Firebase AI Logic saiu com a migração do Coach: quem fala
+  // com o Gemini agora é o Spark Backend, e o app não carrega credencial de modelo nenhuma.
+  // O plugin `com.google.gms.google-services` continua aplicado e exige `app/google-services.json`
+  // (configuração do console, não versionada) — ele é o que sustenta Firebase Auth e App Check.
   implementation(platform(libs.firebase.bom))
-  implementation(libs.firebase.ai)
-  // App Check por variante: Play Integrity em release, provedor de depuração só em debug.
-  // `debugImplementation` é o que garante que o provedor de depuração não entra no APK
-  // publicado — a escolha vive em `src/debug` / `src/release` (`AiCoachAppCheck`).
+  // App Check por variante: Play Integrity em release, provedor de depuração só em debug. Ele
+  // atesta o **aplicativo** perante o Firebase e desde a T16.2 é instalado pela fronteira de
+  // autenticação. `debugImplementation` é o que garante que o provedor de depuração não entra no
+  // APK publicado — a escolha vive em `src/debug` / `src/release` (`SparkAppCheck`).
   implementation(libs.firebase.appcheck.playintegrity)
   debugImplementation(libs.firebase.appcheck.debug)
   // Conta opcional (T16.1): Firebase Authentication + Sign in with Google via Credential Manager.

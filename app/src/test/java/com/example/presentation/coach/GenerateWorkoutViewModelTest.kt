@@ -284,6 +284,24 @@ class GenerateWorkoutViewModelTest {
     }
 
     @Test
+    fun `sem Conta Spark a geracao convida a entrar, sem tratar isso como falha`() =
+        runTest(dispatcher) {
+            val gateway = FakeAiCoachGateway(
+                generationResponder = {
+                    AiWorkoutGenerationGatewayResult.Error(AiCoachErrorKind.AUTH_REQUIRED)
+                }
+            )
+            val viewModel = viewModel(gateway)
+            viewModel.configureFocus()
+
+            viewModel.generate()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // Estado próprio: gerar com IA precisa de conta, criar treino à mão não.
+            assertEquals(GenerateWorkoutStatus.AuthRequired, viewModel.uiState.value.status)
+        }
+
+    @Test
     fun `resposta invalida vira recado sem retry automatico`() = runTest(dispatcher) {
         val gateway = FakeAiCoachGateway(
             generationResponder = {

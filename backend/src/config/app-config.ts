@@ -61,6 +61,47 @@ export class AppConfig {
   get firebaseProjectId(): string | undefined {
     return this.env.FIREBASE_PROJECT_ID;
   }
+  // --- Coach IA (T16.2) -----------------------------------------------------------------
+  //
+  // O backend é a única fronteira com o Gemini. Estes valores existem aqui, e só aqui: nenhum
+  // controller, serviço ou gateway escolhe modelo, temperatura, timeout ou teto por conta.
+
+  /** Credencial do Gemini. `undefined` = Coach indisponível neste servidor, nunca inseguro. */
+  get geminiApiKey(): string | undefined {
+    return this.env.GEMINI_API_KEY;
+  }
+
+  get geminiModel(): string {
+    return this.env.GEMINI_MODEL;
+  }
+
+  get aiTimeoutMs(): number {
+    return this.env.AI_TIMEOUT_MS;
+  }
+
+  get aiTemperature(): number {
+    return this.env.AI_TEMPERATURE;
+  }
+
+  get aiMaxOutputTokens(): number {
+    return this.env.AI_MAX_OUTPUT_TOKENS;
+  }
+
+  get aiThinkingLevel(): SparkEnv['AI_THINKING_LEVEL'] {
+    return this.env.AI_THINKING_LEVEL;
+  }
+
+  get aiMaxRequestsPerUserDay(): number {
+    return this.env.AI_MAX_REQUESTS_PER_USER_DAY;
+  }
+
+  get aiMaxRequestsGlobalDay(): number {
+    return this.env.AI_MAX_REQUESTS_GLOBAL_DAY;
+  }
+
+  get aiMaxConcurrentRequestsPerUser(): number {
+    return this.env.AI_MAX_CONCURRENT_REQUESTS_PER_USER;
+  }
 }
 
 export const APP_CONFIG = Symbol('APP_CONFIG');

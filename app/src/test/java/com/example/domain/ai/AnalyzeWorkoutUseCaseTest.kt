@@ -213,16 +213,21 @@ class AnalyzeWorkoutUseCaseTest {
             }
         }
         val gateway = FakeAiCoachGateway {
-            AiCoachGatewayResult.Success(AiCoachTestData.response(summary = "Resumo."))
+            AiCoachGatewayResult.Success(
+                AiCoachTestData.response(summary = "Resumo."),
+                // Modelo e versão de prompt são decisão do servidor desde a T16.2: a telemetria
+                // registra o que ele informou, não uma constante do app.
+                metadata = com.example.domain.ai.model.AiCoachCallMetadata(
+                    model = "modelo-do-servidor",
+                    promptVersion = 3
+                )
+            )
         }
 
         AnalyzeWorkoutUseCase(contextBuilder, gateway, telemetry)()
 
         assertEquals(
-            listOf(
-                "ANALYZE_WORKOUT|${AiModelConfig.MODEL_NAME}|${AiModelConfig.PROMPT_VERSION}|" +
-                    "${AiModelConfig.SCHEMA_VERSION}|SUCCESS"
-            ),
+            listOf("ANALYZE_WORKOUT|modelo-do-servidor|3|${AiModelConfig.SCHEMA_VERSION}|SUCCESS"),
             recorded
         )
     }

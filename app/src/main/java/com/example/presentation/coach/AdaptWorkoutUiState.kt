@@ -53,6 +53,14 @@ sealed interface AdaptWorkoutStatus {
         val dataQuality: AiCoachDataQuality
     ) : AdaptWorkoutStatus
 
+    /**
+     * A adaptação exige Conta Spark e não há conta conectada (T16.2).
+     *
+     * Estado próprio, e não um `Message`: não houve falha, e editar o treino à mão continua
+     * funcionando sem conta.
+     */
+    data object AuthRequired : AdaptWorkoutStatus
+
     data class Message(
         val text: String,
         val canRetry: Boolean = false,

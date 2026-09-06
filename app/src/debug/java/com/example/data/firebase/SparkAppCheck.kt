@@ -1,4 +1,4 @@
-package com.example.data.ai
+package com.example.data.firebase
 
 import android.content.Context
 import com.google.firebase.appcheck.AppCheckProviderFactory
@@ -7,16 +7,21 @@ import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 /**
  * App Check do build de **depuração**.
  *
+ * Ele atesta o **aplicativo** perante o Firebase. Até a T14.5 quem o instalava era o gateway do
+ * Coach, porque o Coach era o consumidor de Firebase que precisava dele; com a T16.2 o Coach passou
+ * a falar com o Spark Backend, e o produto Firebase que resta em uso é o Authentication — que é
+ * quem instala o App Check agora (`FirebaseAuthGateway`). O provedor por variante não mudou.
+ *
  * Existe uma vez por variante de build, e não um `if (BuildConfig.DEBUG)`: assim o
  * `DebugAppCheckProviderFactory` só é compilado no source set `debug` e não tem como ser
  * escolhido — nem por engano, nem por refatoração — em um APK de release.
  *
  * O segredo de depuração **não vive no código**. Quando nenhum token é informado, o provedor de
  * depuração gera um e o registra no Logcat (`DebugAppCheckProvider`); basta cadastrá-lo no
- * console do Firebase. Quando o console gerar outro, o desenvolvedor cola aquele token na tela do
- * Coach e ele fica apenas neste aparelho, em `SharedPreferences`.
+ * console do Firebase. Quando o console gerar outro, o desenvolvedor cola aquele token na área de
+ * Conta do Perfil e ele fica apenas neste aparelho, em `SharedPreferences`.
  */
-internal object AiCoachAppCheck {
+internal object SparkAppCheck {
 
     /** Nome legível do provedor desta variante. Usado em log técnico e em teste. */
     const val PROVIDER_NAME: String = "debug"

@@ -10,6 +10,7 @@ import com.example.domain.ai.AiCoachTelemetry
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.AiWorkoutAdaptationContextBuilder
 import com.example.domain.ai.model.AiCoachAdvice
+import com.example.domain.ai.model.AiCoachCallMetadata
 import com.example.domain.ai.model.AiCoachExplanation
 import com.example.domain.ai.model.AiCoachExplanationGatewayResult
 import com.example.domain.ai.model.AiCoachExplanationRequest
@@ -177,6 +178,10 @@ class ExplainCoachDecisionUseCase(
         )
 
         val gatewayResult = gateway.explain(request)
+        // Modelo e versão de prompt vêm do servidor (T16.2). Um erro não traz metadata: a
+        // telemetria registra "desconhecido" em vez de fingir que houve modelo.
+        val metadata = (gatewayResult as? AiCoachExplanationGatewayResult.Success)?.metadata
+            ?: AiCoachCallMetadata.Unknown
         val result = when (gatewayResult) {
             is AiCoachExplanationGatewayResult.Error -> fallback(plan, gatewayResult.kind)
 
@@ -215,8 +220,8 @@ class ExplainCoachDecisionUseCase(
         telemetry.onRequestFinished(
             requestId = requestId,
             type = plan.target.requestType,
-            model = AiModelConfig.MODEL_NAME,
-            promptVersion = AiModelConfig.PROMPT_VERSION,
+            model = metadata.model,
+            promptVersion = metadata.promptVersion,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (gatewayResult) {

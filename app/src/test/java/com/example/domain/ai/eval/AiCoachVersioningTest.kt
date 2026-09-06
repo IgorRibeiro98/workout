@@ -1,6 +1,5 @@
 package com.example.domain.ai.eval
 
-import com.example.domain.ai.AiCoachPrompt
 import com.example.domain.ai.AiCoachTelemetry
 import com.example.domain.ai.AiCoachTestData
 import com.example.domain.ai.AiModelConfig
@@ -36,15 +35,12 @@ class AiCoachVersioningTest {
     }
 
     @Test
-    fun `o nome do modelo existe em um unico ponto de configuracao`() {
-        val offenders = mainSources.filter { file ->
-            file.name != "AiModelConfig.kt" && file.readText().contains("gemini-")
-        }
+    fun `nenhum nome de modelo existe no aplicativo`() {
+        // Desde a T16.2 o modelo é decisão do servidor: trocar de modelo não pode exigir publicar
+        // um APK, e um nome de modelo no app seria uma segunda autoridade divergente.
+        val offenders = mainSources.filter { file -> file.readText().contains("gemini-") }
 
-        assertTrue(
-            "nome de modelo fora de AiModelConfig: ${offenders.map { it.name }}",
-            offenders.isEmpty()
-        )
+        assertTrue("nome de modelo no aplicativo: ${offenders.map { it.name }}", offenders.isEmpty())
     }
 
     @Test
@@ -67,33 +63,38 @@ class AiCoachVersioningTest {
     }
 
     @Test
-    fun `a versao de prompt e uma autoridade unica`() {
-        assertTrue("PROMPT_VERSION precisa ser positiva", AiModelConfig.PROMPT_VERSION >= 1)
-
+    fun `o aplicativo nao declara versao de prompt`() {
+        // A versão de prompt acompanha o prompt, e o prompt vive no Spark Backend desde a T16.2.
+        // Declarar um número aqui criaria duas versões divergentes para a mesma conversa.
         val offenders = mainSources.filter { file ->
-            file.name != "AiModelConfig.kt" &&
-                Regex("(?i)(const\\s+val\\s+)?PROMPT_VERSION\\s*[:=]").containsMatchIn(file.readText())
+            Regex("(const\\s+val|val|var)\\s+PROMPT_VERSION\\b").containsMatchIn(file.readText())
         }
 
         assertTrue(
-            "há outra versão de prompt declarada fora de AiModelConfig: ${offenders.map { it.name }}",
+            "versão de prompt declarada no aplicativo: ${offenders.map { it.name }}",
             offenders.isEmpty()
+        )
+
+        // O app carrega a versão que o servidor informou; quando não há chamada, ele diz
+        // "desconhecida" em vez de inventar um número.
+        assertEquals(0, com.example.domain.ai.model.AiCoachCallMetadata.UNKNOWN_PROMPT_VERSION)
+        assertEquals(
+            com.example.domain.ai.model.AiCoachCallMetadata.UNKNOWN_PROMPT_VERSION,
+            com.example.domain.ai.model.AiCoachCallMetadata.Unknown.promptVersion
         )
     }
 
     @Test
-    fun `todo prompt de usuario carrega requestId, schemaVersion e promptVersion`() {
-        val prompt = AiCoachPrompt.userPrompt(
-            AiWorkoutGenerationRequest(
-                requestId = "req-abc",
-                schemaVersion = AiModelConfig.SCHEMA_VERSION,
-                context = WorkoutGenerationTestData.context()
-            )
+    fun `o contrato de ida carrega requestId, schemaVersion e tipo`() {
+        val request = AiWorkoutGenerationRequest(
+            requestId = "req-abc",
+            schemaVersion = AiModelConfig.SCHEMA_VERSION,
+            context = WorkoutGenerationTestData.context()
         )
 
-        assertTrue(prompt.contains("requestId: req-abc"))
-        assertTrue(prompt.contains("schemaVersion: ${AiModelConfig.SCHEMA_VERSION}"))
-        assertTrue(prompt.contains("promptVersion: ${AiModelConfig.PROMPT_VERSION}"))
+        assertEquals("req-abc", request.requestId)
+        assertEquals(AiModelConfig.SCHEMA_VERSION, request.schemaVersion)
+        assertEquals(AiCoachRequestType.GENERATE_WORKOUT, request.type)
     }
 
     @Test
@@ -109,7 +110,7 @@ class AiCoachVersioningTest {
     }
 
     @Test
-    fun `a telemetria registra modelo, prompt e schema da configuracao`() = runTest {
+    fun `a telemetria registra o modelo e a versao de prompt que o servidor informou`() = runTest {
         val recorded = mutableListOf<String>()
         val telemetry = object : AiCoachTelemetry {
             override fun onRequestFinished(
@@ -130,6 +131,12 @@ class AiCoachVersioningTest {
                     summary = "Resumo.",
                     // Sem contexto não há evidência: o teto é INSUFFICIENT.
                     dataQuality = AiCoachTestData.dataQuality(AiDataQualityLevel.INSUFFICIENT)
+                ),
+                // Metadata do servidor: é ela, e não uma constante local, que a telemetria registra.
+                metadata = com.example.domain.ai.model.AiCoachCallMetadata(
+                    requestId = "srv-1",
+                    model = "modelo-do-servidor",
+                    promptVersion = 7
                 )
             )
         }
@@ -143,10 +150,7 @@ class AiCoachVersioningTest {
         )()
 
         assertEquals(
-            listOf(
-                "ANALYZE_WORKOUT|${AiModelConfig.MODEL_NAME}|${AiModelConfig.PROMPT_VERSION}|" +
-                    "${AiModelConfig.SCHEMA_VERSION}|SUCCESS"
-            ),
+            listOf("ANALYZE_WORKOUT|modelo-do-servidor|7|${AiModelConfig.SCHEMA_VERSION}|SUCCESS"),
             recorded
         )
     }

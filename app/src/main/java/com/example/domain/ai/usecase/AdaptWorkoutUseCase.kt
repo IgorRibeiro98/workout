@@ -7,6 +7,7 @@ import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.AiWorkoutAdaptationContextBuilder
 import com.example.domain.ai.AiWorkoutAdaptationValidation
 import com.example.domain.ai.model.AdaptWorkoutResult
+import com.example.domain.ai.model.AiCoachCallMetadata
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiWorkoutAdaptationGatewayResult
@@ -66,11 +67,14 @@ class AdaptWorkoutUseCase(
             context = source.context
         )
 
+        var metadata = AiCoachCallMetadata.Unknown
         val result = when (val gatewayResult = gateway.adaptWorkout(request)) {
             is AiWorkoutAdaptationGatewayResult.Error ->
                 AdaptWorkoutResult.Failure(gatewayResult.kind, gatewayResult.detail)
 
             is AiWorkoutAdaptationGatewayResult.Success -> {
+                // Modelo e versão de prompt vêm do servidor (T16.2), nunca de constante local.
+                metadata = gatewayResult.metadata
                 val validation = AiCoachResponseValidator.validateWorkoutAdaptation(
                     requestId = requestId,
                     templateId = source.templateId,
@@ -97,19 +101,20 @@ class AdaptWorkoutUseCase(
             }
         }
 
-        return finish(requestId, startedAt, result)
+        return finish(requestId, startedAt, result, metadata)
     }
 
     private fun finish(
         requestId: String,
         startedAt: Long,
-        result: AdaptWorkoutResult
+        result: AdaptWorkoutResult,
+        metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
     ): AdaptWorkoutResult {
         telemetry.onRequestFinished(
             requestId = requestId,
             type = AiCoachRequestType.ADAPT_WORKOUT,
-            model = AiModelConfig.MODEL_NAME,
-            promptVersion = AiModelConfig.PROMPT_VERSION,
+            model = metadata.model,
+            promptVersion = metadata.promptVersion,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (result) {

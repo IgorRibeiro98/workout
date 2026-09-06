@@ -23,6 +23,15 @@ sealed interface AiCoachUiState {
         val dataQuality: AiDataQualityUi
     ) : AiCoachUiState
 
+    /**
+     * A ação exige Conta Spark e não há conta conectada (T16.2).
+     *
+     * Estado próprio, e não uma variação de `Error`: aqui não houve falha nenhuma. O Coach passou
+     * a ser uma capacidade online autenticada, e o que a tela precisa oferecer é um convite para
+     * entrar — nunca um seletor de contas aberto sozinho.
+     */
+    data class AuthRequired(val message: String) : AiCoachUiState
+
     /** O Coach não está disponível, mas o resto do Spark continua funcionando normalmente. */
     data class Unavailable(val message: String) : AiCoachUiState
 

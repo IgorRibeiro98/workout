@@ -64,6 +64,14 @@ sealed interface GenerateWorkoutStatus {
     data class Saved(val templateId: Long, val name: String) : GenerateWorkoutStatus
 
     /**
+     * A geração exige Conta Spark e não há conta conectada (T16.2).
+     *
+     * Estado próprio, e não um `Message`: aqui não houve falha — o que a tela precisa oferecer é
+     * um convite para entrar, e criar treino à mão continua funcionando sem conta.
+     */
+    data object AuthRequired : GenerateWorkoutStatus
+
+    /**
      * Um recado para o usuário.
      *
      * [isWarning] separa "o Coach não está disponível" de "a chamada falhou"; [canRetry] diz se

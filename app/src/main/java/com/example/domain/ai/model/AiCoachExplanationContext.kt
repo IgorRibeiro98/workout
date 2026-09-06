@@ -109,7 +109,10 @@ data class AiCoachExplanationResponse(
 
 /** Resultado bruto do provider para uma explicação, antes da validação semântica. */
 sealed interface AiCoachExplanationGatewayResult {
-    data class Success(val response: AiCoachExplanationResponse) : AiCoachExplanationGatewayResult
+    data class Success(
+        val response: AiCoachExplanationResponse,
+        val metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
+    ) : AiCoachExplanationGatewayResult
     data class Error(
         val kind: AiCoachErrorKind,
         val detail: String? = null

@@ -1,10 +1,14 @@
-# CI do Spark Backend (T16.0).
+# CI do Spark Backend (T16.0 → T16.2).
 #
 # Escopo deliberadamente restrito a `backend/**`: o CI do Android foi removido em df63791 e esta
-# tarefa não o ressuscita. Só o backend é validado aqui.
+# tarefa não o ressuscita — os testes do app rodam localmente com
+# `./gradlew :app:testDebugUnitTest`.
 #
-# Nada neste workflow depende de rede além do registro do npm: sem Firebase, sem Gemini, sem VPS,
-# sem credencial. Se algum job precisar de segredo no futuro, isso é uma decisão nova.
+# Nada neste workflow depende de rede além do registro do npm: **sem Firebase, sem Gemini, sem
+# VPS, sem credencial**. Os testes do Coach (T16.2) usam `FakeAiProviderGateway` e
+# `FakeAuthTokenVerifier`, que vivem só em `test/`: não existe `GEMINI_API_KEY` aqui, e uma
+# chamada real ao modelo em CI seria custo recorrente por commit. Se algum job precisar de segredo
+# no futuro, isso é uma decisão nova.
 
 name: backend
 

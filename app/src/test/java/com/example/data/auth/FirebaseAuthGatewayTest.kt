@@ -141,16 +141,37 @@ class FirebaseAuthGatewayTest {
 
     @Test
     fun `App Check continua existindo e separado da autenticacao de usuario`() {
-        // App Check atesta o app; Firebase Auth identifica o usuário. A T16.1 não pode ter
-        // removido nem enfraquecido o primeiro ao introduzir o segundo.
+        // App Check atesta o **app**; Firebase Auth identifica o **usuário**. Nem a T16.1 nem a
+        // T16.2 podem ter removido ou enfraquecido o primeiro.
+        //
+        // Desde a T16.2 quem instala o App Check é esta fronteira: o Coach passou a falar com o
+        // Spark Backend e o Authentication é o produto Firebase que resta em uso. Instalar é uma
+        // coisa; **confundir** as duas identidades é outra — e é isso que se verifica aqui.
         val appCheckFiles = mainSources().filter {
             AuthSourceInspection.code(it).contains("FirebaseAppCheck")
         }
-
         assertTrue("App Check sumiu de src/main", appCheckFiles.isNotEmpty())
+
+        // O provedor de App Check não conhece conta, uid nem estado de sessão.
+        val appCheckProviders = AuthSourceInspection.sources("app/src/debug/java/com/example/data/firebase") +
+            AuthSourceInspection.sources("app/src/release/java/com/example/data/firebase")
+        assertTrue("provedor de App Check não encontrado", appCheckProviders.isNotEmpty())
+        for (file in appCheckProviders) {
+            val code = AuthSourceInspection.code(file)
+            for (identity in listOf("FirebaseAuth", "SparkAccount", "AuthState", "idToken")) {
+                assertTrue(
+                    "App Check não pode conhecer identidade de usuário (${file.name} cita $identity)",
+                    !code.contains(identity)
+                )
+            }
+        }
+
+        // E o caminho do token de usuário não consulta App Check: um atesta o app, o outro
+        // identifica a pessoa, e nenhum substitui o outro.
+        val tokenContract = AuthSourceInspection.sources("app/src/main/java/com/example/domain/auth")
         assertTrue(
-            "App Check e autenticação de usuário não podem se confundir",
-            authSources().none { AuthSourceInspection.code(it).contains("FirebaseAppCheck") }
+            "o contrato de token de usuário não pode depender de App Check",
+            tokenContract.none { AuthSourceInspection.code(it).contains("AppCheck") }
         )
     }
 

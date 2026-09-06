@@ -155,7 +155,10 @@ class AdaptWorkoutViewModel(
         )
     }
 
-    private fun AdaptWorkoutResult.Failure.toStatus(): AdaptWorkoutStatus.Message = when (kind) {
+    private fun AdaptWorkoutResult.Failure.toStatus(): AdaptWorkoutStatus = when (kind) {
+        // Não é falha: é o Coach online pedindo conta.
+        AiCoachErrorKind.AUTH_REQUIRED -> AdaptWorkoutStatus.AuthRequired
+
         AiCoachErrorKind.UNAVAILABLE -> AdaptWorkoutStatus.Message(
             text = if (!detail.isNullOrBlank()) {
                 "O Coach IA não está disponível: $detail"

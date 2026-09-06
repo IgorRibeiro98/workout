@@ -69,13 +69,18 @@ class MainApplication : Application(), ImageLoaderFactory {
         internal set
 
     /**
-     * Coach IA (T14.0/T14.1).
+     * Coach IA (T14 → T16.2).
      *
-     * `by lazy` de propósito: o Spark é local-first e não pode pagar inicialização de Firebase
-     * no startup. Nada de IA é tocado enquanto o usuário não pedir uma análise.
+     * A partir da T16.2 o caminho é **um só**: o Spark Backend. O app não fala com o Gemini, não
+     * carrega credencial de modelo e não tem um segundo provider de reserva — um fallback
+     * escondido para o Firebase AI Logic criaria custo duplicado e comportamento divergente.
+     *
+     * `by lazy` de propósito: o Spark é local-first e nada de IA é tocado enquanto o usuário não
+     * pedir. Sem endereço de backend configurado, o Coach responde indisponível e o restante do
+     * app continua completo.
      */
     val aiCoachGateway: com.example.domain.ai.AiCoachGateway by lazy {
-        com.example.data.ai.FirebaseAiCoachGateway(this)
+        com.example.data.ai.SparkBackendAiCoachGateway(sparkBackendClient)
     }
 
     val analyzeWorkoutUseCase: com.example.domain.ai.usecase.AnalyzeWorkoutUseCase by lazy {
@@ -168,10 +173,12 @@ class MainApplication : Application(), ImageLoaderFactory {
     }
 
     /**
-     * Cliente do Spark Backend (T16.1).
+     * Cliente do Spark Backend (T16.1), agora também o transporte do Coach (T16.2).
      *
      * `null` quando o build não tem endereço configurado — que é o padrão hoje, porque a VPS
-     * ainda não foi provisionada. O núcleo do Spark não depende dele para nada.
+     * ainda não foi provisionada. O núcleo do Spark não depende dele para nada: sem endereço,
+     * treino, execução, histórico, templates e gamificação continuam completos, e só o Coach
+     * responde indisponível.
      */
     val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? by lazy {
         BuildConfig.SPARK_BACKEND_BASE_URL
@@ -249,10 +256,9 @@ class MainApplication : Application(), ImageLoaderFactory {
         )
         notificationManager = WorkoutNotificationManager(this)
 
-        // Nada de Firebase, App Check ou IA acontece no startup: o Spark é local-first e o
-        // Coach só existe dentro de uma chamada que o usuário pediu. Quem inicializa o provider
-        // — e instala o App Check da variante de build — é o `FirebaseAiCoachGateway`, na
-        // primeira chamada real.
+        // Nada de Firebase, App Check ou IA acontece no startup: o Spark é local-first. O Coach
+        // só fala com o Spark Backend dentro de uma chamada que o usuário pediu, e quem instala o
+        // App Check da variante de build é o `FirebaseAuthGateway`, quando a conta é usada.
 
         CoroutineScope(Dispatchers.Main).launch {
             workoutEngine.restTimerTarget.collect { target ->

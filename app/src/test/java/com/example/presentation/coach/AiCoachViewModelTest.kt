@@ -269,6 +269,23 @@ class AiCoachViewModelTest {
     }
 
     @Test
+    fun `sem Conta Spark a UI convida a entrar, sem tratar isso como falha`() = runTest(dispatcher) {
+        // A partir da T16.2 o Coach é uma capacidade online autenticada. Sem conta não existe
+        // chamada nova ao modelo — mas isso não é erro, e a tela não pode dizer que falhou.
+        val gateway = FakeAiCoachGateway { AiCoachGatewayResult.Error(AiCoachErrorKind.AUTH_REQUIRED) }
+        val viewModel = viewModel(gateway)
+
+        viewModel.analyze()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.uiState.value as AiCoachUiState.AuthRequired
+        assertTrue(state.message.contains("Conta Spark"))
+        // O texto precisa deixar claro que o núcleo do Spark continua funcionando sem conta.
+        assertTrue(state.message.contains("sem conta"))
+        assertEquals(1, gateway.callCount)
+    }
+
+    @Test
     fun `Coach nao configurado vira Unavailable e nao erro generico`() = runTest(dispatcher) {
         val gateway = FakeAiCoachGateway { AiCoachGatewayResult.Error(AiCoachErrorKind.UNAVAILABLE) }
         val viewModel = viewModel(gateway)

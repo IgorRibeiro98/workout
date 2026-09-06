@@ -170,6 +170,11 @@ class AiCoachObservabilityTest {
             gateway.generationRequests.single().requestId,
             telemetry.requestIds.single()
         )
-        assertTrue(telemetry.records.single().contains(AiModelConfig.MODEL_NAME))
+        // Sem metadata do servidor (o dublê não a informa), a telemetria registra "desconhecido"
+        // em vez de inventar um nome de modelo que o app não escolhe mais.
+        assertTrue(
+            telemetry.records.single()
+                .contains(com.example.domain.ai.model.AiCoachCallMetadata.UNKNOWN_MODEL)
+        )
     }
 }

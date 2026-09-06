@@ -2,7 +2,10 @@ package com.example.domain.ai.eval
 
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
-import com.example.data.ai.FirebaseAiCoachGateway
+import com.example.BuildConfig
+import com.example.data.ai.SparkBackendAiCoachGateway
+import com.example.data.auth.FirebaseAuthGateway
+import com.example.data.remote.spark.SparkBackendClient
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.model.AiAthleteContext
 import com.example.domain.ai.model.AiCoachContext
@@ -32,15 +35,23 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
- * Avaliação com o provider **real** — opt-in, nunca automática.
+ * Avaliação com o caminho **real** — opt-in, nunca automática.
+ *
+ * Desde a T16.2 "real" significa a cadeia inteira:
+ *
+ * ```text
+ * Firebase Auth (conta conectada no aparelho) → Firebase ID Token
+ *   → Spark Backend → prompt/modelo do servidor → Gemini
+ * ```
  *
  * Ela não roda em `testDebugUnitTest`, não roda no build e não roda em CI: é um teste
- * instrumentado que só executa quando alguém pedir explicitamente, com aparelho, Firebase
- * configurado e App Check válido. Cada execução gasta cota de verdade, por isso é **uma** chamada
- * por tipo de request.
+ * instrumentado que só executa quando alguém pedir explicitamente, com aparelho, conta conectada
+ * e um backend alcançável. Cada execução gasta cota de verdade, por isso é **uma** chamada por
+ * tipo de request.
  *
  * ```bash
  * ./gradlew :app:connectedDebugAndroidTest \
+ *   -PsparkBackendBaseUrlDebug=https://spark.exemplo/ \
  *   -Pandroid.testInstrumentationRunnerArguments.class=com.example.domain.ai.eval.RealProviderEvaluationTest \
  *   -Pandroid.testInstrumentationRunnerArguments.realProviderEval=true
  * ```
@@ -56,7 +67,14 @@ class RealProviderEvaluationTest {
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
-    private val gateway by lazy { FirebaseAiCoachGateway(context) }
+    private val gateway by lazy {
+        SparkBackendAiCoachGateway(
+            SparkBackendClient(
+                baseUrl = BuildConfig.SPARK_BACKEND_BASE_URL,
+                tokens = FirebaseAuthGateway(context)
+            )
+        )
+    }
 
     private fun requireOptIn() {
         val enabled = InstrumentationRegistry.getArguments()
@@ -66,13 +84,26 @@ class RealProviderEvaluationTest {
             "avaliação com provider real desativada (passe -P...$OPT_IN_ARGUMENT=true)",
             enabled
         )
+        // Sem endereço de backend não existe caminho real a exercitar — e nenhuma chamada sai.
+        assumeTrue(
+            "Spark Backend não configurado neste build (-PsparkBackendBaseUrlDebug=...)",
+            BuildConfig.SPARK_BACKEND_BASE_URL.isNotBlank()
+        )
     }
 
-    private fun report(type: AiCoachRequestType, outcome: String) {
+    /**
+     * Só metadata técnica, como manda a política de log do Coach: tipo, versões, modelo que o
+     * **servidor** informou e a classe do resultado. Prompt, contexto e resposta não aparecem.
+     */
+    private fun report(
+        type: AiCoachRequestType,
+        outcome: String,
+        metadata: com.example.domain.ai.model.AiCoachCallMetadata =
+            com.example.domain.ai.model.AiCoachCallMetadata.Unknown
+    ) {
         Log.i(
             TAG,
-            "type=$type model=${AiModelConfig.MODEL_NAME} " +
-                "promptVersion=${AiModelConfig.PROMPT_VERSION} " +
+            "type=$type model=${metadata.model} promptVersion=${metadata.promptVersion} " +
                 "schemaVersion=${AiModelConfig.SCHEMA_VERSION} outcome=$outcome"
         )
     }
@@ -88,11 +119,12 @@ class RealProviderEvaluationTest {
             context = analysisContext()
         )
 
-        val outcome = when (val result = gateway.request(request)) {
-            is AiCoachGatewayResult.Success -> "SUCCESS"
-            is AiCoachGatewayResult.Error -> result.kind.name
+        when (val result = gateway.request(request)) {
+            is AiCoachGatewayResult.Success ->
+                report(AiCoachRequestType.ANALYZE_WORKOUT, "SUCCESS", result.metadata)
+
+            is AiCoachGatewayResult.Error -> report(AiCoachRequestType.ANALYZE_WORKOUT, result.kind.name)
         }
-        report(AiCoachRequestType.ANALYZE_WORKOUT, outcome)
     }
 
     @Test
@@ -105,11 +137,13 @@ class RealProviderEvaluationTest {
             context = generationContext()
         )
 
-        val outcome = when (val result = gateway.generateWorkout(request)) {
-            is AiWorkoutGenerationGatewayResult.Success -> "SUCCESS"
-            is AiWorkoutGenerationGatewayResult.Error -> result.kind.name
+        when (val result = gateway.generateWorkout(request)) {
+            is AiWorkoutGenerationGatewayResult.Success ->
+                report(AiCoachRequestType.GENERATE_WORKOUT, "SUCCESS", result.metadata)
+
+            is AiWorkoutGenerationGatewayResult.Error ->
+                report(AiCoachRequestType.GENERATE_WORKOUT, result.kind.name)
         }
-        report(AiCoachRequestType.GENERATE_WORKOUT, outcome)
     }
 
     @Test
@@ -122,11 +156,13 @@ class RealProviderEvaluationTest {
             context = adaptationContext()
         )
 
-        val outcome = when (val result = gateway.adaptWorkout(request)) {
-            is AiWorkoutAdaptationGatewayResult.Success -> "SUCCESS"
-            is AiWorkoutAdaptationGatewayResult.Error -> result.kind.name
+        when (val result = gateway.adaptWorkout(request)) {
+            is AiWorkoutAdaptationGatewayResult.Success ->
+                report(AiCoachRequestType.ADAPT_WORKOUT, "SUCCESS", result.metadata)
+
+            is AiWorkoutAdaptationGatewayResult.Error ->
+                report(AiCoachRequestType.ADAPT_WORKOUT, result.kind.name)
         }
-        report(AiCoachRequestType.ADAPT_WORKOUT, outcome)
     }
 
     @Test
@@ -140,11 +176,13 @@ class RealProviderEvaluationTest {
             context = explanationContext()
         )
 
-        val outcome = when (val result = gateway.explain(request)) {
-            is AiCoachExplanationGatewayResult.Success -> "SUCCESS"
-            is AiCoachExplanationGatewayResult.Error -> result.kind.name
+        when (val result = gateway.explain(request)) {
+            is AiCoachExplanationGatewayResult.Success ->
+                report(AiCoachRequestType.EXPLAIN_ADAPTATION, "SUCCESS", result.metadata)
+
+            is AiCoachExplanationGatewayResult.Error ->
+                report(AiCoachRequestType.EXPLAIN_ADAPTATION, result.kind.name)
         }
-        report(AiCoachRequestType.EXPLAIN_ADAPTATION, outcome)
     }
 
     // ------------------------------------------------------------------------- fixtures

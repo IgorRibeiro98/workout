@@ -236,7 +236,10 @@ class GenerateWorkoutViewModel(
         _uiState.value = _uiState.value.copy(status = GenerateWorkoutStatus.Idle)
     }
 
-    private fun GenerateWorkoutResult.Failure.toStatus(): GenerateWorkoutStatus.Message = when (kind) {
+    private fun GenerateWorkoutResult.Failure.toStatus(): GenerateWorkoutStatus = when (kind) {
+        // Não é falha: é o Coach online pedindo conta.
+        AiCoachErrorKind.AUTH_REQUIRED -> GenerateWorkoutStatus.AuthRequired
+
         AiCoachErrorKind.UNAVAILABLE -> GenerateWorkoutStatus.Message(
             text = if (!detail.isNullOrBlank()) {
                 "O Coach IA não está disponível: $detail"

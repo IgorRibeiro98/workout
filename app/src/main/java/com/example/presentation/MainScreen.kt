@@ -257,10 +257,19 @@ fun MainScreen() {
                 val templateId = backStackEntry.arguments?.getString("templateId")?.toLongOrNull() ?: -1L
                 val adaptViewModel: com.example.presentation.coach.AdaptWorkoutViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // Conta Spark (T16.1): observar o estado restaura a sessão que já existe e
+                // habilita o convite de login quando o Coach precisar dela. O seletor de contas
+                // continua abrindo só por toque.
+                val accountViewModel: com.example.presentation.account.AccountViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val accountState by accountViewModel.uiState.collectAsState()
                 com.example.presentation.coach.AdaptWorkoutScreen(
                     viewModel = adaptViewModel,
                     templateId = templateId,
-                    onNavigateBack = { navController.popBackStack() }
+                    onNavigateBack = { navController.popBackStack() },
+                    onSignIn = accountViewModel::signIn,
+                    isSignInAvailable = accountState.isSignInAvailable,
+                    isSigningIn = accountState.isBusy
                 )
             }
             composable(Screen.Exercises.route) { 
@@ -325,22 +334,34 @@ fun MainScreen() {
             composable(Screen.AiCoach.route) {
                 val aiCoachViewModel: com.example.presentation.coach.AiCoachViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val accountViewModel: com.example.presentation.account.AccountViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val accountState by accountViewModel.uiState.collectAsState()
                 com.example.presentation.coach.AiCoachScreen(
                     viewModel = aiCoachViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToGenerateWorkout = { navController.navigate(Screen.GenerateWorkout.route) }
+                    onNavigateToGenerateWorkout = { navController.navigate(Screen.GenerateWorkout.route) },
+                    onSignIn = accountViewModel::signIn,
+                    isSignInAvailable = accountState.isSignInAvailable,
+                    isSigningIn = accountState.isBusy
                 )
             }
             composable(Screen.GenerateWorkout.route) {
                 val generateWorkoutViewModel: com.example.presentation.coach.GenerateWorkoutViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val accountViewModel: com.example.presentation.account.AccountViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val accountState by accountViewModel.uiState.collectAsState()
                 com.example.presentation.coach.GenerateWorkoutScreen(
                     viewModel = generateWorkoutViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     // Editar um treino gerado é editar um treino: o editor canônico assume a partir daqui.
                     onOpenTemplate = { templateId ->
                         navController.navigate(Screen.TemplateDetails.createRoute(templateId))
-                    }
+                    },
+                    onSignIn = accountViewModel::signIn,
+                    isSignInAvailable = accountState.isSignInAvailable,
+                    isSigningIn = accountState.isBusy
                 )
             }
             composable(Screen.Settings.route) {

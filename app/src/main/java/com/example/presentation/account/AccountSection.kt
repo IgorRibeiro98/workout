@@ -24,9 +24,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.BuildConfig
+import com.example.data.firebase.SparkAppCheck
 import com.example.domain.auth.AuthError
 import com.example.domain.auth.SparkAccount
 import com.example.ui.theme.BorderLight
@@ -107,6 +113,13 @@ fun AccountSection(
                         check = uiState.backendCheck,
                         onVerify = onVerifyWithBackend
                     )
+                }
+
+                // App Check atesta o **aplicativo** perante o Firebase, e desde a T16.2 quem o
+                // instala é a fronteira de autenticação — por isso a ferramenta de depuração dele
+                // mora aqui, e não na tela do Coach, que não fala mais com o Firebase.
+                if (BuildConfig.DEBUG && SparkAppCheck.SUPPORTS_DEBUG_TOKEN) {
+                    AppCheckDebugTokenRow()
                 }
             }
         }
@@ -254,6 +267,67 @@ private fun SignedInContent(
 }
 
 /**
+ * O token de depuração do App Check deste aparelho.
+ *
+ * Ferramenta de desenvolvimento, compilada só na variante de depuração: em release
+ * `SUPPORTS_DEBUG_TOKEN` é `false` e o provedor de depuração nem existe no APK. Nenhum token vive
+ * no código — sem um colado aqui, o provedor gera o dele e o registra no Logcat.
+ */
+@Composable
+private fun AppCheckDebugTokenRow() {
+    val context = LocalContext.current
+    var currentToken by remember { mutableStateOf(SparkAppCheck.customDebugToken(context)) }
+    var inputToken by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "App Check (debug)",
+            color = Lime400,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
+        )
+        Text(
+            text = currentToken ?: GENERATED_DEBUG_TOKEN_HINT,
+            color = TextSecondary,
+            fontSize = 11.sp
+        )
+        OutlinedTextField(
+            value = inputToken,
+            onValueChange = { inputToken = it },
+            placeholder = {
+                Text(text = "Cole o token do Firebase...", fontSize = 11.sp, color = TextSecondary)
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedButton(
+            onClick = {
+                if (inputToken.isNotBlank()) {
+                    SparkAppCheck.setCustomDebugToken(context, inputToken)
+                    currentToken = inputToken.trim()
+                    inputToken = ""
+                }
+            },
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, BorderLight),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = "Salvar token de depuração", fontSize = 12.sp)
+        }
+    }
+}
+
+/**
+ * O que mostrar quando nenhum token de depuração foi configurado neste aparelho.
+ *
+ * Nenhum token vive no código: sem um colado aqui, o provedor de depuração do Firebase gera o
+ * dele e o registra no Logcat para ser cadastrado no console.
+ */
+private const val GENERATED_DEBUG_TOKEN_HINT: String =
+    "gerado pelo provedor — procure \"DebugAppCheckProvider\" no Logcat"
+
+/**
  * A foto do Google quando existe.
  *
  * O ícone fica atrás da imagem: sem `photoUrl`, ou com o download falhando, ele continua visível
@@ -366,7 +440,7 @@ const val ACCOUNT_ERROR_DESCRIPTION = "Erro ao entrar na conta"
  * O Credential Manager precisa de um contexto de Activity para exibir o seletor de contas.
  * Em Compose, `LocalContext` costuma ser um `ContextWrapper` em volta dela.
  */
-private fun Context.findActivityOrSelf(): Context {
+internal fun Context.findActivityOrSelf(): Context {
     var current: Context = this
     while (current is ContextWrapper) {
         if (current is Activity) return current

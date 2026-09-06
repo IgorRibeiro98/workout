@@ -6,6 +6,7 @@ import com.example.domain.ai.AiCoachTelemetry
 import com.example.domain.ai.AiGeneratedWorkoutValidation
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.AiWorkoutGenerationContextBuilder
+import com.example.domain.ai.model.AiCoachCallMetadata
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiWorkoutGenerationGatewayResult
@@ -78,11 +79,14 @@ class GenerateWorkoutUseCase(
             context = context
         )
 
+        var metadata = AiCoachCallMetadata.Unknown
         val result = when (val gatewayResult = gateway.generateWorkout(request)) {
             is AiWorkoutGenerationGatewayResult.Error ->
                 GenerateWorkoutResult.Failure(gatewayResult.kind, gatewayResult.detail)
 
             is AiWorkoutGenerationGatewayResult.Success -> {
+                // Modelo e versão de prompt vêm do servidor (T16.2), nunca de constante local.
+                metadata = gatewayResult.metadata
                 val validation = AiCoachResponseValidator.validateGeneratedWorkout(
                     requestId = requestId,
                     context = context,
@@ -103,19 +107,20 @@ class GenerateWorkoutUseCase(
             }
         }
 
-        return finish(requestId, startedAt, result)
+        return finish(requestId, startedAt, result, metadata)
     }
 
     private fun finish(
         requestId: String,
         startedAt: Long,
-        result: GenerateWorkoutResult
+        result: GenerateWorkoutResult,
+        metadata: AiCoachCallMetadata = AiCoachCallMetadata.Unknown
     ): GenerateWorkoutResult {
         telemetry.onRequestFinished(
             requestId = requestId,
             type = AiCoachRequestType.GENERATE_WORKOUT,
-            model = AiModelConfig.MODEL_NAME,
-            promptVersion = AiModelConfig.PROMPT_VERSION,
+            model = metadata.model,
+            promptVersion = metadata.promptVersion,
             schemaVersion = AiModelConfig.SCHEMA_VERSION,
             durationMs = elapsedMsProvider() - startedAt,
             result = when (result) {

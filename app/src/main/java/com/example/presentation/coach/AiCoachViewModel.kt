@@ -116,6 +116,10 @@ class AiCoachViewModel(
     )
 
     private fun AiCoachResult.Failure.toUiState(): AiCoachUiState = when (kind) {
+        // Não é falha: é o Coach online pedindo conta. A tela convida a entrar, e o núcleo do
+        // Spark continua completo sem isso.
+        AiCoachErrorKind.AUTH_REQUIRED -> AiCoachUiState.AuthRequired(COACH_REQUIRES_ACCOUNT)
+
         AiCoachErrorKind.UNAVAILABLE -> AiCoachUiState.Unavailable(
             if (!detail.isNullOrBlank()) {
                 "O Coach IA não está disponível: $detail"

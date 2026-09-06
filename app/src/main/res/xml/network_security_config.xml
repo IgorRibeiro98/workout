@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Configuração de rede do Spark (T16.2).
+
+  A regra é simples: comunicação em texto claro não é permitida. O Spark Backend em produção fica
+  atrás de HTTPS (Caddy + Let's Encrypt), e o resto do que o app acessa — catálogo e mídia — já é
+  HTTPS. Sem esta configuração, aparelhos com API < 28 aceitariam HTTP silenciosamente.
+
+  O build de **depuração** substitui este arquivo por uma versão com exceção explícita para o
+  host do emulador (`src/debug/res/xml/network_security_config.xml`). A exceção não existe no APK
+  de release: ela não é compilada nele.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

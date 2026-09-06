@@ -23,3 +23,28 @@ sealed interface SparkBackendResult<out T> {
     /** O servidor respondeu algo que o app não sabe usar. [status] é `null` para corpo inválido. */
     data class Failure(val status: Int?) : SparkBackendResult<Nothing>
 }
+
+/**
+ * O desfecho cru de uma requisição ao Spark Backend, com o status HTTP preservado.
+ *
+ * Existe ao lado de [SparkBackendResult], e não no lugar dele: a verificação de identidade
+ * (T16.1) só precisa saber "deu, não deu, ou não dá para saber", enquanto o Coach (T16.2)
+ * precisa distinguir 401 de 429 e de 504 para dizer coisas diferentes ao usuário. Um tipo só
+ * teria que escolher entre esconder informação de um ou vazar detalhe HTTP para o outro.
+ *
+ * Nenhuma variante carrega header: `Authorization` não sai da fronteira de transporte.
+ */
+sealed interface SparkHttpOutcome {
+
+    /** O servidor respondeu. [code] e [body] são crus — quem interpreta é quem chamou. */
+    data class Response(val code: Int, val body: String) : SparkHttpOutcome
+
+    /** Não há endereço de backend neste build. Nenhuma requisição foi feita. */
+    data object NotConfigured : SparkHttpOutcome
+
+    /** Não havia conta conectada: a requisição autenticada não chegou a sair. */
+    data object SignedOut : SparkHttpOutcome
+
+    /** Sem rede ou servidor inalcançável. Recuperável — e o núcleo do Spark não muda. */
+    data object NetworkFailure : SparkHttpOutcome
+}

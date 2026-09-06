@@ -1,4 +1,4 @@
-package com.example.data.ai
+package com.example.data.firebase
 
 import android.content.Context
 import com.google.firebase.appcheck.AppCheckProviderFactory
@@ -7,11 +7,14 @@ import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderF
 /**
  * App Check do build de **release**.
  *
+ * Ele atesta o **aplicativo** perante o Firebase, e desde a T16.2 quem o instala é o
+ * `FirebaseAuthGateway` — o Coach não fala mais com o Firebase. A escolha por variante não mudou.
+ *
  * Play Integrity é o único provedor desta variante. O provedor de depuração e o token de
  * depuração não existem aqui: não são compilados neste source set, então nenhuma condição de
  * runtime, flag ou refatoração consegue trazê-los para um APK publicado.
  */
-internal object AiCoachAppCheck {
+internal object SparkAppCheck {
 
     /** Nome legível do provedor desta variante. Usado em log técnico e em teste. */
     const val PROVIDER_NAME: String = "playIntegrity"

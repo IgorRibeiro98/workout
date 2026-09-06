@@ -27,6 +27,15 @@ services:
       # existir na máquina. É um CAMINHO: a chave privada nunca vive neste arquivo, que é
       # versionado. Ver docs/FIREBASE_AUTH_SETUP.md.
       # GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/spark-firebase-admin.json
+      #
+      # Coach IA (T16.2). A credencial do Gemini é SERVER-ONLY e nunca entra neste arquivo, que é
+      # versionado: ela vem do ambiente da VPS (por exemplo, um `.env` fora do Git ou o gerenciador
+      # de segredos do host). Sem ela, /v1/ai/coach responde 503 e o núcleo do Spark segue intacto.
+      # GEMINI_API_KEY: ${GEMINI_API_KEY}
+      #
+      # Proteção de custo — os defaults do código já são conservadores; ajuste conforme o uso real.
+      # AI_MAX_REQUESTS_PER_USER_DAY: 50
+      # AI_MAX_REQUESTS_GLOBAL_DAY: 500
     ports:
       # Só no loopback do host: em produção quem publica na internet é o Caddy, não este serviço.
       - "127.0.0.1:8080:8080"

@@ -374,25 +374,34 @@ When returning to an unfinished session, the UX should be driven from durable se
 
 ## 15. Coach IA (T14)
 
-> **Status (verificado em 2026-09-05): implementado.** Diferente das seções 4, 7, 8 e 9, tudo
-> descrito aqui existe no código. O provider é Firebase AI Logic + Gemini Developer API, e ele é
-> opcional: sem configuração válida o Coach responde `UNAVAILABLE` e o restante do Spark continua
-> funcionando offline.
+> **Status (verificado em 2026-09-06): implementado, com o transporte migrado na T16.2.** Tudo
+> descrito aqui existe no código. O que mudou na T16.2: o provider **não é mais** o Firebase AI
+> Logic dentro do app — quem fala com o Gemini é o Spark Backend, e o Coach passou a ser uma
+> capacidade **online autenticada**. O núcleo do Spark continua local-first: sem conta, sem
+> backend e sem internet, treino, execução, histórico, templates e gamificação seguem completos.
 
 ### 15.1 Fluxo canônico
 
 ```text
 Autoridades locais (WorkoutDao/Room, catálogo canônico, SettingsManager)
-  -> Context Builder do tipo de request
-  -> Use Case (Analyze / Generate / Adapt / Explain)
-  -> AiCoachGateway
-  -> Firebase AI Logic -> Gemini
-  -> Structured Output (AiCoachResponseSchema)
-  -> AiCoachResponseValidator  (validação semântica determinística)
+  -> Context Builder do tipo de request                    [Android]
+  -> Use Case (Analyze / Generate / Adapt / Explain)       [Android]
+  -> AiCoachGateway / SparkBackendAiCoachGateway           [Android]
+  -> POST /v1/ai/coach  +  Firebase ID Token               [HTTP]
+  -> BearerAuthGuard -> quota -> concorrência              [Backend]
+  -> AiCoachPromptRegistry (prompt, modelo, schema)        [Backend]
+  -> AiProviderGateway -> GeminiAiProviderGateway -> Gemini
+  -> Structured Output
+  -> validação estrutural + semântica                      [Backend]
+  -> AiCoachResponseValidator                              [Android, validação final]
   -> Advice / Draft / Explanation
   -> confirmação explícita do usuário
   -> WorkoutRepository (o mesmo caminho da criação/edição manual)
 ```
+
+A validação acontece **nos dois lados de propósito** (defense in depth): o servidor valida contra
+o contexto que recebeu; o app valida de novo contra o domínio atual, que pode ter mudado enquanto
+o modelo pensava. O app pode recusar uma resposta que o servidor aceitou — e isso é esperado.
 
 O modelo é **consumidor e proponente**, nunca fonte de verdade. Structured output garante a
 forma; o validador garante a semântica. Uma violação invalida a resposta inteira — nada é
@@ -402,11 +411,13 @@ adivinhado, corrigido por aproximação ou resolvido por nome.
 
 | Papel | Classe |
 | --- | --- |
-| Fronteira com o provider | `AiCoachGateway` / `FirebaseAiCoachGateway` |
-| Configuração (modelo, versões, tetos) | `AiModelConfig` |
-| Prompts (único lugar do app com prompt) | `AiCoachPrompt` |
-| Schemas de saída | `AiCoachResponseSchema` |
-| Validação semântica | `AiCoachResponseValidator` |
+| Fronteira com o backend | `AiCoachGateway` / `SparkBackendAiCoachGateway` |
+| Transporte autenticado | `SparkBackendClient` + `SparkAuthInterceptor` (T16.1) |
+| Configuração do app (versão de contrato, timeouts, tetos de contexto) | `AiModelConfig` |
+| Prompt, modelo e versão de prompt | **backend** (`AiCoachPromptRegistry`, `AppConfig`) |
+| Schemas de saída | **backend** (`ai-coach.output.schema.ts`) |
+| Saneamento de texto do usuário | `AiUserText` |
+| Validação semântica final | `AiCoachResponseValidator` |
 | Contexto de análise | `AiCoachContextBuilder` / `WorkoutAiCoachContextBuilder` |
 | Contexto de geração | `AiWorkoutGenerationContextBuilder` / `WorkoutAiGenerationContextBuilder` |
 | Contexto de adaptação | `AiWorkoutAdaptationContextBuilder` / `WorkoutAiAdaptationContextBuilder` |
@@ -414,7 +425,7 @@ adivinhado, corrigido por aproximação ou resolvido por nome.
 | Recorte do catálogo | `ExerciseCandidateBuilder` |
 | Teto de evidência | `AiDataQualityPolicy` |
 | Observabilidade | `AiCoachTelemetry` / `LogcatAiCoachTelemetry` |
-| App Check por variante | `AiCoachAppCheck` (`src/debug` e `src/release`) |
+| App Check por variante | `SparkAppCheck` (`src/debug` e `src/release`), instalado pelo `FirebaseAuthGateway` |
 
 ### 15.3 Tipos de request
 
@@ -430,16 +441,21 @@ adivinhado, corrigido por aproximação ou resolvido por nome.
 
 ### 15.4 Versionamento
 
-Autoridade única em `AiModelConfig`:
+Depois da T16.2 as autoridades estão separadas por quem decide:
 
-- `MODEL_NAME` — o único lugar do app onde existe nome de modelo;
-- `PROMPT_VERSION` — versão dos prompts; suba a cada mudança de instrução ou de formato;
-- `SCHEMA_VERSION` + `SUPPORTED_SCHEMA_VERSIONS` — versão do contrato de conversa. Uma versão
-  desconhecida é recusada no gateway, antes de qualquer chamada.
+| Onde | O quê |
+| --- | --- |
+| `AiModelConfig` (app) | `SCHEMA_VERSION` + `SUPPORTED_SCHEMA_VERSIONS` — versão do contrato de conversa, recusada no gateway antes de qualquer rede; tetos de contexto; tetos de espera do transporte |
+| `AiCoachPromptRegistry` (backend) | `PROMPT_VERSION` — suba a cada mudança de instrução ou de formato |
+| `AppConfig` (backend) | `GEMINI_MODEL`, temperatura, esforço de raciocínio, teto de saída, timeout do provider |
 
-Toda chamada carrega `requestId`, `schemaVersion` e `promptVersion` no prompt, e registra
-`requestId`, tipo, modelo, `promptVersion`, `schemaVersion`, duração e classe do resultado na
-telemetria.
+**Não existe nome de modelo nem versão de prompt no app** — há teste estrutural para os dois.
+Trocar de modelo é mudar uma variável de ambiente na VPS, não publicar um APK.
+
+Toda chamada carrega `requestId`, `clientRequestId`, `schemaVersion` e `promptVersion`; a
+telemetria do app registra `requestId`, tipo, o modelo e a versão de prompt **que o servidor
+informou**, duração e classe do resultado. Sem chamada, o modelo registrado é `desconhecido` —
+nunca um nome inventado.
 
 ### 15.5 Política de contexto
 
@@ -452,9 +468,13 @@ percorridas, exercícios, PRs, candidatos, candidatos por grupo, grupos de foco)
 ### 15.6 Custo e resiliência
 
 - Nenhuma chamada acontece em `init`, ao abrir tela ou em recomposição — só em ação explícita.
-- Enquanto uma chamada está em andamento, novos toques são ignorados (um request por pedido).
-- Não existe retry automático, polling nem chamada em background.
+- Enquanto uma chamada está em andamento, novos toques são ignorados (um request por pedido). O
+  servidor repete a proteção: uma chamada ativa por conta e deduplicação por `clientRequestId`.
+- Não existe retry automático, polling nem chamada em background — nem no app, nem no servidor.
+- Quotas diárias por conta e globais vivem no servidor e são configuráveis.
 - `RATE_LIMITED` não convida a repetir; `TIMEOUT` permite nova tentativa manual.
+- `AUTH_REQUIRED` não é falha: é o convite para entrar na Conta Spark, e o login **nunca** abre
+  sozinho.
 - Explicação com razão e evidência suficientes é montada **localmente**, sem provider; quando o
   provider falha, o app cai para essa explicação local e declara a limitação.
 
@@ -467,15 +487,24 @@ percorridas, exercícios, PRs, candidatos, candidatos por grupo, grupos de foco)
   real que não estava autorizado naquela requisição também é.
 - App Check é escolhido por variante de build: `src/debug` usa o provedor de depuração,
   `src/release` usa Play Integrity. Não há token de depuração no código nem no APK de release.
+  Desde a T16.2 quem o instala é o `FirebaseAuthGateway` — o Coach não fala mais com o Firebase.
+- **A credencial do Gemini não existe no aplicativo.** Ela vive só no servidor
+  (`GEMINI_API_KEY`), nunca no APK, no `BuildConfig`, em resource, em DataStore, no Git ou em
+  teste. Há teste estrutural que varre os três source sets procurando por ela.
 - A configuração do Firebase vem de `app/google-services.json` (não versionado). Nenhuma chave
   vive no código.
+- Comunicação em texto claro é proibida (`network_security_config.xml`). O build de depuração tem
+  exceção **nominal** para `10.0.2.2`/`localhost`; ela não é compilada no APK de release.
 
 ### 15.8 Suíte de avaliação
 
 `app/src/test/java/com/example/domain/ai/eval/` contém a suíte determinística
 (`AiCoachEvaluationSuiteTest` + cenários), os testes de prompt injection, de versionamento, de
 observabilidade e de configuração de segurança. Ela roda **offline**, com `FakeAiCoachGateway`,
-e não consome cota. Avaliação com provider real é opt-in e instrumentada
+e não consome cota — a migração da T16.2 não a fez depender de VPS, Firebase, Gemini ou internet.
+`app/src/test/java/com/example/data/ai/SparkBackendAiCoachGatewayTest.kt` cobre a nova fronteira
+HTTP com um interceptor terminal, sem abrir socket. Avaliação com o caminho real (Firebase Auth →
+Spark Backend → Gemini) é opt-in e instrumentada
 (`app/src/androidTest/.../RealProviderEvaluationTest`).
 
 ## 16. Important known regression patterns
@@ -497,12 +526,13 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação e identidade implementadas; dados online, não.**
-> A T16.0 criou o backend em `backend/` com configuração, SQLite, migrations, health, logging,
-> Docker e os contratos arquiteturais. A T16.1 acrescentou **conta opcional**: Firebase Auth com
-> Sign in with Google no Android, verificação de Firebase ID Token no backend e `GET /v1/auth/me`.
-> **Não existe** sincronização, backup, restore, outbox, `syncId` nas entidades Room, tabela de
-> usuários no servidor ou proxy do Gemini.
+> **Status (verificado em 2026-09-06): fundação, identidade e Coach online implementados; dados
+> online, não.** A T16.0 criou o backend em `backend/` com configuração, SQLite, migrations,
+> health, logging, Docker e os contratos arquiteturais. A T16.1 acrescentou **conta opcional**:
+> Firebase Auth com Sign in with Google no Android, verificação de Firebase ID Token no backend e
+> `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**: `POST /v1/ai/coach`, prompt/modelo/credencial
+> server-side, quota e validação no servidor. **Não existe** sincronização, backup, restore,
+> outbox, `syncId` nas entidades Room ou tabela de usuários no servidor.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -543,12 +573,78 @@ A UI observa Room. Um dado vindo do servidor entra pelo sync, é validado e é e
 4. O schema remoto **não** é cópia 1:1 do Room.
 5. O backend não vira segunda fonte operacional de verdade.
 
-### Coach IA
+### Coach IA (T16.2) — a nova fronteira com o Gemini
 
-O `FirebaseAiCoachGateway` (seção 15) **permanece o gateway em uso**, inalterado. A migração para
-`SparkBackendAiCoachGateway` está prevista para a **T16.2** e não foi iniciada. App Check, Firebase
-AI Logic e a configuração do Gemini continuam como estão — a T16.1 introduziu identidade de
-usuário e não encostou em nada disso.
+> **Status (verificado em 2026-09-06): implementado.** O `FirebaseAiCoachGateway` **não existe
+> mais**; o gateway em uso é o `SparkBackendAiCoachGateway`, e a dependência `firebase-ai` saiu do
+> app. Não há fallback automático entre os dois caminhos — ter dois providers concorrendo criaria
+> custo duplicado e comportamento divergente.
+
+```text
+Spark Android
+│  Room (autoridade) → ContextBuilder → contexto mínimo/estruturado
+│  Firebase ID Token (obtido sob demanda, nunca persistido)
+▼
+POST /v1/ai/coach
+│
+├── BearerAuthGuard        uid sai do token verificado, nunca do corpo
+├── contrato               schemaVersion, requestType, tetos de array/string/payload
+├── concorrência           1 chamada ativa por conta + dedupe por clientRequestId
+├── quota                  por conta e global, por dia (UTC), configuráveis
+├── AiCoachPromptRegistry  prompt e promptVersion — o único lugar com prompt no Spark
+├── AiProviderConfig       modelo, temperatura, thinking, teto de saída, timeout
+└── AiProviderGateway → GeminiAiProviderGateway → Gemini API
+        ↓ structured output
+    validação estrutural + semântica (ids, candidatos, valores atuais, dataQuality)
+        ↓
+Android: AiCoachResponseValidator (validação final contra o domínio atual) → UI
+```
+
+#### A decisão de produto
+
+| Sem conta | Com conta |
+| --- | --- |
+| treinos, templates, histórico, execução, gamificação, dados locais | tudo isso **+** chamadas novas ao Gemini |
+
+O login continua **opcional para usar o Spark** e passou a ser necessário apenas para capacidades
+online que dependem do Spark Backend, começando pelo Coach. Ao receber `AUTH_REQUIRED` a UI
+convida a entrar (reutilizando a infraestrutura da T16.1) — e **nunca** abre o seletor de contas
+sozinha.
+
+#### Divisão de responsabilidades
+
+```text
+ANDROID                        BACKEND                         GEMINI
+────────────────────           ────────────────────            ────────────────────
+Room/domínio: autoridade       autenticação                    recomendação
+Context Builder                rate limit e quota              probabilística,
+validação semântica final      prompt e promptVersion          nunca autoridade
+revisão de rascunho            configuração do modelo
+confirmação do usuário         acesso ao provider
+persistência do domínio        validação da resposta
+                               metadata de uso
+```
+
+#### Invariantes da T16.2
+
+1. **A credencial do Gemini é server-only.** Ela não existe no APK, no `BuildConfig`, em resource,
+   em DataStore, no Git ou em teste — há teste estrutural nos dois lados.
+2. **O contexto vem do Android.** O backend não lê dado sincronizado para montar contexto: não
+   existe sync, e analisar sobre estado velho seria pior que não analisar.
+3. **O contexto não é persistido.** Ele entra, é usado e vai embora. O SQLite do servidor guarda
+   só `ai_usage_daily` — uid, dia (UTC), tipo, contagem e tokens. Nada de prompt, histórico,
+   resposta ou texto do usuário.
+4. **Uma ação explícita = no máximo uma invocação do modelo.** Sem crítica, reescrita, segunda
+   opinião ou retry automático. Toque duplo é barrado no app e, de novo, no servidor.
+5. **A quota conta tentativas que chegaram ao provider**, inclusive as que falharam — erro não é
+   spam grátis. Requisição inválida é recusada antes, e não consome quota.
+6. **O backend nunca decide nem persiste alteração de treino.** Geração continua *draft-first*,
+   adaptação continua *confirmation-first*, `EXPLAIN_*` continua read-only e sessão concluída
+   continua imutável.
+7. **Explicação local suficiente não gera requisição.** Zero HTTP, zero Gemini — a política de
+   custo da T14.4 sobreviveu à migração.
+8. **Backend fora do ar não quebra o núcleo.** O Coach responde indisponível; treino, execução,
+   histórico, templates e gamificação continuam.
 
 ### Roadmap
 
@@ -556,7 +652,7 @@ usuário e não encostou em nada disso.
 | --- | --- | --- |
 | T16.0 | Fundação do backend + contratos de identidade e sync | **implementado** |
 | T16.1 | Conta opcional + Firebase Auth | **implementado** |
-| T16.2 | Migração do Coach IA para o Spark Backend | planejado |
+| T16.2 | Migração do Coach IA para o Spark Backend | **implementado** |
 | T16.3 | Identidade global dos dados + Outbox | planejado |
 | T16.4 | Backup estruturado | planejado |
 | T16.5 | Restore seguro | planejado |

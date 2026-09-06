@@ -300,6 +300,23 @@ class AdaptWorkoutViewModelTest {
     }
 
     @Test
+    fun `sem Conta Spark a adaptacao convida a entrar, sem tratar isso como falha`() =
+        runTest(dispatcher) {
+            val gateway = FakeAiCoachGateway(
+                adaptationResponder = {
+                    AiWorkoutAdaptationGatewayResult.Error(AiCoachErrorKind.AUTH_REQUIRED)
+                }
+            )
+            val viewModel = viewModel(gateway)
+
+            viewModel.adapt()
+            dispatcher.scheduler.advanceUntilIdle()
+
+            // Estado próprio: adaptar com IA precisa de conta, editar à mão não.
+            assertEquals(AdaptWorkoutStatus.AuthRequired, viewModel.uiState.value.status)
+        }
+
+    @Test
     fun `nenhuma mudanca proposta vira estado proprio`() = runTest(dispatcher) {
         val gateway = FakeAiCoachGateway(
             adaptationResponder = {

@@ -8,8 +8,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * O cliente HTTP do Spark Backend.
@@ -55,6 +57,45 @@ class SparkBackendClient(
         json.decodeFromString<AuthenticatedIdentity>(body).uid.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * `POST` autenticado com corpo JSON, devolvendo status e corpo crus.
+     *
+     * Existe separado de [get] porque o Coach (T16.2) precisa **distinguir** 401, 409, 422, 429,
+     * 503 e 504 para mapear em erro tipado na UI, e [SparkBackendResult] colapsa 5xx em
+     * "indisponível" de propósito — o que serve à verificação de identidade e não serviria aqui.
+     *
+     * O que continua igual: um cliente HTTP, um interceptor, um lugar montando
+     * `Authorization: Bearer`. Nenhum caminho novo de autenticação foi criado.
+     */
+    suspend fun postJson(path: String, jsonBody: String): SparkHttpOutcome =
+        withContext(Dispatchers.IO) {
+            if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
+
+            val url = "${baseUrl.trimEnd('/')}/$path"
+            val request = Request.Builder()
+                .url(url)
+                .post(jsonBody.toRequestBody(APPLICATION_JSON))
+                .build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    SparkHttpOutcome.Response(
+                        code = response.code,
+                        // O corpo é lido inteiro porque as respostas desta API são pequenas e
+                        // limitadas pelo contrato; ele nunca vai para log.
+                        body = response.body?.string().orEmpty()
+                    )
+                }
+            } catch (e: MissingAuthTokenException) {
+                // Sem conta conectada não existe requisição autenticada a fazer.
+                SparkHttpOutcome.SignedOut
+            } catch (e: IOException) {
+                // Backend fora do ar ou sem rede: recuperável, e o núcleo do Spark não muda.
+                Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+                SparkHttpOutcome.NetworkFailure
+            }
+        }
+
     private suspend fun <T> get(
         path: String,
         parse: (String) -> T?
@@ -94,6 +135,7 @@ class SparkBackendClient(
     private data class AuthenticatedIdentity(val uid: String)
 
     companion object {
+        val APPLICATION_JSON = "application/json; charset=utf-8".toMediaType()
         const val TAG = "SparkBackend"
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_SERVER_ERROR = 500
