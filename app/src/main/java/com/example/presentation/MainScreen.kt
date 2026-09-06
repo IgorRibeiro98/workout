@@ -83,7 +83,9 @@ fun MainScreen() {
         },
         adaptWorkoutUseCase = app.adaptWorkoutUseCase,
         applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase,
-        explainCoachDecisionUseCase = app.explainCoachDecisionUseCase
+        explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
+        authGateway = app.authGateway,
+        sparkBackendClient = app.sparkBackendClient
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -292,8 +294,13 @@ fun MainScreen() {
             composable(Screen.Profile.route) {
                 val profileViewModel: com.example.presentation.profile.ProfileViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // Criar o ViewModel liga o Perfil ao estado do Firebase Auth (restaura sessão
+                // existente). Não inicia autenticação: o seletor de contas só abre no toque.
+                val accountViewModel: com.example.presentation.account.AccountViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
+                    accountViewModel = accountViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },

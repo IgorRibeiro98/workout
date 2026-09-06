@@ -63,29 +63,52 @@ export class AllExceptionsFilter implements ExceptionFilter {
   }
 }
 
+/**
+ * O código declarado explicitamente no corpo da exceção, quando existe.
+ *
+ * A presença de `code` é o que distingue uma exceção **autorada por nós** de qualquer outra: as
+ * exceções nativas do Nest respondem `{ statusCode, message, error }`, sem `code`. Por isso um
+ * código declarado é confiável mesmo em 5xx — ele foi escrito no ponto do `throw`, não derivado
+ * do erro. É o que permite ao Android distinguir `AUTH_UNAVAILABLE` (503, tente de novo) de uma
+ * falha genérica do servidor sem que o servidor conte nada sobre si.
+ */
+function declaredCode(exception: unknown): string | null {
+  if (!(exception instanceof HttpException)) {
+    return null;
+  }
+  const body = exception.getResponse();
+  if (typeof body === 'object' && body !== null && 'code' in body) {
+    const code = (body as { code: unknown }).code;
+    if (typeof code === 'string') {
+      return code;
+    }
+  }
+  return null;
+}
+
 function codeFor(exception: unknown, status: number): string {
+  const declared = declaredCode(exception);
+  if (declared !== null) {
+    return declared;
+  }
   if (status >= SERVER_ERROR_FLOOR) {
     return INTERNAL_ERROR_CODE;
-  }
-  if (exception instanceof HttpException) {
-    const body = exception.getResponse();
-    if (typeof body === 'object' && body !== null && 'code' in body) {
-      const code = (body as { code: unknown }).code;
-      if (typeof code === 'string') {
-        return code;
-      }
-    }
   }
   return HTTP_STATUS_NAMES[status] ?? 'ERROR';
 }
 
 function messageFor(exception: unknown, status: number, config: AppConfig): string {
   if (status >= SERVER_ERROR_FLOOR) {
-    return config.isProduction
-      ? INTERNAL_ERROR_MESSAGE
-      : exception instanceof Error
-        ? exception.message
-        : INTERNAL_ERROR_MESSAGE;
+    // Mensagem de 5xx continua opaca: ela pode carregar caminho de arquivo, SQL ou configuração.
+    // Só um corpo com `code` declarado — escrito por nós — pode falar, e a mensagem vem do mesmo
+    // corpo, não da exceção.
+    return declaredCode(exception) !== null
+      ? (declaredMessage(exception) ?? INTERNAL_ERROR_MESSAGE)
+      : config.isProduction
+        ? INTERNAL_ERROR_MESSAGE
+        : exception instanceof Error
+          ? exception.message
+          : INTERNAL_ERROR_MESSAGE;
   }
   if (exception instanceof HttpException) {
     const body = exception.getResponse();
@@ -104,4 +127,19 @@ function messageFor(exception: unknown, status: number, config: AppConfig): stri
     return exception.message;
   }
   return INTERNAL_ERROR_MESSAGE;
+}
+
+/** A mensagem declarada junto com o `code`, quando o corpo da exceção traz uma. */
+function declaredMessage(exception: unknown): string | null {
+  if (!(exception instanceof HttpException)) {
+    return null;
+  }
+  const body = exception.getResponse();
+  if (typeof body === 'object' && body !== null && 'message' in body) {
+    const message = (body as { message: unknown }).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+  return null;
 }

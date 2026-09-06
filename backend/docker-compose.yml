@@ -23,11 +23,18 @@ services:
       LOG_LEVEL: info
       SQLITE_BUSY_TIMEOUT_MS: 5000
       SHUTDOWN_TIMEOUT_MS: 10000
+      # Firebase Admin (T16.1). Descomente junto com a montagem abaixo quando a credencial
+      # existir na máquina. É um CAMINHO: a chave privada nunca vive neste arquivo, que é
+      # versionado. Ver docs/FIREBASE_AUTH_SETUP.md.
+      # GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/spark-firebase-admin.json
     ports:
       # Só no loopback do host: em produção quem publica na internet é o Caddy, não este serviço.
       - "127.0.0.1:8080:8080"
     volumes:
       - spark-data:/data
+      # A service account entra por montagem somente-leitura, a partir de um arquivo que existe
+      # só na VPS e nunca no Git nem na imagem:
+      # - /etc/spark/firebase-admin.json:/run/secrets/spark-firebase-admin.json:ro
     # Dá tempo ao graceful shutdown antes de o Docker mandar SIGKILL.
     stop_grace_period: 15s
 

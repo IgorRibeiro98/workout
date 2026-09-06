@@ -1,9 +1,13 @@
 # Contrato de identidade global do Spark
 
-- **Tarefa:** T16.0 (documentação) — implementação em **T16.1** e **T16.3**.
-- **Status:** **nada aqui está implementado.** A T16.0 não adicionou `syncId`, `deviceId` ou
-  `ownerUid` a nenhuma entidade Room, a nenhum DAO e a nenhuma tabela do servidor. Verificado no
-  código: `syncId`, `deviceId`, `ownerUid` e `mutationId` têm **zero ocorrências** em `app/src`.
+- **Tarefa:** T16.0 (documentação) — implementação em **T16.1** (identidade da conta) e **T16.3**
+  (identidade dos dados).
+- **Status (verificado em 2026-09-06):**
+  - **implementado na T16.1:** a identidade da **conta**. O Firebase UID chega ao servidor por
+    Firebase ID Token, é verificado pelo Admin SDK e vira `AuthenticatedPrincipal { uid }`;
+  - **não implementado:** a identidade dos **dados**. `syncId`, `deviceId`, `ownerUid` e
+    `mutationId` continuam com **zero ocorrências** em `app/src`, e não existe tabela de
+    ownership no servidor — a T16.1 não persistiu usuário nenhum.
 
 Este documento define o contrato que a T16.3 deverá seguir, para que a migração das entidades seja
 uma decisão já tomada em vez de improvisada.
@@ -97,24 +101,50 @@ O caminho é sempre:
 ```text
 Authorization: Bearer <Firebase ID Token>
         ↓
-backend verifica a assinatura do token   [T16.1]
+backend verifica a assinatura do token   [T16.1 — implementado]
         ↓
 uid confiável extraído do token verificado
         ↓
-AuthenticatedPrincipal { uid }
+AuthenticatedPrincipal { uid }           [T16.1 — implementado]
         ↓
-ownership de tudo que a requisição escreve ou lê
+ownership de tudo que a requisição escreve ou lê   [T16.3+ — não implementado]
 ```
+
+O caminho até `AuthenticatedPrincipal` existe e é testado: `BearerAuthGuard` recusa token ausente,
+malformado ou inválido com 401, distingue "não consegui verificar" com 503, e nenhum `uid` vindo de
+query string, header ou corpo influencia a resposta. O que ainda **não** existe é o que vem depois:
+não há dado pessoal no servidor para filtrar por `ownerUid`.
 
 Se o corpo da requisição trouxer um `ownerUid`, ele é **ignorado**, não validado — aceitar um
 `ownerUid` "conferindo se bate com o token" já seria um caminho a mais para errar. O único `uid` que
 existe no servidor é o que veio do token.
 
-Consequências, a partir da T16.1:
+Consequências, a partir da T16.3 (quando existir dado pessoal remoto):
 
 - toda leitura é filtrada por `ownerUid` do principal;
 - toda escrita grava o `ownerUid` do principal;
 - uma requisição sem token válido não acessa dado pessoal nenhum.
+
+Na T16.1 a última regra já vale de forma trivial: `/v1/auth/me` é a única rota sob `/v1`, exige
+token e devolve apenas o `uid` derivado dele.
+
+### Login não associa dados locais a uma conta
+
+Registrado explicitamente para que a T16.3+ não faça isso em silêncio: na T16.1, entrar, sair e
+**trocar de conta** deixam Room e DataStore exatamente como estavam. Nenhuma linha ganha dono,
+nenhum `syncId` é gerado, nada sobe e nada desce.
+
+O cenário que isso protege:
+
+```text
+usuário A entra  →  sai  →  usuário B entra
+        ↓
+dados locais permanecem exatamente como estavam — de ninguém
+```
+
+Associar o banco existente ao usuário B automaticamente seria dar a ele o histórico do A. A
+associação entre dado local e conta é uma decisão da arquitetura de sync, com `syncId` e adoção
+explícita, e pertence à **T16.3+**.
 
 ### Sem autenticação própria
 
@@ -153,7 +183,8 @@ precisar reconciliar nada.
 | --- | --- | --- |
 | `localId` | — (já existe) | já existe |
 | `canonicalExerciseId` | — (já existe) | já existe |
-| `AuthenticatedPrincipal` / `ownerUid` | T16.0 | **T16.1** |
-| `syncId` nas entidades Room | T16.0 | **T16.3** |
-| `deviceId` | T16.0 | **T16.3** |
-| Registro de dispositivos no servidor | T16.0 | **T16.6** |
+| `AuthenticatedPrincipal` (uid do token verificado) | T16.0 | **T16.1 — feito** |
+| `ownerUid` gravado em dado pessoal remoto | T16.0 | T16.3 |
+| `syncId` nas entidades Room | T16.0 | T16.3 |
+| `deviceId` | T16.0 | T16.3 |
+| Registro de dispositivos no servidor | T16.0 | T16.6 |

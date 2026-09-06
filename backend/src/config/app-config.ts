@@ -52,6 +52,15 @@ export class AppConfig {
   get shutdownTimeoutMs(): number {
     return this.env.SHUTDOWN_TIMEOUT_MS;
   }
+
+  /** Caminho do arquivo de service account do Firebase Admin, quando configurado. */
+  get googleApplicationCredentials(): string | undefined {
+    return this.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+
+  get firebaseProjectId(): string | undefined {
+    return this.env.FIREBASE_PROJECT_ID;
+  }
 }
 
 export const APP_CONFIG = Symbol('APP_CONFIG');

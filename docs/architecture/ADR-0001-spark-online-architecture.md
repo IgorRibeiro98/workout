@@ -114,9 +114,29 @@ separados — não há necessidade operacional que justifique o custo.
 - Versionamento de API configurado: toda API de produto futura nasce sob `/v1`.
 - Contratos arquiteturais documentados (este ADR, matriz de dados, identidade, protocolo de sync).
 
+### IMPLEMENTADO EM T16.1
+
+- Conta **opcional** no Android: Firebase Authentication + Sign in with Google via Credential
+  Manager, atrás de `AuthGateway` / `FirebaseAuthGateway`.
+- Estado de autenticação explícito e derivado do Firebase (`SignedOut`, `SigningIn`, `SignedIn`,
+  `SigningOut`, `Error`); sessão existente é restaurada sozinha, sem abrir seletor de contas.
+- Área de Conta Spark dentro do Perfil, com login por ação explícita e logout que limpa também o
+  estado de credencial do Credential Manager.
+- `AuthTokenProvider` + `SparkAuthInterceptor` + `SparkBackendClient`: Firebase ID Token obtido sob
+  demanda, enviado como `Authorization: Bearer`, nunca persistido e nunca registrado em log.
+- Backend: Firebase Admin SDK, `AuthTokenVerifier` / `FirebaseAuthTokenVerifier`, `BearerAuthGuard`,
+  `AuthenticatedPrincipal` e `GET /v1/auth/me`.
+- Credencial do Admin SDK por caminho externo (`GOOGLE_APPLICATION_CREDENTIALS`), fora do Git e
+  fora da imagem. Sem ela, rota autenticada responde 503 — nunca 200 sem verificação.
+- Testes offline dos dois lados: nenhum exige Firebase real, conta Google real, service account
+  ou rede.
+
+O que a T16.1 **não** fez, deliberadamente: nenhum dado pessoal é enviado ou baixado, entrar/sair
+não tocam em Room ou DataStore, trocar de conta não reassocia nada, e não existe tabela de usuários
+no servidor.
+
 ### PLANEJADO — ainda **não** existe
 
-- **T16.1** — Conta opcional + Firebase Auth (verificação real de Firebase ID Token).
 - **T16.2** — Migração do Coach IA para o Spark Backend (proxy do Gemini).
 - **T16.3** — Identidade global dos dados + Outbox no Android.
 - **T16.4** — Backup estruturado.
@@ -126,13 +146,15 @@ separados — não há necessidade operacional que justifique o custo.
 - **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
 - **T17** — Amigos, convites, desafios e social.
 
-Nada acima está implementado. Não existe endpoint de sync, backup, auth ou IA no backend hoje —
-`/v1` está deliberadamente vazio, e há teste que garante isso.
+Nada acima está implementado. Não existe endpoint de sync, backup ou IA no backend hoje — sob
+`/v1` existe apenas `auth`, e há teste que garante isso.
 
 ## Coach IA — migração prevista, não executada
 
-O `FirebaseAiCoachGateway` (T14) **permanece funcional e inalterado**. A T16.0 não removeu, não
-migrou e não tocou em Firebase AI Logic, App Check ou configuração do Gemini.
+O `FirebaseAiCoachGateway` (T14) **permanece funcional e inalterado**. Nem a T16.0 nem a T16.1
+removeram, migraram ou tocaram em Firebase AI Logic, App Check ou configuração do Gemini. A T16.1
+introduziu identidade de **usuário** (Firebase Auth), que é responsabilidade diferente do App Check
+— este atesta o app, aquela identifica quem está usando.
 
 A migração prevista para a **T16.2**:
 

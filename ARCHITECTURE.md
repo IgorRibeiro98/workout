@@ -497,10 +497,12 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação implementada, features online não.** A T16.0 criou
-> o backend em `backend/` com configuração, SQLite, migrations, health, logging, Docker e os
-> contratos arquiteturais. **Não existe** autenticação, sincronização, backup, restore, outbox,
-> `syncId` nas entidades Room ou proxy do Gemini. `/v1` está vazio, e há teste que garante isso.
+> **Status (verificado em 2026-09-06): fundação e identidade implementadas; dados online, não.**
+> A T16.0 criou o backend em `backend/` com configuração, SQLite, migrations, health, logging,
+> Docker e os contratos arquiteturais. A T16.1 acrescentou **conta opcional**: Firebase Auth com
+> Sign in with Google no Android, verificação de Firebase ID Token no backend e `GET /v1/auth/me`.
+> **Não existe** sincronização, backup, restore, outbox, `syncId` nas entidades Room, tabela de
+> usuários no servidor ou proxy do Gemini.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -545,14 +547,15 @@ A UI observa Room. Um dado vindo do servidor entra pelo sync, é validado e é e
 
 O `FirebaseAiCoachGateway` (seção 15) **permanece o gateway em uso**, inalterado. A migração para
 `SparkBackendAiCoachGateway` está prevista para a **T16.2** e não foi iniciada. App Check, Firebase
-AI Logic e a configuração do Gemini continuam como estão.
+AI Logic e a configuração do Gemini continuam como estão — a T16.1 introduziu identidade de
+usuário e não encostou em nada disso.
 
 ### Roadmap
 
 | Fase | Escopo | Estado |
 | --- | --- | --- |
 | T16.0 | Fundação do backend + contratos de identidade e sync | **implementado** |
-| T16.1 | Conta opcional + Firebase Auth | planejado |
+| T16.1 | Conta opcional + Firebase Auth | **implementado** |
 | T16.2 | Migração do Coach IA para o Spark Backend | planejado |
 | T16.3 | Identidade global dos dados + Outbox | planejado |
 | T16.4 | Backup estruturado | planejado |
@@ -562,10 +565,101 @@ AI Logic e a configuração do Gemini continuam como estão.
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
 | T17 | Amigos, convites, desafios e social | planejado |
 
+### Conta opcional e identidade (T16.1)
+
+> **Status (verificado em 2026-09-06): implementado.** Tudo desta seção existe no código e é
+> coberto por teste offline. O que **não** existe: sincronização, backup, restore, `syncId`,
+> `deviceId`, outbox e qualquer persistência de usuário no servidor.
+
+A conta **adiciona capacidades online**. Ela não desbloqueia o funcionamento básico: sem conta,
+abrir o app, criar, editar, iniciar e concluir treino, histórico, gamificação e dados locais
+continuam completos.
+
+#### A fronteira
+
+```text
+┌──────────────────┐
+│ Google Account   │
+└────────┬─────────┘
+         ↓  Credential Manager (Sign in with Google)
+┌──────────────────┐
+│ Firebase Auth    │   ← autoridade da sessão, no aparelho
+└────────┬─────────┘
+         ↓  Firebase ID Token  (obtido sob demanda, nunca persistido)
+┌──────────────────┐
+│ Spark Backend    │
+│ Firebase Admin   │   ← verifyIdToken: assinatura, emissor, audiência, expiração
+└────────┬─────────┘
+         ↓
+AuthenticatedPrincipal
+         │
+         └── uid
+```
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Fronteira de identidade (Android) | `AuthGateway` / `FirebaseAuthGateway` |
+| Estado explícito | `AuthState` (`SignedOut`, `SigningIn`, `SignedIn`, `SigningOut`, `Error`) |
+| Conta no domínio | `SparkAccount` (só `uid` é obrigatório) |
+| Token sob demanda | `AuthTokenProvider` / `AuthTokenResult` |
+| Transporte autenticado | `SparkAuthInterceptor` + `SparkBackendClient` |
+| Web Client ID | `GoogleServerClientId` (recurso `default_web_client_id`, do `google-services.json`) |
+| UI | `AccountViewModel` + `AccountSection`, dentro do Perfil |
+| Verificação (backend) | `AuthTokenVerifier` / `FirebaseAuthTokenVerifier` |
+| Proteção de rota | `BearerAuthGuard` + `@Principal()` |
+| Identidade interna | `AuthenticatedPrincipal { uid, email?, provider? }` |
+| Endpoint | `GET /v1/auth/me` → `{ "uid": ... }` |
+
+#### Invariantes da T16.1
+
+1. **Login começa por ação explícita.** Abrir o app, abrir o Perfil, iniciar treino ou abrir o
+   Coach nunca abrem o seletor de contas. Restaurar uma sessão que já existe, sim, é automático.
+2. **Entrar e sair não tocam em dado local.** A fronteira de autenticação não conhece Room, DAO,
+   repositório nem `SettingsManager` — não é disciplina, é ausência de dependência, e há teste
+   estrutural e comportamental para os dois lados.
+3. **Troca de conta não reassocia nada.** Sair com o usuário A e entrar com o B deixa o banco
+   exatamente como estava. Associar dado local a uma conta é assunto da T16.3+, junto do `syncId`.
+4. **O ID Token não é persistido nem registrado.** Ele é pedido ao Firebase a cada requisição e
+   usado na hora. Não existe refresh token, JWT ou sessão do Spark: o backend verifica, não emite.
+5. **O servidor deriva o `uid` do token.** Query string, header próprio e corpo da requisição não
+   influenciam a identidade — há teste que tenta os três.
+6. **Indisponibilidade não apaga identidade.** Backend fora do ar responde `Unavailable`; a UI
+   continua `SignedIn`, porque quem decide isso é o Firebase Auth local, não o servidor.
+7. **App Check continua como estava.** Ele atesta o **app**; Firebase Auth identifica o
+   **usuário**. São responsabilidades diferentes e nenhuma substitui a outra.
+
+#### O que o Firebase UID **não** é
+
+```text
+Firebase UID != localId               (identidade de linha no Room, por aparelho)
+Firebase UID != syncId                (identidade global de entidade pessoal — T16.3)
+Firebase UID != canonicalExerciseId   (identidade de conteúdo do catálogo)
+Firebase UID != deviceId              (identidade da instalação — T16.3)
+```
+
+O UID responde **quem é o usuário**, e nada além disso. Ver
+[`docs/architecture/identity-contract.md`](docs/architecture/identity-contract.md).
+
+#### Configuração
+
+Nenhum client ID, chave ou credencial vive no código. O Web Client ID vem do
+`app/google-services.json` (não versionado) pelo recurso gerado `default_web_client_id`; a
+credencial do Admin SDK vem do caminho em `GOOGLE_APPLICATION_CREDENTIALS`, montado somente-leitura
+na VPS. Passo a passo em [`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md).
+
+#### Exclusão de conta — pendência registrada
+
+Não implementada, e deliberadamente. Quando existir dado online, apagar a conta precisará coordenar
+Firebase, Spark Backend, backup, mídia e social; um `FirebaseUser.delete()` isolado hoje criaria um
+fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8)**.
+
 ### Documentação detalhada
 
 - [`docs/architecture/ADR-0001-spark-online-architecture.md`](docs/architecture/ADR-0001-spark-online-architecture.md)
 - [`docs/architecture/data-classification-matrix.md`](docs/architecture/data-classification-matrix.md)
 - [`docs/architecture/identity-contract.md`](docs/architecture/identity-contract.md)
 - [`docs/architecture/sync-protocol.md`](docs/architecture/sync-protocol.md)
+- [`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md)
 - [`backend/README.md`](backend/README.md)

@@ -40,7 +40,11 @@ class MainViewModelFactory(
     private val adaptWorkoutUseCase: com.example.domain.ai.usecase.AdaptWorkoutUseCase? = null,
     private val applyWorkoutAdaptationUseCase: com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase? = null,
     /** Coach contextual (T14.4). `null` desliga as entradas de explicação em todas as telas. */
-    private val explainCoachDecisionUseCase: com.example.domain.ai.usecase.ExplainCoachDecisionUseCase? = null
+    private val explainCoachDecisionUseCase: com.example.domain.ai.usecase.ExplainCoachDecisionUseCase? = null,
+    /** Conta Spark (T16.1). `null` remove a área de conta do Perfil, e nada mais muda. */
+    private val authGateway: com.example.domain.auth.AuthGateway? = null,
+    /** Cliente do Spark Backend (T16.1). `null` quando não há endereço configurado neste build. */
+    private val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -138,6 +142,15 @@ class MainViewModelFactory(
                 bodyMeasurementRepository = bodyMeasurementRepository,
                 settingsManager = settingsManager,
                 explainCoachDecision = explainCoachDecisionUseCase
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.AccountViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.AccountViewModel(
+                authGateway = gateway,
+                backendClient = sparkBackendClient
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {

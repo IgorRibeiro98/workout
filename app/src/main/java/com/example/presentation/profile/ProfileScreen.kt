@@ -47,10 +47,13 @@ fun ProfileScreen(
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
     onNavigateToMissions: () -> Unit,
-    onNavigateToAiCoach: () -> Unit
+    onNavigateToAiCoach: () -> Unit,
+    /** Conta Spark (T16.1). `null` quando a identidade online não existe neste build. */
+    accountViewModel: com.example.presentation.account.AccountViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
+    val accountState = accountViewModel?.uiState?.collectAsState()?.value
 
     ProfileScreenContent(
         uiState = uiState,
@@ -62,7 +65,13 @@ fun ProfileScreen(
         onNavigateToAiCoach = onNavigateToAiCoach,
         onWeeklyGoalChange = viewModel::setWeeklyGoal,
         canExplainProgress = viewModel.canExplainProgress,
-        onExplainProgress = viewModel::explainProgress
+        onExplainProgress = viewModel::explainProgress,
+        accountState = accountState,
+        // A autenticação só começa aqui, no toque. Abrir o Perfil não abre seletor de contas.
+        onAccountSignIn = { host -> accountViewModel?.signIn(host) },
+        onAccountSignOut = { accountViewModel?.signOut() },
+        canVerifyWithBackend = accountViewModel?.canVerifyWithBackend == true,
+        onVerifyWithBackend = { accountViewModel?.verifyWithBackend() }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -84,7 +93,13 @@ private fun ProfileScreenContent(
     onWeeklyGoalChange: (Int) -> Unit,
     /** `false` esconde a entrada contextual quando o Coach não está disponível neste build. */
     canExplainProgress: Boolean = false,
-    onExplainProgress: () -> Unit = {}
+    onExplainProgress: () -> Unit = {},
+    /** `null` esconde a área de Conta Spark inteira. */
+    accountState: com.example.presentation.account.AccountUiState? = null,
+    onAccountSignIn: (android.content.Context) -> Unit = {},
+    onAccountSignOut: () -> Unit = {},
+    canVerifyWithBackend: Boolean = false,
+    onVerifyWithBackend: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -168,6 +183,18 @@ private fun ProfileScreenContent(
                 latestWeightKg = uiState.latestWeightKg,
                 onClick = onNavigateToBodyEvolution
             )
+
+            // A conta vive dentro do Perfil, não numa aba nova: ela é identidade, não uma área
+            // de produto. Fica depois do que o Spark já entrega hoje, porque é opcional.
+            if (accountState != null) {
+                com.example.presentation.account.AccountSection(
+                    uiState = accountState,
+                    onSignIn = onAccountSignIn,
+                    onSignOut = onAccountSignOut,
+                    canVerifyWithBackend = canVerifyWithBackend,
+                    onVerifyWithBackend = onVerifyWithBackend
+                )
+            }
 
             SettingsSection(onClick = onNavigateToSettings)
         }

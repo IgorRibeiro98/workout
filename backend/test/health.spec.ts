@@ -78,9 +78,12 @@ describe('Health (liveness e readiness)', () => {
     expect((await request(app.getHttpServer()).get('/v1/health/live')).status).toBe(404);
   });
 
-  it('não existe nenhum endpoint de produto em /v1 na T16.0', async () => {
+  it('sync, IA e backup continuam ausentes de /v1 — só `auth` existe na T16.1', async () => {
     for (const path of ['/v1/sync/push', '/v1/sync/pull', '/v1/ai/analyze', '/v1/backup']) {
       expect((await request(app.getHttpServer()).get(path)).status).toBe(404);
     }
+
+    // `/v1/auth/me` existe e é protegido: 401 (e não 404) é a prova de que a rota nasceu fechada.
+    expect((await request(app.getHttpServer()).get('/v1/auth/me')).status).toBe(401);
   });
 });

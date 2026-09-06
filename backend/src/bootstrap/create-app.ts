@@ -26,6 +26,17 @@ export async function createApp(config: AppConfig): Promise<CreatedApp> {
     bufferLogs: true,
   });
 
+  return configureApp(app, config);
+}
+
+/**
+ * A configuração da instância — versionamento, banco, filtro de erro, shutdown hooks.
+ *
+ * Extraída de [createApp] para que o teste que precisa trocar **um** provedor (o verificador de
+ * token, na T16.1) monte a aplicação pelo `@nestjs/testing` e ainda assim receba exatamente esta
+ * configuração, em vez de uma reimplementação que envelhece em paralelo.
+ */
+export function configureApp(app: INestApplication, config: AppConfig): CreatedApp {
   // Nada de anunciar o framework para quem não precisa saber.
   app.getHttpAdapter().getInstance().disable('x-powered-by');
 

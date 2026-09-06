@@ -29,6 +29,24 @@ export const envSchema = z.object({
 
   /** Tempo máximo para drenar conexões em SIGTERM/SIGINT antes de encerrar à força. */
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(10_000),
+
+  /**
+   * Credencial do Firebase Admin (T16.1), no mecanismo oficial para ambientes não-Google:
+   * o **caminho** de um arquivo de service account que vive fora do repositório e é montado
+   * somente-leitura no container. A chave privada nunca entra no Git, na imagem, no
+   * `docker-compose.yml` nem neste schema — aqui só existe um caminho.
+   *
+   * Opcional: sem ela o processo sobe normalmente, `/health/*` continua público e as rotas
+   * autenticadas respondem 503 (incapaz de verificar), nunca 200 sem verificação. Não existe
+   * modo "autenticação desligada".
+   */
+  GOOGLE_APPLICATION_CREDENTIALS: z.string().min(1).optional(),
+
+  /**
+   * Projeto Firebase esperado pelo verificador. Opcional: normalmente vem do próprio arquivo de
+   * credencial. Quando informado, é o `project_id` contra o qual o token precisa ter sido emitido.
+   */
+  FIREBASE_PROJECT_ID: z.string().min(1).optional(),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

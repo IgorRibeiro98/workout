@@ -142,6 +142,49 @@ class MainApplication : Application(), ImageLoaderFactory {
     }
 
     /**
+     * Conta Spark (T16.1) — Firebase Authentication + Sign in with Google.
+     *
+     * `by lazy` pelo mesmo motivo do Coach: o Spark é local-first e não paga inicialização de
+     * autenticação no startup. Nada de Firebase Auth ou Credential Manager é tocado enquanto o
+     * usuário não abrir a área de conta. Uma sessão já existente é restaurada quando isso
+     * acontece — sem seletor de contas, que só aparece por toque explícito.
+     */
+    val authGateway: com.example.domain.auth.AuthGateway by lazy {
+        firebaseAuthGateway
+    }
+
+    /**
+     * O mesmo objeto, na fronteira de token.
+     *
+     * Uma instância só: o estado da sessão tem um dono, e quem monta o `Authorization: Bearer`
+     * pergunta a ele em vez de guardar token em lugar nenhum.
+     */
+    val authTokenProvider: com.example.domain.auth.AuthTokenProvider by lazy {
+        firebaseAuthGateway
+    }
+
+    private val firebaseAuthGateway: com.example.data.auth.FirebaseAuthGateway by lazy {
+        com.example.data.auth.FirebaseAuthGateway(this)
+    }
+
+    /**
+     * Cliente do Spark Backend (T16.1).
+     *
+     * `null` quando o build não tem endereço configurado — que é o padrão hoje, porque a VPS
+     * ainda não foi provisionada. O núcleo do Spark não depende dele para nada.
+     */
+    val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? by lazy {
+        BuildConfig.SPARK_BACKEND_BASE_URL
+            .takeIf { it.isNotBlank() }
+            ?.let { baseUrl ->
+                com.example.data.remote.spark.SparkBackendClient(
+                    baseUrl = baseUrl,
+                    tokens = authTokenProvider
+                )
+            }
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

@@ -50,6 +50,16 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // Endereço do Spark Backend (T16.1). Não é segredo, mas também não é código: vem de uma
+    // propriedade do Gradle (`-PsparkBackendBaseUrl=...` ou `local.properties`) e nasce vazia.
+    // Vazio significa "backend não configurado": o cliente responde `NotConfigured` e nenhuma
+    // requisição sai. O núcleo do Spark não depende deste valor para nada.
+    buildConfigField(
+      "String",
+      "SPARK_BACKEND_BASE_URL",
+      "\"${providers.gradleProperty("sparkBackendBaseUrl").getOrElse("")}\""
+    )
   }
 
   buildTypes {
@@ -112,13 +122,15 @@ dependencies {
   // publicado — a escolha vive em `src/debug` / `src/release` (`AiCoachAppCheck`).
   implementation(libs.firebase.appcheck.playintegrity)
   debugImplementation(libs.firebase.appcheck.debug)
+  // Conta opcional (T16.1): Firebase Authentication + Sign in with Google via Credential Manager.
+  // A conta é opcional em runtime — sem ela o núcleo do Spark funciona por completo. Nenhum
+  // client ID vive no código: o Web Client ID vem de `google-services.json` (não versionado),
+  // pelo recurso `default_web_client_id` gerado pelo plugin do Gradle.
+  implementation(libs.firebase.auth)
+  implementation(libs.androidx.credentials)
+  implementation(libs.androidx.credentials.play.services)
+  implementation(libs.googleid)
   implementation(libs.kotlinx.serialization.json)
-  // Uncomment to use Firestore:
-
-  // Sign-In via Credential Manager:
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

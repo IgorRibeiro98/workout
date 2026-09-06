@@ -11,3 +11,9 @@ data
 !.env.example
 Caddyfile
 *.md
+
+# Credenciais: nunca entram na imagem, nem por engano num `COPY .`.
+service-account*.json
+firebase-adminsdk*.json
+*.pem
+*.key
