@@ -11,6 +11,7 @@ import com.example.domain.ai.model.GenerateWorkoutResult
 import com.example.domain.ai.model.SaveGeneratedWorkoutResult
 import com.example.domain.ai.model.WorkoutGenerationPreferences
 import com.example.domain.ai.model.WorkoutGoal
+import com.example.domain.ai.usecase.ExplainCoachDecisionUseCase
 import com.example.domain.ai.usecase.GenerateWorkoutUseCase
 import com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase
 import com.example.domain.engine.MuscleGroup
@@ -39,11 +40,40 @@ class GenerateWorkoutViewModel(
     /** A confirmação do usuário, ligada ao [SaveGeneratedWorkoutUseCase] canônico. */
     private val saveGeneratedWorkout: suspend (GeneratedWorkoutDraft) -> SaveGeneratedWorkoutResult,
     /** Recorte determinístico do catálogo para as preferências atuais. Não chama o provider. */
-    private val listCandidates: suspend (WorkoutGenerationPreferences) -> List<AiCandidateExerciseContext>
+    private val listCandidates: suspend (WorkoutGenerationPreferences) -> List<AiCandidateExerciseContext>,
+    /** `null` quando o Coach contextual não está disponível neste build. */
+    private val explainCoachDecision: ExplainCoachDecisionUseCase? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GenerateWorkoutUiState())
     val uiState: StateFlow<GenerateWorkoutUiState> = _uiState.asStateFlow()
+
+    private val explanations = coachExplanationController()
+    val explanationState: StateFlow<CoachExplanationUiState> = explanations.state
+
+    /**
+     * As preferências que geraram o rascunho atual.
+     *
+     * A explicação precisa do pedido **daquela** geração, não do formulário como ele está agora:
+     * mexer no foco depois de gerar não pode reescrever a história da proposta.
+     */
+    private var draftPreferences: WorkoutGenerationPreferences? = null
+
+    val canExplain: Boolean get() = explainCoachDecision != null
+
+    /**
+     * "Como isso foi decidido?" sobre a proposta na tela.
+     *
+     * Resolvida contra o rascunho atual: se ele foi descartado ou salvo, não há chamada.
+     */
+    fun explainDraft() {
+        val useCase = explainCoachDecision ?: return
+        val draft = (_uiState.value.status as? GenerateWorkoutStatus.Draft)?.draft ?: return
+        val preferences = draftPreferences ?: return
+        explanations.request { useCase.explainGeneratedWorkout(draft, preferences) }
+    }
+
+    fun dismissExplanation() = explanations.dismiss()
 
     private var inFlight: Job? = null
     private var candidatesJob: Job? = null
@@ -122,9 +152,13 @@ class GenerateWorkoutViewModel(
         val state = _uiState.value
         if (!state.canGenerate) return
 
+        val preferences = state.preferences()
         _uiState.value = state.copy(status = GenerateWorkoutStatus.Generating)
+        explanations.dismiss()
+        draftPreferences = null
         inFlight = viewModelScope.launch {
-            val result = generateWorkout(state.preferences())
+            val result = generateWorkout(preferences)
+            draftPreferences = (result as? GenerateWorkoutResult.Success)?.let { preferences }
             _uiState.value = _uiState.value.copy(
                 status = when (result) {
                     is GenerateWorkoutResult.Success -> GenerateWorkoutStatus.Draft(result.draft)
@@ -145,6 +179,8 @@ class GenerateWorkoutViewModel(
     /** O usuário descarta a proposta: o rascunho deixa de existir e nada foi persistido. */
     fun discardDraft() {
         if (_uiState.value.isBusy) return
+        explanations.dismiss()
+        draftPreferences = null
         _uiState.value = _uiState.value.copy(status = GenerateWorkoutStatus.Idle)
     }
 
@@ -158,6 +194,8 @@ class GenerateWorkoutViewModel(
         val status = _uiState.value.status as? GenerateWorkoutStatus.Draft ?: return
         val remaining = status.draft.exercises.filterNot { it.exerciseId == exerciseId }
         if (remaining.size == status.draft.exercises.size) return
+        // A proposta mudou: a explicação anterior descrevia outra lista.
+        explanations.dismiss()
         if (remaining.isEmpty()) {
             _uiState.value = _uiState.value.copy(status = GenerateWorkoutStatus.Idle)
             return

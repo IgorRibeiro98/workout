@@ -83,7 +83,10 @@ data class WorkoutAdaptationDraft(
     val summary: String,
     val dataQuality: AiCoachDataQuality,
     val changes: List<WorkoutAdaptationChange>
-)
+) {
+    /** A mudança com este id, ou `null` quando ela não existe mais nesta proposta. */
+    fun change(changeId: String): WorkoutAdaptationChange? = changes.firstOrNull { it.id == changeId }
+}
 
 /** O que uma solicitação de adaptação produziu. */
 sealed interface AdaptWorkoutResult {

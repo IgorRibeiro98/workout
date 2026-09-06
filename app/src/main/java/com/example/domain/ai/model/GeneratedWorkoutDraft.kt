@@ -15,7 +15,28 @@ data class GeneratedWorkoutDraft(
     val name: String,
     val explanation: String,
     val exercises: List<GeneratedWorkoutDraftExercise>
-)
+) {
+    /**
+     * A impressão do rascunho como ele está agora.
+     *
+     * O usuário pode remover exercícios da proposta antes de salvar; quando isso acontece, uma
+     * explicação montada sobre a lista anterior deixa de valer. A revisão é o que faz o cache em
+     * memória perceber isso.
+     */
+    val revision: String
+        get() = buildString {
+            append(requestId).append('|').append(name).append('|')
+            exercises.sortedBy { it.sortOrder }.forEach { exercise ->
+                append(exercise.exerciseId).append(':')
+                append(exercise.sortOrder).append(':')
+                append(exercise.sets).append(':')
+                append(exercise.minReps).append('-').append(exercise.maxReps).append(':')
+                append(exercise.restSeconds).append(':')
+                append(exercise.weightKg?.toString() ?: "-")
+                append(';')
+            }
+        }
+}
 
 /**
  * Um exercício do rascunho, no formato que o domínio realmente suporta.

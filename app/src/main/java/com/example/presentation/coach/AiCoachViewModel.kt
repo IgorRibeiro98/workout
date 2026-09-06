@@ -2,6 +2,7 @@ package com.example.presentation.coach
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.domain.ai.model.AiCoachAdvice
 import com.example.domain.ai.model.AiCoachDataQuality
 import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.AiCoachObservation
@@ -10,6 +11,7 @@ import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.AiRecommendation
 import com.example.domain.ai.model.AiRecommendationType
 import com.example.domain.ai.usecase.AnalyzeWorkoutUseCase
+import com.example.domain.ai.usecase.ExplainCoachDecisionUseCase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,13 +34,39 @@ import kotlinx.coroutines.launch
 class AiCoachViewModel(
     private val analyzeWorkout: AnalyzeWorkoutUseCase,
     /** Resolve o nome de exibição de um `exerciseId`; a identidade continua sendo o id. */
-    private val exerciseNameResolver: suspend (String) -> String? = { null }
+    private val exerciseNameResolver: suspend (String) -> String? = { null },
+    /** `null` quando o Coach contextual não está disponível neste build. */
+    private val explainCoachDecision: ExplainCoachDecisionUseCase? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<AiCoachUiState>(AiCoachUiState.Idle)
     val uiState: StateFlow<AiCoachUiState> = _uiState.asStateFlow()
 
+    private val explanations = coachExplanationController()
+    val explanationState: StateFlow<CoachExplanationUiState> = explanations.state
+
+    /** A análise atual, para resolver "por quê?" contra o que está na tela agora. */
+    private var currentAdvice: AiCoachAdvice? = null
+
     private var inFlight: Job? = null
+
+    val canExplain: Boolean get() = explainCoachDecision != null
+
+    /**
+     * "Por quê?" sobre uma recomendação ou observação desta análise.
+     *
+     * O alvo é resolvido por id contra a análise atual; se ela foi refeita ou nunca existiu, não
+     * há chamada. Esta explicação é **sempre local**: a recomendação já traz razão e evidência.
+     */
+    fun explain(targetId: String) {
+        val useCase = explainCoachDecision ?: return
+        val advice = currentAdvice ?: return
+        explanations.request {
+            useCase.explainAnalysisTarget(advice, targetId, exerciseNameResolver)
+        }
+    }
+
+    fun dismissExplanation() = explanations.dismiss()
 
     /** Único gatilho de chamada ao provider: o toque explícito em "Analisar meu treino". */
     fun analyze() {
@@ -46,7 +74,10 @@ class AiCoachViewModel(
 
         _uiState.value = AiCoachUiState.Loading
         inFlight = viewModelScope.launch {
-            _uiState.value = when (val result = analyzeWorkout()) {
+            val result = analyzeWorkout()
+            currentAdvice = (result as? AiCoachResult.Success)?.advice
+            explanations.dismiss()
+            _uiState.value = when (result) {
                 is AiCoachResult.Success -> AiCoachUiState.Success(
                     summary = result.advice.summary,
                     positiveSignals = result.advice.positiveSignals.map { it.toUi() },
@@ -61,6 +92,7 @@ class AiCoachViewModel(
     }
 
     private suspend fun AiRecommendation.toUi(): AiRecommendationUi = AiRecommendationUi(
+        id = id,
         type = type,
         label = type.label(),
         exerciseName = exerciseId?.let { exerciseNameResolver(it) },
@@ -70,6 +102,7 @@ class AiCoachViewModel(
     )
 
     private suspend fun AiCoachObservation.toUi(): AiObservationUi = AiObservationUi(
+        id = id,
         title = title,
         description = description,
         exerciseName = exerciseId?.let { exerciseNameResolver(it) }

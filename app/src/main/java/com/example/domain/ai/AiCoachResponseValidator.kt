@@ -3,6 +3,8 @@ package com.example.domain.ai
 import com.example.domain.ai.model.AiCoachAdvice
 import com.example.domain.ai.model.AiCoachContext
 import com.example.domain.ai.model.AiCoachDataQuality
+import com.example.domain.ai.model.AiCoachExplanationContext
+import com.example.domain.ai.model.AiCoachExplanationResponse
 import com.example.domain.ai.model.AiCoachObservation
 import com.example.domain.ai.model.AiCoachResponse
 import com.example.domain.ai.model.AiCoachResponseDataQuality
@@ -33,6 +35,18 @@ sealed interface AiCoachValidation {
 sealed interface AiWorkoutAdaptationValidation {
     data class Valid(val draft: WorkoutAdaptationDraft) : AiWorkoutAdaptationValidation
     data class Invalid(val reason: String) : AiWorkoutAdaptationValidation
+}
+
+/** O que a validação decidiu sobre uma explicação escrita pelo modelo. */
+sealed interface AiCoachExplanationValidation {
+    /** Só o que o modelo escreveu. A evidência continua sendo montada pelo app. */
+    data class Valid(
+        val title: String,
+        val explanation: String,
+        val limitations: List<String>
+    ) : AiCoachExplanationValidation
+
+    data class Invalid(val reason: String) : AiCoachExplanationValidation
 }
 
 /** O que a validação decidiu sobre um treino proposto pelo modelo. */
@@ -99,14 +113,24 @@ object AiCoachResponseValidator {
         val knownExerciseIds = context.knownExerciseIds
 
         val positiveSignals = when (
-            val result = validateObservations("positiveSignals", response.positiveSignals, knownExerciseIds)
+            val result = validateObservations(
+                "positiveSignals",
+                AiCoachAdvice.POSITIVE_SIGNAL_ID_PREFIX,
+                response.positiveSignals,
+                knownExerciseIds
+            )
         ) {
             is ObservationsResult.Invalid -> return AiCoachValidation.Invalid(result.reason)
             is ObservationsResult.Valid -> result.observations
         }
 
         val attentionPoints = when (
-            val result = validateObservations("attentionPoints", response.attentionPoints, knownExerciseIds)
+            val result = validateObservations(
+                "attentionPoints",
+                AiCoachAdvice.ATTENTION_POINT_ID_PREFIX,
+                response.attentionPoints,
+                knownExerciseIds
+            )
         ) {
             is ObservationsResult.Invalid -> return AiCoachValidation.Invalid(result.reason)
             is ObservationsResult.Valid -> result.observations
@@ -150,6 +174,7 @@ object AiCoachResponseValidator {
             }
 
             recommendations += AiRecommendation(
+                id = "${AiCoachAdvice.RECOMMENDATION_ID_PREFIX}:$index",
                 type = type,
                 exerciseId = exerciseId,
                 reason = reason,
@@ -183,6 +208,7 @@ object AiCoachResponseValidator {
 
     private fun validateObservations(
         field: String,
+        idPrefix: String,
         raw: List<AiCoachResponseObservation>,
         knownExerciseIds: Set<String>
     ): ObservationsResult {
@@ -216,6 +242,7 @@ object AiCoachResponseValidator {
             }
 
             observations += AiCoachObservation(
+                id = "$idPrefix:$index",
                 exerciseId = exerciseId,
                 title = title,
                 description = description
@@ -795,6 +822,89 @@ object AiCoachResponseValidator {
                 explanation = explanation,
                 exercises = draftExercises.sortedBy { it.sortOrder }
             )
+        )
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Explicação contextual (T14.4)
+    // ---------------------------------------------------------------------------------------
+
+    /** Uma explicação é um parágrafo curto, não um artigo. */
+    const val MAX_EXPLANATION_TEXT_LENGTH: Int = 900
+
+    /** Teto de limitações declaradas pelo modelo. Acima disso é ruído, não transparência. */
+    const val MAX_LIMITATIONS: Int = 4
+
+    /**
+     * Uma explicação também é entrada não confiável.
+     *
+     * Mesma política das outras três: **uma violação invalida a resposta inteira**. As regras
+     * próprias da explicação:
+     *
+     * - título e texto precisam existir e caber no contrato;
+     * - todo `exerciseId` citado precisa estar no contexto enviado — inclusive um id real do
+     *   catálogo que não entrou nesta explicação;
+     * - limitação vazia não é limitação.
+     *
+     * Evidência não é validada aqui porque o modelo não a escreve: ela é montada pelo app a
+     * partir de [AiCoachExplanationContext.facts].
+     */
+    fun validateExplanation(
+        context: AiCoachExplanationContext,
+        response: AiCoachExplanationResponse
+    ): AiCoachExplanationValidation {
+        val title = response.title.trim()
+        if (title.isEmpty()) {
+            return AiCoachExplanationValidation.Invalid("title vazio")
+        }
+        if (title.length > MAX_TITLE_LENGTH) {
+            return AiCoachExplanationValidation.Invalid("title excede $MAX_TITLE_LENGTH caracteres")
+        }
+
+        val explanation = response.explanation.trim()
+        if (explanation.isEmpty()) {
+            return AiCoachExplanationValidation.Invalid("explanation vazia")
+        }
+        if (explanation.length > MAX_EXPLANATION_TEXT_LENGTH) {
+            return AiCoachExplanationValidation.Invalid(
+                "explanation excede $MAX_EXPLANATION_TEXT_LENGTH caracteres"
+            )
+        }
+
+        if (response.limitations.size > MAX_LIMITATIONS) {
+            return AiCoachExplanationValidation.Invalid("mais de $MAX_LIMITATIONS limitações")
+        }
+        val limitations = mutableListOf<String>()
+        response.limitations.forEachIndexed { index, raw ->
+            val limitation = raw.trim()
+            if (limitation.isEmpty()) {
+                return AiCoachExplanationValidation.Invalid("limitação vazia em [$index]")
+            }
+            if (limitation.length > MAX_DESCRIPTION_LENGTH) {
+                return AiCoachExplanationValidation.Invalid(
+                    "limitação excede $MAX_DESCRIPTION_LENGTH caracteres em [$index]"
+                )
+            }
+            limitations += limitation
+        }
+
+        val knownExerciseIds = context.knownExerciseIds
+        response.referencedExerciseIds.forEachIndexed { index, raw ->
+            val exerciseId = raw.trim()
+            if (exerciseId.isEmpty()) {
+                return AiCoachExplanationValidation.Invalid("exerciseId vazio em [$index]")
+            }
+            if (exerciseId !in knownExerciseIds) {
+                return AiCoachExplanationValidation.Invalid(
+                    "exerciseId fora do contexto em [$index]: '$exerciseId'"
+                )
+            }
+        }
+
+        return AiCoachExplanationValidation.Valid(
+            title = title,
+            explanation = explanation,
+            limitations = limitations.distinct()
         )
     }
 

@@ -38,7 +38,9 @@ class MainViewModelFactory(
     private val saveGeneratedWorkoutUseCase: com.example.domain.ai.usecase.SaveGeneratedWorkoutUseCase? = null,
     private val workoutCandidateProvider: (suspend (com.example.domain.ai.model.WorkoutGenerationPreferences) -> List<com.example.domain.ai.model.AiCandidateExerciseContext>)? = null,
     private val adaptWorkoutUseCase: com.example.domain.ai.usecase.AdaptWorkoutUseCase? = null,
-    private val applyWorkoutAdaptationUseCase: com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase? = null
+    private val applyWorkoutAdaptationUseCase: com.example.domain.ai.usecase.ApplyWorkoutAdaptationUseCase? = null,
+    /** Coach contextual (T14.4). `null` desliga as entradas de explicação em todas as telas. */
+    private val explainCoachDecisionUseCase: com.example.domain.ai.usecase.ExplainCoachDecisionUseCase? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -134,7 +136,8 @@ class MainViewModelFactory(
                 achievementRepository = achievementRepo,
                 workoutRepository = repository,
                 bodyMeasurementRepository = bodyMeasurementRepository,
-                settingsManager = settingsManager
+                settingsManager = settingsManager,
+                explainCoachDecision = explainCoachDecisionUseCase
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {
@@ -143,7 +146,8 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.coach.AiCoachViewModel(
                 analyzeWorkout = useCase,
-                exerciseNameResolver = exerciseNameResolver ?: { null }
+                exerciseNameResolver = exerciseNameResolver ?: { null },
+                explainCoachDecision = explainCoachDecisionUseCase
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.GenerateWorkoutViewModel::class.java)) {
@@ -157,7 +161,8 @@ class MainViewModelFactory(
             return com.example.presentation.coach.GenerateWorkoutViewModel(
                 generateWorkout = generate,
                 saveGeneratedWorkout = save::invoke,
-                listCandidates = candidates
+                listCandidates = candidates,
+                explainCoachDecision = explainCoachDecisionUseCase
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AdaptWorkoutViewModel::class.java)) {
@@ -168,7 +173,8 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.coach.AdaptWorkoutViewModel(
                 adaptWorkout = adapt,
-                applyAdaptation = apply::invoke
+                applyAdaptation = apply::invoke,
+                explainCoachDecision = explainCoachDecisionUseCase
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.missions.MissionViewModel::class.java)) {

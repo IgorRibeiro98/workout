@@ -1,6 +1,8 @@
 package com.example.domain.ai
 
 import com.example.domain.ai.model.AiCoachGatewayResult
+import com.example.domain.ai.model.AiCoachExplanationGatewayResult
+import com.example.domain.ai.model.AiCoachExplanationRequest
 import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiWorkoutAdaptationGatewayResult
 import com.example.domain.ai.model.AiWorkoutAdaptationRequest
@@ -26,4 +28,12 @@ interface AiCoachGateway {
 
     /** Adaptação de um treino existente (T14.3). O gateway não altera nenhum treino. */
     suspend fun adaptWorkout(request: AiWorkoutAdaptationRequest): AiWorkoutAdaptationGatewayResult
+
+    /**
+     * Explicação de algo que o app já decidiu ou já propôs (T14.4).
+     *
+     * Um método para os quatro `EXPLAIN_*` porque o contrato de saída é o mesmo: o que muda entre
+     * eles é o contexto mínimo enviado, não a forma da resposta.
+     */
+    suspend fun explain(request: AiCoachExplanationRequest): AiCoachExplanationGatewayResult
 }

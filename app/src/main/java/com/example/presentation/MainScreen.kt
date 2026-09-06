@@ -82,7 +82,8 @@ fun MainScreen() {
             app.workoutGenerationContextBuilder.candidates(preferences)
         },
         adaptWorkoutUseCase = app.adaptWorkoutUseCase,
-        applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase
+        applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase,
+        explainCoachDecisionUseCase = app.explainCoachDecisionUseCase
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)

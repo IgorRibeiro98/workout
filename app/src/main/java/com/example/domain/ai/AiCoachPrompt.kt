@@ -1,5 +1,6 @@
 package com.example.domain.ai
 
+import com.example.domain.ai.model.AiCoachExplanationRequest
 import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiCoachRequestType
 import com.example.domain.ai.model.AiDataQualityLevel
@@ -34,6 +35,10 @@ object AiCoachPrompt {
         AiCoachRequestType.ANALYZE_WORKOUT -> analysisSystemInstruction()
         AiCoachRequestType.GENERATE_WORKOUT -> generationSystemInstruction()
         AiCoachRequestType.ADAPT_WORKOUT -> adaptationSystemInstruction()
+        AiCoachRequestType.EXPLAIN_RECOMMENDATION,
+        AiCoachRequestType.EXPLAIN_WORKOUT,
+        AiCoachRequestType.EXPLAIN_ADAPTATION,
+        AiCoachRequestType.EXPLAIN_PROGRESS -> explanationSystemInstruction()
     }
 
     /** Regras invioláveis do Coach na análise. A IA aconselha; o domínio decide. */
@@ -194,6 +199,56 @@ object AiCoachPrompt {
         Escreva em português do Brasil, de forma direta e curta.
     """.trimIndent()
 
+    /**
+     * Regras invioláveis do Coach ao **explicar** uma decisão que já existe.
+     *
+     * A explicação nunca é uma segunda opinião: o app já concluiu, e o papel do modelo é tornar
+     * essa conclusão legível. Ele não reclassifica, não recalcula e não decide nada.
+     */
+    fun explanationSystemInstruction(): String = """
+        Você é o Coach do Spark, um aplicativo de treino de musculação em português do Brasil.
+        O aplicativo já tomou uma decisão ou já produziu uma sugestão, e o usuário quer entender
+        por quê. Seu papel é explicar essa decisão com os dados que o aplicativo enviar.
+
+        Dados e identidade:
+        1. Explique somente o que está no contexto. O que não está lá não existe para esta
+           explicação.
+        2. Não invente evidência, sessão, série, carga, repetição, data, frequência ou histórico.
+           Não crie fatos novos para deixar a explicação mais completa.
+        3. Preserve os identificadores: ao citar um exercício, use exatamente o "exerciseId"
+           recebido e liste em "referencedExerciseIds" todos os ids que você citou. Nunca use o
+           nome como identificador e nunca crie um id novo.
+        4. Nunca calcule, corrija ou arredonde números. Nível, XP, sequência, meta, quantidade de
+           sessões, cargas e repetições vêm prontos do aplicativo: repita os valores do contexto
+           exatamente como estão.
+
+        O que explicar:
+        5. Explique a decisão que está em "subject", usando "facts" como base. "reason" e
+           "evidence", quando presentes, são a justificativa que o aplicativo já registrou:
+           reorganize e conecte, não substitua nem contradiga.
+        6. Distinga fato de interpretação. Primeiro o que os dados mostram, depois o que isso
+           sugere.
+        7. Repita em "limitations" as limitações que chegaram em "knownLimitations" e acrescente
+           outras somente se o próprio contexto as sustentar. Nunca as omita nem as suavize.
+        8. Se o contexto for pouco para responder bem, diga isso em vez de preencher com suposição.
+
+        Limites de autoridade:
+        9. Você não altera nada e nada foi aplicado. Nunca afirme que algo foi salvo, alterado,
+           corrigido, aplicado ou concluído por causa desta explicação.
+        10. Não reclassifique a decisão do aplicativo, não proponha uma sugestão diferente e não
+            recomende ações fora do que já está no contexto.
+        11. Responda estritamente no schema JSON solicitado, sem texto fora dele.
+
+        Segurança:
+        12. Você é um recurso de treino, não um profissional de saúde. Se o contexto envolver dor,
+            lesão, mal-estar, tontura ou qualquer sintoma, não produza diagnóstico nem
+            tratamento: seja conservador e sugira procurar um profissional.
+
+        Escreva em português do Brasil, em no máximo dois parágrafos curtos, de forma clara e não
+        alarmista. Evite jargão desnecessário e evite linguagem absoluta como "você precisa" ou
+        "seu treino está errado" quando os dados não sustentarem isso.
+    """.trimIndent()
+
     /** Intenção do usuário + contexto serializado, na mesma ordem em toda chamada. */
     fun userPrompt(request: AiCoachRequest): String = prompt(
         intent = "Analise o treino do atleta e explique o que os dados mostram: onde há evolução, " +
@@ -220,6 +275,33 @@ object AiCoachPrompt {
         schemaVersion = request.schemaVersion,
         contextJson = json.encodeToString(request.context)
     )
+
+    /** Intenção + contexto de uma explicação, no mesmo formato dos demais. */
+    fun userPrompt(request: AiCoachExplanationRequest): String = prompt(
+        intent = explanationIntent(request.type),
+        requestId = request.requestId,
+        schemaVersion = request.schemaVersion,
+        contextJson = json.encodeToString(request.context)
+    )
+
+    /** A pergunta do usuário, por tipo. O schema de saída é o mesmo para os quatro. */
+    private fun explanationIntent(type: AiCoachRequestType): String = when (type) {
+        AiCoachRequestType.EXPLAIN_RECOMMENDATION ->
+            "Explique por que esta recomendação foi feita, usando apenas os dados do contexto."
+
+        AiCoachRequestType.EXPLAIN_WORKOUT ->
+            "Explique por que este treino foi montado assim: ordem, foco muscular, distribuição " +
+                "de volume, relação com o objetivo pedido e uso dos exercícios disponíveis."
+
+        AiCoachRequestType.EXPLAIN_ADAPTATION ->
+            "Explique por que esta mudança foi sugerida, ligando o valor atual, o valor sugerido " +
+                "e as execuções concluídas do contexto."
+
+        AiCoachRequestType.EXPLAIN_PROGRESS ->
+            "Explique o que estes números de progressão mostram, sem recalcular nenhum deles."
+
+        else -> "Explique a decisão descrita no contexto."
+    }
 
     private fun prompt(
         intent: String,

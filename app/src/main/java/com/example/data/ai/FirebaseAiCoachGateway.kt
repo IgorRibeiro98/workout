@@ -9,6 +9,9 @@ import com.example.domain.ai.AiCoachPrompt
 import com.example.domain.ai.AiModelConfig
 import com.example.domain.ai.AiThinkingLevel
 import com.example.domain.ai.model.AiCoachErrorKind
+import com.example.domain.ai.model.AiCoachExplanationGatewayResult
+import com.example.domain.ai.model.AiCoachExplanationRequest
+import com.example.domain.ai.model.AiCoachExplanationResponse
 import com.example.domain.ai.model.AiCoachGatewayResult
 import com.example.domain.ai.model.AiCoachRequest
 import com.example.domain.ai.model.AiCoachRequestType
@@ -108,6 +111,20 @@ class FirebaseAiCoachGateway(
                 )
             } catch (e: Exception) {
                 AiWorkoutAdaptationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
+            }
+        }
+
+    override suspend fun explain(
+        request: AiCoachExplanationRequest
+    ): AiCoachExplanationGatewayResult =
+        when (val raw = generate(request.type, AiCoachPrompt.userPrompt(request))) {
+            is RawResult.Error -> AiCoachExplanationGatewayResult.Error(raw.kind, raw.detail)
+            is RawResult.Text -> try {
+                AiCoachExplanationGatewayResult.Success(
+                    json.decodeFromString<AiCoachExplanationResponse>(raw.text)
+                )
+            } catch (e: Exception) {
+                AiCoachExplanationGatewayResult.Error(AiCoachErrorKind.INVALID_RESPONSE, e.message)
             }
         }
 

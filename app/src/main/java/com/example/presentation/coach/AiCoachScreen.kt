@@ -76,11 +76,20 @@ fun AiCoachScreen(
     onNavigateToGenerateWorkout: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val explanationState by viewModel.explanationState.collectAsState()
+
     AiCoachScreenContent(
         uiState = uiState,
         onAnalyze = viewModel::analyze,
         onNavigateBack = onNavigateBack,
-        onNavigateToGenerateWorkout = onNavigateToGenerateWorkout
+        onNavigateToGenerateWorkout = onNavigateToGenerateWorkout,
+        canExplain = viewModel.canExplain,
+        onExplain = viewModel::explain
+    )
+
+    CoachExplanationSheet(
+        state = explanationState,
+        onDismiss = viewModel::dismissExplanation
     )
 }
 
@@ -90,7 +99,11 @@ internal fun AiCoachScreenContent(
     uiState: AiCoachUiState,
     onAnalyze: () -> Unit,
     onNavigateBack: () -> Unit,
-    onNavigateToGenerateWorkout: () -> Unit = {}
+    onNavigateToGenerateWorkout: () -> Unit = {},
+    /** `false` esconde as entradas contextuais: sem Coach, nenhum botão promete o que não há. */
+    canExplain: Boolean = false,
+    /** Recebe o id do alvo, nunca o texto exibido. */
+    onExplain: (String) -> Unit = {}
 ) {
     Scaffold(
         containerColor = BackgroundDark,
@@ -220,7 +233,7 @@ internal fun AiCoachScreenContent(
                     )
                 }
 
-                is AiCoachUiState.Success -> AdviceSection(uiState)
+                is AiCoachUiState.Success -> AdviceSection(uiState, canExplain, onExplain)
 
                 is AiCoachUiState.Unavailable -> MessageCard(
                     message = uiState.message,
@@ -245,7 +258,11 @@ internal fun AiCoachScreenContent(
 }
 
 @Composable
-private fun AdviceSection(state: AiCoachUiState.Success) {
+private fun AdviceSection(
+    state: AiCoachUiState.Success,
+    canExplain: Boolean,
+    onExplain: (String) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionTitle("Resumo")
         Card {
@@ -254,12 +271,28 @@ private fun AdviceSection(state: AiCoachUiState.Success) {
 
         if (state.positiveSignals.isNotEmpty()) {
             SectionTitle("Pontos positivos")
-            state.positiveSignals.forEach { ObservationCard(it, marker = "✓", markerColor = Lime400) }
+            state.positiveSignals.forEach { observation ->
+                ObservationCard(
+                    observation = observation,
+                    marker = "✓",
+                    markerColor = Lime400,
+                    canExplain = canExplain,
+                    onExplain = onExplain
+                )
+            }
         }
 
         if (state.attentionPoints.isNotEmpty()) {
             SectionTitle("Pontos de atenção")
-            state.attentionPoints.forEach { ObservationCard(it, marker = "!", markerColor = Orange400) }
+            state.attentionPoints.forEach { observation ->
+                ObservationCard(
+                    observation = observation,
+                    marker = "!",
+                    markerColor = Orange400,
+                    canExplain = canExplain,
+                    onExplain = onExplain
+                )
+            }
         }
 
         if (state.recommendations.isNotEmpty()) {
@@ -290,6 +323,12 @@ private fun AdviceSection(state: AiCoachUiState.Success) {
                             color = TextTertiary,
                             fontSize = 11.sp
                         )
+                        // Entrada contextual: pequena, ao lado da decisão que ela explica.
+                        if (canExplain) {
+                            CoachExplanationTrigger(text = "Por quê?") {
+                                onExplain(recommendation.id)
+                            }
+                        }
                     }
                 }
             }
@@ -338,7 +377,13 @@ private fun AiDataQualityLevel.accentColor(): Color = when (this) {
 }
 
 @Composable
-private fun ObservationCard(observation: AiObservationUi, marker: String, markerColor: Color) {
+private fun ObservationCard(
+    observation: AiObservationUi,
+    marker: String,
+    markerColor: Color,
+    canExplain: Boolean,
+    onExplain: (String) -> Unit
+) {
     Card {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
@@ -354,6 +399,9 @@ private fun ObservationCard(observation: AiObservationUi, marker: String, marker
                 Text(text = name, color = TextSecondary, fontSize = 12.sp)
             }
             Text(text = observation.description, color = TextSecondary, fontSize = 13.sp)
+            if (canExplain) {
+                CoachExplanationTrigger(text = "Por quê?") { onExplain(observation.id) }
+            }
         }
     }
 }

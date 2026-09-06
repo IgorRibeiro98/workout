@@ -11,7 +11,29 @@ import kotlinx.serialization.Serializable
 enum class AiCoachRequestType {
     ANALYZE_WORKOUT,
     GENERATE_WORKOUT,
-    ADAPT_WORKOUT
+    ADAPT_WORKOUT,
+
+    /** Por que esta recomendação da análise foi feita. */
+    EXPLAIN_RECOMMENDATION,
+
+    /** Por que o treino proposto foi montado assim. */
+    EXPLAIN_WORKOUT,
+
+    /** Por que esta mudança foi sugerida para o treino. */
+    EXPLAIN_ADAPTATION,
+
+    /** O que os números de progressão do Perfil querem dizer. */
+    EXPLAIN_PROGRESS;
+
+    /**
+     * Se o request apenas explica algo que já existe.
+     *
+     * Todo `EXPLAIN_*` é READ-ONLY por contrato: ele não cria treino, não altera treino, não
+     * altera sessão e não concede XP, PR ou conquista.
+     */
+    val isExplanation: Boolean
+        get() = this == EXPLAIN_RECOMMENDATION || this == EXPLAIN_WORKOUT ||
+            this == EXPLAIN_ADAPTATION || this == EXPLAIN_PROGRESS
 }
 
 /**

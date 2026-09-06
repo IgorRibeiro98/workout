@@ -7,6 +7,7 @@ import com.example.domain.ai.model.AiCoachErrorKind
 import com.example.domain.ai.model.ApplyWorkoutAdaptationResult
 import com.example.domain.ai.model.WorkoutAdaptationDraft
 import com.example.domain.ai.usecase.AdaptWorkoutUseCase
+import com.example.domain.ai.usecase.ExplainCoachDecisionUseCase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,13 +31,35 @@ import kotlinx.coroutines.launch
 class AdaptWorkoutViewModel(
     private val adaptWorkout: AdaptWorkoutUseCase,
     /** A confirmação do usuário, ligada ao `ApplyWorkoutAdaptationUseCase` canônico. */
-    private val applyAdaptation: suspend (WorkoutAdaptationDraft, Set<String>) -> ApplyWorkoutAdaptationResult
+    private val applyAdaptation: suspend (WorkoutAdaptationDraft, Set<String>) -> ApplyWorkoutAdaptationResult,
+    /** `null` quando o Coach contextual não está disponível neste build. */
+    private val explainCoachDecision: ExplainCoachDecisionUseCase? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AdaptWorkoutUiState())
     val uiState: StateFlow<AdaptWorkoutUiState> = _uiState.asStateFlow()
 
+    private val explanations = coachExplanationController()
+    val explanationState: StateFlow<CoachExplanationUiState> = explanations.state
+
     private var inFlight: Job? = null
+
+    val canExplain: Boolean get() = explainCoachDecision != null
+
+    /**
+     * "Entender sugestão" sobre uma mudança específica.
+     *
+     * A mudança é resolvida por id contra a proposta atual — descartá-la ou aplicá-la faz o id
+     * deixar de existir. O caso de uso ainda relê o treino e recusa explicar uma proposta montada
+     * sobre um estado que já mudou.
+     */
+    fun explainChange(changeId: String) {
+        val useCase = explainCoachDecision ?: return
+        val draft = (_uiState.value.status as? AdaptWorkoutStatus.Draft)?.draft ?: return
+        explanations.request { useCase.explainAdaptationChange(draft, changeId) }
+    }
+
+    fun dismissExplanation() = explanations.dismiss()
 
     /** Diz qual treino está aberto. Não chama o provider. */
     fun load(templateId: Long) {
@@ -50,6 +73,7 @@ class AdaptWorkoutViewModel(
         val state = _uiState.value
         if (!state.canAdapt) return
 
+        explanations.dismiss()
         _uiState.value = state.copy(
             status = AdaptWorkoutStatus.Generating,
             selectedChangeIds = emptySet()
@@ -81,6 +105,7 @@ class AdaptWorkoutViewModel(
     /** Descartar a proposta inteira: o rascunho some e o treino continua como estava. */
     fun discard() {
         if (_uiState.value.isBusy) return
+        explanations.dismiss()
         _uiState.value = _uiState.value.copy(
             status = AdaptWorkoutStatus.Idle,
             selectedChangeIds = emptySet()
@@ -95,6 +120,7 @@ class AdaptWorkoutViewModel(
         val selected = state.selectedChangeIds.filter { id -> status.draft.changes.any { it.id == id } }.toSet()
         if (selected.isEmpty()) return
 
+        explanations.dismiss()
         _uiState.value = state.copy(status = AdaptWorkoutStatus.Applying(status.draft))
         inFlight = viewModelScope.launch {
             _uiState.value = _uiState.value.copy(

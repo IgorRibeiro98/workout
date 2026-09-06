@@ -77,7 +77,10 @@ internal data class GenerateWorkoutActions(
     val onSave: () -> Unit = {},
     val onReset: () -> Unit = {},
     val onOpenTemplate: (Long) -> Unit = {},
-    val onNavigateBack: () -> Unit = {}
+    val onNavigateBack: () -> Unit = {},
+    /** Entrada contextual: explicar a proposta na tela. Não recebe texto, não recebe domínio. */
+    val onExplainDraft: () -> Unit = {},
+    val canExplain: Boolean = false
 )
 
 /**
@@ -93,6 +96,7 @@ fun GenerateWorkoutScreen(
     onOpenTemplate: (Long) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val explanationState by viewModel.explanationState.collectAsState()
 
     // Só carrega o recorte local do catálogo (Room). Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(Unit) { viewModel.refreshCandidates() }
@@ -112,8 +116,15 @@ fun GenerateWorkoutScreen(
             onSave = viewModel::save,
             onReset = viewModel::reset,
             onOpenTemplate = onOpenTemplate,
-            onNavigateBack = onNavigateBack
+            onNavigateBack = onNavigateBack,
+            onExplainDraft = viewModel::explainDraft,
+            canExplain = viewModel.canExplain
         )
+    )
+
+    CoachExplanationSheet(
+        state = explanationState,
+        onDismiss = viewModel::dismissExplanation
     )
 }
 
@@ -414,6 +425,14 @@ private fun DraftSection(
             Card {
                 Text(text = draft.explanation, color = TextSecondary, fontSize = 13.sp)
             }
+        }
+
+        if (actions.canExplain) {
+            CoachExplanationTrigger(
+                text = "Como isso foi decidido?",
+                enabled = !isSaving,
+                onClick = actions.onExplainDraft
+            )
         }
 
         if (isSaving) {

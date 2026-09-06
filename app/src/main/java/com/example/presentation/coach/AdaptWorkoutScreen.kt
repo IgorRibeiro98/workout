@@ -64,7 +64,10 @@ internal data class AdaptWorkoutActions(
     val onDiscard: () -> Unit = {},
     val onApply: () -> Unit = {},
     val onReset: () -> Unit = {},
-    val onNavigateBack: () -> Unit = {}
+    val onNavigateBack: () -> Unit = {},
+    /** Entrada contextual: explicar uma mudança. Recebe o id da mudança, nunca o texto. */
+    val onExplainChange: (String) -> Unit = {},
+    val canExplain: Boolean = false
 )
 
 /**
@@ -80,6 +83,7 @@ fun AdaptWorkoutScreen(
     onNavigateBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val explanationState by viewModel.explanationState.collectAsState()
 
     // Só informa qual treino está aberto. Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(templateId) { viewModel.load(templateId) }
@@ -92,8 +96,15 @@ fun AdaptWorkoutScreen(
             onDiscard = viewModel::discard,
             onApply = viewModel::apply,
             onReset = viewModel::reset,
-            onNavigateBack = onNavigateBack
+            onNavigateBack = onNavigateBack,
+            onExplainChange = viewModel::explainChange,
+            canExplain = viewModel.canExplain
         )
+    )
+
+    CoachExplanationSheet(
+        state = explanationState,
+        onDismiss = viewModel::dismissExplanation
     )
 }
 
@@ -251,7 +262,9 @@ private fun DraftSection(
                 change = change,
                 selected = change.id in selectedIds,
                 enabled = !isApplying,
-                onToggle = actions.onToggleChange
+                onToggle = actions.onToggleChange,
+                canExplain = actions.canExplain,
+                onExplain = actions.onExplainChange
             )
         }
 
@@ -309,7 +322,9 @@ private fun ChangeCard(
     change: WorkoutAdaptationChange,
     selected: Boolean,
     enabled: Boolean,
-    onToggle: (String) -> Unit
+    onToggle: (String) -> Unit,
+    canExplain: Boolean,
+    onExplain: (String) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -374,6 +389,14 @@ private fun ChangeCard(
                 color = TextTertiary,
                 fontSize = 11.sp
             )
+            // Fica fora do clique do card: entender uma sugestão não pode aceitá-la sem querer.
+            if (canExplain) {
+                CoachExplanationTrigger(
+                    text = "Entender sugestão",
+                    enabled = enabled,
+                    onClick = { onExplain(change.id) }
+                )
+            }
         }
     }
 }

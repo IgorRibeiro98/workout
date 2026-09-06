@@ -22,7 +22,48 @@ internal object AiCoachResponseSchema {
         AiCoachRequestType.ANALYZE_WORKOUT -> schema
         AiCoachRequestType.GENERATE_WORKOUT -> generatedWorkoutSchema
         AiCoachRequestType.ADAPT_WORKOUT -> workoutAdaptationSchema
+        // Os quatro EXPLAIN_* compartilham o schema: o que muda entre eles é o contexto enviado,
+        // não a forma da resposta.
+        AiCoachRequestType.EXPLAIN_RECOMMENDATION,
+        AiCoachRequestType.EXPLAIN_WORKOUT,
+        AiCoachRequestType.EXPLAIN_ADAPTATION,
+        AiCoachRequestType.EXPLAIN_PROGRESS -> explanationSchema
     }
+
+    /**
+     * Contrato de forma de uma explicação.
+     *
+     * Não existe campo de evidência de propósito: evidência é fato do aplicativo, montado a
+     * partir de `facts` do contexto, e não texto do modelo. `referencedExerciseIds` existe para
+     * a citação de exercício ser verificável pelo validador.
+     */
+    val explanationSchema: Schema = Schema.obj(
+        properties = mapOf(
+            "title" to Schema.string(
+                description = "Título curto da explicação, em português do Brasil, no máximo " +
+                    "${AiCoachResponseValidator.MAX_TITLE_LENGTH} caracteres."
+            ),
+            "explanation" to Schema.string(
+                description = "A explicação em no máximo dois parágrafos curtos, usando somente " +
+                    "os dados do contexto."
+            ),
+            "limitations" to Schema.array(
+                items = Schema.string(
+                    description = "Uma limitação desta explicação, em uma frase."
+                ),
+                description = "Repita as limitações recebidas em knownLimitations e acrescente " +
+                    "outras somente se o contexto as sustentar. Pode ser vazia.",
+                maxItems = AiCoachResponseValidator.MAX_LIMITATIONS
+            ),
+            "referencedExerciseIds" to Schema.array(
+                items = Schema.string(
+                    description = "exerciseId copiado exatamente do contexto."
+                ),
+                description = "Todo exerciseId citado na explicação. Vazio quando nenhum " +
+                    "exercício for citado."
+            )
+        )
+    )
 
     private fun observationSchema(description: String): Schema = Schema.array(
         items = Schema.obj(

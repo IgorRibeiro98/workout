@@ -124,6 +124,24 @@ class MainApplication : Application(), ImageLoaderFactory {
     }
 
     /**
+     * Coach contextual (T14.4).
+     *
+     * Instância única para o cache em memória de explicações valer entre as telas: abrir a mesma
+     * explicação de novo, na mesma sessão de uso, não paga uma segunda chamada.
+     *
+     * Recebe apenas leitura — o gateway e o builder de contexto de adaptação. Não recebe
+     * `WorkoutRepository`, DAO de escrita nem publicador de gamificação: uma explicação não tem
+     * como alterar o domínio porque não tem por onde.
+     */
+    val explainCoachDecisionUseCase: com.example.domain.ai.usecase.ExplainCoachDecisionUseCase by lazy {
+        com.example.domain.ai.usecase.ExplainCoachDecisionUseCase(
+            gateway = aiCoachGateway,
+            adaptationContextBuilder = workoutAdaptationContextBuilder,
+            telemetry = com.example.data.ai.LogcatAiCoachTelemetry()
+        )
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

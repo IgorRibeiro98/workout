@@ -50,6 +50,7 @@ fun ProfileScreen(
     onNavigateToAiCoach: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val explanationState by viewModel.explanationState.collectAsState()
 
     ProfileScreenContent(
         uiState = uiState,
@@ -59,7 +60,14 @@ fun ProfileScreen(
         onNavigateToAchievements = onNavigateToAchievements,
         onNavigateToMissions = onNavigateToMissions,
         onNavigateToAiCoach = onNavigateToAiCoach,
-        onWeeklyGoalChange = viewModel::setWeeklyGoal
+        onWeeklyGoalChange = viewModel::setWeeklyGoal,
+        canExplainProgress = viewModel.canExplainProgress,
+        onExplainProgress = viewModel::explainProgress
+    )
+
+    com.example.presentation.coach.CoachExplanationSheet(
+        state = explanationState,
+        onDismiss = viewModel::dismissExplanation
     )
 }
 
@@ -73,7 +81,10 @@ private fun ProfileScreenContent(
     onNavigateToAchievements: () -> Unit,
     onNavigateToMissions: () -> Unit,
     onNavigateToAiCoach: () -> Unit,
-    onWeeklyGoalChange: (Int) -> Unit
+    onWeeklyGoalChange: (Int) -> Unit,
+    /** `false` esconde a entrada contextual quando o Coach não está disponível neste build. */
+    canExplainProgress: Boolean = false,
+    onExplainProgress: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -137,7 +148,11 @@ private fun ProfileScreenContent(
 
             MissionsSection(onClick = onNavigateToMissions)
 
-            AiCoachSection(onClick = onNavigateToAiCoach)
+            AiCoachSection(
+                onClick = onNavigateToAiCoach,
+                canExplainProgress = canExplainProgress,
+                onExplainProgress = onExplainProgress
+            )
 
             AchievementsPreviewSection(
                 achievements = uiState.recentAchievements,
@@ -602,7 +617,11 @@ private fun MissionsSection(onClick: () -> Unit) {
  * com o modelo.
  */
 @Composable
-private fun AiCoachSection(onClick: () -> Unit) {
+private fun AiCoachSection(
+    onClick: () -> Unit,
+    canExplainProgress: Boolean,
+    onExplainProgress: () -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "Coach IA",
@@ -617,6 +636,15 @@ private fun AiCoachSection(onClick: () -> Unit) {
             subtitle = "Uma leitura do seu treino a partir do histórico real",
             onClick = onClick
         )
+
+        // Entrada contextual sobre os números que esta tela já mostra. Os valores continuam
+        // vindo das autoridades: o Coach lê e explica, nunca recalcula.
+        if (canExplainProgress) {
+            com.example.presentation.coach.CoachExplanationTrigger(
+                text = "Entender minha evolução",
+                onClick = onExplainProgress
+            )
+        }
     }
 }
 

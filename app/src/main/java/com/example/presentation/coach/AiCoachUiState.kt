@@ -31,6 +31,8 @@ sealed interface AiCoachUiState {
 
 /** Um fato observado, pronto para render. */
 data class AiObservationUi(
+    /** Identidade estável para pedir a explicação sem depender do texto exibido. */
+    val id: String,
     val title: String,
     val description: String,
     val exerciseName: String?
@@ -38,6 +40,8 @@ data class AiObservationUi(
 
 /** Uma sugestão pronta para render. Continua sendo sugestão: a tela não aplica nada. */
 data class AiRecommendationUi(
+    /** Identidade estável para pedir a explicação sem depender do texto exibido. */
+    val id: String,
     val type: AiRecommendationType,
     val label: String,
     val exerciseName: String?,

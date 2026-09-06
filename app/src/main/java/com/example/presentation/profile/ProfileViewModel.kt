@@ -6,7 +6,11 @@ import com.example.data.datastore.SettingsManager
 import com.example.data.repository.BodyMeasurementRepository
 import com.example.data.repository.WorkoutRepository
 import com.example.domain.evolution.model.achievement.Achievement
+import com.example.domain.ai.model.AiProgressSnapshot
+import com.example.domain.ai.usecase.ExplainCoachDecisionUseCase
 import com.example.domain.evolution.repository.ConsistencyRepository
+import com.example.presentation.coach.CoachExplanationController
+import com.example.presentation.coach.CoachExplanationUiState
 import com.example.domain.gamification.repository.XpTransactionRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,11 +40,54 @@ class ProfileViewModel(
     private val achievementRepository: com.example.domain.evolution.repository.AchievementRepository,
     private val workoutRepository: WorkoutRepository,
     private val bodyMeasurementRepository: BodyMeasurementRepository,
-    private val settingsManager: SettingsManager
+    private val settingsManager: SettingsManager,
+    /**
+     * O Coach contextual, opcional.
+     *
+     * `null` quando o Coach não está disponível neste build — o Perfil continua completo sem ele,
+     * e nenhum número desta tela depende de IA para existir.
+     */
+    private val explainCoachDecision: ExplainCoachDecisionUseCase? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProfileUiState())
     val uiState: StateFlow<ProfileUiState> = _uiState.asStateFlow()
+
+    private val explanations = CoachExplanationController(viewModelScope)
+    val explanationState: StateFlow<CoachExplanationUiState> = explanations.state
+
+    val canExplainProgress: Boolean get() = explainCoachDecision != null
+
+    /**
+     * "Por que meu Coach diz que estou evoluindo?"
+     *
+     * O recorte enviado é o que a tela já mostra, vindo pronto das autoridades. A IA **explica**
+     * estes números; ela não recalcula nível, curva de XP, sequência nem conquista.
+     */
+    fun explainProgress() {
+        val useCase = explainCoachDecision ?: return
+        val state = _uiState.value
+        if (state.isLoading) return
+        explanations.request {
+            useCase.explainProgress(
+                AiProgressSnapshot(
+                    level = state.level,
+                    totalXp = state.totalXp,
+                    currentLevelXp = state.currentLevelXp,
+                    xpForNextLevel = state.xpForNextLevel,
+                    streakWeeks = state.streakWeeks,
+                    weeklyCompleted = state.weeklyCompleted,
+                    weeklyGoal = state.weeklyGoal,
+                    completedWorkouts = state.completedWorkouts,
+                    unlockedAchievements = state.unlockedAchievements,
+                    totalAchievements = state.totalAchievements,
+                    personalRecordsCount = state.personalRecordsCount
+                )
+            )
+        }
+    }
+
+    fun dismissExplanation() = explanations.dismiss()
 
     /** Recorte do estado montado a partir das fontes de progressão. */
     private data class ProgressionSnapshot(
@@ -113,6 +160,11 @@ class ProfileViewModel(
                     latestWeightKg = latestMeasurement?.weightKg
                 )
             }.collect { state ->
+                // Os números mudaram: uma explicação montada sobre os anteriores deixou de
+                // descrever o que a tela mostra.
+                if (state.progressRevision() != _uiState.value.progressRevision()) {
+                    explanations.dismiss()
+                }
                 _uiState.value = state
             }
         }
@@ -127,6 +179,21 @@ class ProfileViewModel(
             consistencyRepository.setWeeklyGoal(goal)
         }
     }
+
+    /** A impressão dos números explicáveis desta tela. */
+    private fun ProfileUiState.progressRevision(): String = AiProgressSnapshot(
+        level = level,
+        totalXp = totalXp,
+        currentLevelXp = currentLevelXp,
+        xpForNextLevel = xpForNextLevel,
+        streakWeeks = streakWeeks,
+        weeklyCompleted = weeklyCompleted,
+        weeklyGoal = weeklyGoal,
+        completedWorkouts = completedWorkouts,
+        unlockedAchievements = unlockedAchievements,
+        totalAchievements = totalAchievements,
+        personalRecordsCount = personalRecordsCount
+    ).revision
 
     /** As três conquistas desbloqueadas mais recentes — as demais continuam em Evolução. */
     private fun List<Achievement>.toRecentPreview(): List<Achievement> =
