@@ -36,9 +36,10 @@ import kotlinx.coroutines.launch
         GamificationEventEntity::class,
         XpTransactionEntity::class,
         WeeklyGoalHistoryEntity::class,
-        AchievementUnlockEntity::class
+        AchievementUnlockEntity::class,
+        com.example.data.sync.SyncOutboxEntryEntity::class
     ],
-    version = 30,
+    version = 31,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -49,8 +50,99 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun xpTransactionDao(): XpTransactionDao
     abstract fun weeklyGoalDao(): WeeklyGoalDao
     abstract fun achievementDao(): AchievementDao
-    
+    abstract fun syncOutboxDao(): com.example.data.sync.SyncOutboxDao
+
     companion object {
+
+        /**
+         * T16.3 — identidade global dos dados pessoais + Outbox transacional.
+         *
+         * A migração é **aditiva**: nenhuma tabela é recriada, nenhuma coluna existente muda de
+         * significado, nenhuma chave estrangeira é substituída. `templateId`, `sessionId` e
+         * `exerciseSessionId` continuam sendo `localId` — trocar relação local por UUID
+         * reescreveria o schema inteiro sem ganho nenhum, e é justamente o que a T16.3 não faz.
+         *
+         * Para cada tabela que passa a ter identidade global, a ordem é sempre a mesma:
+         *
+         * ```text
+         * ADD COLUMN syncId   →   backfill de todas as linhas   →   índice UNIQUE
+         * ```
+         *
+         * O índice vem por último de propósito. Se o backfill produzisse duas linhas iguais — o
+         * que nenhum UUID aleatório faz na prática, mas "UUID nunca colide" não é uma garantia do
+         * banco —, a criação do índice falharia e a migração inteira seria revertida. É a
+         * diferença entre falhar alto e corromper em silêncio.
+         *
+         * `ADD COLUMN NOT NULL` exige `DEFAULT` no SQLite; o `DEFAULT ''` existe só para permitir
+         * o `ALTER TABLE` e some de vista assim que o backfill roda. O Room não valida
+         * `defaultValue` de coluna que a entidade não declara com `@ColumnInfo(defaultValue = ...)`,
+         * então o schema exportado continua batendo.
+         */
+        val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // ---- Identidade global das raízes de agregado pessoais -----------------------
+                //
+                // Só as raízes. Exercícios de treino, exercícios de sessão e séries executadas
+                // não recebem identidade própria: eles nunca são referenciados de fora, não têm
+                // ciclo de vida independente e viajam dentro do snapshot da raiz.
+                listOf(
+                    "workout_programs",
+                    "workout_templates",
+                    "workout_sessions",
+                    "body_measurements",
+                    "check_ins"
+                ).forEach { table ->
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `syncId` TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("UPDATE `$table` SET `syncId` = ${com.example.data.sync.SyncIds.SQLITE_RANDOM_UUID}")
+                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_${table}_syncId` ON `$table` (`syncId`)")
+                }
+
+                // ---- Exercícios: identidade global só para os criados pelo usuário ------------
+                //
+                // A coluna é anulável e o catálogo canônico permanece nulo. `canonicalId` já é a
+                // identidade oficial de um exercício de catálogo e continua sendo — a T16.3 não
+                // cria uma identidade paralela para conteúdo que já tem uma.
+                db.execSQL("ALTER TABLE `exercises` ADD COLUMN `syncId` TEXT")
+                db.execSQL(
+                    "UPDATE `exercises` SET `syncId` = ${com.example.data.sync.SyncIds.SQLITE_RANDOM_UUID} " +
+                        "WHERE `isUserCreated` = 1"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_exercises_syncId` ON `exercises` (`syncId`)")
+
+                // ---- Outbox transacional -----------------------------------------------------
+                //
+                // Nasce vazia e continua vazia enquanto a nuvem estiver desligada, que é o padrão
+                // ao final da T16.3.
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_outbox` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `clientMutationId` TEXT NOT NULL,
+                        `ownerUid` TEXT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entitySyncId` TEXT NOT NULL,
+                        `operation` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `lastAttemptAt` INTEGER
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_outbox_clientMutationId` " +
+                        "ON `sync_outbox` (`clientMutationId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sync_outbox_ownerUid_status_id` " +
+                        "ON `sync_outbox` (`ownerUid`, `status`, `id`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sync_outbox_entityType_entitySyncId` " +
+                        "ON `sync_outbox` (`entityType`, `entitySyncId`)"
+                )
+            }
+        }
 
         val MIGRATION_28_29 = object : Migration(28, 29) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -444,7 +536,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31
                 )
                 .addCallback(DatabaseCallback())
                 .build()

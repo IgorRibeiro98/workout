@@ -1,9 +1,12 @@
 # Protocolo de sincronização do Spark — contrato futuro
 
 - **Tarefa:** T16.0 (documentação) — implementação em **T16.3** a **T16.7**.
-- **Status:** **nada aqui está implementado.** Não existe endpoint de sync, não existe outbox no
-  Android, não existe tabela de mudanças no servidor. `/v1` está vazio na T16.0, e há teste
-  automatizado que garante que `/v1/sync/push` e `/v1/sync/pull` respondem 404.
+- **Status (verificado em 2026-09-06):**
+  - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
+    `clientMutationId`, `deviceId` e os DTOs de agregado;
+  - **não implementado:** tudo o que envolve rede. Não existe endpoint de sync, worker, push, pull,
+    ack, `revision`, `cursor`, tombstone remoto nem tabela de mudanças no servidor. O teste
+    automatizado do backend continua garantindo que `/v1/sync/push` e `/v1/sync/pull` respondem 404.
 
 Este documento existe para que as decisões difíceis do sync estejam tomadas antes de a primeira
 linha de sync ser escrita.
@@ -39,7 +42,117 @@ servidor**. Timestamps continuam existindo como metadado informativo, nunca como
 
 ---
 
-## Push (T16.3 / T16.6)
+## A Outbox no Android (T16.3 — implementado)
+
+```text
+UI
+ ↓
+ViewModel / UseCase
+ ↓
+Repository
+ ↓
+┌──────────────────────────────────────────────┐
+│ Transação Room                               │
+│                                              │
+│ dado de domínio                              │
+│ +                                            │
+│ SyncOutboxEntry  [só se a nuvem estiver      │
+│                   associada a uma conta]     │
+└──────────────────────────────────────────────┘
+ ↓
+COMMIT — Room continua sendo a autoridade local
+```
+
+### Atomicidade
+
+O padrão é *Transactional Outbox*, na **mesma base Room** — não em arquivo JSON paralelo, não em
+`MutableList`, não em `StateFlow`. A fronteira é `SyncMutationCoordinator.mutate { }`:
+
+```text
+salva o treino → app morre → sem entrada de Outbox      ← impossível
+cria a entrada → salvar o treino falha                  ← impossível
+regra de domínio rejeita → entrada registrada mesmo assim ← impossível
+```
+
+Os três são cobertos por teste com Room de verdade: falha na Outbox reverte a escrita de domínio,
+exceção no domínio reverte a entrada, e uma operação recusada por regra de negócio não registra
+nada.
+
+A UI não conhece a Outbox — há teste estrutural que falha se `presentation/` ou `ui/` citar
+`SyncOutbox`, `SyncMutationCoordinator` ou `SyncEntityType`.
+
+### Estrutura da entrada
+
+| Campo | Papel |
+| --- | --- |
+| `id` | ordem de intenção, local. O push processa por `id` crescente |
+| `clientMutationId` | identidade da alteração (UUID, `UNIQUE`) |
+| `ownerUid` | a conta que poderá enviá-la. `NOT NULL` — nenhuma entrada tem dono ambíguo |
+| `entityType` | o agregado (`WORKOUT_TEMPLATE`, `WORKOUT_SESSION`, ...) |
+| `entitySyncId` | identidade global da entidade |
+| `operation` | `UPSERT` ou `DELETE` |
+| `status` | `PENDING` — o único estado que existe hoje |
+| `createdAt` | epoch millis UTC, metadado de auditoria |
+| `attemptCount` / `lastAttemptAt` | metadado mínimo de tentativa, zerado enquanto não houver transporte |
+
+Não existe `SYNCED`: seria um estado mentindo sobre dado que nunca saiu do aparelho. `IN_FLIGHT` e
+`FAILED` nascem junto com o worker, na T16.6.
+
+### Referência, não snapshot
+
+A entrada guarda **o que mudou**, não **o conteúdo**. O payload é montado a partir do Room no
+momento do envio, por `SyncAggregateSnapshotBuilder`.
+
+A alternativa — congelar o payload dentro da entrada — foi recusada por quatro motivos:
+
+1. **segunda autoridade** — uma cópia congelada começa a divergir do Room no instante seguinte;
+2. **estado errado no ar** — três edições seguidas enviariam versões intermediárias que o usuário
+   já abandonou;
+3. **idempotência** — reenviar passa a ser "reler o estado atual", sem reconciliar payloads velhos;
+4. **volume** — uma sessão concluída inteira duplicada na fila a cada alteração multiplicaria o
+   banco local.
+
+O preço assumido: um `DELETE` não monta payload — e não precisa, porque uma exclusão carrega
+apenas tipo e identidade.
+
+### Coalescência
+
+Três edições do mesmo treino antes de qualquer envio viram **uma** `UPSERT`:
+
+```text
+template ABC alterado
+template ABC alterado   →   1 × UPSERT ABC
+template ABC alterado
+```
+
+É seguro justamente porque o payload é referência: as três resolveriam para o mesmo conteúdo.
+
+O que a coalescência **não** faz:
+
+- não atravessa operações: um `DELETE` nunca absorve o `UPSERT` anterior, nem o contrário — a
+  ordem de intenção é preservada por `id`;
+- não toca em entrada fora de `PENDING`. Quando existir envio em andamento (T16.6), reaproveitar
+  uma entrada já despachada quebraria a idempotência que o `clientMutationId` garante;
+- não some com nada por idade. Limpeza depende de acknowledgment real do servidor (T16.6).
+
+Uma operação que altera dezenas de linhas do mesmo agregado — reordenar exercícios, editar em lote
+— produz **uma** mutação daquele agregado, não dezenas. E uma operação que não muda estado (fazer
+check-in quando já existe um aberto) não produz nenhuma.
+
+### Escopo de conta
+
+Com a nuvem desligada — o padrão, e o comportamento ao final da T16.3 — **nenhuma entrada é
+produzida**. Alterações locais continuam normais e não existe mutação remota pendente. Isso é
+deliberado: uma fila criada antes da adoção não teria dono, e adotá-la na primeira conta que
+entrasse seria dar a ela dados de outra pessoa. Ver
+[`identity-contract.md`](./identity-contract.md#adoção-explícita--o-contrato-local_unowned-t163).
+
+Mudanças anteriores à ativação da nuvem **não se perdem**: o primeiro backup é um snapshot completo
+do estado atual, não a reprodução de uma fila histórica desde a instalação.
+
+---
+
+## Push (T16.4 / T16.6)
 
 ```text
 ação do usuário
@@ -54,14 +167,18 @@ POST /v1/sync/push
 Cada item enviado carrega:
 
 ```text
-clientMutationId   UUID da tentativa
-entityType         "workout_template" | "workout_session" | ...
-syncId             identidade global da entidade
-baseRevision       revision conhecida pelo cliente (0 = criação)
-operation          CREATE | UPDATE | DELETE
-deviceId           origem
-payload            conteúdo da entidade
+clientMutationId   UUID da tentativa                        [T16.3 — existe]
+entityType         WORKOUT_TEMPLATE | WORKOUT_SESSION | ...  [T16.3 — existe]
+syncId             identidade global da entidade             [T16.3 — existe]
+operation          UPSERT | DELETE                           [T16.3 — existe]
+deviceId           origem                                    [T16.3 — existe]
+payload            snapshot do agregado + schemaVersion      [T16.3 — montável]
+baseRevision       revision conhecida pelo cliente (0 = criação)   [T16.6]
 ```
+
+`UPSERT` em vez de `CREATE`/`UPDATE`: o cliente não sabe — e não deveria precisar saber — se o
+servidor já viu aquele `syncId`. Quem distingue criação de atualização é o servidor, pela
+`revision`. Duas operações bastam.
 
 O servidor precisa conseguir distinguir quatro situações:
 
@@ -74,6 +191,22 @@ O servidor precisa conseguir distinguir quatro situações:
 
 O `Outbox` só remove uma mutação depois da confirmação do servidor. Uma resposta perdida deixa a
 mutação na fila, e o reenvio é seguro — é exatamente o que a idempotência garante.
+
+Nada disso existe hoje: não há worker, HTTP, retry, ack nem `revision`. A T16.3 entregou a fila
+durável e o montador de payload; o transporte é da T16.6.
+
+### Versão de payload
+
+Cada agregado carrega a própria `schemaVersion`, no envelope `SyncAggregateEnvelope`. Ela **não** é
+a versão da API HTTP, nem a versão do banco Room, nem uma versão de formato de backup — é o
+contrato daquele payload, para que o formato de um treino possa evoluir sem depender do número da
+tabela local.
+
+**Compatibilidade.** A evolução é controlada, não tolerante: um `entityType` desconhecido, um
+`exerciseId` que não resolve ou um campo obrigatório ausente são **recusados**, não preenchidos com
+padrão. O montador de snapshot já segue essa regra — um exercício sem `canonicalId` nem `syncId`
+faz o agregado inteiro não ser montado, em vez de subir incompleto e virar dado errado permanente
+no servidor.
 
 ---
 
@@ -129,6 +262,19 @@ Propriedades exigidas:
 
 ---
 
+## Sessões por status
+
+Identidade global foi dada a **todas** as sessões — `syncId` responde "qual sessão é esta", não
+"esta sessão sincroniza". A política de envio é separada e está na
+[matriz de dados](./data-classification-matrix.md#política-por-status-de-sessão). Resumo:
+
+- `COMPLETED` — histórico, único status que registra mutação na T16.3;
+- `IN_PROGRESS` / `PAUSED` — execução **neste aparelho**. Sincronizar como estado vivo faria dois
+  aparelhos disputarem o mesmo cursor de execução; "retomar treino em outro aparelho" é decisão de
+  produto e não foi tomada;
+- `PLANNED` — derivável do template e da agenda;
+- `CANCELLED` — decisão adiada para a T16.6.
+
 ## Histórico concluído
 
 Esta regra é bloqueante e não pode ser enfraquecida por nenhuma fase da T16.
@@ -159,6 +305,10 @@ Na prática, a partir da T16.6:
 
 Isso é a mesma invariante que o Coach IA já respeita hoje (`PROJECT_RULES` §13: "Sessão concluída é
 imutável"). O sync não pode ser a porta dos fundos que ela não tem.
+
+**Na T16.3:** dar `syncId` a uma sessão concluída **não** a torna editável. A migração 30 → 31 tem
+teste que compara séries, cargas, repetições, ordem e notas de uma sessão `COMPLETED` antes e
+depois — nada muda.
 
 ---
 
@@ -198,6 +348,17 @@ dispositivo pode ficar offline e ainda convergir corretamente.
 | Tombstone vs. update | conflito — o delete não é desfeito silenciosamente |
 
 Nenhuma dessas políticas está implementada.
+
+---
+
+## Deletes locais na T16.3
+
+O delete local continua **físico**, exatamente como era. A T16.3 não antecipou tombstone: apagar um
+treino ou uma sessão apaga a linha, e a intenção fica registrada como `DELETE` do agregado — que é
+o suficiente para o servidor criar o tombstone quando existir servidor.
+
+Mudar o comportamento de exclusão agora, sem nada consumindo a fila, adicionaria linhas
+"apagadas mas presentes" no banco de todo usuário em troca de nada.
 
 ---
 

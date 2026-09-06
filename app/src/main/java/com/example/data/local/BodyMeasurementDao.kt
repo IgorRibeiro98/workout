@@ -40,4 +40,11 @@ interface BodyMeasurementDao {
 
     @Query("DELETE FROM body_measurements WHERE id = :id")
     suspend fun deleteMeasurementById(id: Long)
+
+    /** Identidade global (T16.3): a medida por `syncId`, e o `syncId` de uma linha local. */
+    @Query("SELECT * FROM body_measurements WHERE syncId = :syncId LIMIT 1")
+    suspend fun getMeasurementBySyncId(syncId: String): BodyMeasurementEntity?
+
+    @Query("SELECT syncId FROM body_measurements WHERE id = :id LIMIT 1")
+    suspend fun getMeasurementSyncId(id: Long): String?
 }

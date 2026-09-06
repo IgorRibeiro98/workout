@@ -61,6 +61,22 @@ class MainApplication : Application(), ImageLoaderFactory {
 
     lateinit var settingsManager: SettingsManager
         internal set
+
+    /**
+     * Fundação de sincronização (T16.3) — identidade global + Outbox transacional.
+     *
+     * Nada aqui envia nem baixa dado. O coordenador registra intenção de sync na mesma transação
+     * da alteração; o montador de snapshot existe para a T16.4 conseguir produzir o primeiro
+     * backup; e o `deviceId` identifica a instalação, não a pessoa.
+     */
+    lateinit var syncMutationCoordinator: com.example.data.sync.SyncMutationCoordinator
+        internal set
+
+    lateinit var deviceIdProvider: com.example.data.sync.DeviceIdProvider
+        internal set
+
+    lateinit var syncAggregateSnapshotBuilder: com.example.data.sync.SyncAggregateSnapshotBuilder
+        internal set
         
     lateinit var workoutEngine: WorkoutEngine
         internal set
@@ -211,8 +227,32 @@ class MainApplication : Application(), ImageLoaderFactory {
         super.onCreate()
         database = AppDatabase.getDatabase(this)
         settingsManager = SettingsManager(this)
-        repository = WorkoutRepository(database.workoutDao(), settingsManager = settingsManager)
-        bodyMeasurementRepository = com.example.data.repository.BodyMeasurementRepository(database.bodyMeasurementDao())
+
+        // Fronteira transacional com a Outbox (T16.3).
+        //
+        // Um coordenador só, compartilhado por quem escreve dado pessoal. O estado da nuvem é lido
+        // do DataStore a cada mutação e o padrão do Spark é **desligado**: nenhuma entrada nasce,
+        // e nenhum dado local ganha dono por existir um login. A adoção explícita é da T16.4.
+        syncMutationCoordinator = com.example.data.sync.SyncMutationCoordinator(
+            transactions = com.example.data.sync.RoomTransactionRunner(database),
+            outboxDao = database.syncOutboxDao(),
+            scopeProvider = com.example.data.sync.SettingsCloudSyncScopeProvider(settingsManager)
+        )
+        deviceIdProvider = com.example.data.sync.DeviceIdProvider(settingsManager)
+        syncAggregateSnapshotBuilder = com.example.data.sync.SyncAggregateSnapshotBuilder(
+            workoutDao = database.workoutDao(),
+            bodyMeasurementDao = database.bodyMeasurementDao()
+        )
+
+        repository = WorkoutRepository(
+            database.workoutDao(),
+            settingsManager = settingsManager,
+            syncMutations = syncMutationCoordinator
+        )
+        bodyMeasurementRepository = com.example.data.repository.BodyMeasurementRepository(
+            dao = database.bodyMeasurementDao(),
+            syncMutations = syncMutationCoordinator
+        )
         evolutionRepository = com.example.data.repository.EvolutionRepositoryImpl(bodyMeasurementRepository, database.workoutDao())
         performanceRepository = com.example.data.repository.PerformanceRepositoryImpl(database.workoutDao())
         consistencyRepository = com.example.data.repository.ConsistencyRepositoryImpl(
@@ -252,7 +292,8 @@ class MainApplication : Application(), ImageLoaderFactory {
         workoutEngine = WorkoutEngine(
             dao = database.workoutDao(),
             settingsManager = settingsManager,
-            gamificationEvents = gamificationEventPublisher
+            gamificationEvents = gamificationEventPublisher,
+            syncMutations = syncMutationCoordinator
         )
         notificationManager = WorkoutNotificationManager(this)
 

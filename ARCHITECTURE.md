@@ -526,13 +526,14 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação, identidade e Coach online implementados; dados
-> online, não.** A T16.0 criou o backend em `backend/` com configuração, SQLite, migrations,
-> health, logging, Docker e os contratos arquiteturais. A T16.1 acrescentou **conta opcional**:
-> Firebase Auth com Sign in with Google no Android, verificação de Firebase ID Token no backend e
-> `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**: `POST /v1/ai/coach`, prompt/modelo/credencial
-> server-side, quota e validação no servidor. **Não existe** sincronização, backup, restore,
-> outbox, `syncId` nas entidades Room ou tabela de usuários no servidor.
+> **Status (verificado em 2026-09-06): fundação, identidade, Coach online e a fundação local de
+> sync implementados; dados online, não.** A T16.0 criou o backend em `backend/` com configuração,
+> SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1 acrescentou
+> **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de Firebase ID
+> Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**: `POST /v1/ai/coach`,
+> prompt/modelo/credencial server-side, quota e validação no servidor. A T16.3 acrescentou
+> **identidade global dos dados e a Outbox transacional** no Android. **Não existe** sincronização,
+> backup, restore, upload, download, ownership remoto ou tabela de domínio no servidor.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -653,7 +654,7 @@ persistência do domínio        validação da resposta
 | T16.0 | Fundação do backend + contratos de identidade e sync | **implementado** |
 | T16.1 | Conta opcional + Firebase Auth | **implementado** |
 | T16.2 | Migração do Coach IA para o Spark Backend | **implementado** |
-| T16.3 | Identidade global dos dados + Outbox | planejado |
+| T16.3 | Identidade global dos dados + Outbox | **implementado** |
 | T16.4 | Backup estruturado | planejado |
 | T16.5 | Restore seguro | planejado |
 | T16.6 | Sync incremental multi-device | planejado |
@@ -661,11 +662,138 @@ persistência do domínio        validação da resposta
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
 | T17 | Amigos, convites, desafios e social | planejado |
 
+### Identidade global dos dados e Outbox (T16.3)
+
+> **Status (verificado em 2026-09-06): implementado — e nada é enviado.** Room `version = 31`.
+> `syncId` existe nas raízes de agregado pessoais, a Outbox é persistida e transacional, o
+> `deviceId` identifica a instalação e os DTOs de agregado existem. **Não existe** push, pull,
+> backup, restore, ack, conflito, tombstone remoto, `WorkManager` de sync ou ownership persistido.
+
+#### IMPLEMENTADO na T16.3
+
+- `syncId` nas entidades selecionadas — `workout_programs`, `workout_templates`,
+  `workout_sessions`, `body_measurements`, `check_ins` (todas `NOT NULL` + `UNIQUE`) e `exercises`
+  quando `isUserCreated = 1` (coluna anulável + `UNIQUE`);
+- `deviceId` — UUID aleatório da instalação, no DataStore;
+- **Transactional Outbox** — tabela `sync_outbox` no mesmo Room, gravada na mesma transação da
+  alteração de domínio;
+- fundações de DTO/serialização — envelope com `schemaVersion` por agregado e montador de snapshot
+  a partir da identidade global;
+- contrato de ownership/adoção — `CloudSyncScope` (`Disabled` / `Preparing` / `Enabled`), com
+  `Disabled` como padrão.
+
+#### NÃO IMPLEMENTADO
+
+- upload, download, backup, restore, sync;
+- acknowledgment, `revision`, `cursor`, conflitos, tombstone remoto;
+- ownership remoto persistido e adoção real de dados locais;
+- `WorkManager`, HTTP, polling ou retry para a Outbox;
+- qualquer tabela de domínio do Spark no servidor.
+
+#### Operação local
+
+```text
+        OPERAÇÃO LOCAL
+
+UI
+ ↓
+ViewModel / UseCase
+ ↓
+Repository
+ ↓
+Room Transaction
+ ├── dado de domínio
+ └── SyncOutbox  [quando a nuvem estiver associada a uma conta]
+ ↓
+COMMIT
+```
+
+#### Futuro (T16.4 / T16.6) — não existe ainda
+
+```text
+Outbox
+ -X→  Sync Worker      ← não existe
+ -X→  Spark Backend    ← não recebe dado de treino
+```
+
+#### Agregados, não tabelas
+
+A sincronização não espelha o Room 1:1. A unidade é o agregado, e só a raiz tem identidade global:
+
+```text
+WORKOUT_TEMPLATE          WORKOUT_SESSION
+└── template exercises    └── exercise sessions
+    (ordem + config)          └── set logs
+```
+
+Renomear o treino, mover um exercício e mudar a carga de uma série produzem, os três,
+`UPSERT WORKOUT_TEMPLATE <syncId>` — não três mutações diferentes.
+
+Tabela completa em
+[`docs/architecture/data-classification-matrix.md`](docs/architecture/data-classification-matrix.md#agregados-de-sincronização).
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Geração de identidade | `IdGenerator` / `RandomUuidIdGenerator` / `SyncIds` |
+| Agregados e operações | `SyncEntityType`, `SyncOperation`, `SyncOutboxStatus` |
+| Entrada da Outbox | `SyncOutboxEntryEntity` + `SyncOutboxDao` (tabela `sync_outbox`) |
+| Fronteira transacional | `SyncMutationCoordinator` + `SyncMutationScope` + `TransactionRunner` |
+| Estado da nuvem | `CloudSyncScope` / `CloudSyncScopeProvider` / `SettingsCloudSyncScopeProvider` |
+| Identidade da instalação | `DeviceIdProvider` (DataStore) |
+| Contratos de payload | `com.example.data.sync.dto.*` + `SyncAggregateEnvelope` |
+| Montagem de snapshot | `SyncAggregateSnapshotBuilder` |
+| Migração | `AppDatabase.MIGRATION_30_31` |
+
+#### Invariantes da T16.3
+
+1. **Room continua sendo a autoridade local.** A Outbox registra intenção; ela não decide nada e
+   não é lida pela UI.
+2. **A alteração e o registro são atômicos.** Um commit, um rollback. Regra de domínio que rejeita
+   a alteração não registra intenção nenhuma.
+3. **A UI não conhece a Outbox.** Há teste estrutural sobre `presentation/` e `ui/`.
+4. **`syncId` é imutável e nasce offline.** Login, logout e troca de conta não o regeneram; criar e
+   editar continuam funcionando sem conta, sem backend e sem internet.
+5. **Identidade canônica não é substituída.** Exercício de catálogo continua identificado por
+   `canonicalId` e **não** ganha `syncId`.
+6. **Login não liga a nuvem.** O padrão é `CloudSyncScope.Disabled`, dado local é `LOCAL_UNOWNED`,
+   e nenhuma entrada de Outbox é produzida. A adoção é explícita, na T16.4.
+7. **Troca de conta não transfere nada.** Sair com A e entrar com B deixa identidade e dados
+   exatamente como estavam.
+8. **Nada sai do aparelho.** Sem worker, sem HTTP, sem retry, sem ack.
+
+#### Contrato de identidade
+
+```text
+Firebase UID          → identidade da conta
+deviceId              → identidade da instalação
+syncId                → identidade global da entidade
+clientMutationId      → identidade da alteração
+localId               → identidade interna do banco local
+canonicalExerciseId   → identidade do exercício canônico
+```
+
+Detalhes em
+[`docs/architecture/identity-contract.md`](docs/architecture/identity-contract.md).
+
+#### Política de adoção
+
+```text
+LOGIN  ≠  ADOTAR DADOS LOCAIS
+```
+
+A adoção acontece só quando o usuário ativar a nuvem explicitamente (T16.4): o Spark mostra o que
+será associado, o usuário confirma, o snapshot inicial sobe, o ownership remoto nasce e só então a
+Outbox passa a operar no escopo daquela conta. É o que evita a Conta B receber dados criados pela
+Conta A no mesmo aparelho.
+
 ### Conta opcional e identidade (T16.1)
 
 > **Status (verificado em 2026-09-06): implementado.** Tudo desta seção existe no código e é
-> coberto por teste offline. O que **não** existe: sincronização, backup, restore, `syncId`,
-> `deviceId`, outbox e qualquer persistência de usuário no servidor.
+> coberto por teste offline. `syncId`, `deviceId` e a outbox passaram a existir na **T16.3** — sem
+> mudar nada desta seção. O que **não** existe: sincronização, backup, restore e qualquer
+> persistência de usuário no servidor.
 
 A conta **adiciona capacidades online**. Ela não desbloqueia o funcionamento básico: sem conta,
 abrir o app, criar, editar, iniciar e concluir treino, histórico, gamificação e dados locais
@@ -716,7 +844,9 @@ AuthenticatedPrincipal
    repositório nem `SettingsManager` — não é disciplina, é ausência de dependência, e há teste
    estrutural e comportamental para os dois lados.
 3. **Troca de conta não reassocia nada.** Sair com o usuário A e entrar com o B deixa o banco
-   exatamente como estava. Associar dado local a uma conta é assunto da T16.3+, junto do `syncId`.
+   exatamente como estava. Continua valendo na T16.3, agora com `syncId` no meio: a identidade das
+   entidades não é regenerada e nenhum dado ganha dono. Associar dado local a uma conta é a adoção
+   explícita da T16.4.
 4. **O ID Token não é persistido nem registrado.** Ele é pedido ao Firebase a cada requisição e
    usado na hora. Não existe refresh token, JWT ou sessão do Spark: o backend verifica, não emite.
 5. **O servidor deriva o `uid` do token.** Query string, header próprio e corpo da requisição não
@@ -730,9 +860,9 @@ AuthenticatedPrincipal
 
 ```text
 Firebase UID != localId               (identidade de linha no Room, por aparelho)
-Firebase UID != syncId                (identidade global de entidade pessoal — T16.3)
+Firebase UID != syncId                (identidade global de entidade pessoal — T16.3, existe)
 Firebase UID != canonicalExerciseId   (identidade de conteúdo do catálogo)
-Firebase UID != deviceId              (identidade da instalação — T16.3)
+Firebase UID != deviceId              (identidade da instalação — T16.3, existe)
 ```
 
 O UID responde **quem é o usuário**, e nada além disso. Ver

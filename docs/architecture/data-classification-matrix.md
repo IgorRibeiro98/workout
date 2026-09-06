@@ -1,10 +1,21 @@
 # Matriz de dados do Spark — classificação para sincronização
 
-- **Tarefa:** T16.0
-- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 30`) e
-  `SettingsManager` (DataStore), lidos em 2026-09-06. Nenhum nome aqui foi inferido de documentação.
-- **Status:** documento de arquitetura. **Nada nesta matriz está implementado.** Nenhum `syncId`
-  foi adicionado a nenhuma entidade Room pela T16.0.
+- **Tarefa:** T16.0 (classificação) — **revisada contra o código na T16.3**
+- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 31` desde a
+  T16.3) e `SettingsManager` (DataStore), relidos em 2026-09-06.
+- **Status:** a coluna `syncId` **está implementada** para as raízes de agregado do Grupo A. A
+  Outbox existe e é transacional. Nada é enviado, baixado ou associado a uma conta.
+
+## Correções feitas na T16.3 contra o código real
+
+A matriz original da T16.0 divergia da implementação em quatro pontos. O código executável venceu:
+
+| Item | O que a T16.0 dizia | O que o código diz |
+| --- | --- | --- |
+| `exercise_alternatives` | "alternativas **definidas pelo usuário**", sincronizável | o único escritor é o `ManifestImporter`. É conteúdo de catálogo, não dado pessoal. **Não sincroniza e não recebe `syncId`.** |
+| Grupos de treino | a matriz falava em "exercício do template" como filho | não existe tabela de **grupos**. A estrutura real é `workout_templates` → `workout_template_exercises`, com `sortOrder`. |
+| `workout_template_exercises`, `exercise_sessions`, `set_logs` | "syncId: sim" | **não recebem `syncId`.** São filhos de agregado, viajam no snapshot da raiz e nunca são referenciados de fora. Ver [agregados](#agregados-de-sincronização). |
+| `exercise_user_overrides` | "syncId: sim" | **não recebe `syncId` próprio.** Sua identidade global é a do exercício que ele customiza — dois aparelhos que customizam o mesmo supino estão falando da mesma coisa, e dois UUIDs aleatórios criariam duas customizações concorrentes para um exercício só. |
 
 ## Como ler
 
@@ -16,24 +27,74 @@
 
 ---
 
+## Agregados de sincronização
+
+A sincronização **não** espelha o Room tabela a tabela. A unidade é o agregado: a raiz tem
+identidade global, é serializada inteira e produz **uma** mutação.
+
+| Agregado | Raiz (tabela) | Filhos | Identidade | Gera Outbox | Estratégia futura |
+| --- | --- | --- | --- | --- | --- |
+| `WORKOUT_PROGRAM` | `workout_programs` | — | `syncId` | sim | snapshot |
+| `WORKOUT_TEMPLATE` | `workout_templates` | `workout_template_exercises` (ordem + configuração de séries) | `syncId` da raiz | sim | snapshot do treino inteiro |
+| `WORKOUT_SESSION` | `workout_sessions` | `exercise_sessions` → `set_logs` | `syncId` da raiz | sim, ao concluir | snapshot histórico **imutável** quando `COMPLETED` |
+| `CUSTOM_EXERCISE` | `exercises` com `isUserCreated = 1` | — | `syncId` | sim | snapshot |
+| `BODY_MEASUREMENT` | `body_measurements` | — | `syncId` | sim | snapshot |
+| `CHECK_IN` | `check_ins` | — | `syncId` | sim | snapshot |
+| `EXERCISE_OVERRIDE` | `exercise_user_overrides` | — | identidade do exercício alvo (`canonicalId` ou `syncId`) | não (T16.4) | snapshot com chave derivada |
+| `WEEKLY_GOAL` | `weekly_goal_history` | — | `effectiveFromWeekStartEpochDay` (PK natural já global) | não (T16.4) | snapshot por semana |
+
+Editar o nome de um treino, mover um exercício e mudar a carga de uma série produzem, os três, a
+mesma coisa: `UPSERT WORKOUT_TEMPLATE <syncId>`. Não existem `CHANGE_TEMPLATE_NAME` ou
+`MOVE_EXERCISE` — para um sync de snapshot, seriam nomes diferentes para o mesmo push.
+
+### Por que os filhos não têm identidade própria
+
+Um filho ganharia `syncId` se fosse referenciado de fora, editado de forma independente ou tivesse
+ciclo de vida próprio. Nenhum destes é:
+
+- `workout_template_exercises` — só existe dentro do treino, CASCATA com ele, e nada aponta para
+  ele;
+- `exercise_sessions` e `set_logs` — são o conteúdo de uma sessão concluída, que é histórico
+  imutável enviado de uma vez;
+- adicionar UUID a cada série multiplicaria o banco e a fila sem nada consumir esses ids.
+
+---
+
 ## Grupo A — Dados pessoais canônicos sincronizáveis
 
 Criados pelo usuário, insubstituíveis se perdidos, e com significado igual em qualquer dispositivo.
 
-| Domínio | Tabela Room | Autoridade atual | Identificador atual | syncId | Estratégia | Conflito esperado | Delete | Fase |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Programa de treino | `workout_programs` | Room | `id` autoincrement (+ `externalId` para conteúdo importado) | sim | sync | última revisão vence, com `revision` | tombstone | T16.3 / T16.6 |
-| Template de treino | `workout_templates` | Room | `id` autoincrement | sim | sync | última revisão vence, com `revision` | tombstone | T16.3 / T16.6 |
-| Exercício do template | `workout_template_exercises` | Room | `id` autoincrement | sim | sync (filho do template) | resolvido junto com o template pai | tombstone | T16.3 / T16.6 |
-| Sessão de treino | `workout_sessions` | Room | `id` autoincrement | sim | sync | **imutável quando `COMPLETED`** — divergência é conflito de integridade | tombstone | T16.3 / T16.6 |
-| Exercício da sessão | `exercise_sessions` | Room | `id` autoincrement | sim | sync (filho da sessão) | herda a imutabilidade da sessão | tombstone | T16.3 / T16.6 |
-| Série executada | `set_logs` | Room | `id` autoincrement | sim | sync (filho de `exercise_sessions`) | herda a imutabilidade da sessão | tombstone | T16.3 / T16.6 |
-| Exercício criado pelo usuário | `exercises` com `isUserCreated = 1` | Room | `id` autoincrement | sim | sync | última revisão vence | tombstone | T16.3 / T16.6 |
-| Customização de exercício | `exercise_user_overrides` | Room | `exerciseId` (PK = FK) | sim | sync | última revisão vence | tombstone | T16.3 / T16.6 |
-| Medidas corporais | `body_measurements` | Room | `id` autoincrement | sim | sync | mesma data + conteúdo divergente = conflito | tombstone | T16.3 / T16.6 |
-| Check-in na academia | `check_ins` | Room | `id` autoincrement | sim | sync | última revisão vence | tombstone | T16.3 / T16.6 |
-| Alternativas de exercício definidas pelo usuário | `exercise_alternatives` | Room | `id` autoincrement | sim | sync | última revisão vence | tombstone | T16.6 |
-| Meta semanal (histórico) | `weekly_goal_history` | Room | `effectiveFromWeekStartEpochDay` (PK natural, estável) | não — a PK já é global | sync | mesma semana + meta divergente = última revisão vence | tombstone | T16.3 |
+Colunas: **raiz/filho** dentro do agregado; **mutável** (o conteúdo pode mudar depois de criado);
+**delete** (comportamento local hoje); **histórico imutável**; **gera Outbox** (na T16.3);
+**dono futuro** (quem será `ownerUid` quando houver adoção explícita).
+
+| Domínio | Tabela Room | Autoridade | Identidade hoje | syncId (T16.3) | Raiz/filho | Mutável | Delete | Histórico imutável | Gera Outbox | Dono futuro | Estratégia | Conflito esperado |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Programa de treino | `workout_programs` | Room | `id` (+ `externalId` para conteúdo importado) | **sim**, `NOT NULL` + `UNIQUE` | raiz | sim | físico local | não | sim | conta | sync | última `revision` vence |
+| Template de treino | `workout_templates` | Room | `id` | **sim**, `NOT NULL` + `UNIQUE` | raiz | sim | físico local (cascata nos filhos) | não | sim | conta | sync (snapshot) | última `revision` vence |
+| Exercício do template | `workout_template_exercises` | Room | `id` | **não** — viaja no snapshot do treino | filho | sim | cascata | não | não (o pai gera) | conta | dentro do agregado | resolvido com o pai |
+| Sessão de treino | `workout_sessions` | Room | `id` | **sim**, `NOT NULL` + `UNIQUE` | raiz | só até concluir | físico local | **sim, quando `COMPLETED`** | sim, ao concluir | conta | snapshot histórico | divergência = conflito de integridade |
+| Exercício da sessão | `exercise_sessions` | Room | `id` | **não** | filho | idem raiz | cascata | sim | não (a sessão gera) | conta | dentro do agregado | herda a raiz |
+| Série executada | `set_logs` | Room | `id` | **não** | filho | idem raiz | cascata | sim | não (a sessão gera) | conta | dentro do agregado | herda a raiz |
+| Exercício criado pelo usuário | `exercises` com `isUserCreated = 1` | Room | `id` | **sim** (coluna anulável; preenchida só para `isUserCreated = 1`) | raiz | sim | físico local | não | sim | conta | sync | última `revision` vence |
+| Customização de exercício | `exercise_user_overrides` | Room | `exerciseId` (PK = FK) | **não** — a identidade é a do exercício alvo | raiz | sim | cascata com o exercício | não | não (T16.4) | conta | snapshot com chave derivada | última `revision` vence |
+| Medidas corporais | `body_measurements` | Room | `id` | **sim**, `NOT NULL` + `UNIQUE` | raiz | sim | físico local | não | sim | conta | sync | mesma data + conteúdo divergente = conflito |
+| Check-in na academia | `check_ins` | Room | `id` | **sim**, `NOT NULL` + `UNIQUE` | raiz | sim | físico local | não | sim | conta | sync | última `revision` vence |
+| Meta semanal (histórico) | `weekly_goal_history` | Room | `effectiveFromWeekStartEpochDay` (PK natural, já global) | **não** — a PK já é global | raiz | sim | físico local | não | não (T16.4) | conta | sync por semana | última `revision` vence |
+| Alternativas de exercício | `exercise_alternatives` | **manifesto** (`ManifestImporter`) | `id` + índice único `(exerciseId, alternativeExerciseId, type)` | **não** | — | — | cascata | não | não | n/a — é catálogo | **local** (conteúdo do app) | n/a |
+
+### Política por status de sessão
+
+`workout_sessions` guarda quatro situações diferentes na mesma tabela. Identidade global é dada a
+todas — `syncId` responde "qual sessão é esta", não "esta sessão sincroniza". A política de envio é
+outra coisa, e **nenhuma parte dela está implementada**:
+
+| Status | Significado | Registra mutação na T16.3 | Política prevista |
+| --- | --- | --- | --- |
+| `PLANNED` | sessão prevista, nunca executada | não | provavelmente não sincroniza: é derivável do template e da agenda |
+| `IN_PROGRESS` / `PAUSED` | execução **em andamento neste aparelho** | não | não sincroniza como estado vivo. Sincronizar um treino em execução faria dois aparelhos disputarem o mesmo cursor de execução; a decisão de "retomar treino em outro aparelho" é de produto e não foi tomada |
+| `CANCELLED` | abandonada | não | decisão adiada para a T16.6: não é histórico de treino, mas apagar em silêncio esconderia do usuário algo que ele viu na tela |
+| `COMPLETED` | histórico | **sim** | snapshot imutável; divergência é conflito de integridade |
 
 **Nota sobre `workout_sessions`:** este é o grupo mais sensível da matriz. Uma sessão `COMPLETED`
 registra o que de fato aconteceu. Sincronização não pode reescrevê-la — ver
@@ -57,6 +118,13 @@ a ter uma opinião sobre XP que poderia divergir da regra local. A decisão é s
 | Conquista desbloqueada | `achievement_unlocks` | Room | eventos + definições versionadas | não | derived | — |
 | Recorde pessoal (PR) | `personal_records` | Room | `set_logs` | não | derived | — |
 | Nível / XP total / streak | não persistido (calculado em `UserProgress`) | Domínio | `xp_transactions` | não | derived | — |
+
+**Confirmado na T16.3 contra o código:** `personal_records` é gravado por
+`WorkoutEngine.registerPersonalRecordIfImproved`, a partir das séries concluídas da sessão, com a
+mesma regra que `evaluatePersonalRecords` aplica ao concluir o treino — é **derivado do histórico**
+e reproduzível a partir dele. `gamification_events` já tem `dedupeKey` único e
+`xp_transactions` já tem `eventId` único, então a idempotência local existe sem `syncId`. Nenhuma
+das cinco linhas abaixo recebeu identidade global.
 
 **Consequência aceita:** ao restaurar em um aparelho novo (T16.5), gamificação é **recalculada** a
 partir do histórico restaurado, não copiada. É mais lento e é o comportamento correto: o XP passa a
@@ -82,7 +150,9 @@ seria ativamente ruim (o timer de descanso de um aparelho não deve tocar em out
 | Cache e estado de importação | DataStore (`INSTALLED_CATALOG_CONTENT_VERSION`, `INSTALLED_PREMIUM_CONTENT_VERSION`, `LAST_MEDIA_SYNC_AT`, `MEDIA_SYNC_CONTENT_VERSION`, `LAST_SYNC_STATUS`) | `SettingsManager` | Descreve o estado local de instalação de conteúdo. |
 | Chave de API do ExerciseDB | DataStore (`EXERCISE_DB_V2_API_KEY`) | `SettingsManager` | **Credencial.** Não sai do aparelho, não vai para backup, não vai para o servidor. |
 | Token de depuração do App Check | não persistido — provedor escolhido por variante em `AiCoachAppCheck` (`src/debug`) | build variant | Nunca sai de debug, nunca entra em release, nunca é versionado. |
-| Preferências de treino candidatas a sync futuro | DataStore (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | `SettingsManager` | Hoje local. **Candidatas** a sync em T16.4 (backup), porque descrevem a preferência do atleta e não do aparelho. Decisão adiada de propósito. |
+| Preferências de treino candidatas a sync futuro | DataStore (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | `SettingsManager` | Hoje local. **Candidatas** a sync em T16.4 (backup), porque descrevem a preferência do atleta e não do aparelho. Decisão adiada de propósito — e nada foi movido de DataStore para Room só para poder sincronizar: a T16.4 terá um snapshot próprio de preferências. |
+| `deviceId` | DataStore (`DEVICE_ID`) — **T16.3** | `DeviceIdProvider` | Identidade da **instalação**, não do usuário. Reinstalar gera outro, e isso é correto. Não vai para backup: o que identifica dado é `syncId`. |
+| Estado da nuvem | DataStore (`CLOUD_SYNC_STATE`, `CLOUD_SYNC_OWNER_UID`) — **T16.3** | `SettingsCloudSyncScopeProvider` | Diz se **este aparelho** já teve backup ativado e para qual conta. Ausente = desligado, que é o padrão. Login não escreve aqui. |
 
 ---
 

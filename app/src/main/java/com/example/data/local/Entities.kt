@@ -5,9 +5,13 @@ import androidx.room.ForeignKey
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import com.example.data.sync.SyncIds
 import java.util.Date
 
-@Entity(tableName = "exercises")
+@Entity(
+    tableName = "exercises",
+    indices = [androidx.room.Index(value = ["syncId"], unique = true)]
+)
 data class ExerciseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -51,23 +55,51 @@ data class ExerciseEntity(
     val source: String? = null,
     val externalReferences: String? = null,
     val origin: String? = "SYSTEM",
-    val isCurated: Boolean = false
+    val isCurated: Boolean = false,
+    /**
+     * Identidade global — **apenas para exercício criado pelo usuário** (T16.3).
+     *
+     * Nulo no catálogo canônico, e isso é a decisão, não um esquecimento: um exercício canônico já
+     * tem identidade global estável em [canonicalId], vinda do manifesto versionado, e é o mesmo
+     * exercício em qualquer aparelho porque veio do mesmo conteúdo. Dar a ele um UUID aleatório
+     * criaria uma segunda identidade concorrente para a mesma coisa.
+     *
+     * O índice é `UNIQUE`; no SQLite, nulos são distintos entre si, então o catálogo inteiro
+     * convive com a restrição sem conflito.
+     */
+    val syncId: String? = null
 )
 
-@Entity(tableName = "workout_programs", indices = [androidx.room.Index(value = ["externalId"], unique = true)])
+@Entity(
+    tableName = "workout_programs",
+    indices = [
+        androidx.room.Index(value = ["externalId"], unique = true),
+        androidx.room.Index(value = ["syncId"], unique = true)
+    ]
+)
 data class WorkoutProgramEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val description: String? = null,
     val isCurrent: Boolean = false,
     val externalId: String? = null,
-    val contentVersion: Int = 0
+    val contentVersion: Int = 0,
+    /**
+     * Identidade global do programa (T16.3). Gerada localmente, offline, e nunca mais alterada.
+     *
+     * Convive com [externalId], que continua sendo a identidade **de conteúdo** de um programa
+     * importado de manifesto — a mesma distinção entre `canonicalId` e `syncId` nos exercícios.
+     */
+    val syncId: String = SyncIds.random()
 )
 
 @Entity(
     tableName = "workout_templates",
     foreignKeys = [ForeignKey(entity = WorkoutProgramEntity::class, parentColumns = ["id"], childColumns = ["programId"], onDelete = ForeignKey.CASCADE)],
-    indices = [androidx.room.Index("programId")]
+    indices = [
+        androidx.room.Index("programId"),
+        androidx.room.Index(value = ["syncId"], unique = true)
+    ]
 )
 data class WorkoutTemplateEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -75,7 +107,14 @@ data class WorkoutTemplateEntity(
     val name: String,
     val shortIdentifier: String? = null,
     val orderInProgram: Int = 0,
-    val dayOfWeek: String? = null
+    val dayOfWeek: String? = null,
+    /**
+     * Identidade global do treino (T16.3) — raiz do agregado `WORKOUT_TEMPLATE`.
+     *
+     * Os exercícios do treino não têm identidade própria: eles viajam dentro do snapshot desta
+     * raiz. Editar nome, ordem, séries ou carga não muda este valor.
+     */
+    val syncId: String = SyncIds.random()
 )
 
 @Entity(
@@ -102,7 +141,10 @@ data class WorkoutTemplateExerciseEntity(
 
 enum class SessionStatus { PLANNED, IN_PROGRESS, PAUSED, COMPLETED, CANCELLED }
 
-@Entity(tableName = "workout_sessions")
+@Entity(
+    tableName = "workout_sessions",
+    indices = [androidx.room.Index(value = ["syncId"], unique = true)]
+)
 data class WorkoutSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val templateId: Long?,
@@ -110,7 +152,19 @@ data class WorkoutSessionEntity(
     val finishedAt: Long? = null,
     val status: String = SessionStatus.IN_PROGRESS.name,
     val notes: String? = null,
-    val templateNameSnapshot: String? = null
+    val templateNameSnapshot: String? = null,
+    /**
+     * Identidade global da sessão (T16.3) — raiz do agregado `WORKOUT_SESSION`.
+     *
+     * Toda sessão recebe `syncId`, inclusive `IN_PROGRESS` e `CANCELLED`: identidade responde
+     * "qual sessão é esta", e não "esta sessão sincroniza". A política por status é outra coisa e
+     * está em `docs/architecture/sync-protocol.md`.
+     *
+     * Ter identidade global **não** torna uma sessão `COMPLETED` editável. Ela continua histórico
+     * imutável; o `syncId` é justamente o que permite ao servidor reconhecer a mesma sessão em vez
+     * de duplicá-la.
+     */
+    val syncId: String = SyncIds.random()
 )
 
 @Entity(
@@ -155,14 +209,19 @@ enum class AlternativeType {
     foreignKeys = [
         ForeignKey(entity = WorkoutSessionEntity::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.SET_NULL)
     ],
-    indices = [androidx.room.Index("sessionId")]
+    indices = [
+        androidx.room.Index("sessionId"),
+        androidx.room.Index(value = ["syncId"], unique = true)
+    ]
 )
 data class CheckInEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val checkInTime: Long,
     val checkOutTime: Long? = null,
     val gymName: String? = null,
-    val sessionId: Long? = null
+    val sessionId: Long? = null,
+    /** Identidade global do check-in (T16.3). */
+    val syncId: String = SyncIds.random()
 )
 
 @Entity(

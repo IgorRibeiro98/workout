@@ -2,6 +2,8 @@ package com.example.domain.engine
 
 import com.example.data.datastore.SettingsManager
 import com.example.data.local.*
+import com.example.data.sync.SyncEntityType
+import com.example.data.sync.SyncMutationCoordinator
 import com.example.domain.gamification.GamificationEventPublisher
 import com.example.domain.gamification.GamificationEvents
 import com.example.domain.gamification.model.GamificationEvent
@@ -25,7 +27,10 @@ class WorkoutEngine(
     private val settingsManager: SettingsManager,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
     // O motor apenas informa fatos. Quem os interpreta (histórico, XP, conquistas) vive fora daqui.
-    private val gamificationEvents: GamificationEventPublisher = GamificationEventPublisher.NoOp
+    private val gamificationEvents: GamificationEventPublisher = GamificationEventPublisher.NoOp,
+    // Fronteira transacional com a Outbox (T16.3). O padrão não registra nada: executar treino
+    // continua sendo operação local, sem conta e sem rede.
+    private val syncMutations: SyncMutationCoordinator = SyncMutationCoordinator.disabled()
 ) {
 
     val activeSessionFlow: Flow<WorkoutSessionEntity?> = dao.getActiveSessionFlow()
@@ -100,16 +105,21 @@ class WorkoutEngine(
     }
 
     suspend fun manualCheckIn(gymName: String? = null) {
-        val active = dao.getActiveCheckIn()
-        if (active == null) {
-            dao.insertCheckIn(CheckInEntity(checkInTime = System.currentTimeMillis(), gymName = gymName))
+        // Já existe check-in aberto: nada muda, e por isso nada é registrado. Uma operação que não
+        // altera estado não é uma mutação a sincronizar.
+        if (dao.getActiveCheckIn() != null) return
+        val checkIn = CheckInEntity(checkInTime = System.currentTimeMillis(), gymName = gymName)
+        syncMutations.mutate {
+            dao.insertCheckIn(checkIn)
+            upsert(SyncEntityType.CHECK_IN, checkIn.syncId)
         }
     }
 
     suspend fun manualCheckOut() {
-        val active = dao.getActiveCheckIn()
-        if (active != null) {
+        val active = dao.getActiveCheckIn() ?: return
+        syncMutations.mutate {
             dao.updateCheckIn(active.copy(checkOutTime = System.currentTimeMillis()))
+            upsert(SyncEntityType.CHECK_IN, active.syncId)
         }
     }
 
@@ -562,20 +572,32 @@ class WorkoutEngine(
         val session = dao.getActiveSession() ?: return
         if (session.id == sessionId) {
             val finishedTime = System.currentTimeMillis()
-            dao.updateSession(
-                session.copy(
-                    finishedAt = finishedTime,
-                    status = SessionStatus.COMPLETED.name
-                )
-            )
-            
-            // Auto Check-out Logic
+            // A preferência é lida antes da transação: DataStore é outra fonte de armazenamento e
+            // não deve ser consultado com um lock de banco aberto.
             val autoCheckOut = settingsManager.autoCheckOutFlow.firstOrNull() ?: true
-            if (autoCheckOut) {
-                val checkIn = dao.getCheckInForSession(sessionId)
-                if (checkIn != null && checkIn.checkOutTime == null) {
-                    dao.updateCheckIn(checkIn.copy(checkOutTime = finishedTime))
+
+            syncMutations.mutate {
+                dao.updateSession(
+                    session.copy(
+                        finishedAt = finishedTime,
+                        status = SessionStatus.COMPLETED.name
+                    )
+                )
+
+                // Auto Check-out Logic
+                if (autoCheckOut) {
+                    val checkIn = dao.getCheckInForSession(sessionId)
+                    if (checkIn != null && checkIn.checkOutTime == null) {
+                        dao.updateCheckIn(checkIn.copy(checkOutTime = finishedTime))
+                        upsert(SyncEntityType.CHECK_IN, checkIn.syncId)
+                    }
                 }
+
+                // Concluir é o momento em que a sessão vira histórico. É a única transição de
+                // sessão que registra mutação: `IN_PROGRESS` é estado de execução deste aparelho e
+                // `CANCELLED` não é histórico de treino — a política por status está em
+                // `docs/architecture/sync-protocol.md`.
+                upsert(SyncEntityType.WORKOUT_SESSION, session.syncId)
             }
         }
         skipRestTimer()
@@ -767,12 +789,23 @@ class WorkoutEngine(
         return dao.getAllCompletedSessionsWithDetailsFlow()
     }
     
+    /**
+     * Apagar histórico é direito do usuário e continua sendo delete **físico local** (T16.3 não
+     * muda isso). O tombstone remoto — o que impede o item de ressuscitar vindo de outro aparelho
+     * — é assunto da T16.7; aqui a intenção fica registrada como `DELETE` do agregado.
+     */
     suspend fun deleteHistoricalSession(session: WorkoutSessionEntity) {
-        dao.deleteWorkoutSession(session)
+        syncMutations.mutate {
+            dao.deleteWorkoutSession(session)
+            delete(SyncEntityType.WORKOUT_SESSION, session.syncId)
+        }
     }
-    
+
     suspend fun updateCheckInDetails(checkIn: CheckInEntity) {
-        dao.updateCheckIn(checkIn)
+        syncMutations.mutate {
+            dao.updateCheckIn(checkIn)
+            upsert(SyncEntityType.CHECK_IN, checkIn.syncId)
+        }
     }
 
     suspend fun reorderExercises(sessionId: Long, updatedExercises: List<ExerciseSessionEntity>) {

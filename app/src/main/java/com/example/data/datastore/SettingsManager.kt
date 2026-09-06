@@ -45,6 +45,48 @@ class SettingsManager(private val context: Context) {
         val EXERCISE_DB_V2_API_KEY = stringPreferencesKey("exercise_db_v2_api_key")
         val XP_POLICY_VERSION = intPreferencesKey("xp_policy_version")
         val CONSISTENCY_TRACKING_STARTED_AT = longPreferencesKey("consistency_tracking_started_at")
+
+        // ---- Identidade e nuvem (T16.3) --------------------------------------------------
+        //
+        // Estado da **instalação**, não do domínio. Por isso mora no DataStore e não no Room: não
+        // é dado do usuário, não entra em backup e não sincroniza.
+        val DEVICE_ID = stringPreferencesKey("device_id")
+        val CLOUD_SYNC_STATE = stringPreferencesKey("cloud_sync_state")
+        val CLOUD_SYNC_OWNER_UID = stringPreferencesKey("cloud_sync_owner_uid")
+    }
+
+    /**
+     * Identidade da **instalação** do Spark (T16.3).
+     *
+     * Nulo até alguém pedir — quem cria é o `DeviceIdProvider`, na primeira necessidade real, e
+     * não a abertura do app.
+     */
+    val deviceIdFlow: Flow<String?> = context.dataStore.data.map { it[DEVICE_ID] }
+
+    /** Grava o `deviceId` apenas se ainda não existir. A identidade da instalação não é rotativa. */
+    suspend fun putDeviceIdIfAbsent(deviceId: String): String {
+        var stored = deviceId
+        context.dataStore.edit { prefs ->
+            val existing = prefs[DEVICE_ID]
+            if (existing.isNullOrBlank()) prefs[DEVICE_ID] = deviceId else stored = existing
+        }
+        return stored
+    }
+
+    /**
+     * O estado da nuvem para este aparelho: nome de `CloudSyncScope` e, quando houver, o `uid` dono.
+     *
+     * Ausente significa desligado — é o padrão do Spark e continua sendo ao final da T16.3.
+     * **Login não escreve aqui.** Só a ativação explícita de backup (T16.4) muda este valor.
+     */
+    val cloudSyncStateFlow: Flow<String?> = context.dataStore.data.map { it[CLOUD_SYNC_STATE] }
+    val cloudSyncOwnerUidFlow: Flow<String?> = context.dataStore.data.map { it[CLOUD_SYNC_OWNER_UID] }
+
+    suspend fun setCloudSyncScope(state: String?, ownerUid: String?) {
+        context.dataStore.edit { prefs ->
+            if (state == null) prefs.remove(CLOUD_SYNC_STATE) else prefs[CLOUD_SYNC_STATE] = state
+            if (ownerUid == null) prefs.remove(CLOUD_SYNC_OWNER_UID) else prefs[CLOUD_SYNC_OWNER_UID] = ownerUid
+        }
     }
 
     val trackingStartedAtFlow: Flow<Long?> = context.dataStore.data.map { it[CONSISTENCY_TRACKING_STARTED_AT] }

@@ -3,12 +3,14 @@ package com.example.data.local
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.example.data.sync.SyncIds
 
 @Entity(
     tableName = "body_measurements",
     indices = [
         Index(value = ["date"]),
-        Index(value = ["createdAt"])
+        Index(value = ["createdAt"]),
+        Index(value = ["syncId"], unique = true)
     ]
 )
 data class BodyMeasurementEntity(
@@ -27,5 +29,7 @@ data class BodyMeasurementEntity(
     val leftThighCm: Float? = null,
     val rightThighCm: Float? = null,
     val calfCm: Float? = null,
-    val hipCm: Float? = null
+    val hipCm: Float? = null,
+    /** Identidade global da medida (T16.3). */
+    val syncId: String = SyncIds.random()
 )

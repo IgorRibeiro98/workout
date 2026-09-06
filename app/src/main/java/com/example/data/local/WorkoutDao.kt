@@ -98,7 +98,15 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_programs WHERE isCurrent = 1 LIMIT 1")
     fun getCurrentProgram(): Flow<WorkoutProgramEntity?>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /**
+     * Insere um programa novo.
+     *
+     * Sem `REPLACE` desde a T16.3: com identidade global única, uma colisão de `syncId` sob
+     * `REPLACE` apagaria o programa existente **e**, por cascata, seus treinos — corrupção
+     * silenciosa exatamente onde a restrição deveria proteger. Todos os chamadores criam linha
+     * nova; atualização é [updateProgram].
+     */
+    @Insert
     suspend fun insertProgram(program: WorkoutProgramEntity): Long
 
     @Update
@@ -117,7 +125,8 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
     suspend fun getTemplatesForProgramSync(programId: Long): List<WorkoutTemplateEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /** Insere um treino novo. Sem `REPLACE`, pelo mesmo motivo de [insertProgram]. */
+    @Insert
     suspend fun insertTemplate(template: WorkoutTemplateEntity): Long
 
     @Update
@@ -449,6 +458,39 @@ interface WorkoutDao {
 
     @Delete
     suspend fun deleteTemplateExercise(templateExercise: WorkoutTemplateExerciseEntity)
+
+    // ---- Identidade global (T16.3) --------------------------------------------------------
+    //
+    // Consultas de identidade, não de conteúdo: quem altera um exercício de treino precisa saber
+    // qual **agregado** mudou, e o agregado é o template pai. São propositalmente estreitas — a
+    // resolução do payload é assunto da serialização, não do write path.
+
+    /** O `syncId` do treino dono desta linha, para registrar a mutação do agregado correto. */
+    @Query("SELECT syncId FROM workout_templates WHERE id = :templateId LIMIT 1")
+    suspend fun getTemplateSyncId(templateId: Long): String?
+
+    /** O `syncId` da sessão. */
+    @Query("SELECT syncId FROM workout_sessions WHERE id = :sessionId LIMIT 1")
+    suspend fun getSessionSyncId(sessionId: Long): String?
+
+    @Query("SELECT * FROM workout_programs WHERE syncId = :syncId LIMIT 1")
+    suspend fun getProgramBySyncId(syncId: String): WorkoutProgramEntity?
+
+    @Query("SELECT * FROM workout_programs WHERE id = :id LIMIT 1")
+    suspend fun getProgramById(id: Long): WorkoutProgramEntity?
+
+    @Query("SELECT * FROM workout_templates WHERE syncId = :syncId LIMIT 1")
+    suspend fun getTemplateBySyncId(syncId: String): WorkoutTemplateEntity?
+
+    @Transaction
+    @Query("SELECT * FROM workout_sessions WHERE syncId = :syncId LIMIT 1")
+    suspend fun getSessionWithDetailsBySyncId(syncId: String): SessionWithDetails?
+
+    @Query("SELECT * FROM exercises WHERE syncId = :syncId LIMIT 1")
+    suspend fun getExerciseBySyncId(syncId: String): ExerciseEntity?
+
+    @Query("SELECT * FROM check_ins WHERE syncId = :syncId LIMIT 1")
+    suspend fun getCheckInBySyncId(syncId: String): CheckInEntity?
 }
 
 data class TemplateExerciseWithDetails(

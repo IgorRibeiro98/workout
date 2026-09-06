@@ -269,6 +269,34 @@ Regras obrigatórias ao mexer em qualquer parte do Coach:
   Avaliação com o caminho real (Firebase Auth → Spark Backend → Gemini) é opt-in e nunca entra no
   build padrão nem no CI.
 
+## 13.1 Identidade global e Outbox (T16.3)
+
+O Spark tem identidade global de dados e uma Outbox transacional. Nada disso envia dado — e as
+regras abaixo são o que impede que ele comece a enviar por acidente.
+
+- **`syncId` é imutável.** Ele nasce na criação da entidade (`SyncIds.random()`, valor padrão da
+  entidade Room) e nunca é reescrito. Ao editar, use `copy()` sobre a linha lida do banco; se uma
+  tela remontar a entidade do zero, o repositório preserva a identidade guardada.
+- **Identidade canônica não ganha concorrente.** Exercício de catálogo é identificado por
+  `canonicalId` e **não** recebe `syncId`. `localId` continua sendo a chave de todas as relações
+  locais — não troque FK do Room por UUID.
+- **Escrita de domínio + Outbox é atômica.** Registre mutação apenas dentro de
+  `SyncMutationCoordinator.mutate { }`. Nunca insira na Outbox fora da transação da alteração
+  correspondente, e nunca a partir da UI: Compose não conhece `SyncOutbox`, `SyncEntityType` nem o
+  coordenador. Há teste estrutural sobre isso.
+- **Mutação é por agregado, não por linha.** Alterar um exercício de treino registra `UPSERT` do
+  **treino**. Uma operação em lote (reordenar, editar várias séries) é uma mutação só. Uma operação
+  que não muda estado não registra nada.
+- **Login não liga a nuvem.** O padrão é `CloudSyncScope.Disabled`, e nesse estado nenhuma entrada
+  é produzida. Entrar, sair e trocar de conta não regeneram `syncId`, não dão dono a dado local e
+  não criam mutação. A adoção é explícita e é da T16.4.
+- **Nada consome a Outbox.** Não introduza `WorkManager`, HTTP, polling, retry ou worker de sync.
+- **Migrations.** Room é `version = 31` com schema exportado versionado em `app/schemas`. Toda
+  mudança de schema precisa de migration explícita e teste com banco da versão anterior;
+  `fallbackToDestructiveMigration` é proibido.
+- **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
+  abreviado).
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

@@ -8,11 +8,22 @@ import com.example.data.local.WorkoutTemplateExerciseEntity
 import kotlinx.coroutines.flow.Flow
 import com.example.data.remote.ExerciseRemoteDataSource
 import com.example.data.remote.NetworkExerciseRemoteDataSource
+import com.example.data.sync.SyncEntityType
+import com.example.data.sync.SyncIds
+import com.example.data.sync.SyncMutationCoordinator
 
+/**
+ * @param syncMutations a fronteira transacional entre a escrita de domínio e a Outbox (T16.3).
+ *
+ * O padrão é [SyncMutationCoordinator.disabled]: a alteração acontece e nada é registrado para a
+ * nuvem. É o comportamento do Spark hoje — criar e editar treino continua sendo operação local,
+ * sem conta, sem backend e sem rede.
+ */
 class WorkoutRepository(
     val dao: WorkoutDao,
     private val remoteDataSource: ExerciseRemoteDataSource = NetworkExerciseRemoteDataSource(),
-    val settingsManager: com.example.data.datastore.SettingsManager? = null
+    val settingsManager: com.example.data.datastore.SettingsManager? = null,
+    private val syncMutations: SyncMutationCoordinator = SyncMutationCoordinator.disabled()
 ) {
     val activeExercises: Flow<List<ExerciseEntity>> = dao.getActiveExercises()
     
@@ -33,25 +44,43 @@ class WorkoutRepository(
     val allPrograms: Flow<List<WorkoutProgramEntity>> = dao.getAllPrograms()
     val currentProgram: Flow<WorkoutProgramEntity?> = dao.getCurrentProgram()
 
+    /**
+     * Exercício criado pelo usuário — dado pessoal, e por isso nasce com identidade global.
+     *
+     * O `syncId` é explícito aqui porque a coluna é anulável: o catálogo canônico continua sem
+     * `syncId`, com `canonicalId` como identidade.
+     */
     suspend fun addExercise(name: String, muscle: String, equipment: String? = null) {
-        dao.insertExercise(
-            ExerciseEntity(
-                name = name,
-                primaryMuscle = muscle,
-                equipment = equipment,
-                isUserCreated = true
-            )
+        val exercise = ExerciseEntity(
+            name = name,
+            primaryMuscle = muscle,
+            equipment = equipment,
+            isUserCreated = true,
+            syncId = SyncIds.random()
         )
+        syncMutations.mutate {
+            dao.insertExercise(exercise)
+            exercise.syncId?.let { upsert(SyncEntityType.CUSTOM_EXERCISE, it) }
+        }
     }
 
     suspend fun deleteExercise(exercise: ExerciseEntity) {
-        if (exercise.isUserCreated) {
+        // Exercício canônico não é apagado por aqui, e continua não sendo: a regra de domínio vem
+        // antes da mutação, então uma tentativa recusada não registra intenção de sync nenhuma.
+        if (!exercise.isUserCreated) return
+        syncMutations.mutate {
             dao.deleteExercise(exercise)
+            exercise.syncId?.let { delete(SyncEntityType.CUSTOM_EXERCISE, it) }
         }
     }
 
     suspend fun addProgram(name: String) {
-        val id = dao.insertProgram(WorkoutProgramEntity(name = name))
+        val program = WorkoutProgramEntity(name = name)
+        val id = syncMutations.mutate {
+            val id = dao.insertProgram(program)
+            upsert(SyncEntityType.WORKOUT_PROGRAM, program.syncId)
+            id
+        }
         if (dao.getCurrentProgram() == null) {
             dao.setCurrentProgram(id)
         }
@@ -68,13 +97,18 @@ class WorkoutRepository(
 
     /** Devolve o id gerado pelo Room, para quem precisa continuar montando o treino recém-criado. */
     suspend fun addTemplate(programId: Long, name: String, shortId: String, order: Int, dayOfWeek: String? = null): Long {
-        return dao.insertTemplate(WorkoutTemplateEntity(
+        val template = WorkoutTemplateEntity(
             programId = programId,
             name = name,
             shortIdentifier = shortId,
             orderInProgram = order,
             dayOfWeek = dayOfWeek
-        ))
+        )
+        return syncMutations.mutate {
+            val id = dao.insertTemplate(template)
+            upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
+            id
+        }
     }
 
     /**
@@ -89,11 +123,17 @@ class WorkoutRepository(
     }
 
     suspend fun deleteTemplate(template: WorkoutTemplateEntity) {
-        dao.deleteTemplate(template)
+        syncMutations.mutate {
+            dao.deleteTemplate(template)
+            delete(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
+        }
     }
 
     suspend fun deleteProgram(program: WorkoutProgramEntity) {
-        dao.deleteProgram(program)
+        syncMutations.mutate {
+            dao.deleteProgram(program)
+            delete(SyncEntityType.WORKOUT_PROGRAM, program.syncId)
+        }
     }
 
     suspend fun getLastCompletedSession() = dao.getLastCompletedSession()
@@ -112,7 +152,10 @@ class WorkoutRepository(
     suspend fun getTemplate(templateId: Long) = dao.getTemplateById(templateId)
 
     suspend fun addExerciseToTemplate(templateId: Long, exerciseId: Long, sortOrder: Int) {
-        dao.insertTemplateExercise(WorkoutTemplateExerciseEntity(templateId = templateId, exerciseId = exerciseId, sortOrder = sortOrder))
+        syncMutations.mutate {
+            dao.insertTemplateExercise(WorkoutTemplateExerciseEntity(templateId = templateId, exerciseId = exerciseId, sortOrder = sortOrder))
+            upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(templateId) }
+        }
     }
 
     /**
@@ -123,7 +166,10 @@ class WorkoutRepository(
      * prontos.
      */
     suspend fun addTemplateExercise(templateExercise: WorkoutTemplateExerciseEntity) {
-        dao.insertTemplateExercise(templateExercise)
+        syncMutations.mutate {
+            dao.insertTemplateExercise(templateExercise)
+            upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(templateExercise.templateId) }
+        }
     }
 
     /** Exercício do catálogo pelo id canônico. A identidade nunca é o nome. */
@@ -134,13 +180,25 @@ class WorkoutRepository(
     suspend fun getExerciseByRowId(rowId: Long): ExerciseEntity? = dao.getExerciseById(rowId)
 
     suspend fun updateTemplateExerciseFull(templateExercise: WorkoutTemplateExerciseEntity) {
-        dao.updateTemplateExerciseFull(templateExercise)
+        syncMutations.mutate {
+            dao.updateTemplateExerciseFull(templateExercise)
+            upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(templateExercise.templateId) }
+        }
     }
 
-    /** Lote de atualizações do treino: todas entram juntas ou nenhuma entra. */
+    /**
+     * Lote de atualizações do treino: todas entram juntas ou nenhuma entra.
+     *
+     * É o caminho do reordenar (arrastar e soltar) e de qualquer edição em massa. Ordem é dado de
+     * domínio persistido, então mudar a ordem **é** mudar o agregado — e dezenas de linhas
+     * alteradas produzem **uma** mutação do treino, não uma por linha.
+     */
     suspend fun updateTemplateExercises(items: List<WorkoutTemplateExerciseEntity>) {
         if (items.isEmpty()) return
-        dao.updateTemplateExercisesTransactionally(items)
+        syncMutations.mutate {
+            dao.updateTemplateExercisesTransactionally(items)
+            upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(items.first().templateId) }
+        }
     }
 
     /** Os exercícios do treino como estão persistidos agora, fora de qualquer Flow. */
@@ -148,6 +206,11 @@ class WorkoutRepository(
         dao.getTemplateExercisesWithDetails(templateId)
 
     suspend fun removeExerciseFromTemplate(templateExercise: WorkoutTemplateExerciseEntity) {
-        dao.deleteTemplateExercise(templateExercise)
+        syncMutations.mutate {
+            dao.deleteTemplateExercise(templateExercise)
+            // O exercício some do treino, mas quem mudou foi o treino. Um `DELETE` de agregado
+            // aqui apagaria o template inteiro do outro lado.
+            upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(templateExercise.templateId) }
+        }
     }
 }
