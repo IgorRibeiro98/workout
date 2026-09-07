@@ -46,10 +46,30 @@ enum class SyncOperation {
 /**
  * O estado de uma entrada da Outbox.
  *
- * Um único valor, de propósito. Não existe consumidor remoto na T16.3, e `IN_FLIGHT`, `FAILED` ou
- * `SYNCED` seriam estados que nada produz e nada lê — pior, `SYNCED` seria uma mentira sobre dado
- * que nunca saiu do aparelho. A máquina de estados nasce junto com o worker, na T16.6.
+ * Na T16.3 havia um valor só: não existia consumidor remoto, e `IN_FLIGHT`, `FAILED` ou `SYNCED`
+ * seriam estados que nada produz e nada lê — pior, `SYNCED` seria uma mentira sobre dado que nunca
+ * saiu do aparelho.
+ *
+ * A T16.6 acrescenta **um** estado, e só um. Continua não existindo `IN_FLIGHT`: uma entrada
+ * despachada permanece `PENDING` até o servidor confirmar, e é isso que torna uma resposta perdida
+ * recuperável — o reenvio carrega o mesmo `clientMutationId` e volta como `ALREADY_APPLIED`. Um
+ * estado "em voo" durável só criaria uma linha que ninguém sabe destravar depois de um crash.
+ *
+ * E continua não existindo `SYNCED`: uma entrada confirmada é **removida**, porque a intenção foi
+ * cumprida e guardá-la com um carimbo criaria uma fila que nada mais consome.
  */
 enum class SyncOutboxStatus {
-    PENDING
+
+    /** A intenção existe e ainda não foi confirmada pelo servidor. É o estado normal. */
+    PENDING,
+
+    /**
+     * O servidor recusou esta mutação de um jeito que reenviar **não** resolve.
+     *
+     * Escrita stale, conflito de histórico imutável, payload inválido ou operação não suportada.
+     * A entrada não é apagada — ela é a alteração local, e apagá-la seria descartar em silêncio o
+     * que o usuário fez. Ela sai da fila de envio e passa a esperar a T16.7, que é quem resolve
+     * conflito. O lado remoto correspondente está em [SyncConflictEntity].
+     */
+    BLOCKED
 }

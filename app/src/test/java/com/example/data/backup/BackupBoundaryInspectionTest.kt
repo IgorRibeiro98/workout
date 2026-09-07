@@ -24,20 +24,28 @@ class BackupBoundaryInspectionTest {
 
     @Test
     fun `nenhum backup automatico foi introduzido`() {
-        // A T16.4 começa com ativação explícita e backup manual explícito. Agendador, worker
-        // periódico e alarme são T16.6+ — e introduzi-los aqui faria o app enviar dado sem que
-        // ninguém tivesse pedido.
-        // `WorkManager` é varrido no app inteiro: ele é o caminho pelo qual um envio em segundo
-        // plano nasceria sem ninguém decidir. `AlarmManager` fica de fora da varredura global
-        // porque o timer de descanso já o usa desde muito antes da T16 — o que importa aqui é que
-        // ele não apareça no pacote de backup.
-        assertNoneReference(
-            listOf("app/src/main/java/com/example"),
-            listOf("WorkManager", "androidx.work", "PeriodicWorkRequest")
-        )
+        // O backup continua sendo **manual**: um toque em "Ativar backup" com confirmação, ou um
+        // toque em "Fazer backup agora". Nada o dispara sozinho.
+        //
+        // A T16.6 trouxe `WorkManager` para o **sync**, então a varredura global por ele deixou de
+        // ser possível — e deixou de ser o invariante certo. O que continua valendo, e é o que
+        // este teste passa a exigir, é mais preciso: nenhum agendador encosta no pacote de backup
+        // nem na tela dele, e nada no app é periódico. A forma do trabalho de sync (único, com
+        // rede, com backoff) é provada em `SyncBoundaryInspectionTest`.
         assertNoneReference(
             listOf(backupPackage, "app/src/main/java/com/example/presentation/account"),
-            listOf("AlarmManager", "JobScheduler", "setRepeating", "scheduleAtFixedRate")
+            listOf(
+                "WorkManager",
+                "androidx.work",
+                "AlarmManager",
+                "JobScheduler",
+                "setRepeating",
+                "scheduleAtFixedRate"
+            )
+        )
+        assertNoneReference(
+            listOf("app/src/main/java/com/example"),
+            listOf("PeriodicWorkRequest", "setPeriodic", "setInexactRepeating")
         )
     }
 
@@ -86,30 +94,35 @@ class BackupBoundaryInspectionTest {
     }
 
     @Test
-    fun `sync incremental nao foi implementado`() {
-        // O backup sobe um snapshot completo, e o restore (T16.5) baixa um snapshot completo por
-        // ação explícita. O que continua não existindo é o **incremental**: push por mutação, pull
-        // de mudanças, cursor e revisão de servidor são T16.6+.
+    fun `o backup nao virou sync`() {
+        // O sync incremental existe desde a T16.6 — em `data/sync`, com contrato, cursor e
+        // revisão próprios. O que este teste protege é a separação: **backup não é sync**.
         //
-        // Varrido nos pacotes que falam com o Spark Backend. `nextCursor` e afins existem no
-        // catálogo de exercícios (paginação da ExerciseDB) desde antes da T16 e não têm relação
-        // com sync — varrer o app inteiro por essas palavras acusaria o inocente.
+        // Um snapshot completo e imutável e um fluxo de mudanças resolvem problemas diferentes, e
+        // fundir os dois custaria as duas coisas: o backup deixaria de ser um ponto no tempo ao
+        // qual dá para voltar, e o sync ganharia um caminho que reenvia o dataset inteiro.
         assertNoneReference(
-            listOf(
-                backupPackage,
-                "app/src/main/java/com/example/data/restore",
-                "app/src/main/java/com/example/data/remote/spark",
-                "app/src/main/java/com/example/data/sync",
-                "app/src/main/java/com/example/presentation/account"
-            ),
+            listOf(backupPackage, "app/src/main/java/com/example/data/remote/spark"),
             listOf(
                 "v1/sync/push",
                 "v1/sync/pull",
-                "applyRemoteSnapshot",
                 "nextCursor",
                 "serverRevision",
-                "baseRevision"
+                "baseRevision",
+                "SyncRepository",
+                "SyncRemoteApplier"
             )
+        )
+    }
+
+    @Test
+    fun `o sync nao cria backup`() {
+        // O caminho inverso: um ciclo de sincronização não pode disparar um snapshot completo.
+        // Backup é decisão do usuário, e um ciclo que criasse um em cada rodada encheria a
+        // retenção da conta com cópias que ninguém pediu.
+        assertNoneReference(
+            listOf("app/src/main/java/com/example/data/sync"),
+            listOf("BackupRepository", "BackupSnapshotBuilder", "v1/backups", "backupNow")
         )
     }
 

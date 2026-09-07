@@ -40,9 +40,12 @@ import kotlinx.coroutines.launch
         com.example.data.sync.SyncOutboxEntryEntity::class,
         com.example.data.backup.CloudDataBindingEntity::class,
         com.example.data.backup.BackupAttemptEntity::class,
-        com.example.data.restore.RestoreAttemptEntity::class
+        com.example.data.restore.RestoreAttemptEntity::class,
+        com.example.data.sync.EntitySyncMetadataEntity::class,
+        com.example.data.sync.SyncCursorEntity::class,
+        com.example.data.sync.SyncConflictEntity::class
     ],
-    version = 33,
+    version = 34,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -58,6 +61,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun backupAttemptDao(): com.example.data.backup.BackupAttemptDao
     abstract fun restoreAttemptDao(): com.example.data.restore.RestoreAttemptDao
     abstract fun restoreDao(): com.example.data.restore.RestoreDao
+    abstract fun entitySyncMetadataDao(): com.example.data.sync.EntitySyncMetadataDao
+    abstract fun syncCursorDao(): com.example.data.sync.SyncCursorDao
+    abstract fun syncConflictDao(): com.example.data.sync.SyncConflictDao
 
     companion object {
 
@@ -68,7 +74,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 33
+        const val SCHEMA_VERSION: Int = 34
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -119,6 +125,77 @@ abstract class AppDatabase : RoomDatabase() {
          * rebaixáveis (o download é read-only no servidor) e não têm por que atravessar a
          * transação que substitui o dataset.
          */
+        /**
+         * T16.6 — sincronização incremental multi-device.
+         *
+         * Aditiva, e deliberadamente **fora** das tabelas de domínio: três tabelas novas de
+         * mecanismo e uma coluna anulável na Outbox. Nenhum treino, sessão, série ou medida ganha
+         * `revision`, `cursor` ou `syncState`.
+         *
+         * ```text
+         * sync_entity_metadata   qual revision remota este aparelho conhece de cada agregado
+         * sync_cursor            até onde ele já leu o change log do servidor, por conta
+         * sync_conflicts         a divergência que a T16.6 detecta e a T16.7 vai resolver
+         * sync_outbox.blockedReason  por que uma entrada saiu da fila de envio
+         * ```
+         *
+         * Por que a metadata técnica não virou coluna nas entidades: `lastKnownServerRevision` e
+         * `lastSyncedPayloadHash` não descrevem o treino — descrevem o estado de uma conversa com
+         * o servidor. Espalhá-los por cinco tabelas de domínio significaria cinco migrações,
+         * cinco lugares para esquecer de atualizar, e um modelo de domínio carregando transporte.
+         * Separados, eles também são apagados sozinhos pelo restore, sem tocar em domínio.
+         *
+         * `blockedReason` é anulável porque toda entrada existente é `PENDING` e continua sendo:
+         * a migração não muda o significado de nenhuma linha.
+         */
+        val MIGRATION_33_34 = object : Migration(33, 34) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_entity_metadata` (
+                        `ownerUid` TEXT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entitySyncId` TEXT NOT NULL,
+                        `lastKnownServerRevision` INTEGER NOT NULL,
+                        `lastSyncedPayloadHash` TEXT,
+                        `lastSyncedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerUid`, `entityType`, `entitySyncId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_cursor` (
+                        `ownerUid` TEXT NOT NULL,
+                        `lastPulledServerSequence` INTEGER NOT NULL,
+                        `lastSyncedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerUid`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_conflicts` (
+                        `ownerUid` TEXT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entitySyncId` TEXT NOT NULL,
+                        `kind` TEXT NOT NULL,
+                        `baseRevision` INTEGER,
+                        `localPayloadHash` TEXT,
+                        `remoteRevision` INTEGER,
+                        `remoteServerSequence` INTEGER,
+                        `remotePayloadHash` TEXT,
+                        `remotePayload` TEXT,
+                        `clientMutationId` TEXT,
+                        `detectedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerUid`, `entityType`, `entitySyncId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("ALTER TABLE `sync_outbox` ADD COLUMN `blockedReason` TEXT")
+            }
+        }
+
         val MIGRATION_32_33 = object : Migration(32, 33) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -664,7 +741,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34
                 )
                 .addCallback(DatabaseCallback())
                 .build()

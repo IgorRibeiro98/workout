@@ -69,6 +69,59 @@ interface SyncOutboxDao {
     @Query("DELETE FROM sync_outbox WHERE ownerUid = :ownerUid AND id <= :sequence")
     suspend fun deleteCoveredBy(ownerUid: String, sequence: Long): Int
 
+    /**
+     * As entradas de um agregado, de qualquer status (T16.6).
+     *
+     * O push coalesce as pendentes do mesmo agregado em um envio só; o apply remoto precisa saber
+     * se um agregado tem alteração local pendente antes de escrever por cima dele.
+     */
+    @Query(
+        """
+        SELECT * FROM sync_outbox
+        WHERE ownerUid = :ownerUid AND entityType = :entityType AND entitySyncId = :entitySyncId
+        ORDER BY id ASC
+        """
+    )
+    suspend fun entriesFor(
+        ownerUid: String,
+        entityType: String,
+        entitySyncId: String
+    ): List<SyncOutboxEntryEntity>
+
+    /**
+     * Confirma um conjunto de entradas: elas foram cumpridas e saem da fila (T16.6).
+     *
+     * Só é chamado **depois** de o servidor confirmar (`APPLIED` ou `ALREADY_APPLIED`), e dentro
+     * da mesma transação que grava a `revision` conhecida. Apagar antes da confirmação
+     * transformaria uma resposta perdida em alteração perdida — e alteração perdida não tem
+     * conserto, enquanto reenvio tem.
+     */
+    @Query("DELETE FROM sync_outbox WHERE ownerUid = :ownerUid AND id IN (:ids)")
+    suspend fun acknowledge(ownerUid: String, ids: List<Long>): Int
+
+    /**
+     * Tira as entradas da fila de envio sem apagá-las (T16.6).
+     *
+     * Reenviar o que o servidor recusou por conflito, contrato ou histórico imutável produziria a
+     * mesma recusa para sempre. A alteração local continua guardada, e a resolução é da T16.7.
+     */
+    @Query(
+        """
+        UPDATE sync_outbox
+        SET status = 'BLOCKED', blockedReason = :reason, lastAttemptAt = :now,
+            attemptCount = attemptCount + 1
+        WHERE ownerUid = :ownerUid AND id IN (:ids)
+        """
+    )
+    suspend fun block(ownerUid: String, ids: List<Long>, reason: String, now: Long): Int
+
+    /** Quantas alterações locais ainda não subiram. É o "3 alterações aguardando conexão". */
+    @Query("SELECT COUNT(*) FROM sync_outbox WHERE ownerUid = :ownerUid AND status = 'PENDING'")
+    suspend fun pendingCountFor(ownerUid: String): Int
+
+    @Query("SELECT COUNT(*) FROM sync_outbox WHERE ownerUid = :ownerUid AND status = 'BLOCKED'")
+    suspend fun blockedCountFor(ownerUid: String): Int
+
     @Query("SELECT * FROM sync_outbox ORDER BY id ASC")
     suspend fun all(): List<SyncOutboxEntryEntity>
 

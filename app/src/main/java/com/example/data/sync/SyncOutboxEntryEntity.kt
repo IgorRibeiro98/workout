@@ -88,5 +88,14 @@ data class SyncOutboxEntryEntity(
     val attemptCount: Int = 0,
 
     /** Quando foi a última tentativa, em epoch millis (UTC). Nulo enquanto nunca tentado. */
-    val lastAttemptAt: Long? = null
+    val lastAttemptAt: Long? = null,
+
+    /**
+     * Por que a entrada saiu da fila de envio (T16.6). Nulo enquanto ela está [SyncOutboxStatus.PENDING].
+     *
+     * Vocabulário técnico curto — `STALE`, `IMMUTABLE_HISTORY_CONFLICT`, `INVALID`, `UNSUPPORTED`,
+     * `IDEMPOTENCY_CONFLICT` — e nunca conteúdo do usuário. É o que permite a uma tela dizer "1
+     * item precisa de atenção" sem inventar um diagnóstico.
+     */
+    val blockedReason: String? = null
 )

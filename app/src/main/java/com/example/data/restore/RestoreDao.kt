@@ -115,6 +115,32 @@ interface RestoreDao {
     @Query("DELETE FROM sync_outbox")
     suspend fun deleteAllOutboxEntries()
 
+    /**
+     * Zera o estado de sincronização junto com o dataset (T16.6).
+     *
+     * `sync_entity_metadata`, `sync_cursor` e `sync_conflicts` descrevem **o dataset anterior**:
+     * que revision remota cada agregado tinha, até onde este aparelho já lera o change log e que
+     * divergências existiam. O restore substitui esse dataset inteiro, então nada disso continua
+     * verdadeiro — e mantê-lo faria o primeiro push depois de restaurar nascer com uma
+     * `baseRevision` de outra história.
+     *
+     * O cursor volta ao começo de propósito. Um dataset restaurado não carrega revision nenhuma, e
+     * é reler o change log desde o início que devolve essa informação — de forma idempotente, sem
+     * sobrescrever nada, porque conteúdo idêntico é reconhecido pelo hash canônico. Herdar um
+     * cursor "adiantado" seria o oposto: o aparelho nunca saberia as revisions do que restaurou, e
+     * a primeira edição viraria conflito.
+     *
+     * Chamado **dentro** da transação de aplicação, com as mesmas garantias da Outbox.
+     */
+    @Query("DELETE FROM sync_entity_metadata")
+    suspend fun deleteAllSyncEntityMetadata()
+
+    @Query("DELETE FROM sync_cursor")
+    suspend fun deleteAllSyncCursors()
+
+    @Query("DELETE FROM sync_conflicts")
+    suspend fun deleteAllSyncConflicts()
+
     // ---- Leituras de decisão -----------------------------------------------------------------
 
     /**

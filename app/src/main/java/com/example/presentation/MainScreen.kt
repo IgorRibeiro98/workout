@@ -87,7 +87,9 @@ fun MainScreen() {
         authGateway = app.authGateway,
         sparkBackendClient = app.sparkBackendClient,
         backupRepository = app.backupRepository,
-        restoreRepository = app.restoreRepository
+        restoreRepository = app.restoreRepository,
+        syncRepository = app.syncRepository,
+        syncCoordinator = app.syncCoordinator
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -318,11 +320,17 @@ fun MainScreen() {
                 // restaura — cada uma dessas coisas exige um toque.
                 val restoreViewModel: com.example.presentation.account.RestoreViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // E para o sync: criar o ViewModel **lê** o vínculo, a fila e os conflitos. Ele
+                // não sincroniza — um ciclo nasce do toque, do app voltando ao primeiro plano ou
+                // do trabalho agendado por uma alteração local.
+                val syncViewModel: com.example.presentation.account.SyncViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
                     accountViewModel = accountViewModel,
                     backupViewModel = backupViewModel,
                     restoreViewModel = restoreViewModel,
+                    syncViewModel = syncViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },

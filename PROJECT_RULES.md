@@ -291,10 +291,11 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
   é produzida. Entrar, sair e trocar de conta não regeneram `syncId`, não dão dono a dado local e
   não criam mutação. A adoção é explícita, aconteceu na T16.4 e mora em `cloud_data_binding`
   (Room) — ver §13.2.
-- **Nada consome a Outbox como fila de envio.** O backup da T16.4 a usa apenas para marcar o que
-  um snapshot completo já cobriu, **depois** da confirmação do servidor. Não introduza
-  `WorkManager`, polling, retry automático ou worker de sync.
-- **Migrations.** Room é `version = 33` (era 32 na T16.4) com schema exportado versionado em
+- **Quem consome a Outbox.** O backup da T16.4 a usa apenas para marcar o que um snapshot completo
+  já cobriu, **depois** da confirmação do servidor. Desde a **T16.6** ela também é a fila do push
+  incremental — que igualmente só a libera com confirmação. O que continua proibido é o que a
+  regra sempre quis dizer: trabalho **periódico**, polling e retry automático de recusa. Ver §13.4.
+- **Migrations.** Room é `version = 34` (era 33 na T16.5) com schema exportado versionado em
   `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da versão
   anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
@@ -344,8 +345,9 @@ O Spark **baixa** um snapshot da Conta Spark e substitui o dataset local por ele
 são o que impede o restore de virar perda de dado — ou de virar sync por acidente.
 
 - **Restore é substituição, não merge.** `REPLACE LOCAL DATASET WITH BACKUP`, e só isso. *Keep
-  both*, *last write wins* e merge por campo são T16.6/T16.7; introduzir qualquer um deles aqui faz
-  o usuário perder dado achando que ganhou. Há teste estrutural.
+  both*, *last write wins* e merge por campo continuam sendo T16.7 — a T16.6 detecta conflito e
+  preserva os dois lados sem escolher. Introduzir qualquer um deles aqui faz o usuário perder dado
+  achando que ganhou. Há teste estrutural.
 - **A ordem não muda.** `download → hash → versão → schema → semântica → plano → preview →
   confirmação → snapshot de segurança → transação`. Nada local pode ser alterado antes da
   confirmação, e nenhuma etapa pode ser pulada "porque o servidor já validou".
@@ -359,7 +361,8 @@ são o que impede o restore de virar perda de dado — ou de virar sync por acid
 - **O snapshot de segurança vem antes da mutação**, mora no armazenamento **privado** do app e
   **nunca** é enviado ao servidor.
 - **Uma transação.** Limpeza e inserção do dataset pessoal têm um commit e um rollback. O vínculo
-  com a conta e o baseline da Outbox fazem parte do mesmo commit — nunca antes dele.
+  com a conta, o baseline da Outbox e — desde a T16.6 — a revision conhecida, o cursor e os
+  conflitos fazem parte do mesmo commit, nunca antes dele.
 - **A Outbox não é replay.** Restaurar não gera mutação por item; a fila anterior só é substituída
   dentro do commit. Limpar antes é perda de dado sem conserto.
 - **Catálogo canônico e conteúdo premium não são apagados.** O restore substitui dado pessoal.
@@ -382,6 +385,63 @@ são o que impede o restore de virar perda de dado — ou de virar sync por acid
 - **Testes.** Toda mudança no restore roda
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.restore.*"` e `npm test` em
   `backend/`. As duas são offline e não dependem de Firebase, VPS ou internet.
+
+## 13.4 Sincronização incremental multi-device (T16.6)
+
+Dois aparelhos da mesma Conta Spark convergem sozinhos. As regras abaixo são o que impede o sync de
+virar perda de dado — ou de virar backup, ou de virar tempo real.
+
+- **Local primeiro, sempre.** `ação → domínio → Room → UI` acontece inteiro antes de qualquer
+  requisição. `editar → esperar HTTP → salvar` é proibido, e nenhum caminho do app faz isso. Room é
+  a autoridade **operacional**; o servidor é autoridade de **ordem** (`revision`, `serverSequence`),
+  nunca de execução de treino.
+- **Login não sincroniza.** Só um dataset adotado (T16.4) ou restaurado (T16.5) participa, e só com
+  a conta dona. Sem vínculo, o ciclo nem consulta a sessão; com a conta errada, o resultado é
+  descompasso — e o núcleo do Spark continua completo.
+- **O dono sai do token.** O corpo do push não tem `ownerUid`, e o envelope é estrito: um campo
+  desses recusa a requisição. `deviceId` é metadado de origem e não autoriza nada.
+- **A Outbox só é liberada com confirmação.** Timeout, 503, 429 e resposta perdida deixam tudo
+  pendente. Apagar antes é perda sem conserto; reenviar é seguro pelo `clientMutationId`.
+- **`revision` decide, relógio não.** Escrita stale é detectada por `baseRevision` × `serverRevision`
+  — nunca por `updatedAt`. E um `STALE` **não** atualiza a revision conhecida: fazer isso seria
+  *last write wins* com outro nome. Há teste estrutural e de comportamento.
+- **Conflito é detectado e preservado, não resolvido.** Sem *keep both*, sem merge por campo, sem
+  "reenvia com a revision atual", sem retry automático de `STALE`/`INVALID`/`UNSUPPORTED`. O lado
+  local fica no Room e na Outbox (`BLOCKED`), o remoto em `sync_conflicts`. A escolha é da T16.7.
+- **Um conflito não bloqueia o app.** O isolamento é por agregado: um treino em conflito não impede
+  medidas, check-ins e sessões de convergirem.
+- **Histórico concluído é imutável.** `revision = 1` e nunca mais. Mesmo conteúdo é idempotente;
+  conteúdo divergente é conflito de integridade — dos dois lados. E receber uma sessão concluída
+  **não** dá XP, não desbloqueia conquista, não cria recorde e não notifica.
+- **O apply remoto acontece fora do coordenador de mutações.** Um lugar só (`SyncRemoteApplier`), em
+  transação, como a `RestoreTransaction`. Pelo coordenador, aplicar o que veio do servidor
+  devolveria tudo para ele — um laço. Há teste estrutural.
+- **O cursor só avança depois do apply**, na mesma transação. Mudança que este app não sabe ler
+  pausa o sync naquele ponto; ela nunca é pulada. `canonicalId` que não resolve pausa também —
+  *fuzzy matching* não existe.
+- **Exclusão não propaga.** `DELETE` é recusado explicitamente (`DELETE_NOT_SUPPORTED`), a intenção
+  fica pendente e **bloqueia o agregado dela** — mandar a `UPSERT` anterior ressuscitaria no
+  servidor o que o usuário apagou. Não esconda o botão de excluir por causa disso: a tela avisa.
+- **Nada é periódico.** Um trabalho **único** do `WorkManager`, com restrição de rede e backoff
+  exponencial, agendado por alteração local; foreground conservador (15 min); toque manual. Sem
+  `PeriodicWorkRequest`, sem polling, sem WebSocket, sem push do servidor.
+- **Treino em execução não muda por baixo.** Uma alteração remota no template que está sendo
+  executado é **adiada** até a sessão terminar — o motor lê configuração de série do template
+  durante o treino. Plano e histórico continuam separados: `exercise_sessions` e `set_logs` têm os
+  próprios snapshots, e mudar o template nunca reescreve uma sessão já criada.
+- **A tela não fala protocolo.** `cursor`, `revision`, `baseRevision` e `serverSequence` não entram
+  em UI. O usuário lê "Atualizado", "3 alterações aguardando envio" e "1 item precisa de atenção".
+- **Sync não substitui backup.** O snapshot completo da T16.4 continua sendo o mecanismo de cópia
+  histórica, e um ciclo de sync nunca cria um. Há teste estrutural nos dois sentidos.
+- **Versionamento.** Mudou o payload de um agregado, suba a `entitySchemaVersion` dele **nos dois
+  lados** e atualize as fixtures. Mudou o protocolo, suba `SyncProtocol.VERSION` e
+  `SYNC_PROTOCOL_VERSION` juntos.
+- **Logs.** No servidor: `requestId`, prefixo de uid, prefixo de `deviceId`, contagens por desfecho,
+  cursor, duração. No Android: **nada** — o pacote de sync não registra log, e a ausência é testada.
+  Nunca payload, nome de treino, nota, medida, `syncId` ou `Authorization`.
+- **Testes.** Toda mudança no sync roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
+  As duas são offline e não dependem de Firebase, VPS ou internet.
 
 ## 14. Tests and build are part of implementation
 

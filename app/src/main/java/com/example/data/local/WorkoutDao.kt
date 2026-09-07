@@ -492,6 +492,33 @@ interface WorkoutDao {
     @Query("SELECT * FROM check_ins WHERE syncId = :syncId LIMIT 1")
     suspend fun getCheckInBySyncId(syncId: String): CheckInEntity?
 
+    /**
+     * O `localId` de uma sessão pela identidade global (T16.6).
+     *
+     * Existe separado de [getSessionWithDetailsBySyncId] porque o apply remoto só precisa saber
+     * **se** a sessão já existe e qual linha ela é — carregar exercícios e séries para responder
+     * isso seria trabalho por nada, em transação aberta.
+     */
+    @Query("SELECT id FROM workout_sessions WHERE syncId = :syncId LIMIT 1")
+    suspend fun getSessionIdBySyncId(syncId: String): Long?
+
+    /**
+     * O treino que está sendo executado **agora**, se houver (T16.6).
+     *
+     * `IN_PROGRESS` e `PAUSED` são execução neste aparelho. Enquanto uma delas existir, uma
+     * alteração remota naquele treino é adiada: o motor de execução lê a configuração de série do
+     * template durante o treino (`getTemplateExercise`), e trocá-la no meio mudaria alvo, descanso
+     * ou até removeria o exercício em execução.
+     */
+    @Query(
+        """
+        SELECT templateId FROM workout_sessions
+        WHERE status IN ('IN_PROGRESS', 'PAUSED') AND templateId IS NOT NULL
+        ORDER BY startedAt DESC LIMIT 1
+        """
+    )
+    suspend fun getActiveSessionTemplateId(): Long?
+
     // ---- Enumeração por identidade global, para o snapshot de backup (T16.4) ----------------
     //
     // O backup percorre o dataset **pela identidade global**, e não por `localId`: o que ele

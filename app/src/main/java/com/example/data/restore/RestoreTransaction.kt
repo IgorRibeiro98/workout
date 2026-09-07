@@ -95,6 +95,12 @@ class RestoreTransaction(
             // A fila só é zerada aqui — dentro do commit que substitui o dataset que ela descrevia.
             restoreDao.deleteAllOutboxEntries()
 
+            // E o estado de sincronização junto (T16.6): revision conhecida, cursor e conflitos
+            // descreviam o dataset que acabou de ser substituído. Ver `RestoreDao`.
+            restoreDao.deleteAllSyncEntityMetadata()
+            restoreDao.deleteAllSyncCursors()
+            restoreDao.deleteAllSyncConflicts()
+
             RestoreApplied(
                 programs = programIds.size,
                 templates = templateIds.size,

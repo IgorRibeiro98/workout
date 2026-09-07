@@ -18,7 +18,21 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.example.domain.engine.ManifestImporter
 
-class MainApplication : Application(), ImageLoaderFactory {
+class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configuration.Provider {
+
+    /**
+     * Inicialização sob demanda do WorkManager (T16.6).
+     *
+     * O inicializador padrão roda no startup de todo app que tenha WorkManager no classpath. O
+     * Spark é local-first: quem nunca ativou a nuvem não paga por um agendador que não usa. O nó
+     * `androidx.startup` foi removido do manifesto, e é esta configuração que faz o WorkManager
+     * ser construído só na primeira chamada a `WorkManager.getInstance(...)` — que acontece quando
+     * uma alteração local precisa ser agendada.
+     */
+    override val workManagerConfiguration: androidx.work.Configuration
+        get() = androidx.work.Configuration.Builder()
+            .setMinimumLoggingLevel(android.util.Log.WARN)
+            .build()
     
     lateinit var database: AppDatabase
         internal set
@@ -96,6 +110,20 @@ class MainApplication : Application(), ImageLoaderFactory {
      * (ou desfaz) o que ele já havia confirmado.
      */
     lateinit var restoreRepository: com.example.data.restore.RestoreRepository
+        internal set
+
+    /**
+     * Sincronização incremental multi-device (T16.6).
+     *
+     * Criar o repositório e o coordenador **não** sincroniza, não abre conexão e não agenda nada.
+     * Um ciclo nasce de três gatilhos explícitos: o toque em "Sincronizar agora", o app voltando
+     * ao primeiro plano com algo pendente ou desatualizado, e o trabalho único que uma alteração
+     * local agenda. Não existe laço, polling, trabalho periódico nem tempo real.
+     */
+    lateinit var syncRepository: com.example.data.sync.SyncRepository
+        internal set
+
+    lateinit var syncCoordinator: com.example.data.sync.SyncCoordinator
         internal set
         
     lateinit var workoutEngine: WorkoutEngine
@@ -258,7 +286,13 @@ class MainApplication : Application(), ImageLoaderFactory {
             outboxDao = database.syncOutboxDao(),
             scopeProvider = com.example.data.backup.CloudDataBindingScopeProvider(
                 database.cloudDataBindingDao()
-            )
+            ),
+            // Depois do commit, e só quando uma entrada realmente nasceu: agenda **um** ciclo com
+            // restrição de rede (T16.6). Não é uma requisição HTTP — salvar um treino nunca
+            // espera o servidor.
+            onMutationsRecorded = {
+                if (this::syncCoordinator.isInitialized) syncCoordinator.onLocalMutation()
+            }
         )
         deviceIdProvider = com.example.data.sync.DeviceIdProvider(settingsManager)
         syncAggregateSnapshotBuilder = com.example.data.sync.SyncAggregateSnapshotBuilder(
@@ -337,6 +371,51 @@ class MainApplication : Application(), ImageLoaderFactory {
             deviceIdProvider = deviceIdProvider,
             transactions = com.example.data.sync.RoomTransactionRunner(database),
             operationLock = cloudOperationLock
+        )
+
+        // Sincronização incremental (T16.6) — Android ⇄ Spark Backend, por mudança.
+        //
+        // Ela reusa tudo que já existe: o `SyncAggregateSnapshotBuilder` da T16.3 monta os
+        // payloads (não há um segundo serializador de treino no Spark), o `SparkBackendClient` da
+        // T16.1 é o transporte, e a **mesma** `CloudOperationLock` do backup e do restore impede
+        // um ciclo de rodar no meio de uma substituição de dataset.
+        syncRepository = com.example.data.sync.SyncRepository(
+            bindingDao = database.cloudDataBindingDao(),
+            outboxDao = database.syncOutboxDao(),
+            metadataDao = database.entitySyncMetadataDao(),
+            cursorDao = database.syncCursorDao(),
+            conflictDao = database.syncConflictDao(),
+            pushBuilder = com.example.data.sync.SyncPushBuilder(
+                outboxDao = database.syncOutboxDao(),
+                metadataDao = database.entitySyncMetadataDao(),
+                snapshotBuilder = syncAggregateSnapshotBuilder
+            ),
+            applier = com.example.data.sync.SyncRemoteApplier(
+                transactions = com.example.data.sync.RoomTransactionRunner(database),
+                workoutDao = database.workoutDao(),
+                bodyMeasurementDao = database.bodyMeasurementDao(),
+                outboxDao = database.syncOutboxDao(),
+                metadataDao = database.entitySyncMetadataDao(),
+                cursorDao = database.syncCursorDao(),
+                conflictDao = database.syncConflictDao(),
+                snapshotBuilder = syncAggregateSnapshotBuilder
+            ),
+            api = com.example.data.sync.SparkSyncApi(sparkBackendClient),
+            deviceId = { deviceIdProvider.deviceId() },
+            transactions = com.example.data.sync.RoomTransactionRunner(database),
+            operationLock = cloudOperationLock
+        )
+
+        syncCoordinator = com.example.data.sync.SyncCoordinator(
+            repository = syncRepository,
+            // A sessão é lida do Firebase Auth **quando** um ciclo já decidiu que vai acontecer.
+            // Sem vínculo e sem backend, nada de autenticação é tocado.
+            accounts = com.example.data.sync.SyncAccountProvider {
+                (authGateway.state.value as? com.example.domain.auth.AuthState.SignedIn)
+                    ?.account?.uid
+            },
+            scheduler = com.example.service.WorkManagerSyncScheduler(this),
+            scope = CoroutineScope(Dispatchers.Default)
         )
 
         repository = WorkoutRepository(

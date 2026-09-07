@@ -111,7 +111,7 @@ jobs:
             console.log('persistência ok');
             db.close();"
 
-          # T16.5 — a migration do documento do snapshot e as rotas de leitura do restore.
+          # T16.5/T16.6 — o schema do restore e o do sync incremental.
           #
           # Sem service account não há como autenticar aqui, e é exatamente isso que o smoke
           # verifica: as rotas existem e nascem **fechadas**. 401 (e não 404) é a prova.
@@ -122,19 +122,35 @@ jobs:
             if (!columns.includes('payload')) {
               console.error('migration 0004 não aplicada: sem coluna payload'); process.exit(1);
             }
+            for (const table of ['sync_entities','sync_changes','sync_mutations']) {
+              const found=db.prepare(
+                \"SELECT name FROM sqlite_master WHERE type='table' AND name=?\"
+              ).get(table);
+              if (!found) {
+                console.error('migration 0005 não aplicada: sem tabela ' + table); process.exit(1);
+              }
+            }
             const applied=db.prepare('SELECT COUNT(*) AS total FROM schema_migrations').get();
-            if (applied.total < 4) {
+            if (applied.total < 5) {
               console.error('migrations pendentes: ' + applied.total); process.exit(1);
             }
-            console.log('schema de restore ok');
+            console.log('schema de restore e de sync ok');
             db.close();"
 
-          for path in /v1/backups /v1/backups/abc /v1/backups/abc/content; do
+          for path in /v1/backups /v1/backups/abc /v1/backups/abc/content /v1/sync/pull; do
             status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$path")
             if [ "$status" != "401" ]; then
               echo "rota $path deveria exigir autenticação; respondeu $status"; exit 1
             fi
           done
+
+          # O push é POST: um GET nele responderia 404 e não provaria nada sobre a proteção.
+          status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -d '{}' \
+            "http://127.0.0.1:8080/v1/sync/push")
+          if [ "$status" != "401" ]; then
+            echo "rota /v1/sync/push deveria exigir autenticação; respondeu $status"; exit 1
+          fi
 
           docker rm -f spark-ci-2
           docker volume rm spark-ci-data

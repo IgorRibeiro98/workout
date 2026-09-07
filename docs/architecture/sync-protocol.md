@@ -1,18 +1,24 @@
-# Protocolo de sincronização do Spark — contrato futuro
+# Protocolo de sincronização do Spark
 
-- **Tarefa:** T16.0 (documentação) — implementação em **T16.3** a **T16.7**.
-- **Status (verificado em 2026-09-06):**
+- **Tarefa:** T16.0 (documentação) — **implementado na T16.6**; conflitos e deletes em **T16.7**.
+- **Status (verificado em 2026-09-07):**
   - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
     `clientMutationId`, `deviceId` e os DTOs de agregado;
-  - **implementado na T16.4:** o **backup completo**, que não é sync — `POST /v1/backups` sobe um
-    snapshot autocontido e `GET /v1/backups/latest` devolve metadata;
-  - **implementado na T16.5:** o **restore**, que também não é sync — `GET /v1/backups`,
-    `GET /v1/backups/{id}` e `GET /v1/backups/{id}/content` deixam o usuário **escolher** um
-    snapshot e substituir o dataset local por ele. Um snapshot completo, por ação explícita, sem
-    delta, sem cursor e sem merge;
-  - **não implementado:** o protocolo de sync. Não existe push incremental, pull, worker, ack,
-    `revision`, `cursor`, tombstone remoto nem tabela de mudanças no servidor. O teste
-    automatizado do backend continua garantindo que `/v1/sync/push` e `/v1/sync/pull` respondem 404.
+  - **implementado na T16.4:** o **backup completo** — `POST /v1/backups` sobe um snapshot
+    autocontido e `GET /v1/backups/latest` devolve metadata. Não é sync;
+  - **implementado na T16.5:** o **restore** — `GET /v1/backups`, `GET /v1/backups/{id}` e
+    `GET /v1/backups/{id}/content` deixam o usuário **escolher** um snapshot e substituir o
+    dataset local por ele. Um snapshot completo, por ação explícita, sem delta e sem merge.
+    Também não é sync;
+  - **implementado na T16.6:** o **sync incremental**. `POST /v1/sync/push` e
+    `GET /v1/sync/pull`, estado remoto por agregado (`sync_entities`), `serverRevision` por
+    entidade, ledger de idempotência (`sync_mutations`), change log append-only (`sync_changes`)
+    com sequência global, cursor durável por conta no Android (`sync_cursor`), revision conhecida
+    por agregado (`sync_entity_metadata`), conflitos preservados (`sync_conflicts`) e um trabalho
+    único de `WorkManager` com restrição de rede;
+  - **não implementado (T16.7):** resolução de conflito, tombstone, propagação de exclusão,
+    prevenção de ressurreição e política avançada de consistência offline. Um push de `DELETE` é
+    recusado explicitamente com `DELETE_NOT_SUPPORTED` e a intenção continua pendente no aparelho.
 
 > **Backup/restore ≠ sync.** Os dois movem um snapshot **inteiro**, em uma direção, quando o
 > usuário manda. O protocolo abaixo move **mudanças**, nos dois sentidos, sozinho — e é por isso
@@ -102,12 +108,23 @@ A UI não conhece a Outbox — há teste estrutural que falha se `presentation/`
 | `entityType` | o agregado (`WORKOUT_TEMPLATE`, `WORKOUT_SESSION`, ...) |
 | `entitySyncId` | identidade global da entidade |
 | `operation` | `UPSERT` ou `DELETE` |
-| `status` | `PENDING` — o único estado que existe hoje |
+| `status` | `PENDING` ou `BLOCKED` (T16.6) — ver abaixo |
 | `createdAt` | epoch millis UTC, metadado de auditoria |
 | `attemptCount` / `lastAttemptAt` | metadado mínimo de tentativa, zerado enquanto não houver transporte |
 
-Não existe `SYNCED`: seria um estado mentindo sobre dado que nunca saiu do aparelho. `IN_FLIGHT` e
-`FAILED` nascem junto com o worker, na T16.6.
+Não existe `SYNCED`: seria um estado mentindo sobre dado que nunca saiu do aparelho — uma entrada
+confirmada é **removida**, porque a intenção foi cumprida.
+
+E não existe `IN_FLIGHT`, mesmo depois da T16.6. Uma entrada despachada permanece `PENDING` até o
+servidor confirmar, e é isso que torna uma resposta perdida recuperável: o reenvio carrega o mesmo
+`clientMutationId` e volta como `ALREADY_APPLIED`. Um estado "em voo" durável só criaria uma linha
+que ninguém sabe destravar depois de um crash.
+
+A T16.6 acrescentou **um** estado: `BLOCKED`, para a entrada que o servidor recusou de um jeito que
+reenviar não resolve — escrita stale, conflito de histórico imutável, payload inválido, operação
+não suportada. Ela não é apagada (é a alteração do usuário), sai da fila de envio e passa a esperar
+a T16.7. O lado remoto correspondente vive em `sync_conflicts`, e `blockedReason` guarda o
+vocabulário técnico do motivo — nunca conteúdo.
 
 ### Referência, não snapshot
 
@@ -142,9 +159,16 @@ O que a coalescência **não** faz:
 
 - não atravessa operações: um `DELETE` nunca absorve o `UPSERT` anterior, nem o contrário — a
   ordem de intenção é preservada por `id`;
-- não toca em entrada fora de `PENDING`. Quando existir envio em andamento (T16.6), reaproveitar
-  uma entrada já despachada quebraria a idempotência que o `clientMutationId` garante;
-- não some com nada por idade. Limpeza depende de acknowledgment real do servidor (T16.6).
+- não toca em entrada fora de `PENDING`: reaproveitar uma entrada bloqueada por conflito quebraria
+  a idempotência que o `clientMutationId` garante;
+- não some com nada por idade. Limpeza depende de acknowledgment real do servidor.
+
+**No envio (T16.6)** a mesma regra é aplicada de novo, por `SyncPushBuilder`: as `UPSERT` pendentes
+do mesmo agregado viram um envio só, e a confirmação dele libera todas. É correto pelo mesmo motivo
+— o payload é montado do Room na hora, então todas resolveriam para o mesmo conteúdo. O que é
+enviado leva o `clientMutationId` da última; as outras nunca saíram do aparelho, então nenhuma
+idempotência é quebrada. E um agregado com `DELETE` pendente **não envia nada**: mandar a `UPSERT`
+anterior a ele ressuscitaria no servidor o que o usuário apagou aqui.
 
 Uma operação que altera dezenas de linhas do mesmo agregado — reordenar exercícios, editar em lote
 — produz **uma** mutação daquele agregado, não dezenas. E uma operação que não muda estado (fazer
@@ -182,12 +206,48 @@ O corte é o ponto: uma alteração feita **durante** o upload recebe `id` maior
 porque o snapshot não a contém. Falha no upload não libera nada. Formato, identidades, hash,
 idempotência e erros em [`contracts/backup/v1/README.md`](../../contracts/backup/v1/README.md).
 
-Consequência para a T16.6: quando o push incremental existir, ele precisa **partir do estado
-coberto pelo último backup**, e não da instalação do app. E três agregados que hoje entram só no
-snapshot completo — `EXERCISE_OVERRIDE`, `WEEKLY_GOAL`, `USER_PREFERENCES` — precisarão de mutação
-própria na Outbox.
+### Baseline: como o sync incremental começa (T16.6)
 
-## Push incremental (T16.6)
+A pergunta que a T16.4 e a T16.5 deixaram em aberto era "de qual posição do change log um aparelho
+recém-adotado ou recém-restaurado deve começar a puxar?". A investigação da T16.6 confirmou que
+**nenhuma das duas guardou essa informação**: `backup_snapshots` não tem sequência de sync, e a
+`restore_attempts` também não.
+
+A T16.6 **não inventou** uma. O cursor inicial de qualquer aparelho é **zero**, e o restore zera o
+cursor, a revision conhecida e os conflitos dentro do próprio commit que substitui o dataset. O
+motivo é que a alternativa seria pior:
+
+- um dataset adotado ou restaurado **não carrega revision nenhuma**. Herdar um cursor "adiantado"
+  faria o aparelho nunca aprender as revisions do que ele tem — e a primeira edição de cada
+  agregado viraria um conflito falso;
+- reler o log desde o início é **idempotente e barato**: conteúdo idêntico é reconhecido pelo hash
+  canônico, o domínio não é reescrito, e a única coisa que muda é a metadata técnica passar a
+  saber a revision de cada agregado.
+
+Ou seja: "cursor = 0" aqui não é rebaixar a conta, é a forma de **aprender** o que o servidor sabe.
+Um baseline explícito só passa a valer a pena junto com retenção do change log — e retenção é
+T16.7/T16.8, com `CURSOR_EXPIRED` e rebaseline, nunca com um recomeço silencioso.
+
+O que o backup **não** faz, e continua não fazendo: ele não vira mudança no change log. Um snapshot
+completo enviado não é interpretado como milhares de mudanças novas — há teste sobre isso.
+
+### Três agregados ainda fora do incremental
+
+`EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES` entram no snapshot completo e **não** têm
+mutação de Outbox. A T16.6 os deixou fora do incremental de propósito, e o servidor os recusa
+explicitamente com `UNSUPPORTED` em vez de aceitar pela metade:
+
+- a customização de exercício é escrita hoje direto pelo DAO, a partir de um ViewModel — dar-lhe
+  mutação exigiria mover essa escrita para um repositório, que é refatoração de outra tarefa;
+- a meta semanal é **derivada** de uma preferência do DataStore por `ConsistencyRepositoryImpl`, e
+  não uma entidade que o usuário edita diretamente;
+- as preferências moram no DataStore, que **não** participa da transação Room — e a Outbox
+  transacional é o que garante que intenção e alteração vivam ou morram juntas.
+
+Consequência aceita e registrada: uma alteração nesses três propaga por **backup completo**, não por
+sync incremental. Está em `ARCHITECTURE.md` como pendência da T16.7.
+
+## Push incremental (T16.6 — implementado)
 
 ```text
 ação do usuário
@@ -196,40 +256,102 @@ domínio → Room            ← a escrita local acontece primeiro, e é o que a
       ↓
 Outbox (Room)             ← fila durável de mutações pendentes
       ↓
-POST /v1/sync/push
+SyncPushBuilder           ← coalesce por agregado, monta o payload do Room, lê a baseRevision
+      ↓
+POST /v1/sync/push        ← lotes de até 50 mutações, corpo canônico
 ```
 
-Cada item enviado carrega:
+O fluxo proibido — e que nenhum caminho do app faz — é o inverso:
 
 ```text
-clientMutationId   UUID da tentativa                        [T16.3 — existe]
-entityType         WORKOUT_TEMPLATE | WORKOUT_SESSION | ...  [T16.3 — existe]
-syncId             identidade global da entidade             [T16.3 — existe]
-operation          UPSERT | DELETE                           [T16.3 — existe]
-deviceId           origem                                    [T16.3 — existe]
-payload            snapshot do agregado + schemaVersion      [T16.3 — montável]
-baseRevision       revision conhecida pelo cliente (0 = criação)   [T16.6]
+editar treino → esperar HTTP → salvar Room        ← PROIBIDO
 ```
+
+Corpo da requisição:
+
+```json
+{
+  "deviceId": "…",
+  "mutations": [
+    {
+      "clientMutationId": "…",
+      "entityType": "WORKOUT_TEMPLATE",
+      "entitySyncId": "…",
+      "entitySchemaVersion": 1,
+      "operation": "UPSERT",
+      "baseRevision": 4,
+      "payload": { }
+    }
+  ]
+}
+```
+
+**Não existe `ownerUid` no corpo, e isso é o contrato.** O dono sai do Firebase ID Token verificado;
+o envelope do servidor é estrito, então um campo de dono não é ignorado em silêncio — ele recusa a
+requisição inteira. O `deviceId` é metadado de diagnóstico e não autoriza nada: conhecer o
+`deviceId` de outro aparelho não dá acesso a nada.
 
 `UPSERT` em vez de `CREATE`/`UPDATE`: o cliente não sabe — e não deveria precisar saber — se o
 servidor já viu aquele `syncId`. Quem distingue criação de atualização é o servidor, pela
-`revision`. Duas operações bastam.
+`revision`.
 
-O servidor precisa conseguir distinguir quatro situações:
+### O que o servidor decide, mutação a mutação
 
-| Situação | Como o servidor detecta | Resposta |
+A ordem das perguntas é o protocolo:
+
+| # | Pergunta | Resposta |
 | --- | --- | --- |
-| **Reenvio** | `clientMutationId` já registrado | devolve o resultado original, sem aplicar de novo |
-| **Duplicidade** | mesmo `syncId` já criado | trata como update, não cria segunda entidade |
-| **Versão stale** | `baseRevision` < `revision` atual | rejeita com a `revision` atual |
-| **Conflito** | stale + conteúdo incompatível | conflito explícito para resolução (T16.7) |
+| 1 | `clientMutationId` já registrado, mesmo alvo e mesmo hash? | `ALREADY_APPLIED` com a `revision`/`sequence` originais |
+| 2 | `clientMutationId` já registrado, conteúdo ou alvo diferente? | `IDEMPOTENCY_CONFLICT` — não reaplica |
+| 3 | `operation` é `DELETE`? | `UNSUPPORTED` (`DELETE_NOT_SUPPORTED`) — T16.7 |
+| 4 | `entityType` fora do registry, `entitySchemaVersion` desconhecida? | `UNSUPPORTED` |
+| 5 | payload fora do schema, identidade que não bate, item grande demais? | `INVALID` |
+| 6 | histórico imutável já gravado com **outro** conteúdo? | `IMMUTABLE_HISTORY_CONFLICT` |
+| 7 | conteúdo idêntico ao que já está gravado? | `ALREADY_APPLIED` — nenhuma `revision` é gasta |
+| 8 | `baseRevision` == `revision` atual? | `APPLIED`, `revision + 1` |
+| 9 | `baseRevision` < `revision` atual, ou criação sobre entidade existente | `STALE` com `currentRevision` |
+| 10 | `baseRevision` > `revision` atual | `INVALID` (`BASE_REVISION_AHEAD`) |
 
-O `Outbox` só remove uma mutação depois da confirmação do servidor. Uma resposta perdida deixa a
-mutação na fila, e o reenvio é seguro — é exatamente o que a idempotência garante.
+A idempotência é verificada **antes** da validação de conteúdo, de propósito: um reenvio precisa
+devolver o resultado original mesmo que o servidor tenha ficado mais exigente entre as duas
+tentativas — senão o aparelho reenviaria para sempre algo que o servidor já tem.
 
-Nada disso existe hoje: não há worker, push por mutação, retry, ack nem `revision`. A T16.3
-entregou a fila durável e o montador de payload, a T16.4 entregou o transporte autenticado e o
-snapshot completo; o push incremental é da T16.6.
+### Resultado por item, transação por item
+
+Um lote **não** é atômico, e isso é decisão. As mutações da Outbox são de agregados diferentes e
+independentes entre si; recusar quatro válidas porque a quinta ficou stale faria o aparelho
+reenviar tudo para sempre. Cada mutação recebe o desfecho dela na resposta:
+
+```json
+{
+  "results": [
+    { "clientMutationId": "…", "status": "APPLIED", "serverRevision": 5, "serverSequence": 1842 },
+    { "clientMutationId": "…", "status": "STALE", "currentRevision": 7 }
+  ]
+}
+```
+
+O que **é** atômico é cada aplicação: `sync_entities`, `sync_changes` e `sync_mutations` entram na
+mesma transação SQLite. Atualizar a entidade e falhar ao anexar a mudança deixaria os outros
+aparelhos sem nunca saber da alteração; gravar o ledger sem aplicar faria um reenvio devolver um
+resultado que não existe. Há teste que derruba cada uma das três tabelas e confirma que nada sobra.
+
+### O que o aparelho faz com cada desfecho
+
+| Desfecho | Outbox | `sync_entity_metadata` | `sync_conflicts` |
+| --- | --- | --- | --- |
+| `APPLIED` / `ALREADY_APPLIED` | entradas do agregado **removidas** | grava `serverRevision` e o hash | limpa o conflito daquele agregado |
+| `STALE` | `BLOCKED` (`STALE`) | **não** é atualizada | registra `STALE_LOCAL_CHANGE` com `baseRevision` e hash local |
+| `IMMUTABLE_HISTORY_CONFLICT` | `BLOCKED` | não | registra `IMMUTABLE_HISTORY` |
+| `IDEMPOTENCY_CONFLICT` | `BLOCKED` | não | registra `IDEMPOTENCY` |
+| `INVALID` / `UNSUPPORTED` | `BLOCKED` | não | registra `REJECTED_BY_SERVER` |
+| status desconhecido, ou resultado ausente | continua `PENDING` | não | não |
+| falha de transporte (rede, 5xx, 429) | continua `PENDING` | não | não |
+
+A linha mais importante é a do `STALE`: **a revision conhecida não é atualizada**. Gravar
+`currentRevision` ali faria o próximo push nascer com a base do servidor e sobrescrever a alteração
+do outro aparelho — que é exatamente o *last write wins* que este protocolo existe para impedir. Há
+teste sobre isso.
 
 ### Versão de payload
 
@@ -240,9 +362,22 @@ tabela local.
 
 **Compatibilidade.** A evolução é controlada, não tolerante: um `entityType` desconhecido, um
 `exerciseId` que não resolve ou um campo obrigatório ausente são **recusados**, não preenchidos com
-padrão. O montador de snapshot já segue essa regra — um exercício sem `canonicalId` nem `syncId`
-faz o agregado inteiro não ser montado, em vez de subir incompleto e virar dado errado permanente
-no servidor.
+padrão. Nos dois sentidos: o servidor recusa no push, e o cliente recusa no pull — `Json` estrito,
+com `ignoreUnknownKeys = false`, para que uma versão antiga do app não aceite pela metade um
+payload criado por uma versão nova e destrua o resto na escrita seguinte.
+
+### Tetos
+
+| Teto | Valor | Onde |
+| --- | --- | --- |
+| mutações por push | 50 | `SyncProtocol.PUSH_BATCH_SIZE` / `SYNC_LIMITS.maxMutations` |
+| bytes por payload de mutação | 256 KiB | `SYNC_LIMITS.maxMutationPayloadBytes` |
+| corpo total do push | 2 MiB | `MAX_SYNC_PUSH_BODY_BYTES` |
+| página de pull | 100 pedidos, 200 no teto | `SYNC_LIMITS.defaultPullPageSize` / `maxPullPageSize` |
+| requisições de sync por conta | 60/min | `SYNC_RATE_LIMIT` |
+
+Os dois lados declaram os mesmos números. O do servidor é o que vale: ele não pode supor que só o
+APK oficial faz requisições.
 
 ---
 
@@ -272,29 +407,164 @@ remoto segue o mesmo princípio.
 
 ---
 
-## Pull (T16.6)
+## Pull (T16.6 — implementado)
 
 ```text
-GET /v1/sync/pull?cursor=<opaco>
+GET /v1/sync/pull?cursor=1840&limit=100
       ↓
-{ changes: [...], nextCursor: "<opaco>", hasMore: true|false }
+{ changes: [...], nextCursor: 1841, hasMore: false }
       ↓
 validação                 ← payload do servidor é entrada não confiável
       ↓
-Room                      ← escrita local
+┌─────────────────────────────────────────────┐
+│ Transação Room                              │
+│   domínio + sync_entity_metadata            │
+│   + sync_conflicts + sync_cursor            │
+└─────────────────────────────────────────────┘
       ↓
 UI observa Room           ← a UI nunca lê a resposta HTTP diretamente
 ```
 
-O `cursor` é derivado de `changeSeq`, que é **estado controlado pelo servidor** — nunca do relógio
-do aparelho. Ele é opaco para o cliente: o Android guarda e devolve, sem interpretar.
+Cada mudança carrega `serverSequence`, `entityType`, `entitySyncId`, `entitySchemaVersion`,
+`serverRevision`, `operation`, `payloadHash`, `originDeviceId`, `createdAt` e o **agregado inteiro**
+como estava naquela sequência.
 
-Propriedades exigidas:
+O `cursor` é posição em `sync_changes.server_sequence` — estado controlado pelo servidor, nunca do
+relógio do aparelho. Propriedades exigidas, todas cobertas por teste:
 
 - **monotônico** — mudanças aparecem em ordem estável;
 - **retomável** — perder conexão no meio não obriga a recomeçar;
 - **completo** — nenhuma mudança entre dois cursores é pulada;
-- **por conta** — nunca entrega dado de outro `ownerUid`.
+- **por conta** — nunca entrega dado de outro `ownerUid`, e o cursor de uma conta não é reusado por
+  outra (a chave de `sync_cursor` é o `ownerUid`);
+- **verificável** — cursor negativo, não inteiro ou além do que o servidor já emitiu é
+  `INVALID_CURSOR`, nunca um reset silencioso para zero.
+
+### O change log guarda o snapshot, não uma referência
+
+Cada linha de `sync_changes` guarda o payload daquela mudança, e não um ponteiro para o estado
+atual da entidade. Duplica armazenamento; a alternativa custaria corretude, porque a sequência X
+passaria a devolver um estado posterior a X assim que a entidade mudasse de novo. Na escala do
+Spark — um app pessoal, uma VPS — alguns KB não valem uma classe inteira de bug de convergência.
+
+E o log é **append-only**: uma linha criada nunca é editada. Retenção agressiva não existe nesta
+fase, justamente porque um aparelho offline pode precisar de mudanças antigas; se um dia existir,
+ela precisa vir junto com `CURSOR_EXPIRED` e um caminho de rebaseline — nunca com um recomeço
+silencioso de outro lugar.
+
+### O que acontece com cada mudança recebida
+
+```text
+já conheço uma revision >= esta?          → eco. Nada a escrever, nenhuma Outbox nova
+o agregado tem alteração local pendente?
+   └ sim, e o hash local == o remoto      → convergiu. Confirma a fila, grava a revision
+   └ sim, e o conteúdo é outro            → CONFLITO. O Room não é tocado
+   └ não                                  → aplica no Room e grava a revision
+```
+
+Uma sessão concluída que já existe localmente com conteúdo divergente é conflito de integridade —
+nunca sobrescrita.
+
+### O cursor só avança depois do apply
+
+A transação cobre domínio, metadata, conflitos **e** o cursor. Gravar o cursor antes transformaria
+uma falha de escrita em alteração remota perdida — e perder não tem conserto, enquanto reaplicar
+tem, porque cada passo é idempotente.
+
+Quando alguma coisa não pode ser tratada, o sync **para naquele ponto** em vez de pular:
+
+| Situação | O que acontece |
+| --- | --- |
+| `entityType`/`entitySchemaVersion` que este app não conhece | a página é truncada antes dela; o cursor para ali; a tela pede atualização do app |
+| payload fora do contrato, identidade que não bate | idem |
+| `canonicalId` que não resolve neste aparelho | a transação inteira é desfeita; o cursor **não** anda; nada é escrito |
+| exercício personalizado ainda ausente | idem — e a página seguinte o traz |
+
+Não existe *fuzzy matching* em lugar nenhum: o app não escolhe "um exercício parecido" para
+conseguir aplicar. Ele para e diz por quê.
+
+### Treino em execução
+
+Uma execução em andamento é o único estado que o pull **adia** em vez de aplicar.
+
+```text
+sessão IN_PROGRESS/PAUSED usando o treino X
+      +
+chega uma mudança remota do treino X
+      ↓
+a mudança fica no change log, o cursor para antes dela
+      ↓
+o ciclo seguinte, sem execução ativa, a aplica
+```
+
+O motivo é concreto: o motor de execução lê a configuração de série do template **durante** o
+treino (`getTemplateExercise`) — alvo de séries, faixa de repetições e descanso. Substituir os
+exercícios do template no meio de uma execução mudaria esses valores debaixo do usuário, ou
+removeria a linha do exercício que ele está fazendo naquele instante.
+
+Adiar, e não descartar: a mudança não se perde, e uma execução dura minutos. Só o treino **em
+execução** é adiado — outro treino, uma medida ou uma sessão concluída que chegue antes dele na
+sequência continua sendo aplicada.
+
+O histórico já criado nunca é afetado por isso, em nenhum cenário: `exercise_sessions` e `set_logs`
+carregam os próprios snapshots (`exerciseNameSnapshot`, `restDurationSecondsSnapshot`) desde a
+T16.3, e é essa separação entre **plano** e **execução** que faz o passado não ser reescrito quando
+o plano muda.
+
+### Ordem de dependência dentro da página
+
+A ordem incidental do JSON não é confiável. O prefixo aplicável de cada página é ordenado por
+dependência antes de ser escrito — exercícios personalizados e programas, depois treinos, depois
+sessões, depois check-ins, e medidas por último, que não dependem de nada. Entre mudanças **do
+mesmo agregado** a ordem continua sendo a da sequência, então o estado final é idêntico ao de
+aplicar uma a uma.
+
+### Supressão de eco
+
+Uma mudança originada neste próprio aparelho volta no pull, como qualquer outra. Ela é reconhecida
+por `sync_entity_metadata` (a revision já é conhecida) e não produz escrita nem entrada nova de
+Outbox. É isso que impede `push → change log → pull → push` de virar um laço.
+
+### O apply remoto não gera Outbox
+
+As escritas do pull acontecem **fora** do `SyncMutationCoordinator`, em um lugar só
+(`SyncRemoteApplier`) — exatamente como a `RestoreTransaction` da T16.5. Pelo coordenador, aplicar
+40 mudanças remotas registraria 40 `UPSERT` e o aparelho devolveria ao servidor o que acabou de
+receber dele. Há teste estrutural sobre isso.
+
+E nenhum efeito colateral de domínio: receber uma sessão concluída de outro aparelho não dá XP, não
+desbloqueia conquista, não cria recorde e não notifica. Gamificação é derivada, e as reconciliações
+que já existem a reconstroem.
+
+---
+
+## Ciclo, gatilhos e estado (T16.6)
+
+```text
+1. valida conta e vínculo      ← só dataset adotado sincroniza, e só com a conta dona
+2. push da Outbox              ← em lotes, em ordem de intenção
+3. processa ACKs e conflitos
+4. pull do change log          ← página a página, a partir do cursor durável
+5. aplica cada página          ← transação: domínio + metadata + cursor
+6. repete até hasMore = false
+```
+
+**Push antes de pull.** A Outbox descreve o que este aparelho decidiu; mandá-la primeiro evita que
+uma alteração local vire conflito por causa de uma mudança remota que chegaria no mesmo ciclo.
+Quando o push encontra `STALE`, o conflito é registrado e o pull seguinte **traz o lado remoto** —
+sem aplicá-lo por cima do local sujo.
+
+Os gatilhos são três, e nenhum deles é um laço:
+
+| Gatilho | Quando | Como |
+| --- | --- | --- |
+| manual | toque em "Sincronizar agora" | um ciclo; toque repetido não vira um segundo |
+| foreground | `MainActivity.onStart` | só se houver pendência ou se a última sincronização tiver mais de 15 min |
+| alteração local | depois do commit da mutação | agenda **um** trabalho único do `WorkManager`, com rede e backoff exponencial |
+
+Não existe `PeriodicWorkRequest`, `AlarmManager` de repetição, polling nem WebSocket. O Spark não
+precisa de tempo real, e a tela não promete o que não existe: ela diz "última sincronização", não
+"sempre atualizado".
 
 ---
 
@@ -309,7 +579,9 @@ Identidade global foi dada a **todas** as sessões — `syncId` responde "qual s
   aparelhos disputarem o mesmo cursor de execução; "retomar treino em outro aparelho" é decisão de
   produto e não foi tomada;
 - `PLANNED` — derivável do template e da agenda;
-- `CANCELLED` — decisão adiada para a T16.6.
+- `CANCELLED` — continua **local**. A T16.6 manteve a decisão anterior: o registry de payload só
+  aceita `COMPLETED`, e uma sessão cancelada não é histórico de treino. Propagá-la exigiria decidir
+  o que ela significa no outro aparelho, e essa decisão continua sem dono.
 
 ## Histórico concluído
 
@@ -330,14 +602,18 @@ E **não**:
 mesmo syncId + conteúdo divergente → last write wins → o histórico do usuário é reescrito
 ```
 
-Na prática, a partir da T16.6:
+Na prática, **implementado na T16.6**:
 
-- uma sessão concluída chega ao servidor uma vez e vira imutável;
-- um push que tente alterar o conteúdo de uma sessão concluída é rejeitado, não aplicado;
-- divergência é reportada como conflito de integridade e exige decisão explícita, nunca resolução
-  automática;
-- a exceção legítima é o **tombstone**: o usuário pode apagar a própria sessão. Apagar não é
-  reescrever.
+- uma sessão concluída chega ao servidor uma vez e nasce em `revision = 1`;
+- o mesmo `syncId` com conteúdo **idêntico** é idempotente — nada é aplicado, nenhuma `revision` é
+  gasta;
+- o mesmo `syncId` com conteúdo **divergente** é `IMMUTABLE_HISTORY_CONFLICT`, nunca `revision++`;
+- no pull, uma sessão que já existe localmente com conteúdo divergente vira conflito e o Room não é
+  tocado;
+- receber uma sessão concluída de outro aparelho **não** dispara XP, conquista, recorde nem
+  notificação;
+- a exceção legítima continua sendo o **tombstone**: o usuário pode apagar a própria sessão. Apagar
+  não é reescrever — e o tombstone é T16.7.
 
 Isso é a mesma invariante que o Coach IA já respeita hoje (`PROJECT_RULES` §13: "Sessão concluída é
 imutável"). O sync não pode ser a porta dos fundos que ela não tem.
@@ -348,7 +624,22 @@ depois — nada muda.
 
 ---
 
-## Deletes e tombstones (T16.7)
+## Deletes e tombstones (T16.7 — o que a T16.6 deliberadamente não fez)
+
+A T16.6 **não propaga exclusão**, e é explícita sobre isso em vez de silenciosa:
+
+```text
+push com operation = DELETE   →   UNSUPPORTED (DELETE_NOT_SUPPORTED)
+entrada DELETE na Outbox      →   permanece PENDING, e bloqueia o agregado dela
+```
+
+O agregado é bloqueado — e não parcialmente enviado — porque mandar a `UPSERT` anterior a um
+`DELETE` pendente ressuscitaria no servidor exatamente o que o usuário apagou aqui. Converter um
+`DELETE` em `UPSERT` é o defeito que essa regra existe para tornar impossível.
+
+A UI **não esconde** a exclusão por causa disso: o usuário continua apagando o que quiser,
+localmente. O que a tela faz é dizer a verdade — "itens excluídos neste aparelho ainda não são
+removidos nos outros".
 
 Delete físico imediato não funciona em multi-device:
 
@@ -376,33 +667,55 @@ dispositivo pode ficar offline e ainda convergir corretamente.
 
 ## Conflitos (T16.7)
 
+A T16.6 **detecta, isola e preserva**. Ela não resolve — e não resolver foi a decisão, não uma
+omissão: qualquer heurística de desempate apagaria em silêncio a alteração de um dos dois lados.
+
+O que já existe:
+
+| O que a T16.6 faz | Onde |
+| --- | --- |
+| detecta escrita stale por `revision`, nunca por relógio | servidor |
+| detecta divergência de histórico imutável | servidor |
+| guarda a alteração local intacta, fora da fila de envio | `sync_outbox` em `BLOCKED` |
+| guarda o lado remoto — revision, hash e payload daquela sequência | `sync_conflicts` |
+| isola: um agregado em conflito não impede os outros de convergirem | cliente |
+| reconhece convergência quando os dois lados têm o mesmo hash canônico | cliente e servidor |
+
+O que **não** existe, e é a T16.7:
+
 | Tipo de entidade | Política prevista |
 | --- | --- |
-| Template, programa, exercício pessoal, customização | última `revision` vence, com histórico preservado no servidor |
+| Template, programa, exercício pessoal, customização | escolha explícita entre as duas versões, com histórico preservado no servidor |
 | Sessão concluída e seus filhos | **imutável** — divergência é conflito de integridade, sem resolução automática |
 | Medida corporal | mesma data com conteúdo divergente = conflito explícito |
 | Tombstone vs. update | conflito — o delete não é desfeito silenciosamente |
 
-Nenhuma dessas políticas está implementada.
+E, explicitamente ausentes da T16.6: *last write wins*, desempate por `updatedAt`, merge por campo,
+"reenvia com a revision atual" e retry automático de `STALE`/`INVALID`/`UNSUPPORTED`. Há teste
+estrutural e testes de comportamento sobre cada um.
 
 ---
 
-## Deletes locais na T16.3
+## Deletes locais (T16.3 → T16.6)
 
-O delete local continua **físico**, exatamente como era. A T16.3 não antecipou tombstone: apagar um
-treino ou uma sessão apaga a linha, e a intenção fica registrada como `DELETE` do agregado — que é
-o suficiente para o servidor criar o tombstone quando existir servidor.
+O delete local continua **físico**, exatamente como era. Apagar um treino ou uma sessão apaga a
+linha, e a intenção fica registrada como `DELETE` do agregado — o suficiente para o servidor criar
+o tombstone quando o tombstone existir.
 
-Mudar o comportamento de exclusão agora, sem nada consumindo a fila, adicionaria linhas
-"apagadas mas presentes" no banco de todo usuário em troca de nada.
+A T16.6 não mudou isso, e a razão é a mesma de antes invertida: agora **há** algo consumindo a
+fila, e é justamente por isso que a exclusão precisa de política antes de viajar. Adicionar linhas
+"apagadas mas presentes" no banco de todo usuário sem a política de retenção e de prevenção de
+ressurreição trocaria um problema conhecido por um pior.
 
 ---
 
 ## O que a T16.0 deixou pronto para isso
 
-Nada do protocolo. O que existe é a **fundação** que permite implementá-lo sem retrabalho:
+Nada do protocolo — mas a **fundação** que permitiu implementá-lo na T16.6 sem retrabalho, e cada
+peça foi usada como estava:
 
-- versionamento de API configurado — um `@Controller('sync')` futuro responde em `/v1/sync`;
+- versionamento de API configurado — o `@Controller('sync')` da T16.6 responde em `/v1/sync` sem
+  ninguém ter escrito o prefixo;
 - migrations versionadas e transacionais, para o schema remoto nascer por fase;
 - SQLite com `foreign_keys=ON`, para que as tabelas de sync possam recusar órfãos de verdade;
 - envelope de erro e request ID, para que um conflito seja diagnosticável;

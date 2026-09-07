@@ -1,12 +1,42 @@
 # Matriz de dados do Spark — classificação para sincronização
 
-- **Tarefa:** T16.0 (classificação) — revisada contra o código na T16.3, na T16.4 e **na T16.5**
-- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 33` desde a
-  T16.5) e `SettingsManager` (DataStore), relidos em 2026-09-06.
+- **Tarefa:** T16.0 (classificação) — revisada contra o código na T16.3, T16.4, T16.5 e **na T16.6**
+- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 34` desde a
+  T16.6) e `SettingsManager` (DataStore), relidos em 2026-09-07.
 - **Status:** a coluna `syncId` **está implementada** para as raízes de agregado do Grupo A, a
-  Outbox existe e é transacional, desde a **T16.4** o Grupo A **sobe** para o Spark Backend como
-  snapshot completo (depois de adoção explícita) e desde a **T16.5** ele **volta**, por ação
-  explícita do usuário, substituindo o dataset local. Nada é sincronizado: incremental é T16.6.
+  Outbox existe e é transacional, desde a **T16.4** o Grupo A **sobe** como snapshot completo
+  (depois de adoção explícita), desde a **T16.5** ele **volta** por ação explícita substituindo o
+  dataset local, e desde a **T16.6** seis dos oito agregados **convergem incrementalmente** entre
+  aparelhos da mesma conta. Conflitos e exclusões são detectados e preservados, não resolvidos:
+  isso é T16.7.
+
+## Matriz de sincronização incremental (T16.6)
+
+A coluna que faltava desta vez. Para cada agregado, qual é a semântica de atualização — e ela
+**não** é genérica: `UPSERT qualquer coisa` trataria uma sessão concluída como documento
+colaborativo.
+
+| Agregado | Mutável? | Append-only? | Delete hoje | Sync T16.6? | Política |
+| --- | --- | --- | --- | --- | --- |
+| `WORKOUT_PROGRAM` | sim | não | físico local, **não propaga** | **sim** | snapshot com `serverRevision`; stale = conflito |
+| `WORKOUT_TEMPLATE` | sim | não | físico local (cascata), **não propaga** | **sim** | snapshot do treino inteiro, filhos substituídos; stale = conflito |
+| `WORKOUT_SESSION` (`COMPLETED`) | **não** | sim | físico local, **não propaga** | **sim** | histórico imutável: `revision = 1` e nunca mais; divergência = `IMMUTABLE_HISTORY_CONFLICT` |
+| `CUSTOM_EXERCISE` | sim | não | físico local, **não propaga** | **sim** | snapshot; precisa chegar **antes** dos treinos que o referenciam |
+| `BODY_MEASUREMENT` | sim | não | físico local, **não propaga** | **sim** | snapshot; "mesma data com conteúdo divergente" é T16.7 |
+| `CHECK_IN` | sim | não | físico local, **não propaga** | **sim** | snapshot; referência de sessão pode ficar nula até ela chegar |
+| `EXERCISE_OVERRIDE` | sim | não | cascata com o exercício | **não** | só backup completo — escrito hoje por ViewModel direto no DAO |
+| `WEEKLY_GOAL` | sim | não | físico local | **não** | só backup completo — derivado de preferência do DataStore |
+| `USER_PREFERENCES` | sim | não | — | **não** | só backup completo — DataStore não participa da transação Room |
+| Catálogo canônico, conteúdo premium | — | — | — | **nunca** | conteúdo do app, vem do manifesto versionado |
+| Gamificação, XP, conquistas, PRs | — | — | — | **nunca** | derivado; cada aparelho recalcula do histórico |
+| Preferências de aparelho, timer, `deviceId` | — | — | — | **nunca** | descrevem a instalação, não a pessoa |
+
+Sessões `IN_PROGRESS`/`PAUSED`/`PLANNED`/`CANCELLED` continuam fora: o registry de payload aceita
+**apenas** `COMPLETED`, dos dois lados.
+
+Os três `não` da coluna "Sync T16.6?" são a pendência que a T16.4 registrou e que a T16.6
+**não** fechou — com motivo, e com o servidor recusando-os explicitamente em vez de aceitá-los pela
+metade. Ver `sync-protocol.md`, "Três agregados ainda fora do incremental".
 
 > **A coluna "Estratégia de restore" deixou de ser plano.** Ela está implementada em
 > `com.example.data.restore` e é exercitada por teste de ida e volta (dataset → backup → servidor →
@@ -25,7 +55,7 @@ código do montador de snapshot.
 | `workout_sessions` `COMPLETED` (+ `exercise_sessions`, `set_logs`) | **BACKUP** | histórico do que aconteceu | `syncId` da raiz | 1 | inserir se ausente; divergência = conflito de integridade, nunca sobrescrita |
 | `workout_sessions` `PLANNED` | **DERIVED** | derivável do template e da agenda | — | — | não restaura (não entra no snapshot) |
 | `workout_sessions` `IN_PROGRESS` / `PAUSED` | **LOCAL_ONLY** | execução **neste** aparelho; sincronizar faria dois aparelhos disputarem o mesmo cursor | — | — | não restaura |
-| `workout_sessions` `CANCELLED` | **LOCAL_ONLY** (T16.4) | decisão adiada para a T16.6 pela própria matriz | — | — | decisão pendente |
+| `workout_sessions` `CANCELLED` | **LOCAL_ONLY** | **T16.6 confirmou:** continua local, e o registry de payload aceita só `COMPLETED` | — | — | não restaura |
 | `exercises` com `isUserCreated = 1` | **BACKUP** | criado pelo usuário | `syncId` (UUID) | 1 | recriar por `syncId` |
 | `exercises` de catálogo | **LOCAL_ONLY** | conteúdo do app, vem do manifesto versionado | `canonicalId` (já global) | — | reinstalar pelo manifesto |
 | `exercise_user_overrides` | **BACKUP** (sem `customPhotoUri`) | customização pessoal | identidade **do exercício alvo**: `canonical:<id>` ou `custom:<uuid>` | 1 | aplicar sobre o exercício resolvido; `customPhotoUri` volta nulo |
@@ -40,14 +70,15 @@ código do montador de snapshot.
 | Fotos personalizadas (`customPhotoUri` em `exercises` e `exercise_user_overrides`) | **LOCAL_ONLY** | é `content://` deste aparelho; sem object storage na T16.4, e Base64 no snapshot seria contornar a decisão | — | — | permanece local — a UI avisa |
 | Chave da ExerciseDB | **LOCAL_ONLY** | credencial | — | — | não restaura |
 | `deviceId`, estado da nuvem, versões de conteúdo instaladas | **LOCAL_ONLY** | identidade/estado da instalação | — | — | não restaura |
-| `sync_outbox`, `backup_attempts`, `cloud_data_binding`, `restore_attempts` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura. **T16.5:** a Outbox é zerada no commit do restore e o vínculo é gravado por ele |
+| `sync_outbox`, `backup_attempts`, `cloud_data_binding`, `restore_attempts`, `sync_entity_metadata`, `sync_cursor`, `sync_conflicts` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura. **T16.5/T16.6:** a Outbox, a revision conhecida, o cursor e os conflitos são zerados **dentro do commit** do restore — eles descreviam o dataset que acabou de ser substituído |
 | Firebase ID Token, credencial Google, App Check, credencial/prompt/contexto/resposta do Gemini | **nunca** | segredo ou estado transitório | — | — | — |
-| Vínculo `uid` ↔ dataset no servidor, sequência/cursor de mudanças, registro de `clientMutationId`, tombstones, quota de IA | **FUTURE_SERVER_ONLY** | só faz sentido com identidade autenticada | — | — | — |
+| Vínculo `uid` ↔ dataset no servidor, `sync_entities`, `sync_changes`, `sync_mutations`, quota de IA | **SERVER_ONLY** | só faz sentido com identidade autenticada; **existe desde a T16.6** (tombstones continuam sendo T16.7) | — | — | — |
 
-**Três agregados entram no backup e ainda não produzem mutação incremental** —
-`EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES`. O snapshot completo os cobre, e a T16.6
-precisa lhes dar mutação própria quando o push incremental existir. Está registrado como pendência
-em `ARCHITECTURE.md`.
+**Três agregados entram no backup e continuam sem mutação incremental** — `EXERCISE_OVERRIDE`,
+`WEEKLY_GOAL` e `USER_PREFERENCES`. A T16.6 **não** fechou essa pendência, e a decisão está
+documentada com o motivo de cada um em `sync-protocol.md`. O servidor os recusa com `UNSUPPORTED`
+em vez de aceitar pela metade, e o snapshot completo continua cobrindo os três. Segue registrado
+como pendência em `ARCHITECTURE.md`, agora endereçada à T16.7.
 
 ## Correções feitas na T16.3 contra o código real
 
@@ -130,14 +161,14 @@ Colunas: **raiz/filho** dentro do agregado; **mutável** (o conteúdo pode mudar
 
 `workout_sessions` guarda quatro situações diferentes na mesma tabela. Identidade global é dada a
 todas — `syncId` responde "qual sessão é esta", não "esta sessão sincroniza". A política de envio é
-outra coisa, e **nenhuma parte dela está implementada**:
+outra coisa, e desde a T16.6 ela **está implementada**:
 
-| Status | Significado | Registra mutação na T16.3 | Política prevista |
+| Status | Significado | Registra mutação | Política |
 | --- | --- | --- | --- |
 | `PLANNED` | sessão prevista, nunca executada | não | provavelmente não sincroniza: é derivável do template e da agenda |
 | `IN_PROGRESS` / `PAUSED` | execução **em andamento neste aparelho** | não | não sincroniza como estado vivo. Sincronizar um treino em execução faria dois aparelhos disputarem o mesmo cursor de execução; a decisão de "retomar treino em outro aparelho" é de produto e não foi tomada |
-| `CANCELLED` | abandonada | não | decisão adiada para a T16.6: não é histórico de treino, mas apagar em silêncio esconderia do usuário algo que ele viu na tela |
-| `COMPLETED` | histórico | **sim** | snapshot imutável; divergência é conflito de integridade |
+| `CANCELLED` | abandonada | não | **T16.6 manteve local.** Não é histórico de treino, e propagá-la exigiria decidir o que ela significa no outro aparelho — decisão que continua sem dono |
+| `COMPLETED` | histórico | **sim** | **T16.6:** snapshot imutável, `revision = 1`, divergência é `IMMUTABLE_HISTORY_CONFLICT` |
 
 **Nota sobre `workout_sessions`:** este é o grupo mais sensível da matriz. Uma sessão `COMPLETED`
 registra o que de fato aconteceu. Sincronização não pode reescrevê-la — ver

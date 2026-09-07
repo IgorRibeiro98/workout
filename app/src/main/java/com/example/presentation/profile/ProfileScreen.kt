@@ -53,7 +53,9 @@ fun ProfileScreen(
     /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
     backupViewModel: com.example.presentation.account.BackupViewModel? = null,
     /** Restore de backup (T16.5). `null` quando não há Spark Backend configurado neste build. */
-    restoreViewModel: com.example.presentation.account.RestoreViewModel? = null
+    restoreViewModel: com.example.presentation.account.RestoreViewModel? = null,
+    /** Sync multi-device (T16.6). `null` quando não há Spark Backend configurado neste build. */
+    syncViewModel: com.example.presentation.account.SyncViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -62,6 +64,15 @@ fun ProfileScreen(
     val backupState = backupViewModel?.uiState?.collectAsState()?.value
     // Idem para o restore: observar o estado lista nada, baixa nada e restaura nada.
     val restoreState = restoreViewModel?.uiState?.collectAsState()?.value
+    // E para o sync: observar o estado não dispara ciclo nenhum.
+    val syncState = syncViewModel?.uiState?.collectAsState()?.value
+
+    // O ViewModel de sync precisa saber qual conta está conectada para distinguir "entre na
+    // conta" de "estes dados são de outra conta". A tela já observa isso para a seção de conta;
+    // repassar é leitura, e não dispara sincronização.
+    androidx.compose.runtime.LaunchedEffect(accountState?.account?.uid, syncViewModel) {
+        syncViewModel?.onAccountChanged(accountState?.account?.uid)
+    }
 
     ProfileScreenContent(
         uiState = uiState,
@@ -91,7 +102,9 @@ fun ProfileScreen(
         onRequestRestore = { restoreViewModel?.requestRestore() },
         onConfirmReplacement = { restoreViewModel?.confirmReplacement() },
         onCancelReplacement = { restoreViewModel?.cancelReplacement() },
-        onCancelRestore = { restoreViewModel?.cancel() }
+        onCancelRestore = { restoreViewModel?.cancel() },
+        syncState = syncState,
+        onSyncNow = { syncViewModel?.syncNow() }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -133,7 +146,10 @@ private fun ProfileScreenContent(
     onRequestRestore: () -> Unit = {},
     onConfirmReplacement: () -> Unit = {},
     onCancelReplacement: () -> Unit = {},
-    onCancelRestore: () -> Unit = {}
+    onCancelRestore: () -> Unit = {},
+    /** Sync multi-device (T16.6). `null` quando não há Spark Backend configurado neste build. */
+    syncState: com.example.presentation.account.SyncUiState? = null,
+    onSyncNow: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -253,6 +269,15 @@ private fun ProfileScreenContent(
                     onConfirmReplacement = onConfirmReplacement,
                     onCancelReplacement = onCancelReplacement,
                     onCancel = onCancelRestore
+                )
+            }
+
+            // A sincronização vem depois do restore, fechando a ordem das decisões sobre dados:
+            // proteger (backup), trazer de volta (restore) e manter os aparelhos em dia (sync).
+            if (syncState != null) {
+                com.example.presentation.account.SyncSection(
+                    uiState = syncState,
+                    onSyncNow = onSyncNow
                 )
             }
 

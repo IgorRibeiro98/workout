@@ -526,8 +526,8 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação, identidade, Coach online, fundação de sync,
-> backup e restore implementados; sincronização, não.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-07): fundação, identidade, Coach online, backup, restore e
+> sincronização incremental implementados; resolução de conflito e exclusão, não.** A T16.0 criou o backend em `backend/` com
 > configuração, SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -537,9 +537,14 @@ Be especially cautious around:
 > snapshot completo, `POST /v1/backups` e `GET /v1/backups/latest`. A T16.5 acrescentou **restore
 > seguro**: descoberta (`GET /v1/backups`), download do conteúdo
 > (`GET /v1/backups/{id}/content`), verificação de integridade, validação integral, preview,
-> confirmação explícita, snapshot de segurança local e substituição transacional do dataset.
-> **Não existe** sincronização incremental, push/pull, convergência multi-device, conflito,
-> tombstone remoto, merge, backup automático ou backup off-site da VPS.
+> confirmação explícita, snapshot de segurança local e substituição transacional do dataset. A
+> T16.6 acrescentou **sincronização incremental multi-device**: `POST /v1/sync/push` e
+> `GET /v1/sync/pull`, estado remoto por agregado com `serverRevision`, ledger de idempotência,
+> change log append-only com sequência global, cursor durável no Android, apply transacional e
+> conflitos detectados e preservados.
+> **Não existe** resolução de conflito, UI de merge, propagação de exclusão, tombstone, prevenção
+> completa de ressurreição, merge por campo, *last write wins*, realtime/WebSocket, backup
+> automático ou backup off-site da VPS.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -663,7 +668,7 @@ persistência do domínio        validação da resposta
 | T16.3 | Identidade global dos dados + Outbox | **implementado** |
 | T16.4 | Backup estruturado | **implementado** |
 | T16.5 | Restore seguro | **implementado** |
-| T16.6 | Sync incremental multi-device | planejado |
+| T16.6 | Sync incremental multi-device | **implementado** |
 | T16.7 | Conflitos, deletes e consistência offline | planejado |
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
 | T17 | Amigos, convites, desafios e social | planejado |
@@ -719,13 +724,14 @@ COMMIT
 ```text
 Outbox
  ──→  baseline por snapshot completo   ← existe desde a T16.4 (§ backup, abaixo)
- -X→  Sync Worker                      ← não existe
- -X→  push incremental                 ← não existe (T16.6)
+ ──→  push incremental + ack           ← existe desde a T16.6 (§ sync, abaixo)
+ ──→  trabalho único do WorkManager    ← existe desde a T16.6, com rede e backoff
+ -X→  trabalho periódico / polling     ← não existe, e há teste estrutural
 ```
 
 O backup **não** consome a Outbox como fila de envio: ele sobe um snapshot completo e, depois da
-confirmação do servidor, marca como cobertas as entradas anteriores ao corte. Não há worker, não há
-retry automático e não há push por mutação.
+confirmação do servidor, marca como cobertas as entradas anteriores ao corte. Quem consome a fila
+como fila é o push da T16.6 — e ele também só a libera depois da confirmação.
 
 #### Agregados, não tabelas
 
@@ -939,8 +945,15 @@ T16.5 precisa desenhar.
 
 `EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES` entram no snapshot completo e **não**
 produzem entrada de Outbox. Enquanto só existir backup completo isso é consistente: todo "Fazer
-backup agora" recaptura os três. Quando a T16.6 trouxer push incremental, eles precisam ganhar
-mutação própria — senão uma alteração neles deixaria de ser propagada.
+backup agora" recaptura os três.
+
+**A T16.6 não fechou esta pendência**, e a decisão está documentada com o motivo de cada um em
+[`sync-protocol.md`](docs/architecture/sync-protocol.md): a customização de exercício é escrita hoje
+direto pelo DAO a partir de um ViewModel, a meta semanal é derivada de uma preferência do DataStore,
+e as preferências vivem no DataStore, que não participa da transação Room. O servidor os recusa com
+`UNSUPPORTED` em vez de aceitá-los pela metade, e o snapshot completo continua cobrindo os três.
+Consequência aceita: uma alteração nesses três propaga por **backup completo**, não por sync
+incremental. Endereçado à T16.7.
 
 ### Restore seguro (T16.5)
 
@@ -955,12 +968,18 @@ mutação própria — senão uma alteração neles deixaria de ser propagada.
 ```text
 T16.4  BACKUP     Android ──snapshot completo──▶ VPS
 T16.5  RESTORE    Android ◀──snapshot completo── VPS      somente por ação explícita
-T16.6  SYNC       Android ⇄ VPS, incremental              NÃO EXISTE
+T16.6  SYNC       Android ⇄ VPS, incremental              existe — e é outra coisa
 ```
 
 Restore é uma **substituição explícita do dataset local**, não uma união. O que ele faz é
 `REPLACE LOCAL DATASET WITH BACKUP`; *keep both*, *last write wins* e merge por campo pertencem à
-T16.6/T16.7 e não existem no código — há teste estrutural sobre isso.
+T16.7 e continuam não existindo no código — há teste estrutural sobre isso, e a T16.6 **não** os
+introduziu: ela detecta conflito e preserva os dois lados sem escolher.
+
+**O restore zera o estado de sync no mesmo commit** (T16.6): revision conhecida, cursor e conflitos
+descreviam o dataset que acabou de ser substituído. O cursor volta ao começo de propósito — um
+dataset restaurado não carrega revision nenhuma, e reler o change log é como ele as aprende, de
+forma idempotente.
 
 #### A ordem, que é o invariante
 
@@ -1087,16 +1106,129 @@ histórico inteiro.
 11. **Histórico não é recalculado.** Duração, carga, repetições e horários voltam como estavam.
 12. **Restore não cria backup, não apaga o snapshot remoto e não liga sync.**
 
-#### O que continua não existindo
+#### O que continua não existindo **no restore**
 
 ```text
 ✗ merge / keep both / last write wins / field-level merge
-✗ sync incremental (push, pull, cursor, serverRevision)
-✗ pull automático, push automático, sync em background, WorkManager
-✗ resolução de conflito e tombstone remoto
 ✗ rebind de dataset entre contas
 ✗ upload/download de mídia
-✗ backup automático
+✗ restore automático (login, abertura de tela, WorkManager)
+```
+
+Sync incremental — push, pull, cursor, `serverRevision` e trabalho em background — passou a existir
+na **T16.6**, em `com.example.data.sync`, e continua sendo uma coisa **diferente** do restore. Ver
+a seção abaixo.
+
+### Sync incremental multi-device (T16.6)
+
+> **Status (verificado em 2026-09-07): implementado.** Room `version = 34`; backend com a migration
+> `0005_sync.sql`. Dois aparelhos da mesma Conta Spark convergem sem que o usuário exporte nada.
+> **Não existe** resolução de conflito, UI de merge, propagação de exclusão, tombstone, prevenção
+> completa de ressurreição, merge por campo, *last write wins*, realtime, WebSocket ou push do
+> servidor.
+
+#### Sync não é backup, e não substitui nada
+
+```text
+T16.4  BACKUP     Android ──snapshot completo──▶ VPS       imutável, autocontido, sob demanda
+T16.5  RESTORE    Android ◀──snapshot completo── VPS       substituição explícita do dataset
+T16.6  SYNC       Android ⇄ mudanças ⇄ VPS                 convergência incremental
+```
+
+Os três coexistem e resolvem problemas diferentes. Um snapshot imutável é um ponto no tempo ao qual
+dá para voltar; o sync converge cópias vivas. Fundir os dois custaria as duas coisas — e há teste
+estrutural nos dois sentidos: o pacote de backup não fala o vocabulário do sync, e o pacote de sync
+não cria backup.
+
+#### O fluxo, e o que ele nunca inverte
+
+```text
+DEVICE A                                   DEVICE B
+ação do usuário
+   ↓
+domínio → Room  ← a UI observa daqui, imediatamente
+   ↓
+Outbox (mesma transação)
+   ↓
+push ──────────▶ Spark Backend
+                 ├── sync_entities   estado atual por agregado + serverRevision
+                 ├── sync_mutations  ledger de clientMutationId
+                 └── sync_changes    log append-only, sequência global
+                              │
+                              └──── pull ──────▶ validação
+                                                    ↓
+                                                 Room (transação)
+                                                    ↓
+                                                 UI observa
+```
+
+O fluxo proibido é `editar → esperar HTTP → salvar`. Ele não existe em caminho nenhum: Room continua
+sendo a autoridade operacional do aparelho, e o servidor é autoridade **de ordem** — `revision`,
+`serverSequence`, convergência — nunca de execução de treino.
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Contrato (Kotlin ⇄ TypeScript) | `SyncProtocol` + `sync.contract.ts` — e [`contracts/sync/v1/`](contracts/sync/v1/README.md) |
+| Estado remoto | `sync_entities` (migration `0005_sync.sql`) |
+| Ledger de idempotência | `sync_mutations`, único em `(owner_uid, client_mutation_id)` |
+| Change log | `sync_changes`, `server_sequence` `AUTOINCREMENT` |
+| Validação de push | `sync.validator.ts` + **o mesmo** `BackupEntityRegistry` do backup |
+| Decisão por mutação | `SyncService` (backend) |
+| Proteção por conta | `SyncRateLimiter` (60 req/min por uid) |
+| Revision conhecida (Android) | `EntitySyncMetadataEntity` + `EntitySyncMetadataDao` |
+| Cursor durável (Android) | `SyncCursorEntity` + `SyncCursorDao`, chave `ownerUid` |
+| Conflito preservado | `SyncConflictEntity` + `SyncConflictKind` |
+| Lote de push | `SyncPushBuilder` (coalescência no envio, `baseRevision`) |
+| Apply remoto | `SyncRemoteApplier` (transação, ordem de dependência, sem Outbox) |
+| Ciclo | `SyncRepository` (push → ACK → pull → apply → cursor) |
+| Gatilhos e estado | `SyncCoordinator` + `SyncScheduler` |
+| Agendamento | `SparkSyncWorker` + `WorkManagerSyncScheduler` (`service/`) |
+| Transporte | `SyncApi` / `SparkSyncApi` sobre o `SparkBackendClient` da T16.1 |
+| Tela | `SyncViewModel` + `SyncSection` (Perfil → Conta Spark) |
+
+#### Invariantes da T16.6
+
+1. **Só dataset adotado sincroniza, e só com a conta dona.** Sem `cloud_data_binding` o ciclo nem
+   consulta a sessão; com a conta errada conectada o resultado é `AccountMismatch`, e nada sobe nem
+   desce. Login continua não ligando nada.
+2. **O dono vem do token.** O corpo do push não tem campo de dono, e o envelope estrito recusa um
+   se ele aparecer. `deviceId` é metadado e não autoriza nada.
+3. **Room continua sendo a autoridade operacional.** A escrita local acontece primeiro e a UI a
+   observa; o servidor nunca está no caminho de salvar um treino.
+4. **A Outbox só é liberada com confirmação.** Erro de rede, 5xx, 429 e resposta perdida deixam a
+   fila intacta — e o reenvio é seguro pelo `clientMutationId`.
+5. **Escrita stale não sobrescreve nada.** Nem o remoto (o servidor recusa), nem o local (o app
+   preserva). A revision conhecida **não** é atualizada por um `STALE`.
+6. **Conflito é detectado, isolado e preservado.** Um agregado em conflito não impede os outros de
+   convergirem, e os dois lados ficam guardados para a T16.7.
+7. **Histórico concluído é imutável.** `revision = 1` e nunca mais; conteúdo divergente é conflito
+   de integridade dos dois lados.
+8. **O cursor só avança depois do apply**, na mesma transação. Uma mudança que o app não sabe ler
+   pausa o sync ali, sem perder nada.
+9. **O apply remoto não gera Outbox.** Sem laço — há teste estrutural.
+10. **Sem efeito colateral de domínio.** Receber uma sessão concluída não dá XP, conquista, recorde
+    nem notificação.
+11. **Sem *fuzzy matching*.** `canonicalId` que não resolve pausa o sync; nunca vira "o exercício
+    mais parecido".
+12. **Nada é periódico.** Um trabalho único, com rede e backoff, disparado por alteração local;
+    foreground conservador; toque manual. Sem polling, sem WebSocket, sem push do servidor.
+13. **Exclusão não propaga, e a tela diz isso.** `DELETE` é recusado explicitamente e a intenção
+    fica pendente — nunca convertida em `UPSERT`.
+14. **Treino em execução não é alterado por baixo.** Uma mudança remota no template que está sendo
+    executado é **adiada** até a sessão terminar; o histórico já gravado nunca é afetado, porque
+    `exercise_sessions` e `set_logs` carregam os próprios snapshots desde a T16.3.
+
+#### Pendências que a T16.6 deixou para a T16.7
+
+```text
+✗ resolução de conflito e UI de escolha entre as duas versões
+✗ propagação de exclusão, tombstone e retenção de tombstone
+✗ prevenção completa de ressurreição
+✗ EXERCISE_OVERRIDE, WEEKLY_GOAL e USER_PREFERENCES no incremental
+✗ política por tipo de agregado além de "mutável × histórico imutável"
+✗ retenção do change log + CURSOR_EXPIRED + rebaseline
 ```
 
 ### Conta opcional e identidade (T16.1)

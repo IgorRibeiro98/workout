@@ -63,7 +63,20 @@ class SyncMutationCoordinator(
     private val outboxDao: SyncOutboxDao?,
     private val scopeProvider: CloudSyncScopeProvider,
     private val idGenerator: IdGenerator = RandomUuidIdGenerator,
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    /**
+     * Avisado **depois do commit** quando alguma intenção foi realmente registrada (T16.6).
+     *
+     * É o gancho que faz uma alteração local agendar um ciclo de sync — e ele fica aqui, e não em
+     * cada repositório, porque este é o único lugar que sabe se a mutação foi mesmo gravada.
+     *
+     * Depois do commit de propósito: agendar dentro da transação avisaria sobre uma alteração que
+     * ainda podia ser desfeita. E é um **agendamento**, nunca uma requisição HTTP — quem decide
+     * quando falar com o servidor é o `SyncCoordinator`, não o repositório que salvou o treino.
+     *
+     * O padrão não faz nada: o Spark sem nuvem continua exatamente como era.
+     */
+    private val onMutationsRecorded: () -> Unit = {}
 ) {
 
     /**
@@ -81,11 +94,15 @@ class SyncMutationCoordinator(
             error("Cloud sync is active for a account but no outbox DAO was provided")
         }
         val recording = RecordingScope(ownerUid)
-        return transactions.runInTransaction {
-            val result = recording.block()
+        val result = transactions.runInTransaction {
+            val value = recording.block()
             recording.flush()
-            result
+            value
         }
+        // Fora da transação, e só se alguma entrada nasceu: uma operação que não mudou estado não
+        // agenda nada.
+        if (recording.recorded) onMutationsRecorded()
+        return result
     }
 
     private inner class RecordingScope(private val ownerUid: String?) : SyncMutationScope {
@@ -99,6 +116,10 @@ class SyncMutationCoordinator(
          * (`UPSERT` seguido de `DELETE` no mesmo bloco resulta em `DELETE`).
          */
         private val intents = LinkedHashMap<AggregateKey, SyncOperation>()
+
+        /** `true` quando [flush] chegou a inserir alguma entrada. Lido depois do commit. */
+        var recorded: Boolean = false
+            private set
 
         override val isRecording: Boolean get() = ownerUid != null
 
@@ -146,6 +167,7 @@ class SyncMutationCoordinator(
                     latest.status == SyncOutboxStatus.PENDING.name &&
                     latest.operation == operation.name
                 if (alreadyRecorded) return@forEach
+                recorded = true
                 dao.insert(
                     SyncOutboxEntryEntity(
                         clientMutationId = idGenerator.newId(),

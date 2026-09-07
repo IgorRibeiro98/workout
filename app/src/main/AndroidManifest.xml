@@ -37,6 +37,26 @@
             android:name=".service.RestNotificationReceiver"
             android:exported="false" />
 
+        <!--
+            Inicialização sob demanda do WorkManager (T16.6).
+
+            O inicializador padrão é um `ContentProvider` que roda no **startup** de todo app que
+            tenha WorkManager no classpath. O Spark é local-first: quem nunca ativou a nuvem não
+            deve pagar nada por um agendador que ele não usa. Removendo este nó e implementando
+            `Configuration.Provider` em `MainApplication`, o WorkManager só é construído na
+            primeira vez que alguém chama `WorkManager.getInstance(...)` — ou seja, quando uma
+            alteração local precisa ser agendada.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

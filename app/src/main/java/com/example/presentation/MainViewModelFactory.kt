@@ -48,7 +48,15 @@ class MainViewModelFactory(
     /** Backup estruturado (T16.4). `null` remove a seção de backup do Perfil, e nada mais muda. */
     private val backupRepository: com.example.data.backup.BackupRepository? = null,
     /** Restore seguro (T16.5). `null` remove a seção de restore do Perfil, e nada mais muda. */
-    private val restoreRepository: com.example.data.restore.RestoreRepository? = null
+    private val restoreRepository: com.example.data.restore.RestoreRepository? = null,
+    /**
+     * Sync incremental (T16.6). `null` remove a seção de sincronização do Perfil, e nada mais muda.
+     *
+     * Os dois vêm juntos ou não vêm: o repositório é a leitura de estado, o coordenador é quem
+     * roda o ciclo. Um sem o outro seria uma tela que mostra sem poder agir, ou o contrário.
+     */
+    private val syncRepository: com.example.data.sync.SyncRepository? = null,
+    private val syncCoordinator: com.example.data.sync.SyncCoordinator? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -177,6 +185,17 @@ class MainViewModelFactory(
             return com.example.presentation.account.RestoreViewModel(
                 repository = restore,
                 authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.SyncViewModel::class.java)) {
+            val sync = syncRepository
+                ?: throw IllegalStateException("SyncRepository not provided")
+            val coordinator = syncCoordinator
+                ?: throw IllegalStateException("SyncCoordinator not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.SyncViewModel(
+                repository = sync,
+                coordinator = coordinator
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {

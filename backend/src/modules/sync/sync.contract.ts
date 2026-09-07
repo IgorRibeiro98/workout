@@ -1,0 +1,174 @@
+/**
+ * O contrato de sincronização incremental entre o Spark Android e o Spark Backend (T16.6).
+ *
+ * O espelho Kotlin é `com.example.data.sync.SyncProtocol`. A descrição legível do protocolo —
+ * revision, cursor, idempotência, conflito — vive em `docs/architecture/sync-protocol.md`.
+ *
+ * ## Sync não é backup
+ *
+ * ```text
+ * T16.4   Android ──snapshot completo──▶ Spark Backend     backup, imutável, autocontido
+ * T16.5   Android ◀──snapshot completo── Spark Backend     restore, substituição explícita
+ * T16.6   Android ⇄ mudanças ⇄ Spark Backend               sync incremental
+ * ```
+ *
+ * Os três coexistem e nenhum substitui o outro. O backup continua sendo o mecanismo de cópia
+ * histórica; o sync converge cópias vivas do mesmo dataset.
+ */
+
+/** Versão do **protocolo de sync**. Não é `/v1`, não é o Room, não é `entitySchemaVersion`. */
+export const SYNC_PROTOCOL_VERSION = 1;
+
+/**
+ * Os agregados que participam do sync incremental.
+ *
+ * É o mesmo conjunto de `SyncEntityType` da T16.3 — exatamente o que a Outbox sabe registrar. Os
+ * payloads são validados pelo **mesmo** registry do backup (`BackupEntityRegistry`): não existe um
+ * segundo schema de treino no servidor.
+ *
+ * `EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES` ficam **fora** do sync incremental na
+ * T16.6 e continuam cobertos pelo backup completo — ver a pendência registrada em
+ * `ARCHITECTURE.md`.
+ */
+export const SYNC_ENTITY_TYPES = [
+  'WORKOUT_PROGRAM',
+  'WORKOUT_TEMPLATE',
+  'WORKOUT_SESSION',
+  'CUSTOM_EXERCISE',
+  'BODY_MEASUREMENT',
+  'CHECK_IN',
+] as const;
+
+export type SyncEntityType = (typeof SYNC_ENTITY_TYPES)[number];
+
+export function isSyncEntityType(value: string): value is SyncEntityType {
+  return (SYNC_ENTITY_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * A política de atualização de cada agregado. Ela **não** é genérica.
+ *
+ * `UPSERT qualquer coisa` trataria uma sessão concluída como um documento colaborativo. Um
+ * template é um plano e muda; um histórico registra o que aconteceu e não muda.
+ */
+export type SyncEntityPolicy = 'MUTABLE_SNAPSHOT' | 'IMMUTABLE_HISTORY';
+
+const POLICIES: Record<SyncEntityType, SyncEntityPolicy> = {
+  WORKOUT_PROGRAM: 'MUTABLE_SNAPSHOT',
+  WORKOUT_TEMPLATE: 'MUTABLE_SNAPSHOT',
+  CUSTOM_EXERCISE: 'MUTABLE_SNAPSHOT',
+  BODY_MEASUREMENT: 'MUTABLE_SNAPSHOT',
+  CHECK_IN: 'MUTABLE_SNAPSHOT',
+  // Uma `WorkoutSession` só entra no sync quando `COMPLETED` (o registry do backup recusa
+  // qualquer outro status). Depois disso ela é histórico: divergência é conflito de integridade,
+  // nunca `revision++`.
+  WORKOUT_SESSION: 'IMMUTABLE_HISTORY',
+};
+
+export function policyOf(entityType: SyncEntityType): SyncEntityPolicy {
+  return POLICIES[entityType];
+}
+
+/** As operações que uma mutação pode declarar. As mesmas duas da Outbox (T16.3). */
+export const SYNC_OPERATIONS = ['UPSERT', 'DELETE'] as const;
+export type SyncOperation = (typeof SYNC_OPERATIONS)[number];
+
+/**
+ * O desfecho de **uma** mutação dentro de um push.
+ *
+ * Resultado por item, e não um veredito único do lote: uma mutação stale e uma válida no mesmo
+ * push precisam receber respostas diferentes, e esconder isso atrás de um 400 faria o cliente
+ * reenviar o que já foi aplicado.
+ */
+export const SYNC_MUTATION_STATUSES = [
+  /** Aplicada agora. `serverRevision` e `serverSequence` vêm preenchidos. */
+  'APPLIED',
+  /**
+   * O servidor já tinha este resultado: reenvio do mesmo `clientMutationId`, ou conteúdo
+   * idêntico ao que já está gravado. O cliente confirma a Outbox do mesmo jeito.
+   */
+  'ALREADY_APPLIED',
+  /** `baseRevision` desatualizada. O servidor devolve `currentRevision` e **não** aplica nada. */
+  'STALE',
+  /** Fora do contrato: payload, identidade ou relação inválida. Não adianta reenviar igual. */
+  'INVALID',
+  /** O servidor entende o pedido e não o suporta nesta versão — hoje, `DELETE`. */
+  'UNSUPPORTED',
+  /** Sessão concluída com o mesmo `syncId` e conteúdo divergente. Nunca sobrescrita. */
+  'IMMUTABLE_HISTORY_CONFLICT',
+  /** Mesmo `clientMutationId`, conteúdo ou alvo diferente. Não reaplica. */
+  'IDEMPOTENCY_CONFLICT',
+] as const;
+
+export type SyncMutationStatus = (typeof SYNC_MUTATION_STATUSES)[number];
+
+export interface SyncMutationResult {
+  readonly clientMutationId: string;
+  readonly status: SyncMutationStatus;
+  /** A revision resultante, quando a mutação foi aplicada ou reconhecida. */
+  readonly serverRevision?: number;
+  /** A posição no change log, quando existe. */
+  readonly serverSequence?: number;
+  /** A revision atual do servidor, quando o resultado é `STALE`. */
+  readonly currentRevision?: number;
+  /** Código curto do motivo, para diagnóstico. Nunca conteúdo do usuário. */
+  readonly reason?: string;
+}
+
+export interface SyncPushResponse {
+  readonly results: readonly SyncMutationResult[];
+}
+
+/** Uma mudança do change log, como o cliente a recebe. */
+export interface SyncChangeResponse {
+  readonly serverSequence: number;
+  readonly entityType: SyncEntityType;
+  readonly entitySyncId: string;
+  readonly entitySchemaVersion: number;
+  readonly serverRevision: number;
+  readonly operation: SyncOperation;
+  readonly payloadHash: string;
+  /** Qual instalação originou a mudança. Diagnóstico e *echo suppression* — nunca segurança. */
+  readonly originDeviceId: string;
+  readonly createdAt: number;
+  /** O agregado inteiro, como estava naquela sequência. */
+  readonly payload: unknown;
+}
+
+export interface SyncPullResponse {
+  readonly changes: readonly SyncChangeResponse[];
+  /** Onde o cliente deve retomar. Igual ao cursor pedido quando nada veio. */
+  readonly nextCursor: number;
+  readonly hasMore: boolean;
+}
+
+/**
+ * Códigos de erro do sync, no envelope da T16.0 (`{ error: { code, message, requestId } }`).
+ *
+ * São erros de **requisição inteira**. O desfecho de uma mutação individual é
+ * [SyncMutationStatus], dentro de um `200` — um item stale não é um erro HTTP.
+ */
+export const SYNC_ERROR_CODES = {
+  /** Corpo, `deviceId` ou lista de mutações fora do contrato. */
+  INVALID_SYNC_REQUEST: 'INVALID_SYNC_REQUEST',
+  /** Mais mutações, ou payload maior, do que o servidor aceita. */
+  SYNC_PAYLOAD_TOO_LARGE: 'SYNC_PAYLOAD_TOO_LARGE',
+  /** Cursor negativo, não inteiro ou além do que o servidor já emitiu. */
+  INVALID_CURSOR: 'INVALID_CURSOR',
+  /** Proteção simples por conta contra um app em laço. */
+  SYNC_RATE_LIMITED: 'SYNC_RATE_LIMITED',
+} as const;
+
+export type SyncErrorCode = (typeof SYNC_ERROR_CODES)[keyof typeof SYNC_ERROR_CODES];
+
+/** Motivos curtos devolvidos em `SyncMutationResult.reason`. Vocabulário fechado. */
+export const SYNC_MUTATION_REASONS = {
+  DELETE_NOT_SUPPORTED: 'DELETE_NOT_SUPPORTED',
+  UNKNOWN_ENTITY_TYPE: 'UNKNOWN_ENTITY_TYPE',
+  UNSUPPORTED_ENTITY_SCHEMA_VERSION: 'UNSUPPORTED_ENTITY_SCHEMA_VERSION',
+  INVALID_PAYLOAD: 'INVALID_PAYLOAD',
+  IDENTITY_MISMATCH: 'IDENTITY_MISMATCH',
+  PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+  BASE_REVISION_AHEAD: 'BASE_REVISION_AHEAD',
+  IMMUTABLE_HISTORY: 'IMMUTABLE_HISTORY',
+} as const;

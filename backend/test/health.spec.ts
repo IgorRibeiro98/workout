@@ -78,17 +78,23 @@ describe('Health (liveness e readiness)', () => {
     expect((await request(app.getHttpServer()).get('/v1/health/live')).status).toBe(404);
   });
 
-  it('sync continua ausente de /v1; auth, IA e backup existem e nasceram fechados', async () => {
-    // Sync incremental é T16.6/T16.7. Backup (T16.4) **não** é sync: ele sobe um snapshot
-    // completo e não tem push, pull, cursor nem merge.
-    for (const path of ['/v1/sync/push', '/v1/sync/pull', '/v1/ai/analyze']) {
-      expect((await request(app.getHttpServer()).get(path)).status).toBe(404);
-    }
+  it('auth, IA, backup e sync existem e nasceram fechados; o que não existe responde 404', async () => {
+    // Rota que nunca existiu continua não existindo. `/v1/ai/analyze` foi um nome considerado e
+    // descartado na T16.2 — o Coach responde em `/v1/ai/coach`.
+    expect((await request(app.getHttpServer()).get('/v1/ai/analyze')).status).toBe(404);
 
     // 401 (e não 404) é a prova de que a rota existe e nasceu protegida.
     expect((await request(app.getHttpServer()).get('/v1/auth/me')).status).toBe(401);
     expect((await request(app.getHttpServer()).get('/v1/backups/latest')).status).toBe(401);
     expect((await request(app.getHttpServer()).post('/v1/backups').send({})).status).toBe(401);
+  });
+
+  it('o sync incremental existe desde a T16.6 e nasceu fechado', async () => {
+    // Este teste substitui o da T16.0→T16.5, que exigia a **ausência** de `/v1/sync/*`. Elas
+    // existem agora, e 401 — não 404 — é a prova de que nasceram protegidas. Sync não substitui o
+    // backup: `POST /v1/backups` continua sendo o snapshot completo, e as duas coisas coexistem.
+    expect((await request(app.getHttpServer()).post('/v1/sync/push').send({})).status).toBe(401);
+    expect((await request(app.getHttpServer()).get('/v1/sync/pull')).status).toBe(401);
   });
 
   it('a leitura do backup para restore existe e nasceu fechada (T16.5)', async () => {

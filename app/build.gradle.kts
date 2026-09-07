@@ -119,6 +119,11 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  // Sincronização incremental (T16.6). É a **única** coisa agendada no Spark: um trabalho único,
+  // com restrição de rede e backoff exponencial, enfileirado quando uma alteração local entra na
+  // Outbox. Não existe trabalho periódico, polling nem alarme — e nenhum caminho do app depende
+  // dele para funcionar offline.
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.coil.compose)
   implementation(libs.coil.gif)
   implementation(libs.converter.moshi)

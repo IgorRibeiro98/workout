@@ -41,4 +41,19 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * O app voltou para o primeiro plano (T16.6).
+     *
+     * Este é o gatilho conservador de sincronização: o coordenador decide se vale rodar — só roda
+     * se houver alteração pendente ou se a última sincronização já estiver velha. Abrir o Spark
+     * dez vezes em cinco minutos não produz dez ciclos.
+     *
+     * Ele **não bloqueia a primeira renderização**: a chamada apenas lança uma corrotina, e a UI
+     * continua lendo o Room. Sem rede, sem conta ou sem vínculo, nada acontece e nada muda.
+     */
+    override fun onStart() {
+        super.onStart()
+        (application as? MainApplication)?.syncCoordinator?.onAppForeground()
+    }
 }

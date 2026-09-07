@@ -1,8 +1,8 @@
 # Contrato de identidade global do Spark
 
-- **Tarefa:** T16.0 (documentação) — implementação em **T16.1** (identidade da conta) e **T16.3**
-  (identidade dos dados).
-- **Status (verificado em 2026-09-06):**
+- **Tarefa:** T16.0 (documentação) — implementação em **T16.1** (identidade da conta), **T16.3**
+  (identidade dos dados) e **T16.6** (identidade em movimento).
+- **Status (verificado em 2026-09-07):**
   - **implementado na T16.1:** a identidade da **conta**. O Firebase UID chega ao servidor por
     Firebase ID Token, é verificado pelo Admin SDK e vira `AuthenticatedPrincipal { uid }`;
   - **implementado na T16.3:** a identidade dos **dados**. `syncId` nas raízes de agregado
@@ -16,7 +16,12 @@
     `localId` — as relações são reconstruídas por identidade portátil, e nada depende do `localId`
     do aparelho de origem. Um restore bem-sucedido também dá dono a um dataset que não tinha, e
     **nunca** transfere um dataset de uma conta para outra;
-  - **não implementado:** sync incremental (T16.6).
+  - **implementado na T16.6:** a identidade em movimento. `clientMutationId` passou a ser a chave
+    de idempotência do servidor (`sync_mutations`), `deviceId` viaja como metadado de origem e não
+    autoriza nada, `syncId` é a identidade do agregado em `sync_entities` e no change log, e
+    `ownerUid` continua saindo **só** do token verificado — o corpo do push não tem campo de dono,
+    e um campo desses recusa a requisição inteira. Room `version = 34`;
+  - **não implementado (T16.7):** tombstone e a identidade de uma exclusão.
 
 ---
 
@@ -107,8 +112,13 @@ entitySyncId      → o treino ABC
 clientMutationId  → a edição XYZ feita naquele treino
 ```
 
-É o que permite ao servidor (T16.6) distinguir "reenviaram porque a resposta se perdeu" de
-"mudaram de novo". Tem índice `UNIQUE` no Room.
+É o que permite ao servidor distinguir "reenviaram porque a resposta se perdeu" de "mudaram de
+novo". Tem índice `UNIQUE` no Room, e desde a T16.6 também no servidor: `sync_mutations` tem índice
+único em `(owner_uid, client_mutation_id)`, e é constraint de banco — não verificação em código —
+porque duas requisições simultâneas passariam por qualquer verificação.
+
+O contrato completo, com os desfechos possíveis, está em
+[`sync-protocol.md`](./sync-protocol.md#push-incremental-t166--implementado).
 
 ### `canonicalExerciseId` — identidade de conteúdo, que já existe
 
@@ -131,8 +141,13 @@ Nunca o `localId` do exercício — ele não significa nada no outro aparelho.
 
 ### `deviceId` — identidade da instalação
 
-Identificador da instalação do Spark, necessário para o multi-device (T16.6) saber de onde veio uma
-mudança e para o cursor de sync ser por dispositivo.
+Identificador da instalação do Spark. Desde a T16.6 ele viaja no push e volta no pull como
+`originDeviceId`, para diagnóstico e supressão de eco.
+
+**Ele não autoriza nada.** Conhecer o `deviceId` de outro aparelho não dá acesso a conta nenhuma:
+ownership vem do Firebase UID do token verificado, e só dele. O cursor de sync, por sua vez, é por
+**conta e banco local** (`sync_cursor` tem `ownerUid` como chave) — não por `deviceId`, porque o que
+ele descreve é a posição **deste banco** no change log daquela conta.
 
 - **Formato:** UUID aleatório gerado pelo próprio Spark, guardado no DataStore (`DEVICE_ID`).
   Implementado na T16.3 em `DeviceIdProvider`.
@@ -301,4 +316,9 @@ precisar reconciliar nada.
 | `ownerUid` gravado em dado pessoal remoto | T16.0 | **T16.4 — feito** |
 | Adoção real (primeiro backup) | T16.0 | **T16.4 — feito** |
 | `clientBackupId` (identidade de uma tentativa de backup) | T16.4 | **T16.4 — feito** |
-| Registro de dispositivos no servidor | T16.0 | T16.6 |
+| `syncId` como identidade do agregado remoto (`sync_entities`) | T16.0 | **T16.6 — feito** |
+| `clientMutationId` como chave de idempotência do servidor | T16.0 | **T16.6 — feito** |
+| `deviceId` como origem de uma mudança (`originDeviceId`) | T16.0 | **T16.6 — feito** |
+| Cursor por conta e por banco local (`sync_cursor`) | T16.0 | **T16.6 — feito** |
+| Registro de dispositivos no servidor | T16.0 | não implementado — o `deviceId` é metadado, e uma tabela de dispositivos só passa a valer a pena com revogação por aparelho (T16.8) |
+| Identidade de uma exclusão (tombstone) | T16.0 | T16.7 |
