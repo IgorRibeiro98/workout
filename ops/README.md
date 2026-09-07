@@ -15,8 +15,10 @@ com permissão `600`.
 | `backup.sh` | `snapshot.sh` → manifesto → restic (criptografado, off-site) → retenção → estado. Diário e antes de cada deploy. |
 | `restore.sh` | Restaura do off-site (ou de um arquivo), **verifica**, e só com `--install` troca o banco de produção. |
 | `verify-backup.sh` | Ensaio de restauração: restaura, verifica e **sobe o backend real sobre a cópia** exigindo `/health/ready`. Não toca em produção. |
-| `check-health.sh` | Saúde do backend, acessibilidade do banco, disco e idade do último backup. Sai ≠ 0 quando algo está errado. |
-| `deploy.sh` | Backup pré-deploy → build com tag do commit → `up` → healthcheck → rollback se falhar. |
+| `check-health.sh` | Saúde do backend (**por dentro do container**: produção não publica porta), acessibilidade do banco, permissões, disco e idade do último backup. Sai ≠ 0 quando algo está errado. O health público é separado e opcional (`SPARK_PUBLIC_HEALTH_URL`). |
+| `deploy.sh` | Backup pré-deploy → build com tag do commit → `up` → health **interno** → rollback se falhar. |
+| `tests/permissions.test.sh` | Prova o modelo de grupo compartilhado com uid diferente entre host e container. Roda no CI. |
+| `tests/backup-status.test.sh` | Prova que todo desfecho do backup — sucesso e as seis falhas — chega a `backup-status.json`. Roda no CI. |
 | `systemd/` | Unidades e timers para o backup diário e a verificação horária. |
 
 ## Convenções

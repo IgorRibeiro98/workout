@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Funções compartilhadas pelos scripts operacionais do Spark (T16.8).
+# Funções compartilhadas pelos scripts operacionais do Spark (T16.8 / T16.8.1).
 #
 # Este arquivo não faz nada sozinho: ele é lido com `source` pelos demais scripts de `ops/`.
 # Nenhum segredo mora aqui. Configuração vem de variáveis de ambiente, opcionalmente carregadas de
@@ -23,6 +23,10 @@ SPARK_COMPOSE_FILE="${SPARK_COMPOSE_FILE:-docker-compose.prod.yml}"
 SPARK_SERVICE="${SPARK_SERVICE:-backend}"
 # Imagem usada para abrir o SQLite quando o container não está de pé.
 SPARK_IMAGE="${SPARK_IMAGE:-spark-backend:latest}"
+# Arquivo de exclusão mútua do backup. Configuração, e não parâmetro de função: ele precisa ser o
+# mesmo para todas as execuções da máquina, e uma função que aceitasse outro por chamada tornaria
+# possível dois backups simultâneos com locks diferentes — que é exatamente o que ele impede.
+SPARK_LOCK_FILE="${SPARK_LOCK_FILE:-${SPARK_STATE_DIR}/backup.lock}"
 
 DB_FILENAME="${DB_FILENAME:-spark.db}"
 
@@ -51,10 +55,157 @@ require_cmd() {
 # disco e I/O e podem deixar o repositório restic com snapshots redundantes. `flock` sem espera:
 # se já há um rodando, este simplesmente não roda, e diz por quê.
 acquire_lock() {
-  local lock_file="${1:-${SPARK_STATE_DIR}/backup.lock}"
-  mkdir -p "$(dirname "$lock_file")"
-  exec 9> "$lock_file"
-  flock -n 9 || fail "já existe um backup em andamento (lock: ${lock_file})"
+  mkdir -p "$(dirname "$SPARK_LOCK_FILE")"
+  exec 9> "$SPARK_LOCK_FILE"
+  flock -n 9 || fail "já existe um backup em andamento (lock: ${SPARK_LOCK_FILE})"
+}
+
+# ---------------------------------------------------------------- Compose
+
+# Executa um comando do Compose que **altera** a pilha (`up`, `down`, `restart`).
+#
+# Existe como função para que ninguém precise repetir o `cd` e o `-f`: repetir era a origem do
+# `A && B || C` que o ShellCheck acusava (SC2015), uma forma em que a parte `|| C` roda também
+# quando `cd` dá certo e o comando falha — mascarando a falha do comando como "diretório ausente".
+#
+# Aqui **não** há valor de reserva para variável nenhuma: `docker-compose.prod.yml` declara
+# `SPARK_IMAGE_TAG`, `SPARK_DOMAIN`, `SPARK_ACME_EMAIL` e `SPARK_DATA_GID` como obrigatórias
+# (`${VAR:?}`), e é isso que impede um `up` de subir com tag indefinida, domínio errado ou fora do
+# grupo compartilhado. Quem as fornece é `backend/.env` na VPS, mais o `SPARK_IMAGE_TAG` que
+# `ops/deploy.sh` passa por deploy.
+compose_cmd() {
+  ( cd "$SPARK_COMPOSE_DIR" && docker compose -f "$SPARK_COMPOSE_FILE" "$@" )
+}
+
+# Executa um comando do Compose **somente leitura** (`ps`, `exec`, `logs`, `images`).
+#
+# ## Por que isto precisa existir
+#
+# O Compose interpola o arquivo inteiro antes de rodar qualquer subcomando. Uma variável `${VAR:?}`
+# não resolvida derruba até um `ps` — então `ops/check-health.sh` rodando pelo systemd, sem
+# `SPARK_IMAGE_TAG` no ambiente, não conseguia sequer perguntar se o backend estava vivo. O
+# healthcheck reportava "o backend não respondeu" com o backend perfeitamente no ar.
+#
+# A ordem de precedência é a mesma do Compose: ambiente > `.env` do projeto > reserva. As reservas
+# só existem para o que **não** afeta um container que já está rodando — consultar um processo em
+# execução não depende de qual tag construiu a imagem dele.
+#
+# Elas ficam deliberadamente fora de `compose_cmd`: uma reserva silenciosa num `up` é exatamente o
+# tipo de default escondido que a T16.8 proíbe.
+compose_query() {
+  (
+    cd "$SPARK_COMPOSE_DIR" || return 1
+
+    # O mesmo arquivo que o Compose leria sozinho — carregado aqui para que as reservas abaixo não
+    # passem por cima do que o operador configurou.
+    if [ -f .env ]; then
+      set -a
+      # O `.env` do projeto é configuração da VPS: ele não existe no repositório nem em tempo de
+      # análise estática, então não há arquivo para o ShellCheck seguir.
+      # shellcheck disable=SC1091
+      . ./.env
+      set +a
+    fi
+
+    : "${SPARK_IMAGE_TAG:=indefinida}"
+    : "${SPARK_DOMAIN:=spark.invalid}"
+    : "${SPARK_ACME_EMAIL:=ops@spark.invalid}"
+    : "${SPARK_DATA_GID:=0}"
+    export SPARK_IMAGE_TAG SPARK_DOMAIN SPARK_ACME_EMAIL SPARK_DATA_GID
+
+    docker compose -f "$SPARK_COMPOSE_FILE" "$@"
+  )
+}
+
+compose_running() {
+  [ -d "$SPARK_COMPOSE_DIR" ] || return 1
+  local running
+  # A falha vira `return 1` explicitamente: "não consegui perguntar" e "não está rodando" levam à
+  # mesma conclusão operacional, e nenhuma delas pode ser confundida com sucesso.
+  running="$( compose_query ps -q "$SPARK_SERVICE" 2> /dev/null )" || return 1
+  [ -n "$running" ]
+}
+
+# ---------------------------------------------------------------- health
+
+# O corpo do probe de health, executado **dentro** do container (T16.8.1 §2).
+#
+# Produção não publica a porta do backend: quem escuta 80/443 é o Caddy, e `docker-compose.prod.yml`
+# só declara `expose`. Um script operacional que fizesse `curl http://127.0.0.1:8080` no host
+# testaria uma porta que, por construção, não existe — e falharia sempre, ou pior, passaria a
+# depender de alguém publicá-la "para o health funcionar".
+#
+# O probe usa o `fetch` global do Node 22, que já está na imagem: nada de instalar curl num
+# container que deliberadamente não o tem.
+health_probe_script() {
+  local endpoint="$1"
+  printf '%s' "
+    const port = process.env.PORT || 8080;
+    fetch('http://127.0.0.1:' + port + '/health/${endpoint}')
+      .then(async (response) => {
+        process.stdout.write(await response.text());
+        process.exit(response.ok ? 0 : 1);
+      })
+      .catch((error) => {
+        process.stderr.write(String((error && error.message) || error) + '\n');
+        process.exit(1);
+      });
+  "
+}
+
+# Consulta `/health/live` ou `/health/ready` e imprime o corpo da resposta em stdout.
+#
+# Dois caminhos, e a ordem é deliberada:
+#
+#   1. `SPARK_HEALTH_URL` definido → HTTP direto. É o caminho para quem roda a composição **local**
+#      (`docker-compose.yml`, que publica 127.0.0.1:8080) ou para um endereço público já com TLS.
+#   2. padrão → `docker compose exec` no serviço do backend. Não depende de DNS, de certificado,
+#      de proxy nem de porta publicada, e verifica exatamente o container que está implantado.
+#
+# O health **público** (pelo Caddy, com TLS) é uma verificação diferente e continua separada:
+# `SPARK_PUBLIC_HEALTH_URL` em `ops/check-health.sh`. Um responde "o backend serve?", o outro
+# responde "a internet chega até ele?" — e confundi-los faz um problema de DNS parecer um backend
+# morto.
+spark_health() {
+  local endpoint="${1:?spark_health exige 'live' ou 'ready'}"
+
+  if [ -n "${SPARK_HEALTH_URL:-}" ]; then
+    curl -fsS --max-time "${SPARK_HEALTH_TIMEOUT_SECONDS:-10}" \
+      "${SPARK_HEALTH_URL%/}/health/${endpoint}"
+    return
+  fi
+
+  compose_query exec -T "$SPARK_SERVICE" node -e "$(health_probe_script "$endpoint")" 2> /dev/null
+}
+
+# `/health/ready` respondeu `{"status":"ok"}`?
+spark_health_ready() {
+  spark_health ready 2> /dev/null | grep -q '"status":"ok"'
+}
+
+# ---------------------------------------------------------------- permissões
+
+# O grupo compartilhado entre o operador do host e o processo do container (T16.8.1 §3).
+#
+# ## Por que um grupo, e não um uid combinado
+#
+# O container roda como `node`, uid 1000, e **não pode rodar como root**. O usuário `spark` do host
+# recebe o uid que o `adduser` tiver livre — 1000 numa VPS recém-criada, 1001 ou outro qualquer numa
+# VPS onde já exista um usuário. Um desenho que só funciona quando os dois números coincidem por
+# acaso não é um desenho: é uma coincidência que a próxima VPS quebra.
+#
+# A solução é não depender do uid. `/opt/spark/data` pertence a `spark:<grupo compartilhado>` com
+# `2770` (setgid, para que o que o container criar herde o grupo), a service account é `640` no
+# mesmo grupo, e o container entra nesse grupo por `group_add` no compose. Os dois lados alcançam o
+# que precisam **pelo grupo**, com uid diferente e sem `777`, sem `chown` de root em runtime e sem
+# rodar nada como root.
+#
+# Este helper devolve o GID do grupo do diretório de dados — que **é** o grupo compartilhado, por
+# construção. Ler do próprio diretório em vez de exigir mais uma variável elimina a possibilidade
+# de a configuração e a realidade discordarem.
+spark_data_gid() {
+  [ -d "$SPARK_DATA_DIR" ] || return 1
+  stat -c %g "$SPARK_DATA_DIR"
 }
 
 # ---------------------------------------------------------------- SQLite
@@ -67,25 +218,24 @@ acquire_lock() {
 #
 # Prefere `exec` no container em pé — mesma máquina, mesmo namespace de arquivo, mesmo build. Se
 # ele não estiver rodando, cai para um container efêmero da mesma imagem com o diretório montado.
+# O container efêmero entra no grupo compartilhado pelo mesmo motivo que o de produção: sem isso
+# ele não abriria o banco quando o uid do host não for 1000.
 sqlite_node() {
   local script="$1"
   if compose_running; then
-    ( cd "$SPARK_COMPOSE_DIR" && \
-      docker compose -f "$SPARK_COMPOSE_FILE" exec -T "$SPARK_SERVICE" node -e "$script" )
+    compose_query exec -T "$SPARK_SERVICE" node -e "$script"
   else
+    local group_args=()
+    local gid
+    if gid="$(spark_data_gid)"; then
+      group_args=(--group-add "$gid")
+    fi
     docker run --rm \
+      "${group_args[@]}" \
       -v "${SPARK_DATA_DIR}:/data" \
       --entrypoint node \
       "$SPARK_IMAGE" -e "$script"
   fi
-}
-
-compose_running() {
-  [ -d "$SPARK_COMPOSE_DIR" ] || return 1
-  local running
-  running="$( cd "$SPARK_COMPOSE_DIR" && \
-    docker compose -f "$SPARK_COMPOSE_FILE" ps -q "$SPARK_SERVICE" 2> /dev/null || true )"
-  [ -n "$running" ]
 }
 
 # ---------------------------------------------------------------- restic
@@ -120,8 +270,8 @@ require_restic_env() {
 load_env_file() {
   local file="${1:-${SPARK_BACKUP_ENV_FILE:-/opt/spark/secrets/backup.env}}"
   if [ -f "$file" ]; then
-    # Caminho vem de configuração operacional; ele não é conhecido em tempo de análise estática.
     set -a
+    # Caminho vem de configuração operacional: ele não é conhecido em tempo de análise estática.
     # shellcheck disable=SC1090
     . "$file"
     set +a

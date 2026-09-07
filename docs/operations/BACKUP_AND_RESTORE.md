@@ -112,9 +112,38 @@ FAILURE` é reportada como problema mesmo que o último sucesso ainda seja recen
 
 Uma falha (§40):
 
-- escreve o estado com `outcome: FAILURE` e o motivo;
+- escreve o estado com `outcome: FAILURE` e a **etapa** em que parou;
 - imprime a saída real do restic em `stderr` — é ela que diz *por quê*;
 - sai com código diferente de zero, que é o que o systemd registra e o `OnFailure=` enxerga.
+
+### Todo desfecho chega ao estado (T16.8.1 §9)
+
+Isso não pode depender de qual caminho de erro foi tomado, e por um tempo dependeu: o script usava
+`trap ... ERR`, e `fail()` faz `exit` — que **não** dispara o trap de ERR. Credencial ausente,
+restic recusado e `snapshot_id` vazio saíam com código diferente de zero deixando o arquivo com o
+desfecho **anterior**. Um backup quebrado registrado como sucesso é o pior resultado possível deste
+script: ele não só falha, como afirma que não falhou.
+
+Hoje há um `trap finalize EXIT`, que cobre `set -e`, `exit` explícito e término normal de uma vez.
+`ops/tests/backup-status.test.sh` exercita os sete desfechos no CI — sucesso, credencial ausente,
+falha do snapshot, falha do envio, restic sem `snapshot_id`, falha da retenção e área de trabalho
+sem escrita — e exige, em todos, `outcome: FAILURE`, código diferente de zero e o último sucesso
+**preservado**.
+
+A `message` carrega a etapa, de um vocabulário fechado:
+
+| Etapa | O que estava acontecendo |
+| --- | --- |
+| `config` | Credencial do storage (`RESTIC_REPOSITORY`, senha) |
+| `workdir` | Criando a área de trabalho em `/opt/spark/backups` |
+| `snapshot` | `VACUUM INTO` + `integrity_check` + `foreign_key_check` |
+| `manifest` | Lendo a versão do schema e a imagem no ar |
+| `offsite-upload` | `restic backup` |
+| `offsite-retention` | `restic forget --prune` |
+
+É um rótulo, e **não** a saída do comando que falhou: a saída do restic pode conter o endereço do
+repositório e a credencial de storage, e este arquivo é aberto durante o diagnóstico. O detalhe
+técnico fica no journal do systemd, onde ele pertence.
 
 `ops/check-health.sh` acusa quando o último sucesso passa de 36 h (§138) — backup diário com mais
 de 36 h significa pelo menos uma execução perdida sem ninguém notar.
@@ -137,7 +166,10 @@ ensaio prova quatro coisas de uma vez: o repositório abre com a senha que o ope
 restaurado é íntegro, o schema está aplicado, e o processo de produção sobe sobre ele.
 
 Ele não toca em produção em momento nenhum: sobe um container separado, em porta separada, sobre
-uma cópia.
+uma cópia — e com o **mesmo modelo de permissão da produção** (diretório `2770`, arquivo `660`,
+container no grupo por `--group-add`). Até a T16.8.1 o ensaio usava `chmod 777`, o que além de ser
+o que a T16.8 proíbe tornava o ensaio incapaz de detectar o problema que ele deveria detectar: com
+`777`, qualquer combinação de uid passa, inclusive as que a produção real não teria.
 
 **Faça o ensaio depois do primeiro backup e sempre que a senha, o destino ou o schema mudarem.**
 
@@ -149,8 +181,17 @@ ops/restore.sh --to /tmp/restauracao --snapshot <id>    # um snapshot específic
 docker compose -f docker-compose.prod.yml down          # o backend precisa estar parado
 ops/restore.sh --to /tmp/restauracao --install          # troca o banco
 docker compose -f docker-compose.prod.yml up -d
-curl -s https://api.<dominio>/health/ready
+ops/check-health.sh                                     # health interno: não depende de DNS/TLS
+curl -s https://api.<dominio>/health/ready              # e o público, quando houver domínio
 ```
+
+`--install` grava o banco com modo `660` no **grupo compartilhado** do diretório de dados, e não
+com `chown 1000:1000` — que era o que ele fazia até a T16.8.1 e que estava errado duas vezes:
+`chown` exige root (o comando falhava em silêncio para o usuário `spark`, deixando só um aviso) e o
+número 1000 presumia que o uid do operador e o do container coincidissem. O resultado era um banco
+instalado que o backend não conseguia abrir — descoberto no pior momento possível, que é durante
+uma recuperação. Ver [PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md), "Usuários, grupos e
+permissões".
 
 O que `restore.sh` **nunca** faz (§130):
 

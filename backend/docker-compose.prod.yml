@@ -58,6 +58,26 @@ services:
     # NENHUMA porta publicada. Quem fala com a internet é o Caddy.
     expose:
       - "8080"
+    # O grupo compartilhado entre o host e o container (T16.8.1 §3).
+    #
+    # ## Por que isto existe
+    #
+    # O processo roda como `node` (uid 1000, `USER node` no Dockerfile) e **não pode rodar como
+    # root**. O usuário `spark` do host recebe o uid que o `adduser` tiver livre: 1000 numa VPS
+    # recém-criada, 1001 ou outro qualquer numa VPS onde já exista um usuário. A T16.8 documentava
+    # `/opt/spark/data` como `1000:1000` e a service account como `spark:spark` — um arranjo que só
+    # funcionava enquanto os dois números coincidissem **por acaso**. Na primeira VPS em que não
+    # coincidissem, ou o backend não abriria o banco, ou o operador não leria o snapshot.
+    #
+    # `group_add` remove o acaso: o container entra no grupo compartilhado e alcança
+    # `/opt/spark/data` (2770) e `firebase-admin.json` (640) **pelo grupo**, com uid diferente do
+    # operador, sem `chmod 777`, sem `chown` em runtime e sem root.
+    #
+    # Sem default de propósito: um valor herdado em silêncio seria o mesmo tipo de suposição que
+    # esta linha existe para eliminar. O número sai de `getent group spark-data | cut -d: -f3`
+    # (docs/operations/PRODUCTION_DEPLOYMENT.md, "usuários, grupos e permissões").
+    group_add:
+      - "${SPARK_DATA_GID:?defina SPARK_DATA_GID no .env: getent group spark-data | cut -d: -f3}"
     environment:
       NODE_ENV: production
       PORT: 8080
@@ -92,6 +112,11 @@ services:
       - ${SPARK_DATA_DIR:-/opt/spark/data}:/data
       # A service account entra por montagem somente-leitura, a partir de um arquivo que existe só
       # nesta VPS. Ela nunca entra na imagem nem no Git (§53).
+      #
+      # Somente-leitura continua sendo somente-leitura: o `ro` protege contra o container escrever
+      # nela. Quem garante que ele consegue **ler** é o grupo compartilhado acima — o arquivo é
+      # `640` no grupo `spark-data`, e não `600` do dono. Com `REQUIRE_FIREBASE_ADMIN=true`, uma
+      # credencial ilegível agora derruba o startup (T16.8.1 §8) em vez de virar `503` silencioso.
       - ${SPARK_SECRETS_DIR:-/opt/spark/secrets}/firebase-admin.json:/run/secrets/firebase-admin.json:ro
     stop_grace_period: 15s
     logging: *json-logs

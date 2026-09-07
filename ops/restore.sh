@@ -117,8 +117,21 @@ fi
 # de outro banco, e o SQLite tentaria aplicá-las.
 rm -f "${PREVIOUS}-wal" "${PREVIOUS}-shm"
 
-install -m 600 "$RESTORED_DB" "$PREVIOUS"
-# O container roda como uid 1000 (`node`); sem isto ele não abre o arquivo que acabou de chegar.
-chown 1000:1000 "$PREVIOUS" 2> /dev/null || log "aviso: não foi possível ajustar o dono de ${PREVIOUS}"
+# O banco restaurado precisa ser aberto pelo processo do container — que roda como `node`, com um
+# uid que **não** é o do operador (T16.8.1 §3).
+#
+# A versão anterior fazia `chown 1000:1000`, e isso estava errado por dois motivos ao mesmo tempo:
+# `chown` exige root, então o comando falhava em silêncio para o usuário `spark` (o `|| log` só
+# avisava), e o número 1000 presumia que o uid do container fosse fixo e que o do host coincidisse.
+# O resultado era um banco instalado que o backend não conseguia abrir — descoberto no pior momento
+# possível, que é durante uma recuperação.
+#
+# O acesso vem do **grupo compartilhado**, o mesmo mecanismo do resto do modelo: `660` no grupo do
+# diretório de dados. Nada de `chown`, nada de `sudo`, nada de uid combinado.
+DATA_GID="$(spark_data_gid)" \
+  || fail "não foi possível ler o grupo de ${SPARK_DATA_DIR} — o diretório de dados existe?"
+
+install -m 660 -g "$DATA_GID" "$RESTORED_DB" "$PREVIOUS" \
+  || fail "não foi possível instalar o banco com o grupo ${DATA_GID}; o usuário atual pertence a ele? (ver docs/operations/PRODUCTION_DEPLOYMENT.md, 'usuários, grupos e permissões')"
 
 log "banco instalado em ${PREVIOUS}. Suba o backend e confira /health/ready."

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Backup off-site do SQLite do servidor (T16.8 §26–§42).
+# Backup off-site do SQLite do servidor (T16.8 §26–§42; T16.8.1 §9).
 #
 #   spark.db ──▶ snapshot consistente ──▶ integrity_check ──▶ manifesto
 #            ──▶ restic (compressão + criptografia) ──▶ storage off-site ──▶ retenção ──▶ estado
@@ -17,6 +17,13 @@
 # Uma cópia em `/opt/spark/backups` na mesma VPS não é backup: o disco que morre leva os dois. O
 # destino é `RESTIC_REPOSITORY`, e o restic o criptografa **antes** de enviar — o provedor de
 # armazenamento nunca vê dado pessoal em claro (§147).
+#
+# ## Todo desfecho é registrado (T16.8.1 §9)
+#
+# `backup-status.json` é o que `ops/check-health.sh` lê para responder "o último backup funcionou?".
+# Um backup que falha **precisa** deixar `outcome=FAILURE` lá; um que falha em silêncio é pior que
+# não ter backup, porque dá confiança. Isso não pode depender de qual caminho de erro foi tomado —
+# daí o `trap finalize EXIT`, que roda tanto no `set -e` quanto no `exit` explícito de `fail`.
 #
 # Uso:  ops/backup.sh [--tag <rótulo>]
 #       ops/backup.sh --tag pre-deploy      (usado por ops/deploy.sh antes de migration)
@@ -46,6 +53,19 @@ KEEP_MONTHLY="${SPARK_BACKUP_KEEP_MONTHLY:-12}"
 STATUS_FILE="${SPARK_STATE_DIR}/backup-status.json"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 STARTED_EPOCH="$(date -u +%s)"
+
+# A etapa em curso, de um **vocabulário fechado** (§9: "mensagem técnica segura").
+#
+# É deliberadamente um rótulo, e não a saída do comando que falhou: a saída do restic pode conter o
+# endereço do repositório, um cabeçalho de autorização ou parte de uma credencial de storage, e o
+# arquivo de estado é lido por quem estiver diagnosticando. O detalhe fica em stderr, que vai para o
+# journal do systemd; o estado carrega apenas onde parou.
+STAGE="config"
+SUCCEEDED=0
+SNAPSHOT_ID=""
+SIZE_BYTES=0
+WORK_DIR=""
+RESTIC_OUTPUT_FILE=""
 
 mkdir -p "$SPARK_STATE_DIR" "$SPARK_STAGING_DIR"
 chmod 700 "$SPARK_STATE_DIR" "$SPARK_STAGING_DIR" 2> /dev/null || true
@@ -84,27 +104,51 @@ if [ -f "$STATUS_FILE" ]; then
   LAST_SUCCESS_EPOCH="${LAST_SUCCESS_EPOCH:-0}"
 fi
 
-on_failure() {
+# O único ponto de saída do script (T16.8.1 §9).
+#
+# Um `trap ... ERR` não bastava, e foi exatamente o defeito auditado: `fail` faz `exit 1`, e `exit`
+# **não** dispara o trap de ERR. Todo caminho que passava por `fail` — credencial ausente, restic
+# recusado, `snapshot_id` vazio — saía com código diferente de zero e deixava
+# `backup-status.json` com o desfecho anterior. Um backup quebrado registrado como sucesso é o pior
+# resultado possível deste script.
+#
+# `EXIT` cobre os três caminhos de uma vez: `set -e`, `exit` explícito e término normal.
+finalize() {
   local code=$?
-  # Falha silenciosa em cron é como não ter backup, e pior: dá confiança (§40). O estado fica
-  # gravado, a saída vai para stderr, e o código de saída é diferente de zero — que é o que o
-  # systemd e o `OnFailure=` enxergam.
-  write_status "FAILURE" "" 0 "backup falhou com código ${code}"
-  printf 'ERRO: o backup do Spark FALHOU (tag=%s). Estado em %s\n' "$TAG" "$STATUS_FILE" >&2
+
+  rm -rf "${WORK_DIR:-}" 2> /dev/null || true
+  rm -f "${RESTIC_OUTPUT_FILE:-}" 2> /dev/null || true
+
+  if [ "$SUCCEEDED" -eq 1 ] && [ "$code" -eq 0 ]; then
+    write_status "SUCCESS" "$SNAPSHOT_ID" "$SIZE_BYTES" ""
+  else
+    # `lastSuccessfulBackupAt`/`Epoch` são reemitidos **sem alteração**: a falha de hoje não pode
+    # apagar o sucesso de ontem, porque é a idade dele que diz o tamanho real do risco.
+    write_status "FAILURE" "" 0 "falha na etapa '${STAGE}' (código ${code})"
+    printf 'ERRO: o backup do Spark FALHOU na etapa %s (tag=%s). Estado em %s\n' \
+      "$STAGE" "$TAG" "$STATUS_FILE" >&2
+  fi
+
   exit "$code"
 }
-trap on_failure ERR
 
+# --- 0. exclusão mútua -----------------------------------------------------------------------
+#
+# Antes do trap, e de propósito: um segundo backup que encontra o lock ocupado **não começou**, e
+# sobrescrever o estado do que está rodando faria a execução em andamento parecer falha.
 acquire_lock
+
+trap finalize EXIT
+
 require_cmd docker
 require_restic_env
 
+STAGE="workdir"
 WORK_DIR="$(mktemp -d "${SPARK_STAGING_DIR}/work-XXXXXX")"
 chmod 700 "$WORK_DIR"
-cleanup_work() { rm -rf "$WORK_DIR"; rm -f "${RESTIC_OUTPUT_FILE:-}"; }
-trap 'cleanup_work' EXIT
 
 # --- 1. snapshot consistente + integridade ------------------------------------------------
+STAGE="snapshot"
 SNAPSHOT="${WORK_DIR}/${DB_FILENAME}"
 "${SCRIPT_DIR}/snapshot.sh" "$SNAPSHOT" > /dev/null
 SIZE_BYTES="$(stat -c %s "$SNAPSHOT")"
@@ -116,6 +160,7 @@ SIZE_BYTES="$(stat -c %s "$SNAPSHOT")"
 #
 # O que **não** acompanha: nenhum segredo (§35). Service account, chave do Gemini e senha do
 # repositório não entram aqui nem no snapshot — eles vivem fora do banco por construção.
+STAGE="manifest"
 SCHEMA_VERSION="$(sqlite_node "
   const Database = require('better-sqlite3');
   const db = new Database('/data/${DB_FILENAME}', { readonly: true, fileMustExist: true });
@@ -123,8 +168,10 @@ SCHEMA_VERSION="$(sqlite_node "
   db.close();
 " | tr -d '\r\n')"
 
-IMAGE_REF="$( cd "$SPARK_COMPOSE_DIR" 2> /dev/null && \
-  docker compose -f "$SPARK_COMPOSE_FILE" images -q "$SPARK_SERVICE" 2> /dev/null | head -1 || true )"
+IMAGE_REF=""
+if compose_running; then
+  IMAGE_REF="$( compose_query images -q "$SPARK_SERVICE" 2> /dev/null | head -1 )" || IMAGE_REF=""
+fi
 
 cat > "${WORK_DIR}/manifest.json" <<JSON
 {
@@ -138,13 +185,15 @@ cat > "${WORK_DIR}/manifest.json" <<JSON
 JSON
 
 # --- 3. off-site criptografado ------------------------------------------------------------
+STAGE="offsite-upload"
 log "enviando para o repositório off-site"
 # `--host spark` deixa a política de retenção estável mesmo se a VPS for recriada com outro
 # hostname: sem isso, a nova máquina começaria uma linhagem separada de snapshots e o `forget`
 # manteria as duas para sempre.
 # A saída do restic é capturada, e não descartada: quando ele falha, a mensagem dele é a única
 # coisa que diz **por quê** (repositório inexistente, credencial errada, storage fora do ar). Um
-# backup que falha sem dizer o motivo custa horas na hora errada.
+# backup que falha sem dizer o motivo custa horas na hora errada. Ela vai para stderr — e nunca
+# para `backup-status.json`, que pode conter endereço de repositório e credencial de storage.
 # Fora de `$WORK_DIR`: um arquivo criado ali enquanto o restic lê o diretório entraria no próprio
 # snapshot, meio escrito.
 RESTIC_OUTPUT_FILE="$(mktemp)"
@@ -158,12 +207,15 @@ fi
 
 SNAPSHOT_ID="$(sed -n 's/.*"snapshot_id":"\([a-f0-9]*\)".*/\1/p' "$RESTIC_OUTPUT_FILE" | tail -1)"
 [ -n "$SNAPSHOT_ID" ] || fail "restic não devolveu um snapshot_id"
-rm -f "$RESTIC_OUTPUT_FILE"
 
 # --- 4. retenção --------------------------------------------------------------------------
+STAGE="offsite-retention"
 log "aplicando retenção (${KEEP_DAILY}d/${KEEP_WEEKLY}s/${KEEP_MONTHLY}m)"
 # `--prune` só depois de o backup novo estar confirmado: uma limpeza que rode antes pode remover
 # a última cópia útil (§133). Nesta ordem, uma falha aqui deixa backup **a mais**, nunca a menos.
+#
+# E ela continua sendo uma falha: o snapshot subiu, mas o repositório está crescendo sem limite, e
+# isso precisa aparecer em `check-health.sh` em vez de esperar o storage encher.
 restic_cmd forget \
   --host spark --tag "spark-db" \
   --keep-daily "$KEEP_DAILY" \
@@ -172,9 +224,9 @@ restic_cmd forget \
   --prune > /dev/null
 
 # --- 5. estado ----------------------------------------------------------------------------
+STAGE="done"
 LAST_SUCCESS_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LAST_SUCCESS_EPOCH="$(date -u +%s)"
-trap - ERR
-write_status "SUCCESS" "$SNAPSHOT_ID" "$SIZE_BYTES" ""
+SUCCEEDED=1
 
 log "backup concluído: snapshot=${SNAPSHOT_ID} bytes=${SIZE_BYTES} tag=${TAG}"

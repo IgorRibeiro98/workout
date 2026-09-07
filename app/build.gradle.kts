@@ -27,16 +27,194 @@ ksp {
  * nenhuma requisição sai, e treino, execução, histórico, templates e gamificação continuam
  * completos — o Spark é local-first, e essa propriedade não depende da nuvem.
  */
+
+/**
+ * O portão de endereço de release, e a tarefa que prova que ele concorda com o de runtime.
+ *
+ * ## Por que uma classe, e não funções soltas no script
+ *
+ * Porque a verificação é uma **tarefa**, e o cache de configuração do Gradle não serializa
+ * referências ao objeto do script: um `doLast` que chamasse funções de topo do `build.gradle.kts`
+ * falha o build com "cannot serialize Gradle script object references". Com a lógica dentro da
+ * classe da tarefa e no `companion`, tanto a tarefa quanto `releaseBackendBaseUrl` usam a mesma
+ * implementação — e não há duas cópias da regra dentro do próprio arquivo.
+ */
+abstract class VerifyReleaseEndpointGate : DefaultTask() {
+
+  @get:InputFile
+  abstract val casesTable: RegularFileProperty
+
+  @TaskAction
+  fun verify() {
+    val file = casesTable.get().asFile
+    val failures = mutableListOf<String>()
+    var checked = 0
+
+    file.readLines().forEach { line ->
+      val text = line.trim()
+      if (text.isEmpty() || text.startsWith("#")) return@forEach
+
+      val columns = text.split('\t').map { it.trim() }.filter { it.isNotEmpty() }
+      if (columns.size != 2) {
+        throw GradleException("linha malformada na tabela de casos: '$line'")
+      }
+      val verdict = columns[0]
+      val url = columns[1]
+      val expected = when (verdict) {
+        "ACCEPT" -> true
+        "REJECT" -> false
+        else -> throw GradleException("veredito desconhecido '$verdict' na tabela de casos")
+      }
+
+      checked++
+      val actual = isAcceptable(url)
+      if (actual != expected) {
+        failures += "  $url — esperado $verdict, o portão do build disse " +
+          (if (actual) "ACCEPT" else "REJECT")
+      }
+    }
+
+    // Uma tabela vazia deixaria os dois portões "de acordo" sobre nada.
+    if (checked == 0) {
+      throw GradleException("a tabela de casos está vazia; o portão não estaria sendo verificado")
+    }
+    if (failures.isNotEmpty()) {
+      throw GradleException(
+        "o portão de endereço do build discorda da tabela compartilhada:\n" +
+          failures.joinToString("\n")
+      )
+    }
+    logger.lifecycle("portão de endereço de release: $checked casos conferidos")
+  }
+
+  companion object {
+
+    /**
+     * O host de uma URL, ou `null` quando o texto não descreve um.
+     *
+     * Espelha `SparkBackendEndpoint.hostOf`, e pelos mesmos motivos: `java.net.URI` aceita coisas
+     * demais em silêncio, e credencial embutida (`https://api.exemplo.com@10.0.2.2/`) esconde qual
+     * é o host real — um endereço que mente sobre para onde vai não pode passar por ser "bonito".
+     *
+     * A versão da T16.8 fazia `substringBefore(':')` direto, o que quebrava em IPv6: para
+     * `https://[::1]` ela extraía o host `"["` e concluía que era público.
+     */
+    fun hostOf(url: String): String? {
+      val afterScheme = url.substringAfter("://", "")
+      if (afterScheme.isEmpty()) return null
+      val authority = afterScheme.substringBefore('/').substringBefore('?')
+      if (authority.contains('@')) return null
+      val host = if (authority.startsWith("[")) {
+        authority.substringAfter('[').substringBefore(']')
+      } else {
+        authority.substringBefore(':')
+      }
+      return host.lowercase().takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * O host não é publicamente roteável — IPv4 ou IPv6 (T16.8.1 §10).
+     *
+     * Espelha `SparkBackendEndpoint.isPrivateAddress`. As duas implementações são obrigadas a
+     * concordar caso a caso pela tabela em `contracts/endpoint/release-endpoint-cases.tsv`,
+     * aplicada a este portão por `verifyReleaseEndpointGate` e ao de runtime por
+     * `SparkReleaseEndpointTableTest`.
+     */
+    fun isPrivateHost(host: String): Boolean {
+      if (host in setOf("10.0.2.2", "localhost", "127.0.0.1", "::1")) return true
+
+      if (!host.contains(':')) {
+        val octets = host.split('.')
+        if (octets.size != 4) return false
+        val numbers = octets.map { it.toIntOrNull() ?: return false }
+        if (numbers.any { it !in 0..255 }) return false
+        return isPrivateIpv4Octets(numbers)
+      }
+
+      // Um IPv6 que não conseguimos entender é tratado como privado: em release, recusar um
+      // endereço estranho só desliga a nuvem — que é um estado normal e completo do Spark —,
+      // enquanto aceitá-lo põe o APK publicado falando com uma máquina qualquer.
+      val hextets = ipv6Hextets(host.substringBefore('%')) ?: return true
+      return when {
+        hextets.all { it == 0 } -> true
+        hextets.take(7).all { it == 0 } && hextets[7] == 1 -> true
+        hextets[0] and 0xFE00 == 0xFC00 -> true
+        hextets[0] and 0xFFC0 == 0xFE80 -> true
+        hextets[0] and 0xFFC0 == 0xFEC0 -> true
+        hextets.take(5).all { it == 0 } && hextets[5] == 0xFFFF -> isPrivateIpv4Octets(
+          listOf(hextets[6] shr 8, hextets[6] and 0xFF, hextets[7] shr 8, hextets[7] and 0xFF)
+        )
+        else -> false
+      }
+    }
+
+    /** Um APK de release pode usar este endereço? A mesma pergunta que `SparkBackendEndpoint` responde. */
+    fun isAcceptable(raw: String): Boolean {
+      val trimmed = raw.trim()
+      if (trimmed.isEmpty()) return false
+      if (trimmed.substringBefore("://", "").lowercase() != "https") return false
+      val host = hostOf(trimmed) ?: return false
+      return !isPrivateHost(host)
+    }
+
+    private fun isPrivateIpv4Octets(numbers: List<Int>): Boolean = when {
+      numbers[0] == 10 -> true
+      numbers[0] == 127 -> true
+      numbers[0] == 172 && numbers[1] in 16..31 -> true
+      numbers[0] == 192 && numbers[1] == 168 -> true
+      numbers[0] == 169 && numbers[1] == 254 -> true
+      numbers[0] == 100 && numbers[1] in 64..127 -> true
+      else -> false
+    }
+
+    private fun ipv6Hextets(address: String): List<Int>? {
+      var text = address
+
+      // Forma mista `::ffff:1.2.3.4`: os quatro octetos viram os dois últimos hextets.
+      val lastColon = text.lastIndexOf(':')
+      if (lastColon >= 0 && text.substring(lastColon + 1).contains('.')) {
+        val octets = text.substring(lastColon + 1).split('.')
+        if (octets.size != 4) return null
+        val numbers = octets.map { it.toIntOrNull() ?: return null }
+        if (numbers.any { it !in 0..255 }) return null
+        text = text.substring(0, lastColon + 1) +
+          ((numbers[0] shl 8) or numbers[1]).toString(16) + ":" +
+          ((numbers[2] shl 8) or numbers[3]).toString(16)
+      }
+
+      val halves = text.split("::")
+      if (halves.size > 2) return null
+
+      fun groupsOf(part: String): List<String>? {
+        if (part.isEmpty()) return emptyList()
+        val groups = part.split(':')
+        return if (groups.any { it.isEmpty() }) null else groups
+      }
+
+      val head = groupsOf(halves[0]) ?: return null
+      val tail = if (halves.size == 2) (groupsOf(halves[1]) ?: return null) else emptyList()
+      val groups = if (halves.size == 2) {
+        val zeros = 8 - head.size - tail.size
+        if (zeros < 0) return null
+        head + List(zeros) { "0" } + tail
+      } else {
+        head
+      }
+      if (groups.size != 8) return null
+
+      return groups.map { group ->
+        if (group.length > 4) return null
+        val value = group.toIntOrNull(16) ?: return null
+        if (value !in 0..0xFFFF) return null
+        value
+      }
+    }
+  }
+}
+
 fun releaseBackendBaseUrl(providers: ProviderFactory): String {
   val raw = providers.gradleProperty("sparkBackendBaseUrl").getOrElse("").trim()
   if (raw.isEmpty()) return ""
-
-  val host = raw.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase()
-  val developmentHosts = setOf("10.0.2.2", "localhost", "127.0.0.1")
-  val isPrivate = host in developmentHosts ||
-    Regex("""^(10|127)\.""").containsMatchIn(host) ||
-    Regex("""^192\.168\.""").containsMatchIn(host) ||
-    Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(host)
 
   if (!raw.startsWith("https://")) {
     throw GradleException(
@@ -44,13 +222,22 @@ fun releaseBackendBaseUrl(providers: ProviderFactory): String {
         "Produção fica atrás de Caddy + TLS; para desenvolvimento use -PsparkBackendBaseUrlDebug."
     )
   }
-  if (isPrivate) {
+  if (!VerifyReleaseEndpointGate.isAcceptable(raw)) {
     throw GradleException(
-      "sparkBackendBaseUrl aponta para um host de desenvolvimento/rede privada ('$host'). " +
+      "sparkBackendBaseUrl aponta para um host de desenvolvimento, de rede privada ou " +
+        "indecifrável ('" + (VerifyReleaseEndpointGate.hostOf(raw) ?: "sem host") + "'). " +
         "Um APK de release com esse endereço fala com outra máquina na rede de quem o instalar."
     )
   }
   return raw
+}
+
+tasks.register<VerifyReleaseEndpointGate>("verifyReleaseEndpointGate") {
+  group = "verification"
+  description = "Confere o portão de endereço de release contra a tabela compartilhada."
+  casesTable.set(
+    rootProject.layout.projectDirectory.file("contracts/endpoint/release-endpoint-cases.tsv")
+  )
 }
 
 android {

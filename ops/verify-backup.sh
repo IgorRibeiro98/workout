@@ -71,13 +71,26 @@ fi
 # não pode alterar o artefato que acabou de ser verificado.
 DATA_DIR="${DRILL_DIR}/data"
 mkdir -p "$DATA_DIR"
-cp "$RESTORED" "${DATA_DIR}/${DB_FILENAME}"
-chmod 777 "$DATA_DIR"
-chmod 666 "${DATA_DIR}/${DB_FILENAME}"
 
-log "subindo o backend sobre a cópia restaurada (porta ${PORT})"
+# O ensaio usa **o mesmo modelo de permissão da produção** (T16.8.1 §3), e não `777`/`666`.
+#
+# A versão anterior abria tudo para todo mundo. Além de ser o que a T16.8 proíbe em produção, isso
+# tornava o ensaio inútil justamente na parte que mais quebra: um `777` passa com qualquer
+# combinação de uid, inclusive as que a produção real não teria. O ensaio deixava de provar que o
+# container consegue abrir o banco e passava a provar apenas que o container existe.
+#
+# Aqui: `2770` (setgid) no diretório, `660` no arquivo, dono é quem roda o script, e o container
+# entra no grupo por `--group-add`. O uid do container (1000, `node`) e o do operador podem ser
+# diferentes — e no CI **são**, que é exatamente o caso que precisava de cobertura.
+DRILL_GID="$(id -g)"
+chmod 2770 "$DATA_DIR"
+cp "$RESTORED" "${DATA_DIR}/${DB_FILENAME}"
+chmod 660 "${DATA_DIR}/${DB_FILENAME}"
+
+log "subindo o backend sobre a cópia restaurada (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
 docker run -d --name "$CONTAINER" \
   -p "127.0.0.1:${PORT}:8080" \
+  --group-add "$DRILL_GID" \
   -v "${DATA_DIR}:/data" \
   -e DATABASE_PATH="/data/${DB_FILENAME}" \
   -e NODE_ENV=production \

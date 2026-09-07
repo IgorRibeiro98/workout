@@ -190,7 +190,10 @@ Também vale testar os caminhos ruins:
 - desligar a rede e tentar entrar → erro recuperável, com "Tentar novamente";
 - desligar o backend e repetir o passo 6 → "Servidor indisponível. Sua conta segue conectada."
 
-Verificação equivalente pelo lado do servidor, sem aparelho:
+Verificação equivalente pelo lado do servidor, sem aparelho — com a composição **local**
+(`backend/docker-compose.yml`), que publica `127.0.0.1:8080` de propósito para desenvolvimento.
+Em **produção** o backend não publica porta nenhuma, e o health é outro:
+ver [docs/operations/RUNBOOK.md](./operations/RUNBOOK.md).
 
 ```bash
 curl -i http://127.0.0.1:8080/health/live      # 200, público

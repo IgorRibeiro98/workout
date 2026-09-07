@@ -1,0 +1,33 @@
+# Sobreposição de **smoke de topologia** para o compose de produção (T16.8.1 §11).
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.ci-topology.yml up -d
+#
+# ## O que ela muda, e por que só isso
+#
+# Ela muda **uma coisa**: em qual porta do host o Caddy é publicado. Nada mais. O serviço `backend`
+# não aparece aqui — o que sobe é exatamente a definição de produção, com `expose` e sem `ports`.
+# Uma sobreposição que tocasse no backend transformaria o teste de topologia em um teste de outra
+# topologia, que é o oposto do objetivo.
+#
+# ## Por que ela existe
+#
+# `docker compose config` prova o que o YAML diz; ele não prova que a pilha sobe, que o Caddy
+# alcança o backend pela rede interna, que o health interno funciona sem porta publicada ou que o
+# bind mount persiste. Isso exige subir de verdade — e subir de verdade nas portas 80/443 esbarra
+# em qualquer máquina que já tenha um servidor web, incluindo a de desenvolvimento deste projeto.
+#
+# ## TLS
+#
+# Não há ACME aqui, e não deveria haver: o CI não tem domínio, não tem DNS e não pode depender da
+# Let's Encrypt. O smoke roda com `SPARK_DOMAIN=http://localhost` — o esquema explícito no endereço
+# do site faz o Caddy servir HTTP puro, sem tentar emitir certificado. O Caddyfile de produção é
+# **o mesmo arquivo**, validado separadamente por `caddy validate` no job de ops.
+#
+# O que este smoke valida é a topologia: o backend não alcançável do host, o proxy alcançando-o
+# pela rede interna, o health interno funcionando e o dado sobrevivendo ao ciclo do container.
+# ACME real continua sendo `NOT VERIFIED` até existir VPS e domínio.
+
+services:
+  caddy:
+    ports: !override
+      - "${SPARK_CI_HTTP_PORT:-8081}:80"

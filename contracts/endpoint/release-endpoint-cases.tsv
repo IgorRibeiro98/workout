@@ -1,0 +1,86 @@
+# Endereços do Spark Backend aceitos e recusados em **release** (T16.8 §6/§7; T16.8.1 §10).
+#
+# Este arquivo é a tabela de decisão compartilhada pelos DOIS portões que existem sobre o endereço:
+#
+#   app/build.gradle.kts  ── falha o build de release antes de o APK existir
+#   SparkBackendEndpoint  ── recusa em runtime, se algum caminho futuro montar o endereço por outro meio
+#
+# ## Por que uma tabela, e não dois conjuntos de testes
+#
+# Porque os dois portões são implementações separadas — uma em Kotlin de app, outra em Kotlin de
+# build — e implementações separadas divergem. Uma divergência aqui é traiçoeira nos dois sentidos:
+# "o Gradle aceita e o runtime recusa" produz um APK publicado com a nuvem desligada sem que
+# ninguém entenda por quê; "o Gradle recusa e o runtime aceitaria" bloqueia uma publicação legítima.
+#
+# Cada linha é verificada por ambos:
+#
+#   ./gradlew :app:testDebugUnitTest --tests "*SparkBackendEndpointTest*"   (runtime)
+#   ./gradlew :app:verifyReleaseEndpointGate                                (build)
+#
+# Formato:  <ACCEPT|REJECT><TAB><url>
+# ACCEPT significa "um APK de release pode usar este endereço".
+
+# --- o caso legítimo -------------------------------------------------------------------------
+ACCEPT	https://api.exemplo.com
+ACCEPT	https://api.exemplo.com/
+ACCEPT	https://api.exemplo.com:8443
+# A regra é sobre esquema e alcance, não sobre "ser um nome": 172.15 e 172.32 estão FORA do bloco
+# privado 172.16/12, e recusá-los seria uma regra errada disfarçada de cuidado.
+ACCEPT	https://172.15.0.1
+ACCEPT	https://172.32.0.1
+ACCEPT	https://8.8.8.8
+# IPv6 público. Recusar todo IPv6 seria mais fácil e estaria errado.
+ACCEPT	https://[2001:db8::1]
+ACCEPT	https://[2606:4700:4700::1111]
+
+# --- texto claro -------------------------------------------------------------------------------
+# Proibição da T16.2, e ela não tem exceção em release.
+REJECT	http://api.exemplo.com
+REJECT	http://10.0.2.2:8080
+REJECT	http://localhost:8080
+
+# --- host de desenvolvimento -------------------------------------------------------------------
+REJECT	https://10.0.2.2:8080
+REJECT	https://localhost:8080
+REJECT	https://127.0.0.1:8080
+REJECT	https://127.1.2.3
+
+# --- rede privada IPv4 -------------------------------------------------------------------------
+# Numa rede diferente da de quem construiu o APK, esses endereços pertencem a OUTRA máquina.
+REJECT	https://10.0.0.1
+REJECT	https://10.1.2.3
+REJECT	https://192.168.1.1
+REJECT	https://192.168.0.10:8080
+REJECT	https://172.16.0.5
+REJECT	https://172.31.255.1
+REJECT	https://169.254.1.1
+REJECT	https://100.64.0.1
+
+# --- rede privada IPv6 (T16.8.1 §10) -----------------------------------------------------------
+# O buraco que a T16.8 deixou aberto: o endurecimento cobria IPv4, e um endereço IPv6 privado
+# passava pelo portão do Gradle sem que nada reclamasse.
+REJECT	https://[::1]
+REJECT	https://[::1]:8443
+REJECT	https://[0:0:0:0:0:0:0:1]
+REJECT	https://[::]
+REJECT	https://[fc00::1]
+REJECT	https://[fd12:3456:789a::1]
+REJECT	https://[fe80::1]
+REJECT	https://[fe80::1%25eth0]
+REJECT	https://[febf::1]
+REJECT	https://[fec0::1]
+# IPv4 mapeado em IPv6: o endereço é o IPv4 que ele carrega, e a decisão precisa ser a mesma.
+REJECT	https://[::ffff:127.0.0.1]
+REJECT	https://[::ffff:192.168.1.1]
+
+# --- endereço que mente sobre o destino --------------------------------------------------------
+# `https://api.exemplo.com@10.0.2.2/` tem host `10.0.2.2`, e não `api.exemplo.com`.
+REJECT	https://api.exemplo.com@10.0.2.2/
+REJECT	https://usuario:senha@api.exemplo.com/
+
+# --- não é um endereço -------------------------------------------------------------------------
+REJECT	api.exemplo.com
+REJECT	ftp://api.exemplo.com
+REJECT	javascript:alert(1)
+REJECT	://x
+REJECT	https://

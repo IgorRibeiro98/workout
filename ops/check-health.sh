@@ -4,8 +4,9 @@
 #
 # Responde, em uma execução, as perguntas que a operação do Spark realmente precisa fazer:
 #
-#   o backend está no ar?          → /health/live
-#   o banco está acessível?        → /health/ready
+#   o backend está no ar?          → /health/live   (por dentro do container, sem porta publicada)
+#   o banco está acessível?        → /health/ready  (idem)
+#   a internet chega até ele?      → SPARK_PUBLIC_HEALTH_URL, quando houver domínio e TLS
 #   o último backup funcionou?     → estado gravado por ops/backup.sh
 #   quanto disco resta?            → df da partição de dados
 #   o banco está crescendo demais? → tamanho de spark.db e do WAL
@@ -34,26 +35,53 @@ DISK_WARN_PERCENT="${SPARK_DISK_WARN_PERCENT:-80}"
 DISK_FAIL_PERCENT="${SPARK_DISK_FAIL_PERCENT:-90}"
 # Backup diário: acima de 36 h já houve pelo menos uma execução perdida sem ninguém notar (§138).
 BACKUP_STALE_HOURS="${SPARK_BACKUP_STALE_HOURS:-36}"
-HEALTH_URL="${SPARK_HEALTH_URL:-http://127.0.0.1:8080}"
+
+# O health **público**, opcional e deliberadamente separado do health do backend (T16.8.1 §2).
+#
+# São duas perguntas diferentes, e tratá-las como uma só é o que faz um problema de DNS parecer um
+# backend morto — ou o contrário. `spark_health` (ops/lib.sh) responde "o processo implantado
+# serve?", por dentro do container, sem depender de porta publicada. Este responde "a internet
+# chega até ele?", e só existe depois que houver domínio e certificado. Vazio = ainda não há.
+PUBLIC_HEALTH_URL="${SPARK_PUBLIC_HEALTH_URL:-}"
 
 problems=0
 note() { [ "$QUIET" -eq 1 ] || printf '  %s\n' "$*"; }
 problem() { printf 'PROBLEMA: %s\n' "$*" >&2; problems=$((problems + 1)); }
 
 # --- backend -------------------------------------------------------------------------------
-if curl -fsS --max-time 10 "${HEALTH_URL}/health/live" 2> /dev/null | grep -q '"status":"ok"'; then
+#
+# Por dentro do container, por padrão: em produção o backend **não publica porta** (§13.7), e um
+# `curl http://127.0.0.1:8080` no host testaria algo que não existe. Ver `spark_health` em
+# `ops/lib.sh`.
+if spark_health live 2> /dev/null | grep -q '"status":"ok"'; then
   note "liveness ok"
 else
-  problem "o backend não respondeu /health/live em ${HEALTH_URL}"
+  problem "o backend não respondeu /health/live (serviço '${SPARK_SERVICE}' em ${SPARK_COMPOSE_DIR})"
 fi
 
-READY_BODY="$(curl -fsS --max-time 10 "${HEALTH_URL}/health/ready" 2> /dev/null || true)"
+READY_BODY="$(spark_health ready 2> /dev/null || true)"
 if printf '%s' "$READY_BODY" | grep -q '"status":"ok"'; then
   note "readiness ok (banco acessível, migrations aplicadas)"
 else
   # Readiness falso com liveness ok quase sempre significa banco: arquivo sumiu, permissão errada
   # ou migration pendente. O RUNBOOK trata os três.
   problem "readiness falhou: ${READY_BODY:-sem resposta}"
+fi
+
+# --- proxy / endereço público ----------------------------------------------------------------
+#
+# Verificação **adicional**, nunca substituta. Ela só roda quando o operador declarou o endereço:
+# antes de existir domínio e certificado não há o que verificar, e exigi-la faria o bootstrap de
+# uma VPS nova falhar por uma etapa que ainda nem começou.
+if [ -n "$PUBLIC_HEALTH_URL" ]; then
+  if curl -fsS --max-time 10 "${PUBLIC_HEALTH_URL%/}/health/ready" 2> /dev/null \
+     | grep -q '"status":"ok"'; then
+    note "health público ok (${PUBLIC_HEALTH_URL})"
+  else
+    # Com o backend ready acima e este falhando, o problema está entre a internet e o container:
+    # DNS, certificado, firewall ou o próprio Caddy. O RUNBOOK separa os casos.
+    problem "o endereço público não respondeu /health/ready: ${PUBLIC_HEALTH_URL}"
+  fi
 fi
 
 # --- disco ---------------------------------------------------------------------------------
@@ -77,6 +105,39 @@ if [ -d "$SPARK_DATA_DIR" ]; then
   fi
 else
   problem "o diretório de dados não existe: ${SPARK_DATA_DIR}"
+fi
+
+# --- modelo de permissão (T16.8.1 §3) --------------------------------------------------------
+#
+# O acesso ao banco é por **grupo compartilhado**, não por uid coincidente: `/opt/spark/data`
+# pertence a `spark:<grupo>` com `2770`, e o container entra nesse grupo por `group_add`. Esta
+# verificação existe porque o modelo tem duas formas de se degradar em silêncio:
+#
+#   - alguém "resolve" um problema de permissão com `chmod 777` — e o dado pessoal do servidor
+#     passa a ser legível por qualquer processo da máquina;
+#   - alguém remove o setgid — e o próximo arquivo que o container criar sai com outro grupo, que
+#     o operador não consegue ler. O backup só falha na próxima execução.
+#
+# Nenhuma das duas aparece no readiness: o backend continua servindo normalmente.
+if [ -d "$SPARK_DATA_DIR" ]; then
+  DATA_MODE="$(stat -c %a "$SPARK_DATA_DIR")"
+  # `stat -c %a` devolve 3 dígitos quando não há bit especial e 4 quando há. Normalizar para 4
+  # evita comparar "770" com "2770" e concluir errado.
+  [ "${#DATA_MODE}" -eq 4 ] || DATA_MODE="0${DATA_MODE}"
+  note "permissões de ${SPARK_DATA_DIR}: ${DATA_MODE} (grupo $(spark_data_gid))"
+
+  case "$DATA_MODE" in
+    2*) : ;;
+    *) problem "${SPARK_DATA_DIR} perdeu o setgid (modo ${DATA_MODE}); o que o container criar sairá com outro grupo — ver PRODUCTION_DEPLOYMENT.md" ;;
+  esac
+  case "${DATA_MODE: -2:1}" in
+    7) : ;;
+    *) problem "o grupo compartilhado não tem rwx em ${SPARK_DATA_DIR} (modo ${DATA_MODE}); o backend não conseguirá escrever" ;;
+  esac
+  case "${DATA_MODE: -1}" in
+    0) : ;;
+    *) problem "${SPARK_DATA_DIR} está acessível a outros (modo ${DATA_MODE}); dado pessoal do servidor não pode ser legível pela máquina inteira" ;;
+  esac
 fi
 
 # --- idade do último backup ----------------------------------------------------------------

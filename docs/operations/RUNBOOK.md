@@ -17,8 +17,29 @@ foi o último backup bem-sucedido? Sai com código diferente de zero quando algo
 ```bash
 docker compose -f /opt/spark/repo/backend/docker-compose.prod.yml ps
 docker compose -f /opt/spark/repo/backend/docker-compose.prod.yml logs --tail 100 backend
-curl -s https://api.<dominio>/health/ready
+curl -s https://api.<dominio>/health/ready          # a internet chega até ele?
 ```
+
+> **O backend não publica porta no host.** `curl http://127.0.0.1:8080/health/ready` na VPS **não
+> funciona, por construção**: quem escuta 80/443 é o Caddy, e `docker-compose.prod.yml` só declara
+> `expose`. Se você precisar falar direto com o processo, é por dentro do container:
+>
+> ```bash
+> cd /opt/spark/repo/backend
+> docker compose -f docker-compose.prod.yml exec -T backend \
+>   node -e "fetch('http://127.0.0.1:8080/health/ready').then(r=>r.text()).then(console.log)"
+> ```
+>
+> É exatamente isso que `ops/check-health.sh` e `ops/deploy.sh` fazem. **Publicar a porta 8080 para
+> "facilitar o diagnóstico" é reabrir `http://IP:8080`**, que a T16.8 fechou de propósito.
+
+### O health interno passa e o público não
+
+São perguntas diferentes, e a distinção economiza horas: o backend serve, mas a internet não chega
+até ele. Olhe, nesta ordem, DNS (`dig +short api.<dominio>`), certificado
+(`docker compose -f docker-compose.prod.yml logs caddy | tail -50`), firewall (`sudo ufw status`) e
+por último o próprio Caddy. O banco, as migrations e a aplicação estão fora de suspeita — o health
+interno já respondeu por eles.
 
 ## O que NUNCA está quebrado
 
@@ -44,7 +65,10 @@ docker compose -f docker-compose.prod.yml logs --tail 100 backend
 | O que você vê | Causa provável | O que fazer |
 | --- | --- | --- |
 | `Configuração inválida:` | Variável de ambiente errada | Corrija `.env`/`backend.env` e suba de novo |
-| `Configuração incompleta:` | `REQUIRE_FIREBASE_ADMIN=true` sem credencial | Confira `/opt/spark/secrets/firebase-admin.json` e a montagem |
+| `Configuração incompleta:` | `REQUIRE_FIREBASE_ADMIN=true` sem `GOOGLE_APPLICATION_CREDENTIALS` | Defina o caminho no compose |
+| `REQUIRE_FIREBASE_ADMIN=true, mas o arquivo não pôde ser lido (EACCES)` | A service account não é legível pelo container | `install -m 640 -o spark -g spark-data` — ver "permissão" abaixo |
+| `... não pôde ser lido (ENOENT)` | O arquivo não existe no caminho montado | Confira `/opt/spark/secrets/firebase-admin.json` e a montagem |
+| `... o conteúdo não é JSON válido` / `faltam campos obrigatórios` | Arquivo truncado ou não é a service account | Baixe de novo do console do Firebase |
 | `Falha no bootstrap:` | Banco não abre, ou migration falhou | Ver "migration falhou" e "banco corrompido" |
 | Container reiniciando em laço | Configuração inválida | **Não** aumente o restart: corrija a configuração. Um laço de restart mascarando config errada é pior que o serviço parado |
 | Container ausente | Nunca subiu | `ops/deploy.sh` |
@@ -77,10 +101,23 @@ O processo está vivo e o **banco** não está utilizável. O corpo diz qual ver
 | `migrations: false` | Migration nova no código que não foi aplicada — quase sempre um deploy pela metade |
 
 ```bash
-ls -la /opt/spark/data/                          # o arquivo existe? dono é 1000:1000?
+stat -c '%n %U:%G %a' /opt/spark/data /opt/spark/data/spark.db
 df -h /opt/spark/data                            # disco cheio?
 docker compose -f docker-compose.prod.yml logs --tail 50 backend | grep -i database
 ```
+
+O esperado é `/opt/spark/data` em `spark:spark-data 2770`. **Não confira se o dono é o uid 1000**:
+o acesso do container vem do *grupo* compartilhado, e o uid do `spark` pode ser qualquer um (ver
+[PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md), "Usuários, grupos e permissões"). Duas
+formas de quebrar, as duas silenciosas:
+
+| O que você vê | O que aconteceu | Correção |
+| --- | --- | --- |
+| Modo sem o `2` inicial (`770`) | O setgid caiu; o que o container criar sai com outro grupo | `sudo chmod 2770 /opt/spark/data` |
+| `SPARK_DATA_GID` errado no `.env` | O container entrou no grupo errado | `getent group spark-data \| cut -d: -f3` e corrija |
+
+Nunca resolva isso com `chmod 777`: além de expor o dado pessoal de todo mundo à máquina inteira,
+esconde o defeito em vez de corrigi-lo. `check-health.sh` acusa as duas situações acima.
 
 O readiness **não** consulta Firebase nem Gemini, e nunca vai consultar: o Coach fora não pode
 derrubar sync e backup (§61). Se `ready` está falhando, o problema é banco ou configuração.
@@ -217,6 +254,21 @@ ops/backup.sh --tag manual
 Um backup que falhou **não** apaga o registro do último sucesso: `check-health.sh` continua medindo
 a idade real, e não a data de uma falha.
 
+**Todo** desfecho fica registrado. `backup-status.json` traz a etapa em que parou, e ela leva
+direto à causa:
+
+| `message` | Onde parou |
+| --- | --- |
+| `falha na etapa 'config'` | Credencial do storage ausente (`RESTIC_REPOSITORY`/senha) |
+| `falha na etapa 'workdir'` | Não conseguiu escrever em `/opt/spark/backups` — quase sempre disco |
+| `falha na etapa 'snapshot'` | `VACUUM INTO`/`integrity_check` — pode ser **corrupção do banco** |
+| `falha na etapa 'offsite-upload'` | O restic recusou o envio; o motivo dele está no journal |
+| `falha na etapa 'offsite-retention'` | O snapshot subiu, mas o `forget --prune` falhou: o repositório está crescendo sem limite |
+
+O arquivo carrega o rótulo da etapa e **nunca** a saída do comando: endereço de repositório, chave
+de storage e senha do restic ficam fora dele de propósito, porque ele é lido durante o diagnóstico.
+O detalhe técnico está em `journalctl -u spark-backup.service`.
+
 ---
 
 ## O Coach está caro, lento ou fora
@@ -317,6 +369,8 @@ Para sair, `SPARK_MAINTENANCE_MODE=false` e suba de novo.
 | Preciso de | Comando |
 | --- | --- |
 | Diagnóstico geral | `ops/check-health.sh` |
+| Health do backend (sem porta publicada) | `docker compose -f docker-compose.prod.yml exec -T backend node -e "fetch('http://127.0.0.1:8080/health/ready').then(r=>r.text()).then(console.log)"` |
+| Health público (quando há domínio) | `curl -s https://api.<dominio>/health/ready` |
 | Deploy | `ops/deploy.sh` |
 | Rollback | `ops/deploy.sh --rollback <sha>` |
 | Backup agora | `ops/backup.sh --tag manual` |

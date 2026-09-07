@@ -1,14 +1,26 @@
-# CI do Spark Backend (T16.0 → T16.2).
+# CI do Spark Backend (T16.0 → T16.8.1).
 #
-# Escopo deliberadamente restrito a `backend/**`. O Android tem o próprio workflow desde a T16.7.1
-# (`android.yml`), e os dois não se misturam: eles têm gatilhos, toolchain e tempo de execução
-# diferentes, e juntá-los faria uma mudança de documentação do backend recompilar o app.
+# Escopo deliberadamente restrito a `backend/**` e `ops/**`. O Android tem o próprio workflow desde
+# a T16.7.1 (`android.yml`), e os dois não se misturam: eles têm gatilhos, toolchain e tempo de
+# execução diferentes, e juntá-los faria uma mudança de documentação do backend recompilar o app.
 #
 # Nada neste workflow depende de rede além do registro do npm: **sem Firebase, sem Gemini, sem
 # VPS, sem credencial**. Os testes do Coach (T16.2) usam `FakeAiProviderGateway` e
 # `FakeAuthTokenVerifier`, que vivem só em `test/`: não existe `GEMINI_API_KEY` aqui, e uma
 # chamada real ao modelo em CI seria custo recorrente por commit. Se algum job precisar de segredo
 # no futuro, isso é uma decisão nova.
+#
+# ## Diretório de trabalho: por job, nunca global (T16.8.1 §6)
+#
+# Havia um `defaults.run.working-directory: backend` no topo deste arquivo, e ele quebrava em
+# silêncio todo job que operasse a partir da raiz: o `backup-drill` fazia
+# `docker build -t spark-backend:local backend` e recebia `path "backend" not found`, porque o
+# caminho resolvia para `backend/backend`. O ensaio de backup **nunca chegou a rodar** — o job
+# falhava no primeiro passo, e o CI ficava vermelho por um erro de caminho em vez de por um
+# problema de backup.
+#
+# Agora cada job declara o seu. Os que rodam `npm` declaram `backend`; os que operam a árvore
+# inteira (`ops/`, compose, drill) declaram a raiz, explicitamente.
 
 name: backend
 
@@ -27,14 +39,13 @@ on:
       - 'ops/**'
       - '.github/workflows/backend.yml'
 
-defaults:
-  run:
-    working-directory: backend
-
 jobs:
   verify:
     name: lint + test + build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -80,6 +91,10 @@ jobs:
   docker:
     name: docker build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Este job constrói a imagem a partir do contexto `backend/`, então o `.` abaixo é ele.
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -216,8 +231,53 @@ jobs:
       # `ops/backup.sh` e `ops/restore.sh` mexem no banco de produção e no repositório de backup.
       # Um `$VAR` sem aspas ali é um caminho com espaço que vira dois argumentos — e um backup que
       # não acontece. O shellcheck já vem instalado no runner do GitHub.
+      #
+      # `ops/tests/` entra junto: um teste operacional com defeito de shell dá falso verde, que é
+      # a única coisa pior que não ter o teste.
+      #
+      # Os avisos são **corrigidos**, nunca silenciados em bloco (T16.8.1 §5). As duas únicas
+      # supressões que restam em `ops/` são pontuais e documentadas na linha de cima: `SC2086` onde
+      # a divisão em palavras é o comportamento pretendido (`SPARK_RESTIC_CMD` carrega comando com
+      # argumentos) e `SC1090`/`SC1091` onde o caminho do `source` é configuração operacional e não
+      # existe em tempo de análise.
       - name: shellcheck
-        run: shellcheck ops/*.sh
+        run: shellcheck ops/*.sh ops/tests/*.sh
+
+      # Nenhuma supressão em bloco (T16.8.1 §5): a saída fácil para deixar o passo acima verde é
+      # um `# shellcheck disable=` com meia dúzia de códigos no topo do arquivo, e ela apaga os
+      # avisos junto com os defeitos que eles descrevem.
+      - name: Nenhuma supressão de ShellCheck em bloco
+        run: |
+          set -euo pipefail
+          if grep -rn 'shellcheck disable=.*,' ops/; then
+            echo "supressão de múltiplos códigos numa linha só: trate cada aviso"; exit 1
+          fi
+          # Uma supressão precisa vir acompanhada da explicação, na linha de cima ou na de baixo.
+          while IFS=: read -r file line _; do
+            vizinhas="$(sed -n "$((line - 1))p;$((line + 1))p" "$file")"
+            case "$vizinhas" in
+              *'#'*) : ;;
+              *) echo "$file:$line — supressão sem justificativa adjacente"; exit 1 ;;
+            esac
+          done < <(grep -rn 'shellcheck disable=' ops/ || true)
+          echo "supressões pontuais e justificadas"
+
+      # A proibição de `777`/`666` (T16.8 §145/§146). Ela existia como regra escrita e não como
+      # verificação — e `ops/verify-backup.sh` tinha um `chmod 777` no ensaio de restauração, que
+      # além de proibido tornava o ensaio incapaz de detectar o problema de permissão que ele
+      # deveria detectar.
+      - name: Nenhum chmod aberto nos scripts operacionais
+        run: |
+          set -euo pipefail
+          # `^[^#]*` exclui comentário: a regra precisa poder ser **explicada** nos arquivos que a
+          # aplicam, e uma verificação que proíbe escrever o número em um comentário proibiria
+          # justamente o texto que impede alguém de reintroduzi-lo.
+          if grep -rnE '^[^#]*chmod ([0-7]?)(777|666|776|667)' \
+               ops/ backend/docker-compose*.yml backend/Dockerfile; then
+            echo "permissão aberta em caminho operacional: use o grupo compartilhado (T16.8.1 §3)"
+            exit 1
+          fi
+          echo "nenhuma permissão aberta"
 
       - name: Sintaxe das unidades systemd
         run: |
@@ -247,6 +307,25 @@ jobs:
             -v "$PWD/backend/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
             caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
+      # A documentação operacional não pode contradizer a topologia (T16.8.1 §24).
+      #
+      # Enquanto `docker-compose.prod.yml` não publicar a porta do backend, nenhum documento pode
+      # mandar o operador rodar `curl http://127.0.0.1:8080` **no host**: esse comando não pode
+      # funcionar, e um runbook que o recomenda leva quem está diagnosticando a concluir que o
+      # backend está morto. Explicar que ele NÃO funciona continua permitido — a verificação só
+      # olha linhas que são comandos.
+      - name: A documentação não recomenda a porta que produção não publica
+        run: |
+          set -euo pipefail
+          # `docs/operations/` apenas: é a documentação de **produção**. `docs/FIREBASE_AUTH_SETUP.md`
+          # descreve a composição local (`docker-compose.yml`), que publica 127.0.0.1:8080 de
+          # propósito — e o comando de lá está certo justamente porque fala de outra topologia.
+          if grep -rnE '^[[:space:]]*curl [^|]*127\.0\.0\.1:8080' docs/operations/; then
+            echo "documentação mandando falar com uma porta que produção não publica (T16.8.1 §24)"
+            exit 1
+          fi
+          echo "documentação coerente com a topologia"
+
       # O compose de produção precisa continuar não publicando a porta do backend. É a diferença
       # entre "o backend fica atrás do Caddy" e "o backend está na internet na porta 8080".
       - name: O compose de produção não expõe o backend
@@ -262,14 +341,285 @@ jobs:
           printf '%s' "$resolved" | grep -q 'published: "443"' || { echo "o Caddy precisa publicar 443"; exit 1; }
           echo "topologia de produção ok"
 
+  production-topology:
+    name: topologia de produção (compose real)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      # A topologia de produção, subida de verdade (T16.8.1 §11).
+      #
+      # `docker compose config` prova o que o YAML diz. Ele não prova que a pilha sobe, que o Caddy
+      # alcança o backend pela rede interna, que o health operacional funciona **sem porta
+      # publicada** ou que o bind mount persiste. Este job sobe `docker-compose.prod.yml` — o
+      # arquivo de produção, sem alteração nenhuma no serviço `backend` — e verifica as quatro.
+      #
+      # A única adaptação é a porta do host em que o Caddy é publicado
+      # (`docker-compose.ci-topology.yml`), porque 80/443 nem sempre estão livres. TLS real
+      # continua `NOT VERIFIED`: não há domínio nem DNS aqui, e depender da Let's Encrypt no CI
+      # seria uma dependência externa por commit.
+      - name: Build image
+        run: docker build -t spark-backend:topology backend
+
+      - name: Configuração da VPS, reproduzida no runner
+        run: |
+          set -euo pipefail
+          WORK="$(mktemp -d)"
+          echo "SPARK_WORK=$WORK" >> "$GITHUB_ENV"
+          mkdir -p "$WORK/data" "$WORK/secrets" "$WORK/state" "$WORK/backups"
+
+          # O modelo de permissão da T16.8.1 §3: setgid + grupo compartilhado, nunca 777.
+          # O uid do runner (1001) já é diferente do uid do container (1000, `node`), que é
+          # exatamente o caso que a T16.8 não cobria.
+          chmod 2770 "$WORK/data"
+          chmod 2750 "$WORK/secrets"
+          echo "uid do host: $(id -u); gid compartilhado: $(id -g)"
+          if [ "$(id -u)" = "1000" ]; then
+            echo "AVISO: o uid do host coincide com o do container; este job prova menos do que deveria."
+            echo "O teste que constrói o desencontro de propósito é ops/tests/permissions.test.sh."
+          fi
+
+          # Service account **sintética**: chave RSA descartável, projeto que não existe, gerada
+          # aqui e jogada fora com o runner. Nenhuma credencial real entra no CI (§164). Ela existe
+          # porque o compose de produção declara `REQUIRE_FIREBASE_ADMIN=true`, e desde a T16.8.1
+          # §8 isso é verificado de verdade no startup — uma credencial ilegível derruba o processo.
+          docker run --rm -v "$WORK/secrets:/s" --entrypoint node spark-backend:topology -e "
+            const { generateKeyPairSync } = require('node:crypto');
+            const { writeFileSync, chmodSync } = require('node:fs');
+            const { privateKey } = generateKeyPairSync('rsa', {
+              modulusLength: 2048,
+              privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+              publicKeyEncoding: { type: 'spki', format: 'pem' },
+            });
+            writeFileSync('/s/firebase-admin.json', JSON.stringify({
+              type: 'service_account',
+              project_id: 'ci-only-not-a-real-firebase-project',
+              private_key_id: '0'.repeat(40),
+              private_key: privateKey,
+              client_email: 'ci@ci-only-not-a-real-firebase-project.iam.gserviceaccount.com',
+              client_id: '0'.repeat(21),
+              token_uri: 'https://oauth2.googleapis.com/token',
+            }, null, 2));
+            chmodSync('/s/firebase-admin.json', 0o640);
+          "
+          # 640 no grupo compartilhado, e não 600 do dono: legível pelo container, e não pela
+          # máquina inteira.
+          test "$(stat -c %a "$WORK/secrets/firebase-admin.json")" = "640"
+
+          cp backend/Caddyfile.prod backend/Caddyfile
+          cat > backend/.env <<EOF
+          SPARK_DOMAIN=http://localhost
+          SPARK_ACME_EMAIL=ops@exemplo.invalid
+          SPARK_DATA_DIR=$WORK/data
+          SPARK_SECRETS_DIR=$WORK/secrets
+          SPARK_DATA_GID=$(id -g)
+          SPARK_CI_HTTP_PORT=8081
+          EOF
+
+      - name: A pilha de produção sobe, e o backend continua inalcançável do host
+        run: |
+          set -euo pipefail
+          cd backend
+          COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.ci-topology.yml"
+          SPARK_IMAGE_TAG=topology $COMPOSE up -d
+
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 3 http://localhost:8081/health/ready 2>/dev/null \
+               | grep -q '"status":"ok"'; then break; fi
+            if [ "$i" = "30" ]; then
+              SPARK_IMAGE_TAG=topology $COMPOSE logs; exit 1
+            fi
+            sleep 2
+          done
+
+          # A invariante central da T16.8: o backend não publica porta. Não é conferido no YAML —
+          # é conferido tentando alcançá-lo.
+          if curl -fsS --max-time 3 http://127.0.0.1:8080/health/ready > /dev/null 2>&1; then
+            echo "FALHA: o backend está publicado em 127.0.0.1:8080"; exit 1
+          fi
+          if SPARK_IMAGE_TAG=topology $COMPOSE port backend 8080 2>/dev/null | grep -q ':'; then
+            echo "FALHA: o serviço backend publicou uma porta"; exit 1
+          fi
+          echo "ok: o backend só existe na rede interna"
+
+          # E a sobreposição do CI não pode ter tocado no backend.
+          resolved="$(SPARK_IMAGE_TAG=topology $COMPOSE config)"
+          if printf '%s' "$resolved" | grep -A8 'container_name: spark-backend' | grep -q 'published:'; then
+            echo "FALHA: a sobreposição do CI publicou a porta do backend"; exit 1
+          fi
+
+          # O proxy alcança o backend pela rede interna, e a rota de dado nasce fechada.
+          curl -fsS http://localhost:8081/health/live | grep -q '"status":"ok"'
+          status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8081/v1/backups)"
+          [ "$status" = "401" ] || { echo "rota protegida respondeu $status pelo proxy"; exit 1; }
+          echo "ok: Caddy alcança o backend e a rota exige autenticação"
+
+      - name: O health operacional funciona sem porta publicada
+        run: |
+          set -euo pipefail
+          # Sem NENHUMA variável do compose no ambiente: é assim que `ops/check-health.sh` roda pelo
+          # systemd. O Compose interpola o arquivo inteiro antes de qualquer subcomando, e um
+          # `${VAR:?}` não resolvido derrubava até um `ps` — o healthcheck reportava "o backend não
+          # respondeu" com o backend no ar (T16.8.1 §2).
+          export SPARK_COMPOSE_DIR="$PWD/backend"
+          export SPARK_COMPOSE_FILE=docker-compose.prod.yml
+          export SPARK_DATA_DIR="$SPARK_WORK/data"
+          export SPARK_STATE_DIR="$SPARK_WORK/state"
+          export SPARK_STAGING_DIR="$SPARK_WORK/backups"
+          export SPARK_BACKUP_ENV_FILE=/dev/null
+
+          # shellcheck source=ops/lib.sh
+          . ops/lib.sh
+          spark_health ready | grep -q '"status":"ok"' || { echo "health interno falhou"; exit 1; }
+          spark_health live  | grep -q '"status":"ok"' || { echo "liveness interno falhou"; exit 1; }
+          echo "ok: health interno pelo compose, sem porta publicada e sem variáveis no ambiente"
+
+          # O health público é uma verificação SEPARADA, e opcional: ela só existe quando há
+          # domínio e certificado. Um problema de DNS não pode parecer um backend morto.
+          SPARK_PUBLIC_HEALTH_URL=http://localhost:8081 ops/check-health.sh 2>&1 | tee /tmp/health.log || true
+          grep -q 'liveness ok' /tmp/health.log
+          grep -q 'readiness ok' /tmp/health.log
+          grep -q 'health público ok' /tmp/health.log
+
+          # E o modelo de permissão precisa aparecer no diagnóstico: um `chmod 777` "para resolver"
+          # é acusado aqui, não descoberto depois.
+          grep -q 'permissões de .*: 2770' /tmp/health.log
+
+      - name: O dado sobrevive à recriação dos containers
+        run: |
+          set -euo pipefail
+          cd backend
+          COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.ci-topology.yml"
+          SPARK_IMAGE_TAG=topology $COMPOSE exec -T backend node -e "
+            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
+            db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
+              .run('topologia','persistiu',Date.now()); db.close();"
+
+          SPARK_IMAGE_TAG=topology $COMPOSE down
+          SPARK_IMAGE_TAG=topology $COMPOSE up -d
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 3 http://localhost:8081/health/ready 2>/dev/null \
+               | grep -q '"status":"ok"'; then break; fi
+            if [ "$i" = "30" ]; then SPARK_IMAGE_TAG=topology $COMPOSE logs; exit 1; fi
+            sleep 2
+          done
+
+          SPARK_IMAGE_TAG=topology $COMPOSE exec -T backend node -e "
+            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
+            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('topologia');
+            if (!row || row.value !== 'persistiu') {
+              console.error('o dado não sobreviveu ao bind mount'); process.exit(1);
+            }
+            console.log('persistência ok no bind mount'); db.close();"
+
+          SPARK_IMAGE_TAG=topology $COMPOSE down -v
+
+      # `ops/deploy.sh` exercitado de verdade (T16.8.1 §12).
+      #
+      # Não é um deploy em VPS: é a mesma composição de produção, no runner. O que precisa ser
+      # provado são as três garantias que o script existe para dar — backup antes do deploy, health
+      # depois do deploy, rollback quando o health falha — e nenhuma delas é verificável lendo o
+      # arquivo.
+      - name: deploy.sh — health interno, rollback e o portão de backup
+        run: |
+          set -euo pipefail
+          export SPARK_COMPOSE_DIR="$PWD/backend"
+          export SPARK_COMPOSE_FILE=docker-compose.prod.yml
+          export SPARK_DATA_DIR="$SPARK_WORK/data"
+          export SPARK_STATE_DIR="$SPARK_WORK/state"
+          export SPARK_STAGING_DIR="$SPARK_WORK/backups"
+          export SPARK_BACKUP_ENV_FILE=/dev/null
+          export SPARK_HEALTH_ATTEMPTS=25
+
+          docker tag spark-backend:topology spark-backend:baseline
+          running_tag() {
+            docker inspect spark-backend --format '{{.Config.Image}}' 2>/dev/null | sed 's/.*://'
+          }
+
+          echo "--- 1. rollback para uma imagem conhecida: health interno, sem porta publicada ---"
+          ops/deploy.sh --rollback baseline
+          [ "$(running_tag)" = "baseline" ] || { echo "a tag no ar não é baseline"; exit 1; }
+
+          echo "--- 2. health falhando: rollback automático para a versão anterior ---"
+          # `SPARK_HEALTH_URL` apontando para uma porta morta força o caminho de falha usando a
+          # configuração de verdade, sem quebrar o script para testá-lo.
+          set +e
+          SPARK_HEALTH_URL=http://127.0.0.1:59999 SPARK_HEALTH_ATTEMPTS=2 \
+            ops/deploy.sh --skip-backup > /tmp/deploy-falha.log 2>&1
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "o deploy declarou sucesso com health falhando"; exit 1; }
+          grep -q 'voltando para spark-backend:baseline' /tmp/deploy-falha.log \
+            || { echo "o rollback automático não aconteceu"; cat /tmp/deploy-falha.log; exit 1; }
+          [ "$(running_tag)" = "baseline" ] \
+            || { echo "não voltou para a versão anterior (no ar: $(running_tag))"; exit 1; }
+          echo "ok: health falhou, o script voltou para a imagem anterior e saiu com erro"
+
+          echo "--- 3. deploy real do commit atual: health interno aprova ---"
+          ops/deploy.sh --skip-backup
+          commit="$(git rev-parse --short=12 HEAD)"
+          [ "$(running_tag)" = "$commit" ] \
+            || { echo "a tag no ar não é o commit (no ar: $(running_tag))"; exit 1; }
+          echo "ok: deploy concluído e ready, com o backend sem porta publicada"
+
+          echo "--- 4. sem backup possível, o deploy aborta antes de tocar em produção ---"
+          set +e
+          ops/deploy.sh > /tmp/deploy-backup.log 2>&1
+          code=$?
+          set -e
+          [ "$code" != "0" ] || { echo "o deploy seguiu sem ponto de recuperação"; exit 1; }
+          grep -q 'backup pré-deploy falhou' /tmp/deploy-backup.log \
+            || { echo "abortou por outro motivo"; cat /tmp/deploy-backup.log; exit 1; }
+          [ "$(running_tag)" = "$commit" ] \
+            || { echo "produção foi alterada apesar do backup ter falhado"; exit 1; }
+          # E a falha do backup precisa ter ficado registrada (T16.8.1 §9).
+          grep -q '"outcome": "FAILURE"' "$SPARK_STATE_DIR/backup-status.json" \
+            || { echo "a falha do backup não foi registrada"; exit 1; }
+          echo "ok: deploy abortado, produção intacta, falha do backup registrada"
+
+          echo "--- 5. árvore suja: a tag da imagem precisa descrever o que sobe ---"
+          echo "// sujeira temporária do teste" >> backend/src/main.ts
+          set +e
+          ops/deploy.sh --skip-backup > /tmp/deploy-sujo.log 2>&1
+          code=$?
+          set -e
+          git checkout -- backend/src/main.ts
+          [ "$code" != "0" ] || { echo "o deploy aceitou uma árvore suja"; exit 1; }
+          grep -q 'não commitadas' /tmp/deploy-sujo.log \
+            || { echo "abortou por outro motivo"; cat /tmp/deploy-sujo.log; exit 1; }
+          echo "ok: deploy recusa árvore suja"
+
+      - name: Limpeza
+        if: always()
+        run: |
+          cd backend
+          SPARK_IMAGE_TAG=topology docker compose -f docker-compose.prod.yml \
+            -f docker-compose.ci-topology.yml down -v > /dev/null 2>&1 || true
+          rm -f Caddyfile .env
+
   backup-drill:
     name: ensaio de backup e restauração
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # A raiz, explicitamente: este job opera `ops/` e o contexto de build `backend/`. Era o
+        # `defaults` global apontando para `backend` que fazia `docker build ... backend` procurar
+        # `backend/backend` e o job inteiro morrer antes do primeiro ensaio (T16.8.1 §6).
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
       - name: Build image
         run: docker build -t spark-backend:local backend
+
+      # O modelo de permissão host ↔ container, com o desencontro de uid construído de propósito
+      # (T16.8.1 §3). Roda antes do ensaio porque é a pré-condição dele: um backup que não consegue
+      # ler o arquivo que o container escreveu não é um backup.
+      - name: Permissões com uid diferente entre host e container
+        run: SPARK_IMAGE=spark-backend:local ops/tests/permissions.test.sh
 
       # O ensaio que importa (T16.8 §43/§161/§163): snapshot consistente com o banco **ativo**
       # recebendo escrita, verificação de integridade, restauração e o backend real subindo sobre
@@ -283,8 +633,13 @@ jobs:
         run: |
           set -euo pipefail
           WORK="$(mktemp -d)"
+          echo "SPARK_WORK=$WORK" >> "$GITHUB_ENV"
           mkdir -p "$WORK/data" "$WORK/backups" "$WORK/state"
-          chmod 777 "$WORK/data"
+
+          # Modelo de produção (T16.8.1 §3): setgid + grupo compartilhado. Era `chmod 777` aqui, e
+          # `777` fazia o ensaio passar com qualquer combinação de uid — inclusive as que a
+          # produção real não teria.
+          chmod 2770 "$WORK/data"
 
           export SPARK_DATA_DIR="$WORK/data"
           export SPARK_STAGING_DIR="$WORK/backups"
@@ -293,7 +648,10 @@ jobs:
           export SPARK_IMAGE=spark-backend:local
           export SPARK_BACKUP_ENV_FILE=/dev/null
 
+          echo "uid do host: $(id -u) | grupo compartilhado: $(stat -c %g "$SPARK_DATA_DIR")"
+
           docker run -d --name drill-backend -p 127.0.0.1:8080:8080 \
+            --group-add "$(stat -c %g "$SPARK_DATA_DIR")" \
             -v "$SPARK_DATA_DIR:/data" -e DATABASE_PATH=/data/spark.db -e NODE_ENV=production \
             spark-backend:local
           for i in $(seq 1 30); do
@@ -310,26 +668,47 @@ jobs:
           # Escrita concorrente durante o snapshot: em WAL, VACUUM INTO não pode bloquear o
           # servidor, e um snapshot rasgado por escrita concorrente é exatamente o defeito que
           # `cp spark.db` produziria.
-          ( for i in $(seq 1 20); do
-              docker exec drill-backend node -e "
-                const D=require('better-sqlite3'); const db=new D('/data/spark.db');
-                db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
-                  .run('carga_$i','x',Date.now()); db.close();" || true
-            done ) &
-          WRITER=$!
+          #
+          # Um processo só, escrevendo em laço por tempo determinado, e não um `docker exec` por
+          # iteração: o custo de subir um processo por escrita fazia a carga terminar antes de o
+          # snapshot começar, e a sobreposição — que é o ponto do ensaio — acontecia por sorte.
+          docker exec -d drill-backend node -e "
+            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
+            const insert=db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)');
+            const fim=Date.now()+20000;
+            let n=0;
+            while (Date.now() < fim) { insert.run('carga_'+(n++),'x',Date.now()); }
+            db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
+              .run('carga_total', String(n), Date.now());
+            db.close();"
+
+          sleep 2
           SNAP="$(ops/snapshot.sh)"
-          wait $WRITER || true
           test -s "$SNAP"
+          echo "SPARK_SNAPSHOT=$SNAP" >> "$GITHUB_ENV"
+
+          # O snapshot foi tirado com escrita em curso, e precisa estar íntegro assim mesmo.
+          docker run --rm -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
+            const D=require('better-sqlite3');
+            const db=new D('/s/$(basename "$SNAP")',{readonly:true});
+            const integridade=db.pragma('integrity_check',{simple:true});
+            if (integridade !== 'ok') { console.error('integrity_check: '+integridade); process.exit(1); }
+            const orfaos=db.pragma('foreign_key_check');
+            if (orfaos.length > 0) { console.error('foreign_key_check: '+orfaos.length); process.exit(1); }
+            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('drill');
+            if (!row || row.value !== 'presente') { console.error('o snapshot não tem o dado'); process.exit(1); }
+            const carga=db.prepare(\"SELECT COUNT(*) n FROM server_metadata WHERE key LIKE 'carga\_%' ESCAPE '\\\\'\").get().n;
+            if (carga < 1) { console.error('nenhuma escrita concorrente foi capturada'); process.exit(1); }
+            console.log('snapshot íntegro sob escrita concorrente; linhas de carga:', carga);
+            db.close();"
 
           # Restauração + integrity_check + backend real ready sobre a cópia.
           SPARK_DRILL_DIR="$WORK/drill" ops/verify-backup.sh --from-file "$SNAP" --port 18082
 
-          # E o dado precisa estar lá: um backup íntegro e vazio passaria em tudo acima.
-          docker run --rm -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
-            const D=require('better-sqlite3');
-            const db=new D('/s/$(basename "$SNAP")',{readonly:true});
-            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('drill');
-            if (!row || row.value !== 'presente') { console.error('o snapshot não tem o dado'); process.exit(1); }
-            console.log('o snapshot contém o dado esperado'); db.close();"
-
           docker rm -f drill-backend
+
+      # Todo desfecho do backup chega ao estado operacional (T16.8.1 §9). Sem isto, um caminho de
+      # falha que não escrevesse `backup-status.json` deixaria o monitoramento afirmando que existe
+      # backup quando não existe — que é pior que não ter backup, porque dá confiança.
+      - name: Todo desfecho do backup vira estado (sucesso e todas as falhas)
+        run: SPARK_IMAGE=spark-backend:local ops/tests/backup-status.test.sh "$SPARK_WORK/data"

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
 import { type App, cert, deleteApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
@@ -46,6 +47,13 @@ const INVALID_TOKEN_CODES = new Set([
  * A inicialização é **tardia** e não fatal: sem credencial o processo sobe, `/health/*` continua
  * público e as rotas autenticadas respondem 503. Não existe caminho que devolva 200 sem ter
  * verificado o token.
+ *
+ * Quando o deploy declara `REQUIRE_FIREBASE_ADMIN=true`, a credencial é verificada **antes** disso,
+ * no startup — ver [verifyFirebaseAdminCredential], no fim deste arquivo. Ela mora aqui, e não em
+ * um módulo próprio, porque `test/dependency-security.spec.ts` exige que **um** arquivo importe
+ * `firebase-admin`: é essa fronteira que mantém a cadeia vulnerável de `@google-cloud/storage`
+ * inalcançável, e ela vale mais que a separação estética entre "verificar no startup" e
+ * "verificar por requisição".
  */
 @Injectable()
 export class FirebaseAuthTokenVerifier implements AuthTokenVerifier {
@@ -149,5 +157,140 @@ export class FirebaseAuthTokenVerifier implements AuthTokenVerifier {
     // Falha ao buscar as chaves públicas, relógio, cota: o servidor não conseguiu decidir.
     this.logger.error('auth.verifier.failed', { errorCode: code || 'unknown' });
     return new VerifierUnavailableError('não foi possível verificar o token');
+  }
+}
+
+/** Nome próprio do app usado só na verificação de startup. Nunca é o app que serve requisições. */
+const PREFLIGHT_APP_NAME = 'spark-backend-preflight';
+
+/**
+ * A credencial declarada obrigatória não serve.
+ *
+ * `reason` é uma frase curta e **sem o caminho do arquivo** — a mesma decisão que
+ * `FirebaseAuthTokenVerifier` já tomava ao registrar apenas `error.name`: a mensagem do Admin SDK
+ * carrega o caminho da service account, e ela vai para stderr, que vai para o journal.
+ */
+export class FirebaseAdminCredentialError extends Error {
+  constructor(readonly reason: string) {
+    super(`credencial do Firebase Admin inutilizável: ${reason}`);
+    this.name = 'FirebaseAdminCredentialError';
+  }
+}
+
+/** Os campos sem os quais uma service account não é uma service account. */
+const REQUIRED_FIELDS = ['project_id', 'client_email', 'private_key'] as const;
+
+/**
+ * Verificação de startup da credencial do Firebase Admin (T16.8.1 §8).
+ *
+ * ## O que ela conserta
+ *
+ * `REQUIRE_FIREBASE_ADMIN=true` declara "este servidor não sobe sem conseguir verificar
+ * identidade". Até a T16.8 o startup checava apenas se `GOOGLE_APPLICATION_CREDENTIALS` era uma
+ * string não vazia — o que é verdade para um caminho digitado errado, para um arquivo que não
+ * existe, para um arquivo sem permissão de leitura e para um JSON truncado. Em todos esses casos o
+ * processo subia, `/health/ready` respondia `200`, e o defeito só aparecia na **primeira
+ * requisição autenticada**, como uma sequência de `503`.
+ *
+ * `503` é a resposta certa para indisponibilidade transitória, e é isso que a torna enganosa aqui:
+ * o operador procura instabilidade de rede por horas, porque o servidor está dizendo "tente de
+ * novo" para um problema que nunca vai passar sozinho.
+ *
+ * ## O que ela verifica, e o que ela deliberadamente não verifica
+ *
+ * Verifica, nesta ordem: caminho declarado → arquivo legível → JSON válido → forma de service
+ * account → `cert()` + `initializeApp()` do Admin SDK de verdade. A última etapa é a que importa:
+ * é a mesma chamada que `FirebaseAuthTokenVerifier` fará depois, então "passou aqui" significa
+ * "vai inicializar lá".
+ *
+ * **Não** faz chamada de rede. Nada de emitir token, listar usuários ou consultar as chaves
+ * públicas do Google: isso tornaria o startup do Spark dependente da disponibilidade de um
+ * terceiro, que é exatamente o que §13.7 proíbe ("readiness é sobre servir, não sobre terceiros").
+ * A verificação é local, determinística e offline — e o que ela não pode cobrir (o projeto ter
+ * sido apagado no console, por exemplo) continua sendo `503` em runtime, como sempre foi.
+ *
+ * ## Por que no startup, e não no readiness
+ *
+ * Porque `/health/ready` continua **sem consultar Firebase** (§13.7): o Coach ou a identidade fora
+ * do ar não podem derrubar backup e sync. A credencial obrigatória impede o readiness de outro
+ * jeito, e mais forte — o processo não chega a escutar a porta, então não existe janela em que
+ * `/health/ready` responda `200` num servidor que prometeu verificar identidade e não consegue.
+ *
+ * @throws {FirebaseAdminCredentialError} quando a credencial não existe ou não é utilizável.
+ */
+export async function verifyFirebaseAdminCredential(
+  credentialsPath: string | undefined,
+  projectId?: string,
+): Promise<void> {
+  if (!credentialsPath) {
+    throw new FirebaseAdminCredentialError('GOOGLE_APPLICATION_CREDENTIALS não está definido');
+  }
+
+  let contents: string;
+  try {
+    contents = readFileSync(credentialsPath, 'utf8');
+  } catch (error) {
+    // O código do errno, e não a mensagem: `ENOENT` e `EACCES` levam a ações diferentes do
+    // operador (arquivo ausente × montagem somente-leitura com o grupo errado — T16.8.1 §3), e
+    // nenhum dos dois precisa do caminho para ser entendido.
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : 'desconhecido';
+    throw new FirebaseAdminCredentialError(`o arquivo não pôde ser lido (${code})`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    // Sem a mensagem do parser: ela cita um trecho do arquivo, e o arquivo é uma chave privada.
+    throw new FirebaseAdminCredentialError('o conteúdo não é JSON válido');
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new FirebaseAdminCredentialError('o conteúdo não é um objeto de service account');
+  }
+
+  const account = parsed as Record<string, unknown>;
+  if (account.type !== 'service_account') {
+    throw new FirebaseAdminCredentialError(
+      // Escrito sem o par chave/valor literal de propósito: `test/auth-config.spec.ts` varre a
+      // árvore versionada procurando exatamente essa forma, e é assim que ele encontraria uma
+      // service account de verdade commitada por engano. Uma mensagem de erro não pode ensinar o
+      // detector a ignorar o padrão que ele existe para achar.
+      'o campo type não identifica uma service account',
+    );
+  }
+
+  const missing = REQUIRED_FIELDS.filter(
+    (field) => typeof account[field] !== 'string' || account[field].length === 0,
+  );
+  if (missing.length > 0) {
+    // Nomes de campo ausentes não são segredo — o valor deles é que seria.
+    throw new FirebaseAdminCredentialError(`faltam campos obrigatórios: ${missing.join(', ')}`);
+  }
+
+  let app: App | undefined;
+  try {
+    // Um app anterior com este nome só existiria se uma verificação tivesse sido interrompida no
+    // meio; `initializeApp` recusaria o nome duplicado e a falha diria a coisa errada.
+    const stale = getApps().find((candidate) => candidate.name === PREFLIGHT_APP_NAME);
+    if (stale) {
+      await deleteApp(stale);
+    }
+
+    app = initializeApp({ credential: cert(credentialsPath), projectId }, PREFLIGHT_APP_NAME);
+  } catch {
+    // A mensagem do Admin SDK ("Failed to parse service account json file: ...") carrega o caminho
+    // do arquivo. As causas comuns já foram classificadas acima com mensagem própria; o que sobra
+    // aqui é o resto, e o resto não vale um vazamento.
+    throw new FirebaseAdminCredentialError('o Admin SDK recusou a credencial');
+  } finally {
+    if (app) {
+      // O app da verificação não sobrevive a ela: quem serve requisições é o do
+      // `FirebaseAuthTokenVerifier`, com nome próprio e ciclo de vida ligado ao módulo.
+      await deleteApp(app);
+    }
   }
 }

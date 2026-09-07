@@ -1,12 +1,16 @@
 import 'reflect-metadata';
 import { createApp } from './bootstrap/create-app';
 import { AppConfig, ConfigValidationError } from './config/app-config';
+import {
+  FirebaseAdminCredentialError,
+  verifyFirebaseAdminCredential,
+} from './modules/auth/firebase-auth-token-verifier';
 
 /**
  * Ponto de entrada do processo.
  *
- * Ordem deliberada: valida configuração -> confere as exigências declaradas -> abre banco e aplica
- * migrations -> só então escuta HTTP. Um processo que não conseguiu carregar configuração ou
+ * Ordem deliberada: valida configuração -> confere as exigências declaradas -> verifica a
+ * credencial obrigatória -> abre banco e aplica migrations -> só então escuta HTTP. Um processo que não conseguiu carregar configuração ou
  * migrar o banco morre com código 1 em vez de subir e responder erro em toda requisição.
  *
  * A consequência que importa em produção (T16.8 §19/§20): `/health/ready` **não existe** enquanto
@@ -35,6 +39,38 @@ async function bootstrap(): Promise<void> {
       `Configuração incompleta:\n${missing.map((m) => `  - ${m}`).join('\n')}\n`,
     );
     process.exit(1);
+  }
+
+  // A exigência declarada, verificada de verdade (T16.8.1 §8).
+  //
+  // `missingRequirements()` acima confere que o **caminho** foi informado. Isso é barato e vale a
+  // pena, mas um caminho preenchido não é uma credencial utilizável: o arquivo pode não existir,
+  // pode estar montado sem permissão de leitura para o usuário do container, ou pode ser um JSON
+  // truncado. Nesses casos o processo subia, respondia `/health/ready` 200, e devolvia `503` em
+  // toda requisição autenticada — indistinguível de instabilidade de rede.
+  //
+  // Aqui, e não no readiness: `/health/ready` continua sem consultar Firebase (§13.7). A checagem
+  // é local e offline — arquivo, JSON, forma e `initializeApp` do Admin SDK —, e acontece **antes**
+  // de abrir o banco e de escutar a porta.
+  if (config.requireFirebaseAdmin) {
+    try {
+      await verifyFirebaseAdminCredential(
+        config.googleApplicationCredentials,
+        config.firebaseProjectId,
+      );
+    } catch (error) {
+      if (error instanceof FirebaseAdminCredentialError) {
+        // Sem logger ainda, e de propósito: subir para responder erro seria o que este bloco
+        // existe para impedir. stderr + código 1 é o que o Docker e o systemd sabem ler.
+        process.stderr.write(
+          `REQUIRE_FIREBASE_ADMIN=true, mas ${error.reason}.\n` +
+            'Corrija a service account ou desative a exigência. ' +
+            'Ver docs/operations/PRODUCTION_DEPLOYMENT.md.\n',
+        );
+        process.exit(1);
+      }
+      throw error;
+    }
   }
 
   const { app, logger } = await createApp(config);

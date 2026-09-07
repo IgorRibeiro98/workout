@@ -73,25 +73,123 @@ object SparkBackendEndpoint {
     }
 
     /**
-     * Endereço de rede privada.
+     * Endereço de rede privada, em IPv4 ou IPv6.
      *
      * Um APK de release apontando para `192.168.x.x` não é apenas inútil fora daquela rede: é um
-     * endereço que, na rede de outra pessoa, pertence a outra máquina.
+     * endereço que, na rede de outra pessoa, pertence a outra máquina. Vale igual para `fc00::/7`,
+     * que é o equivalente IPv6 — e que até a T16.8.1 passava, porque o endurecimento da T16.8 só
+     * conhecia os quatro octetos do IPv4.
      */
-    private fun isPrivateAddress(host: String): Boolean {
+    private fun isPrivateAddress(host: String): Boolean =
+        if (host.contains(':')) isPrivateIpv6(host) else isPrivateIpv4(host)
+
+    private fun isPrivateIpv4(host: String): Boolean {
         val octets = host.split('.')
         if (octets.size != 4) return false
         val numbers = octets.map { it.toIntOrNull() ?: return false }
         if (numbers.any { it !in 0..255 }) return false
+        return isPrivateIpv4Octets(numbers)
+    }
+
+    private fun isPrivateIpv4Octets(numbers: List<Int>): Boolean = when {
+        numbers[0] == 10 -> true
+        numbers[0] == 127 -> true
+        numbers[0] == 172 && numbers[1] in 16..31 -> true
+        numbers[0] == 192 && numbers[1] == 168 -> true
+        // Link-local (169.254.0.0/16) e carrier-grade NAT (100.64.0.0/10).
+        numbers[0] == 169 && numbers[1] == 254 -> true
+        numbers[0] == 100 && numbers[1] in 64..127 -> true
+        else -> false
+    }
+
+    /**
+     * Endereço IPv6 que não é publicamente roteável (T16.8.1 §10).
+     *
+     * Um endereço que não conseguimos entender é tratado como **privado**, e a assimetria é
+     * deliberada: em release, o custo de recusar um endereço estranho é a nuvem ficar desligada —
+     * um estado normal e completo do Spark. O custo de aceitar um que não entendemos é o APK
+     * publicado falar com uma máquina qualquer da rede de quem o instalou.
+     */
+    private fun isPrivateIpv6(host: String): Boolean {
+        // O identificador de zona (`fe80::1%eth0`, ou `%25eth0` percent-encoded na URL) descreve a
+        // interface local, nunca um destino público.
+        val withoutZone = host.substringBefore('%')
+        val hextets = ipv6Hextets(withoutZone) ?: return true
+
         return when {
-            numbers[0] == 10 -> true
-            numbers[0] == 127 -> true
-            numbers[0] == 172 && numbers[1] in 16..31 -> true
-            numbers[0] == 192 && numbers[1] == 168 -> true
-            // Link-local (169.254.0.0/16) e carrier-grade NAT (100.64.0.0/10).
-            numbers[0] == 169 && numbers[1] == 254 -> true
-            numbers[0] == 100 && numbers[1] in 64..127 -> true
+            // `::` — endereço não especificado.
+            hextets.all { it == 0 } -> true
+            // `::1` — loopback, na forma comprimida ou na expandida.
+            hextets.take(7).all { it == 0 } && hextets[7] == 1 -> true
+            // `fc00::/7` — unique local address, o equivalente a 10/8 e 192.168/16.
+            hextets[0] and 0xFE00 == 0xFC00 -> true
+            // `fe80::/10` — link-local.
+            hextets[0] and 0xFFC0 == 0xFE80 -> true
+            // `fec0::/10` — site-local, obsoleto mas ainda configurável em rede doméstica.
+            hextets[0] and 0xFFC0 == 0xFEC0 -> true
+            // `::ffff:a.b.c.d` — IPv4 mapeado. O endereço real é o IPv4, e a decisão é a dele:
+            // `::ffff:192.168.1.1` é `192.168.1.1` escrito de outro jeito.
+            hextets.take(5).all { it == 0 } && hextets[5] == 0xFFFF -> isPrivateIpv4Octets(
+                listOf(
+                    hextets[6] shr 8,
+                    hextets[6] and 0xFF,
+                    hextets[7] shr 8,
+                    hextets[7] and 0xFF
+                )
+            )
             else -> false
+        }
+    }
+
+    /**
+     * Os 8 grupos de 16 bits de um endereço IPv6, ou `null` quando o texto não é um.
+     *
+     * Escrito à mão pelo mesmo motivo de `hostOf`: `java.net.InetAddress` resolve nomes (uma
+     * chamada de rede em um caminho que precisa ser puro) e `java.net.URI` aceita coisas demais em
+     * silêncio.
+     */
+    private fun ipv6Hextets(address: String): List<Int>? {
+        var text = address
+
+        // Forma mista `::ffff:1.2.3.4`: os quatro octetos viram os dois últimos hextets.
+        val lastColon = text.lastIndexOf(':')
+        if (lastColon >= 0 && text.substring(lastColon + 1).contains('.')) {
+            val octets = text.substring(lastColon + 1).split('.')
+            if (octets.size != 4) return null
+            val numbers = octets.map { it.toIntOrNull() ?: return null }
+            if (numbers.any { it !in 0..255 }) return null
+            val high = (numbers[0] shl 8) or numbers[1]
+            val low = (numbers[2] shl 8) or numbers[3]
+            text = text.substring(0, lastColon + 1) +
+                high.toString(16) + ":" + low.toString(16)
+        }
+
+        val halves = text.split("::")
+        if (halves.size > 2) return null
+
+        fun groupsOf(part: String): List<String>? {
+            if (part.isEmpty()) return emptyList()
+            val groups = part.split(':')
+            return if (groups.any { it.isEmpty() }) null else groups
+        }
+
+        val head = groupsOf(halves[0]) ?: return null
+        val tail = if (halves.size == 2) (groupsOf(halves[1]) ?: return null) else emptyList()
+
+        val groups = if (halves.size == 2) {
+            val zeros = 8 - head.size - tail.size
+            if (zeros < 0) return null
+            head + List(zeros) { "0" } + tail
+        } else {
+            head
+        }
+        if (groups.size != 8) return null
+
+        return groups.map { group ->
+            if (group.length > 4) return null
+            val value = group.toIntOrNull(16) ?: return null
+            if (value !in 0..0xFFFF) return null
+            value
         }
     }
 }

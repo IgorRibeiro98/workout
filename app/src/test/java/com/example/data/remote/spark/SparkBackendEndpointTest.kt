@@ -127,6 +127,126 @@ class SparkBackendEndpointTest {
         // essa forma é aceitar que o endereço mente sobre para onde vai.
         assertNull(SparkBackendEndpoint.resolve("https://api.exemplo.com@10.0.2.2/", false))
     }
+
+    // ------------------------------------------------------------------ IPv6 (T16.8.1 §10)
+
+    @Test
+    fun `release recusa loopback, ULA e link-local em IPv6`() {
+        // O buraco que a T16.8 deixou: o endurecimento conhecia só os quatro octetos do IPv4, e um
+        // endereço IPv6 privado passava pelo portão do build sem que nada reclamasse.
+        for (url in listOf(
+            "https://[::1]",
+            "https://[::1]:8443",
+            "https://[0:0:0:0:0:0:0:1]",
+            "https://[::]",
+            "https://[fc00::1]",
+            "https://[fd12:3456:789a::1]",
+            "https://[fe80::1]",
+            "https://[fe80::1%25eth0]",
+            "https://[febf::1]",
+            "https://[fec0::1]"
+        )) {
+            assertNull("release não pode aceitar $url", SparkBackendEndpoint.resolve(url, false))
+        }
+    }
+
+    @Test
+    fun `release recusa IPv4 privado escrito como IPv6 mapeado`() {
+        // `::ffff:192.168.1.1` é `192.168.1.1` escrito de outro jeito. Uma regra que olha só a
+        // forma do texto deixaria passar exatamente o endereço que ela existe para recusar.
+        assertNull(SparkBackendEndpoint.resolve("https://[::ffff:127.0.0.1]", false))
+        assertNull(SparkBackendEndpoint.resolve("https://[::ffff:192.168.1.1]", false))
+    }
+
+    @Test
+    fun `release aceita IPv6 publico`() {
+        // Recusar todo IPv6 seria mais fácil e estaria errado: a regra é sobre alcance, não sobre
+        // família de endereço.
+        assertEquals(
+            "https://[2001:db8::1]",
+            SparkBackendEndpoint.resolve("https://[2001:db8::1]", isDebugBuild = false)
+        )
+        assertEquals(
+            "https://[2606:4700:4700::1111]",
+            SparkBackendEndpoint.resolve("https://[2606:4700:4700::1111]", isDebugBuild = false)
+        )
+    }
+}
+
+/**
+ * Os dois portões de endereço concordam, caso a caso (T16.8.1 §10).
+ *
+ * `contracts/endpoint/release-endpoint-cases.tsv` é a tabela de decisão compartilhada. Este teste a
+ * aplica ao portão de **runtime**; `./gradlew :app:verifyReleaseEndpointGate` aplica a mesma tabela
+ * ao portão de **build**. É o que impede a divergência que a auditoria da T16.8 encontrou — o
+ * Gradle aceitava `https://[fc00::1]` porque extraía o host `"["`, enquanto o runtime o recusava.
+ *
+ * Uma divergência nessa direção publica um APK com a nuvem inexplicavelmente desligada; na direção
+ * contrária, bloqueia uma publicação legítima. Nenhuma das duas apareceria em revisão de código.
+ */
+class SparkReleaseEndpointTableTest {
+
+    @Test
+    fun `o portao de runtime concorda com a tabela compartilhada`() {
+        val table = tableFile()
+        assertTrue("contracts/endpoint/release-endpoint-cases.tsv não encontrado", table != null)
+
+        val failures = mutableListOf<String>()
+        var checked = 0
+
+        table!!.readLines().forEach { line ->
+            val text = line.trim()
+            if (text.isEmpty() || text.startsWith("#")) return@forEach
+
+            val columns = text.split('\t').map { it.trim() }.filter { it.isNotEmpty() }
+            assertEquals("linha malformada na tabela: '$line'", 2, columns.size)
+
+            val (verdict, url) = columns
+            val expected = when (verdict) {
+                "ACCEPT" -> true
+                "REJECT" -> false
+                else -> throw AssertionError("veredito desconhecido '$verdict' na tabela")
+            }
+            checked++
+
+            val accepted = SparkBackendEndpoint.resolve(url, isDebugBuild = false) != null
+            if (accepted != expected) {
+                failures += "$url — esperado $verdict, o runtime disse " +
+                    if (accepted) "ACCEPT" else "REJECT"
+            }
+        }
+
+        // Uma tabela vazia passaria em silêncio e não verificaria nada.
+        assertTrue("a tabela de casos está vazia", checked > 0)
+        assertTrue(
+            "o portão de runtime discorda da tabela:\n" + failures.joinToString("\n"),
+            failures.isEmpty()
+        )
+    }
+
+    @Test
+    fun `a tabela cobre os casos que a T16 8 1 fechou`() {
+        // Sem isto, esvaziar a tabela deixaria os dois portões "de acordo" sobre nada.
+        val text = tableFile()!!.readText()
+        for (obrigatorio in listOf(
+            "REJECT\thttp://api.exemplo.com",
+            "REJECT\thttps://[::1]",
+            "REJECT\thttps://[fc00::1]",
+            "REJECT\thttps://[fe80::1]",
+            "REJECT\thttps://10.0.0.1",
+            "REJECT\thttps://192.168.1.1",
+            "REJECT\thttps://127.0.0.1",
+            "ACCEPT\thttps://api.exemplo.com"
+        )) {
+            assertTrue("a tabela precisa conter: $obrigatorio", text.contains(obrigatorio))
+        }
+    }
+
+    private fun tableFile(): File? =
+        listOf(
+            File("../contracts/endpoint/release-endpoint-cases.tsv"),
+            File("contracts/endpoint/release-endpoint-cases.tsv")
+        ).firstOrNull { it.isFile }
 }
 
 /**

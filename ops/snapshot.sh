@@ -77,6 +77,13 @@ VERIFICATION="$(sqlite_node "
   }
   const version = copy.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v;
   copy.close();
+
+  // O snapshot nasce legível pelo **grupo compartilhado** (T16.8.1 §3), e só por ele.
+  //
+  // Quem o cria é o processo do container (uid 1000); quem o recolhe é o operador do host, cujo
+  // uid é outro. Sem isto, a leitura dependeria do umask do container — herdado, não declarado —
+  // e do uid do host coincidir com o do container. O grupo vem do setgid de \`/opt/spark/data\`.
+  require('node:fs').chmodSync('${CONTAINER_PATH}', 0o640);
   console.log('integrity_check=ok schema_version=' + version);
 ")"
 # A verificação é narrativa e vai para stderr; stdout deste script carrega **só** o caminho do
@@ -85,8 +92,17 @@ log "$VERIFICATION"
 
 [ -f "$HOST_PATH" ] || fail "o snapshot não apareceu em ${HOST_PATH} (o diretório de dados é o mesmo montado no container?)"
 
-mv "$HOST_PATH" "$DESTINATION"
-chmod 600 "$DESTINATION"
+# `install`, e não `mv` (T16.8.1 §3).
+#
+# O arquivo em `$HOST_PATH` foi criado **pelo container**, então pertence ao uid dele. Um `mv`
+# preserva esse dono, e o `chmod 600` seguinte falharia com EPERM em qualquer VPS onde o operador
+# não seja, por acaso, o mesmo uid — que é justamente a coincidência que esta fase removeu.
+#
+# `install` copia o conteúdo para um arquivo **novo**, de quem está rodando o script, já com o
+# modo final. Ler o original exige apenas o grupo compartilhado; removê-lo, apenas permissão de
+# escrita no diretório de dados. Nenhum dos dois exige `chown`, `sudo` ou uid combinado.
+install -m 600 "$HOST_PATH" "$DESTINATION"
+rm -f "$HOST_PATH"
 trap - EXIT
 
 log "snapshot pronto: ${DESTINATION} ($(du -h "$DESTINATION" | cut -f1))"

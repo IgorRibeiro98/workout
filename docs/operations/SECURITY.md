@@ -10,7 +10,7 @@ pessoais de um grupo pequeno realmente enfrenta.
 
 | Ameaça | Consequência | Mitigação |
 | --- | --- | --- |
-| **Vazamento de credencial** | Acesso ao Firebase, ao Gemini ou aos backups | Nada versionado; teste varre a árvore; `.gitignore`/`.dockerignore`; credencial por caminho montado somente-leitura; `600` nos arquivos |
+| **Vazamento de credencial** | Acesso ao Firebase, ao Gemini ou aos backups | Nada versionado; teste varre a árvore; `.gitignore`/`.dockerignore`; credencial por caminho montado somente-leitura; `600` nos segredos só do host e `640` no grupo compartilhado na service account |
 | **Acesso entre contas** | Um usuário lê o dado de outro | `uid` vem **só** do token verificado; corpo e query não influenciam identidade; dado de outra conta é `404`, nunca `403` |
 | **Perda do banco** | Backups, sync e change log de todo mundo | Snapshot consistente diário + off-site criptografado + ensaio de restauração |
 | **Disco cheio** | SQLite para de escrever; falha silenciosa | Rotação de log (10 MB × 5 por container); `check-health.sh` alerta em 80 % e falha em 90 % |
@@ -31,7 +31,7 @@ provedor, e DDoS volumétrico (uma VPS pessoal não se defende disso; o Caddy li
 
 | Segredo | Onde vive | Como chega ao runtime | Versionado? |
 | --- | --- | --- | --- |
-| Service account do Firebase Admin | `/opt/spark/secrets/firebase-admin.json` (`600`, dono `spark`) | Bind mount **somente leitura** em `/run/secrets/firebase-admin.json`; `GOOGLE_APPLICATION_CREDENTIALS` aponta o caminho | **Não** |
+| Service account do Firebase Admin | `/opt/spark/secrets/firebase-admin.json` (`640`, `spark:spark-data`) | Bind mount **somente leitura** em `/run/secrets/firebase-admin.json`; `GOOGLE_APPLICATION_CREDENTIALS` aponta o caminho | **Não** |
 | Chave do Gemini | `/opt/spark/secrets/backend.env` (`600`) | `env_file` do Compose → `GEMINI_API_KEY` | **Não** |
 | Senha do repositório de backup | `/opt/spark/secrets/restic-password` (`600`) + cópia fora da VPS | `RESTIC_PASSWORD_FILE` lido por `ops/lib.sh` | **Não** |
 | Credencial do storage off-site | `/opt/spark/secrets/backup.env` (`600`) | `EnvironmentFile` da unidade systemd | **Não** |
@@ -107,7 +107,11 @@ Impacto: nenhum, se a ordem for essa. O núcleo do Spark não depende do Coach.
 
 ```bash
 # 1. gere uma chave nova no console (Configurações → Contas de serviço)
-install -m 600 -o spark -g spark nova.json /opt/spark/secrets/firebase-admin.json
+#
+# `640` no grupo `spark-data`, e NÃO `600`: o container roda como `node` (uid 1000) e não é o dono
+# do arquivo — com `600` ele não a lê, e desde a T16.8.1 isso **derruba o startup** em vez de virar
+# 503 silencioso. Ver PRODUCTION_DEPLOYMENT.md, "Usuários, grupos e permissões".
+install -m 640 -o spark -g spark-data nova.json /opt/spark/secrets/firebase-admin.json
 docker compose -f docker-compose.prod.yml up -d backend
 curl -s -o /dev/null -w '%{http_code}\n' https://api.<dominio>/v1/auth/me    # precisa ser 401
 # 2. valide login no app; 3. só então apague a chave antiga no console
@@ -116,6 +120,17 @@ curl -s -o /dev/null -w '%{http_code}\n' https://api.<dominio>/v1/auth/me    # p
 Impacto: durante o restart, rota autenticada indisponível por segundos. Se a nova credencial
 estiver errada, o processo **não sobe** (`REQUIRE_FIREBASE_ADMIN=true`) — o que é o comportamento
 desejado: falha visível em vez de 503 silencioso.
+
+Desde a T16.8.1 "errada" quer dizer o que a palavra deveria ter significado desde o começo. O
+startup lê o arquivo, faz o parse, confere a forma de service account e inicializa o Admin SDK,
+nesta ordem — arquivo ausente, sem permissão de leitura, JSON truncado, campo faltando ou chave
+privada inválida derrubam o processo. Antes, a checagem era se `GOOGLE_APPLICATION_CREDENTIALS`
+era uma string não vazia, o que é verdade em todos esses casos: o servidor subia, respondia
+`/health/ready` 200 e devolvia `503` em toda requisição autenticada.
+
+A verificação é **local e offline**: nada de chamada ao Google no startup, porque isso tornaria a
+subida do Spark dependente da disponibilidade de um terceiro. O que ela não pode cobrir — o projeto
+apagado no console, a chave revogada — continua sendo `503` em runtime, como sempre foi.
 
 ### Credencial do storage de backup
 
@@ -172,9 +187,16 @@ streak) e credenciais.
 **Onde fica.** No SQLite da VPS, como texto opaco por agregado — o servidor não desmonta treino em
 colunas consultáveis. E, criptografado, no storage de backup off-site.
 
-**Como é protegido.** HTTPS em trânsito (Caddy/Let's Encrypt); permissão `700` no diretório e `600`
-no arquivo; ownership derivado do token verificado, com dado de outra conta indistinguível de
+**Como é protegido.** HTTPS em trânsito (Caddy/Let's Encrypt); `2770` no diretório de dados e
+`spark:spark-data` como dono — alcançável pelo operador e pelo container, e por mais ninguém na
+máquina; ownership derivado do token verificado, com dado de outra conta indistinguível de
 inexistente; criptografia no backup off-site.
+
+`777` e `666` são proibidos em caminho operacional, e a proibição é verificada: um passo do CI
+(`Nenhum chmod aberto`) recusa o commit, e `ops/check-health.sh` acusa um diretório de dados que
+tenha perdido o setgid ou ganhado permissão para "outros". A tentação é real — quase todo problema
+de permissão "some" com `chmod 777` —, e o custo é o dado pessoal de todo mundo que usa o servidor
+ficar legível por qualquer processo da máquina.
 
 **O que nunca é registrado em log.** `Authorization`, token, corpo de requisição, payload de backup,
 payload de sync, prompt, resposta do modelo, nome de treino, nota, medida. Só metadata técnica —

@@ -163,12 +163,27 @@ jobs:
       - name: Build de release
         run: ./gradlew :app:assembleRelease --stacktrace
 
+      # Os dois portões de endereço concordam, caso a caso (T16.8.1 §10).
+      #
+      # `contracts/endpoint/release-endpoint-cases.tsv` é lida por esta tarefa **e** pelo
+      # `SparkReleaseEndpointTableTest` do passo de testes acima. É o que impede a divergência que a
+      # auditoria da T16.8 encontrou: o portão do Gradle extraía o host de `https://[::1]` como
+      # `"["` e concluía que era público, enquanto o runtime o recusava. Uma divergência assim
+      # publica um APK com a nuvem inexplicavelmente desligada — ou bloqueia uma publicação
+      # legítima — e nenhuma das duas aparece em revisão de código.
+      - name: Portão de endereço de build e de runtime concordam
+        run: ./gradlew :app:verifyReleaseEndpointGate --stacktrace
+
       # O portão de endereço da T16.8 (§6): um endereço de release inseguro precisa **impedir** a
       # geração do APK. Aqui ele é exercitado de verdade — se o build passar, o portão não existe.
+      #
+      # A T16.8.1 acrescentou os casos IPv6: `[::1]`, `[fc00::1]` e `[fe80::1]` passavam pelo
+      # portão do build, porque o endurecimento da T16.8 conhecia só os quatro octetos do IPv4.
       - name: O build de release recusa endereço inseguro
         run: |
           set -euo pipefail
-          for url in "http://api.exemplo.com" "https://10.0.2.2:8080" "https://192.168.0.10:8080"; do
+          for url in "http://api.exemplo.com" "https://10.0.2.2:8080" "https://192.168.0.10:8080" \
+                     "https://[::1]" "https://[fc00::1]" "https://[fe80::1]"; do
             if ./gradlew :app:help -PsparkBackendBaseUrl="$url" -q > /tmp/gate.log 2>&1; then
               echo "FALHA: o build aceitou o endereço inseguro $url"; exit 1
             fi

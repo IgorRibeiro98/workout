@@ -114,11 +114,21 @@ banco que já exista no destino. Ele recusa rodar com o backend de pé.
 cd /opt/spark/repo
 docker build -t spark-backend:recuperacao backend
 cd backend
-cat > .env <<'EOF'
+cat > .env <<EOF
 SPARK_DOMAIN=api.seudominio.com
 SPARK_ACME_EMAIL=voce@seudominio.com
+# O gid do grupo compartilhado NESTA máquina — ele quase certamente não é o mesmo da VPS antiga,
+# e não precisa ser: o modelo é por grupo, nunca por número fixo.
+SPARK_DATA_GID=$(getent group spark-data | cut -d: -f3)
 EOF
 SPARK_IMAGE_TAG=recuperacao docker compose -f docker-compose.prod.yml up -d
+```
+
+Antes do DNS, confirme que o backend serve — o health interno não depende de domínio nem de
+certificado, e separá-lo do público evita perseguir um problema de DNS achando que é de banco:
+
+```bash
+cd /opt/spark/repo && ops/check-health.sh
 ```
 
 ### 6. DNS

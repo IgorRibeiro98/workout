@@ -29,8 +29,13 @@ load_env_file
 
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${REPO_ROOT}/backend"
-COMPOSE_FILE="${SPARK_COMPOSE_FILE:-docker-compose.prod.yml}"
-HEALTH_URL="${SPARK_HEALTH_URL:-http://127.0.0.1:8080}"
+# Quantas vezes esperar pelo readiness antes de desistir, a 2 s por tentativa.
+#
+# É configuração, e não parâmetro de função: o valor certo depende da máquina (uma VPS pequena
+# aplicando migration demora mais que um runner de CI), e não de quem chama. A versão anterior
+# declarava `local attempts="${1:-45}"` e nunca recebia argumento — uma API fictícia, que o
+# ShellCheck acusava (SC2120/SC2119) e que ninguém podia usar sem editar o script.
+HEALTH_ATTEMPTS="${SPARK_HEALTH_ATTEMPTS:-45}"
 SKIP_BACKUP=0
 ROLLBACK_TAG=""
 
@@ -45,12 +50,28 @@ done
 require_cmd docker
 require_cmd git
 
-cd "$BACKEND_DIR"
+# O diretório do projeto Compose vem de `ops/lib.sh` (`SPARK_COMPOSE_DIR`, por padrão
+# `/opt/spark/repo/backend`), e não de um `cd` local: é ele que `compose_cmd` — e portanto o health
+# interno — usa. Manter dois caminhos de Compose no mesmo script era como o deploy conseguia subir
+# um serviço em um projeto e verificar a saúde de outro.
+[ -f "${SPARK_COMPOSE_DIR}/${SPARK_COMPOSE_FILE}" ] \
+  || fail "compose de produção não encontrado em ${SPARK_COMPOSE_DIR}/${SPARK_COMPOSE_FILE}"
 
+# O health do **backend**, e não o da internet (T16.8.1 §2).
+#
+# Produção não publica a porta do backend: `docker-compose.prod.yml` só declara `expose`, e quem
+# escuta 80/443 é o Caddy. A versão anterior deste script tinha
+# `HEALTH_URL="${SPARK_HEALTH_URL:-http://127.0.0.1:8080}"` — uma porta que, por construção, não
+# existe no host de produção. O deploy dependia de uma topologia que a T16.8 decidiu não ter.
+#
+# `spark_health_ready` (ops/lib.sh) usa `docker compose exec` no serviço do backend por padrão:
+# não depende de DNS, de certificado, de proxy nem de porta publicada, e verifica exatamente o
+# container que acabou de subir. Provar que **as migrations terminaram e o processo serve** é
+# justamente o que o deploy precisa saber; se o Caddy está no ar é outra pergunta, e ela tem outro
+# lugar (`SPARK_PUBLIC_HEALTH_URL`, em `ops/check-health.sh`).
 wait_for_health() {
-  local attempts="${1:-45}"
-  for _ in $(seq 1 "$attempts"); do
-    if curl -fsS --max-time 5 "${HEALTH_URL}/health/ready" 2> /dev/null | grep -q '"status":"ok"'; then
+  for _ in $(seq 1 "$HEALTH_ATTEMPTS"); do
+    if spark_health_ready; then
       return 0
     fi
     sleep 2
@@ -61,7 +82,7 @@ wait_for_health() {
 current_tag() {
   # A tag que está no ar agora, lida do container em execução — e não de um arquivo de estado que
   # pode ter sido escrito por um deploy que não terminou.
-  docker compose -f "$COMPOSE_FILE" ps --format '{{.Image}}' "$SPARK_SERVICE" 2> /dev/null \
+  compose_query ps --format '{{.Image}}' "$SPARK_SERVICE" 2> /dev/null \
     | head -1 | sed 's/.*://' || true
 }
 
@@ -74,7 +95,7 @@ if [ -n "$ROLLBACK_TAG" ]; then
   # ATENÇÃO, e está no runbook: voltar a aplicação NÃO desfaz uma migration (§24). Se a versão que
   # está saindo aplicou uma migration incompatível com a que entra, o caminho é restaurar o backup
   # pré-deploy — não este rollback.
-  SPARK_IMAGE_TAG="$ROLLBACK_TAG" docker compose -f "$COMPOSE_FILE" up -d "$SPARK_SERVICE"
+  SPARK_IMAGE_TAG="$ROLLBACK_TAG" compose_cmd up -d "$SPARK_SERVICE"
   if wait_for_health; then
     log "rollback concluído e saudável"
     exit 0
@@ -110,7 +131,7 @@ docker build -t "spark-backend:${COMMIT}" -t "spark-backend:latest" "$BACKEND_DI
 # 3. Subir. As migrations rodam no startup do processo, antes de ele escutar a porta — então o
 #    readiness abaixo já é a confirmação de que elas terminaram (§19).
 log "subindo spark-backend:${COMMIT}"
-SPARK_IMAGE_TAG="$COMMIT" docker compose -f "$COMPOSE_FILE" up -d
+SPARK_IMAGE_TAG="$COMMIT" compose_cmd up -d
 
 # 4. Health obrigatório antes de declarar sucesso (§109).
 if wait_for_health; then
@@ -122,12 +143,16 @@ fi
 # 5. Rollback automático apenas da **aplicação**. O banco não volta sozinho: se a versão nova
 #    aplicou migration, desfazê-la é decisão humana com o backup pré-deploy em mãos (§24).
 printf 'ERRO: a versão nova não ficou saudável.\n' >&2
-docker compose -f "$COMPOSE_FILE" logs --tail 50 "$SPARK_SERVICE" >&2 || true
+compose_query logs --tail 50 "$SPARK_SERVICE" >&2 || true
 
 if [ -n "$PREVIOUS_TAG" ] && [ "$PREVIOUS_TAG" != "$COMMIT" ]; then
   log "voltando para spark-backend:${PREVIOUS_TAG}"
-  SPARK_IMAGE_TAG="$PREVIOUS_TAG" docker compose -f "$COMPOSE_FILE" up -d "$SPARK_SERVICE"
-  wait_for_health && fail "rollback aplicado; a versão ${COMMIT} não subiu. Se houve migration, ver RUNBOOK."
+  SPARK_IMAGE_TAG="$PREVIOUS_TAG" compose_cmd up -d "$SPARK_SERVICE"
+  # `if`, e não `A && fail`: com `set -e`, um `&&` que termina falso no fim de um bloco encerra o
+  # script em silêncio — sem a mensagem que diz ao operador se o rollback pegou ou não.
+  if wait_for_health; then
+    fail "rollback aplicado; a versão ${COMMIT} não subiu. Se houve migration, ver RUNBOOK."
+  fi
 fi
 
 fail "deploy falhou e o rollback automático não recuperou — ver docs/operations/RUNBOOK.md"
