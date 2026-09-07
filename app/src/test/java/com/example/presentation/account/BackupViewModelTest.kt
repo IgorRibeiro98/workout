@@ -2,6 +2,7 @@ package com.example.presentation.account
 
 import android.content.Context
 import android.os.Build
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -70,8 +71,21 @@ class BackupViewModelTest {
         api = FakeBackupApi()
     }
 
+    /**
+     * Os ViewModels do teste, para que o `viewModelScope` deles seja encerrado.
+     *
+     * `BackupViewModel` coleta `authGateway.state` no `init`, e um `StateFlow` não termina. Sem
+     * cancelar, a corrotina continua consultando o Room depois do `close()` e lendo
+     * `Dispatchers.Main` durante o `resetMain` — e quem falha é a classe seguinte.
+     */
+    private val viewModels = ViewModelStore()
+    private var viewModelKeys = 0
+
     @After
     fun tearDown() {
+        // A ordem é o ponto: encerra quem ainda coleta, depois fecha o banco, depois devolve o
+        // dispatcher.
+        viewModels.clear()
         database.close()
         Dispatchers.resetMain()
     }
@@ -308,7 +322,10 @@ class BackupViewModelTest {
         const val AWAIT_TIMEOUT_MS = 10_000L
     }
 
-    private fun viewModel(gateway: FakeAuthGateway) = BackupViewModel(
+    private fun viewModel(gateway: FakeAuthGateway) = buildViewModel(gateway)
+        .also { viewModels.put("backup-${viewModelKeys++}", it) }
+
+    private fun buildViewModel(gateway: FakeAuthGateway) = BackupViewModel(
         repository = BackupRepository(
             bindingDao = database.cloudDataBindingDao(),
             attemptDao = database.backupAttemptDao(),

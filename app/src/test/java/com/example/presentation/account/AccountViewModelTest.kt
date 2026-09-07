@@ -2,6 +2,7 @@ package com.example.presentation.account
 
 import android.app.Application
 import android.os.Build
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.domain.auth.AuthError
@@ -37,6 +38,20 @@ class AccountViewModelTest {
 
     private val host: Application get() = ApplicationProvider.getApplicationContext()
 
+    /**
+     * Os ViewModels do teste, para que o `viewModelScope` deles seja encerrado.
+     *
+     * `AccountViewModel` coleta `authGateway.state` no `init`, e um `StateFlow` não termina: sem
+     * cancelar, cada teste deixa uma corrotina viva em `Dispatchers.Main`. O `setMain`/`resetMain`
+     * seguinte encontra alguém lendo o dispatcher no meio da troca, e a falha aparece em outro
+     * método — ou em outra classe.
+     */
+    private val viewModels = ViewModelStore()
+    private var viewModelKeys = 0
+
+    private fun accountViewModel(gateway: FakeAuthGateway) =
+        AccountViewModel(gateway).also { viewModels.put("account-${viewModelKeys++}", it) }
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -44,6 +59,8 @@ class AccountViewModelTest {
 
     @After
     fun tearDown() {
+        // Encerra quem ainda coleta antes de devolver o `Dispatchers.Main`.
+        viewModels.clear()
         Dispatchers.resetMain()
     }
 
@@ -51,7 +68,7 @@ class AccountViewModelTest {
 
     @Test
     fun `sem usuario no Firebase o estado e SignedOut`() = runTest {
-        val viewModel = AccountViewModel(FakeAuthGateway())
+        val viewModel = accountViewModel(FakeAuthGateway())
 
         assertEquals(AuthState.SignedOut, viewModel.uiState.value.authState)
         assertFalse(viewModel.uiState.value.isSignedIn)
@@ -64,7 +81,7 @@ class AccountViewModelTest {
         val gateway = FakeAuthGateway(initialAccount = existing)
 
         // Recriar o ViewModel é o que acontece quando o app reabre.
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         assertEquals(AuthState.SignedIn(existing), viewModel.uiState.value.authState)
         assertEquals(
@@ -78,7 +95,7 @@ class AccountViewModelTest {
     fun `criar o ViewModel e observar o estado nao inicia autenticacao`() = runTest {
         val gateway = FakeAuthGateway()
 
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
         repeat(5) { viewModel.uiState.value }
 
         assertEquals(0, gateway.signInCalls)
@@ -91,7 +108,7 @@ class AccountViewModelTest {
     fun `login bem-sucedido leva a SignedIn com o uid do provider`() = runTest {
         val account = SparkAccount(uid = "uid-1", displayName = "João", email = "joao@example.com")
         val gateway = FakeAuthGateway().apply { nextOutcome = AuthOutcome.Success(account) }
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signIn(host)
 
@@ -102,7 +119,7 @@ class AccountViewModelTest {
     @Test
     fun `cancelamento volta para SignedOut e nao vira erro`() = runTest {
         val gateway = FakeAuthGateway().apply { nextOutcome = AuthOutcome.Cancelled }
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signIn(host)
 
@@ -115,7 +132,7 @@ class AccountViewModelTest {
         val gateway = FakeAuthGateway().apply {
             nextOutcome = AuthOutcome.Failure(AuthError.NETWORK)
         }
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signIn(host)
 
@@ -131,7 +148,7 @@ class AccountViewModelTest {
     @Test
     fun `dez toques rapidos iniciam um unico fluxo de autenticacao`() = runTest {
         val gateway = FakeAuthGateway().apply { holdNextSignIn = true }
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         repeat(10) { viewModel.signIn(host) }
 
@@ -147,7 +164,7 @@ class AccountViewModelTest {
     @Test
     fun `SigningIn e um estado explicito enquanto o fluxo esta aberto`() = runTest {
         val gateway = FakeAuthGateway().apply { holdNextSignIn = true }
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signIn(host)
 
@@ -159,7 +176,7 @@ class AccountViewModelTest {
 
     @Test
     fun `sem configuracao a entrada de login e marcada como indisponivel`() = runTest {
-        val viewModel = AccountViewModel(FakeAuthGateway(isSignInAvailable = false))
+        val viewModel = accountViewModel(FakeAuthGateway(isSignInAvailable = false))
 
         assertFalse(viewModel.uiState.value.isSignInAvailable)
     }
@@ -169,7 +186,7 @@ class AccountViewModelTest {
     @Test
     fun `logout leva a SignedOut`() = runTest {
         val gateway = FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT)
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signOut()
 
@@ -180,7 +197,7 @@ class AccountViewModelTest {
     @Test
     fun `sair nao inicia login e entrar de novo exige acao explicita`() = runTest {
         val gateway = FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT)
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signOut()
 
@@ -193,7 +210,7 @@ class AccountViewModelTest {
         val userA = SparkAccount(uid = "uid-A", displayName = "A")
         val userB = SparkAccount(uid = "uid-B", displayName = "B")
         val gateway = FakeAuthGateway(initialAccount = userA)
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
 
         viewModel.signOut()
         gateway.nextOutcome = AuthOutcome.Success(userB)
@@ -207,7 +224,7 @@ class AccountViewModelTest {
 
     @Test
     fun `sem cliente de backend a verificacao reporta nao configurado`() = runTest {
-        val viewModel = AccountViewModel(FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT))
+        val viewModel = accountViewModel(FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT))
 
         assertFalse(viewModel.canVerifyWithBackend)
         viewModel.verifyWithBackend()
@@ -218,7 +235,7 @@ class AccountViewModelTest {
     @Test
     fun `sair limpa uma verificacao anterior`() = runTest {
         val gateway = FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT)
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = accountViewModel(gateway)
         viewModel.verifyWithBackend()
 
         viewModel.signOut()

@@ -2,6 +2,7 @@ package com.example.presentation.profile
 
 import android.content.Context
 import android.os.Build
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -78,6 +79,19 @@ class ProfileViewModelTest {
     private lateinit var achievementRepository: AchievementRepositoryImpl
     private lateinit var xpTransactionRepository: XpTransactionRepositoryImpl
 
+    /**
+     * Os ViewModels criados pelo teste, para que o `viewModelScope` deles seja **encerrado**.
+     *
+     * `ProfileViewModel` inicia no `init` uma coleção que não termina sozinha: ela combina flows do
+     * Room com `settingsManager.weeklyGoalFlow`, que é um DataStore vivo pelo processo inteiro.
+     * Sem cancelar, essa corrotina continua rodando em `Dispatchers.Main` depois do teste — e o
+     * `setMain`/`resetMain` do teste seguinte encontra alguém lendo o dispatcher no meio da troca
+     * (`Dispatchers.Main is used concurrently with setting it`). A falha aparece em outro método,
+     * ou em outra classe, sem relação nenhuma com o que quebrou.
+     */
+    private val viewModels = ViewModelStore()
+    private var viewModelKeys = 0
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -105,6 +119,10 @@ class ProfileViewModelTest {
 
     @After
     fun tearDown() {
+        // A ordem é o ponto: encerra quem ainda coleta, depois fecha o banco, depois devolve o
+        // `Dispatchers.Main`. Invertê-la deixa uma corrotina consultando um Room fechado — ou
+        // lendo um dispatcher que já está sendo trocado.
+        viewModels.clear()
         database.close()
         Dispatchers.resetMain()
     }
@@ -120,7 +138,7 @@ class ProfileViewModelTest {
         workoutRepository = workoutRepository,
         bodyMeasurementRepository = bodyMeasurementRepository,
         settingsManager = settingsManager
-    )
+    ).also { viewModels.put("profile-${viewModelKeys++}", it) }
 
     private suspend fun ProfileViewModel.awaitState(
         predicate: (ProfileUiState) -> Boolean = { true }

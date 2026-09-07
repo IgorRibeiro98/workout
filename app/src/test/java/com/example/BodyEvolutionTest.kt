@@ -1,5 +1,6 @@
 package com.example
 
+import androidx.lifecycle.ViewModelStore
 import com.example.data.local.BodyMeasurementDao
 import com.example.data.local.BodyMeasurementEntity
 import com.example.data.mapper.toDomain
@@ -37,6 +38,19 @@ class BodyEvolutionTest {
 
     private val testDispatcher = StandardTestDispatcher()
 
+    /**
+     * Os ViewModels do teste, para que o `viewModelScope` deles seja encerrado.
+     *
+     * O `init` deles coleta um flow que não termina; sem cancelar, a corrotina segue viva em
+     * `Dispatchers.Main` depois do teste, e o `setMain`/`resetMain` seguinte a encontra lendo o
+     * dispatcher no meio da troca. Quem falha, então, é outra classe.
+     */
+    private val viewModels = ViewModelStore()
+    private var viewModelKeys = 0
+
+    private fun trackedBodyEvolutionViewModel(vm: BodyEvolutionViewModel) =
+        vm.also { viewModels.put("evolution-${viewModelKeys++}", it) }
+
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
@@ -44,6 +58,8 @@ class BodyEvolutionTest {
 
     @After
     fun tearDown() {
+        // Encerra quem ainda coleta antes de devolver o dispatcher.
+        viewModels.clear()
         Dispatchers.resetMain()
     }
 
@@ -189,7 +205,7 @@ class BodyEvolutionTest {
         assertNull(summary.bmiCategory)
 
         val fakeRepo = BodyMeasurementRepository(createFakeDao(emptyList()))
-        val viewModel = BodyEvolutionViewModel(fakeRepo)
+        val viewModel = trackedBodyEvolutionViewModel(BodyEvolutionViewModel(fakeRepo))
         advanceUntilIdle()
 
         val state = viewModel.uiState.value

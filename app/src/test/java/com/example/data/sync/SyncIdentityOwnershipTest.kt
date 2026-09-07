@@ -2,6 +2,7 @@ package com.example.data.sync
 
 import android.content.Context
 import android.os.Build
+import androidx.lifecycle.ViewModelStore
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -49,6 +50,19 @@ class SyncIdentityOwnershipTest {
     private lateinit var database: AppDatabase
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
+    /**
+     * Os ViewModels do teste, para que o `viewModelScope` deles seja encerrado.
+     *
+     * O `init` deles coleta um flow que não termina; sem cancelar, a corrotina segue viva em
+     * `Dispatchers.Main` depois do teste, e o `setMain`/`resetMain` seguinte a encontra lendo o
+     * dispatcher no meio da troca. Quem falha, então, é outra classe.
+     */
+    private val viewModels = ViewModelStore()
+    private var viewModelKeys = 0
+
+    private fun trackedAccountViewModel(vm: AccountViewModel) =
+        vm.also { viewModels.put("account-${viewModelKeys++}", it) }
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -59,6 +73,8 @@ class SyncIdentityOwnershipTest {
 
     @After
     fun tearDown() {
+        // Encerra quem ainda coleta antes de fechar o banco e devolver o dispatcher.
+        viewModels.clear()
         database.close()
         Dispatchers.resetMain()
     }
@@ -106,7 +122,7 @@ class SyncIdentityOwnershipTest {
         assertTrue(identitiesBefore.isNotEmpty())
 
         val gateway = FakeAuthGateway()
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = trackedAccountViewModel(AccountViewModel(gateway))
 
         gateway.nextOutcome = AuthOutcome.Success(SparkAccount(uid = "uid-A"))
         viewModel.signIn(context)
@@ -137,7 +153,7 @@ class SyncIdentityOwnershipTest {
         assertEquals(CloudSyncScope.Disabled, provider.current())
 
         val gateway = FakeAuthGateway()
-        val viewModel = AccountViewModel(gateway)
+        val viewModel = trackedAccountViewModel(AccountViewModel(gateway))
         gateway.nextOutcome = AuthOutcome.Success(SparkAccount(uid = "uid-A"))
         viewModel.signIn(context)
 
