@@ -76,9 +76,12 @@ class SyncViewModel(
     /**
      * O usuário escolheu o que fazer com um conflito (T16.7).
      *
-     * A proteção contra duplo toque é dupla, de propósito: aqui, para que a tela nem chame duas
-     * vezes; e na resolução, com uma escrita condicional no banco — porque duas corrotinas podem
-     * entrar antes de o estado da tela mudar, e é o banco que decide.
+     * A proteção contra duplo toque tem três camadas, de propósito, e nenhuma delas é só visual:
+     * aqui, para que a tela nem chame duas vezes; um `Mutex` no repositório, que serializa as
+     * resoluções deste processo e impede duas consultas remotas simultâneas para a mesma decisão
+     * (T16.7.1); e a escrita condicional no banco, que é a única que sobrevive ao processo morrer.
+     * Desabilitar o botão sozinho não bastaria: duas corrotinas podem entrar antes de o estado da
+     * tela mudar.
      *
      * Uma decisão que virou mutação dispara um ciclo: o usuário acabou de agir, e esperar o
      * agendamento faria a tela dizer "aguardando envio" sem motivo visível.
@@ -109,6 +112,14 @@ class SyncViewModel(
             SyncConflictResolution.Queued,
             SyncConflictResolution.AlreadyResolved,
             SyncConflictResolution.NotFound -> null
+
+            // A nuvem mudou enquanto a tela estava aberta. O conflito já foi atualizado pela
+            // camada de dados; `render` abaixo relê a lista, e o usuário vê a versão nova antes de
+            // escolher de novo. A escolha anterior **não** é reaplicada sozinha.
+            SyncConflictResolution.RemoteChanged -> SyncResolutionProblem.REMOTE_CHANGED
+            SyncConflictResolution.RemoteUnavailable -> SyncResolutionProblem.REMOTE_UNAVAILABLE
+            SyncConflictResolution.RemoteInconsistent ->
+                SyncResolutionProblem.REMOTE_INCONSISTENT
 
             SyncConflictResolution.NoRemoteCopy -> SyncResolutionProblem.NO_REMOTE_COPY
             SyncConflictResolution.StillReferenced -> SyncResolutionProblem.STILL_REFERENCED

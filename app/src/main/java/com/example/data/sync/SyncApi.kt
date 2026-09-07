@@ -2,6 +2,7 @@ package com.example.data.sync
 
 import com.example.data.remote.spark.SparkBackendClient
 import com.example.data.remote.spark.SparkHttpOutcome
+import java.net.URLEncoder
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -28,14 +29,31 @@ interface SyncApi {
 
     /** Lê uma página do change log da conta depois de [cursor]. */
     suspend fun pull(cursor: Long, limit: Int): SyncPullOutcome
+
+    /**
+     * Lê o estado **atual** de um agregado no servidor (T16.7.1).
+     *
+     * Somente leitura, e por identidade — não por cursor. Ela existe porque a cópia remota
+     * guardada em um conflito foi validada **no passado**: entre a página de pull que a trouxe e o
+     * toque do usuário, outro aparelho pode ter escrito. Sem esta pergunta, "usar a versão da
+     * nuvem" aplicaria localmente uma revision que o servidor já sabe estar superada.
+     *
+     * Ela **não** substitui o pull nem o backup: não move cursor, não entrega mudanças e não
+     * carrega o dataset.
+     */
+    suspend fun entityState(
+        entityType: SyncEntityType,
+        entitySyncId: String
+    ): SyncEntityStateOutcome
 }
 
 /**
  * A fronteira HTTP do sync.
  *
  * ```text
- * SyncRepository → aqui → POST /v1/sync/push  (Bearer <Firebase ID Token>) → Spark Backend
- *                       → GET  /v1/sync/pull  (Bearer <Firebase ID Token>) → Spark Backend
+ * SyncRepository → aqui → POST /v1/sync/push      (Bearer <Firebase ID Token>) → Spark Backend
+ *                       → GET  /v1/sync/pull      (Bearer <Firebase ID Token>) → Spark Backend
+ *                       → GET  /v1/sync/entities  (Bearer <Firebase ID Token>) → Spark Backend
  * ```
  *
  * Reusa o `SparkBackendClient` da T16.1: um cliente, um interceptor, um lugar montando
@@ -101,6 +119,49 @@ class SparkSyncApi(
         }
     }
 
+    override suspend fun entityState(
+        entityType: SyncEntityType,
+        entitySyncId: String
+    ): SyncEntityStateOutcome {
+        val backend = client
+        if (backend == null || !backend.isConfigured) return SyncEntityStateOutcome.NotConfigured
+
+        // O `syncId` é sempre um UUID gerado pelo próprio Spark, então a codificação não muda
+        // nada hoje. Ela existe para que um valor fora do formato não vire outro caminho de URL:
+        // o pedido falha fechado no servidor em vez de perguntar outra coisa.
+        val encoded = URLEncoder.encode(entitySyncId, "UTF-8")
+        val path = "${SyncProtocol.ENTITY_PATH}/${entityType.name}/$encoded"
+
+        return when (val outcome = backend.getJson(path)) {
+            SparkHttpOutcome.NotConfigured -> SyncEntityStateOutcome.NotConfigured
+            SparkHttpOutcome.SignedOut -> SyncEntityStateOutcome.AuthRequired
+            SparkHttpOutcome.NetworkFailure -> SyncEntityStateOutcome.Network
+            is SparkHttpOutcome.Response -> when {
+                outcome.code == HTTP_OK -> decodeEntityState(outcome.body)
+                outcome.code == HTTP_UNAUTHORIZED -> SyncEntityStateOutcome.AuthRequired
+                // O servidor não tem esta identidade **nesta conta**. Não é falha de transporte, e
+                // tratá-la como tal esconderia do usuário que a nuvem já não tem aquele item.
+                outcome.code == HTTP_NOT_FOUND -> SyncEntityStateOutcome.NotFound
+                outcome.code == HTTP_TOO_MANY -> SyncEntityStateOutcome.RateLimited
+                outcome.code in HTTP_BAD_REQUEST until HTTP_SERVER_ERROR ->
+                    SyncEntityStateOutcome.Rejected(errorCodeOf(outcome.body))
+                else -> SyncEntityStateOutcome.Unavailable
+            }
+        }
+    }
+
+    private fun decodeEntityState(body: String): SyncEntityStateOutcome = try {
+        SyncEntityStateOutcome.Success(
+            json.decodeFromString(SyncEntityStateDto.serializer(), body)
+        )
+    } catch (e: SerializationException) {
+        // Resposta ilegível **não** vira "confirmei que está atual": sem confirmação, nada é
+        // aplicado e o conflito continua inteiro.
+        SyncEntityStateOutcome.Rejected(UNREADABLE_RESPONSE)
+    } catch (e: IllegalArgumentException) {
+        SyncEntityStateOutcome.Rejected(UNREADABLE_RESPONSE)
+    }
+
     private fun decodePush(body: String): SyncPushOutcome = try {
         SyncPushOutcome.Success(json.decodeFromString(SyncPushResponseDto.serializer(), body))
     } catch (e: SerializationException) {
@@ -138,6 +199,7 @@ class SparkSyncApi(
         const val HTTP_OK = 200
         const val HTTP_BAD_REQUEST = 400
         const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_NOT_FOUND = 404
         const val HTTP_TOO_MANY = 429
         const val HTTP_SERVER_ERROR = 500
         const val UNREADABLE_RESPONSE = "RESPOSTA_ILEGIVEL"
@@ -179,4 +241,30 @@ sealed interface SyncPullOutcome {
     data object Unavailable : SyncPullOutcome
     data object RateLimited : SyncPullOutcome
     data class Rejected(val code: String?) : SyncPullOutcome
+}
+
+/**
+ * O desfecho de uma leitura de estado atual (T16.7.1).
+ *
+ * As mesmas classes de falha do push e do pull, mais uma: [NotFound]. Ela é **informação**, não
+ * erro de transporte — o servidor respondeu, e a resposta é "esta identidade não existe nesta
+ * conta". Colapsá-la em "indisponível" faria o app tratar como problema de rede algo que ele
+ * precisa mostrar ao usuário.
+ *
+ * O que **nenhum** destes desfechos autoriza é aplicar a cópia guardada mesmo assim: sem
+ * confirmação, o conflito fica inteiro.
+ */
+sealed interface SyncEntityStateOutcome {
+
+    data class Success(val state: SyncEntityStateDto) : SyncEntityStateOutcome
+
+    /** O servidor não tem esta identidade para a conta autenticada. */
+    data object NotFound : SyncEntityStateOutcome
+
+    data object NotConfigured : SyncEntityStateOutcome
+    data object AuthRequired : SyncEntityStateOutcome
+    data object Network : SyncEntityStateOutcome
+    data object Unavailable : SyncEntityStateOutcome
+    data object RateLimited : SyncEntityStateOutcome
+    data class Rejected(val code: String?) : SyncEntityStateOutcome
 }

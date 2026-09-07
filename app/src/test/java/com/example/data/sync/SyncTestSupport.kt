@@ -58,6 +58,36 @@ class FakeSparkSyncServer {
         return SyncPushResponseDto(mutations.map { applyOne(ownerUid, deviceId, it) })
     }
 
+    /**
+     * O estado **atual** de um agregado daquela conta (T16.7.1) — o `GET /v1/sync/entities/...`.
+     *
+     * Somente leitura, como no servidor real: nenhuma revision é gasta, nenhuma mudança é anexada
+     * ao log e nenhum ledger é escrito. `null` significa "esta conta não tem esta identidade" — a
+     * mesma resposta que o servidor dá para uma identidade de outra conta.
+     */
+    fun entityState(
+        ownerUid: String,
+        entityType: SyncEntityType,
+        entitySyncId: String
+    ): SyncEntityStateDto? {
+        val stored = entities[EntityKey(ownerUid, entityType.name, entitySyncId)] ?: return null
+        return SyncEntityStateDto(
+            // Derivado do "token" desta requisição, como no servidor real.
+            ownerUid = ownerUid,
+            entityType = entityType.name,
+            entitySyncId = entitySyncId,
+            entitySchemaVersion = 1,
+            serverRevision = stored.revision,
+            deleted = stored.deleted,
+            payloadHash = if (stored.deleted) null else stored.hash,
+            payload = if (stored.deleted) {
+                null
+            } else {
+                stored.payloadText?.let { Json.parseToJsonElement(it) }
+            }
+        )
+    }
+
     fun pull(ownerUid: String, cursor: Long, limit: Int): SyncPullResponseDto {
         val page = changes
             .filter { it.ownerUid == ownerUid && it.serverSequence > cursor }
@@ -348,6 +378,22 @@ class FakeSyncApi(
     /** Quando ligado, toda chamada falha como se não houvesse rede. Nada chega ao servidor. */
     var offline: Boolean = false
 
+    /**
+     * A conta com que esta fronteira autentica (T16.7.1).
+     *
+     * Trocá-la reproduz o que o interceptor faria depois de um login diferente: o servidor passa a
+     * responder como **outra** conta. É assim que o teste de troca de conta durante o voo é
+     * montado sem Firebase.
+     */
+    var authenticatedUid: String = ownerUid
+
+    /** Chamado logo depois de a resposta de estado atual ser produzida, antes de devolvê-la. */
+    var onEntityStateResponse: (() -> Unit)? = null
+
+    /** Quantas leituras de estado atual chegaram. Prova que um toque duplo produz **uma**. */
+    var entityStateCalls: Int = 0
+        private set
+
     /** Quando ligado, o servidor aplica e a **resposta se perde** — o cenário do §40. */
     var dropNextPushResponse: Boolean = false
 
@@ -397,6 +443,22 @@ class FakeSyncApi(
             )
         }
         return SyncPullOutcome.Success(page)
+    }
+
+    override suspend fun entityState(
+        entityType: SyncEntityType,
+        entitySyncId: String
+    ): SyncEntityStateOutcome {
+        entityStateCalls++
+        if (offline) return SyncEntityStateOutcome.Network
+
+        // A conta é a que **esta requisição** autenticou — não a dona do dataset local. É essa
+        // distinção que o teste de troca de conta precisa exercitar.
+        val state = server.entityState(authenticatedUid, entityType, entitySyncId)
+        // O gancho roda depois de o servidor responder e antes de o app ver a resposta: é a janela
+        // exata em que a sessão pode mudar.
+        onEntityStateResponse?.invoke()
+        return state?.let { SyncEntityStateOutcome.Success(it) } ?: SyncEntityStateOutcome.NotFound
     }
 
     /** O `deviceId` desta instalação, para os testes que precisam distinguir origem. */

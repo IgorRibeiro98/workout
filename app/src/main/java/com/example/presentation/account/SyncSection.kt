@@ -430,6 +430,15 @@ private fun resolutionProblemText(problem: SyncResolutionProblem): String = when
         "Há alterações não enviadas dentro deste item. Sincronize antes de excluí-lo."
     SyncResolutionProblem.ACCOUNT_MISMATCH ->
         "A conta conectada mudou. Nada foi alterado."
+    SyncResolutionProblem.REMOTE_CHANGED ->
+        "A versão na nuvem mudou enquanto você decidia. Atualizamos as informações. Revise " +
+            "novamente antes de escolher."
+    SyncResolutionProblem.REMOTE_UNAVAILABLE ->
+        "Não foi possível confirmar a versão atual da nuvem. Sua versão local não foi alterada. " +
+            "Tente novamente quando houver conexão."
+    SyncResolutionProblem.REMOTE_INCONSISTENT ->
+        "A versão da nuvem não confere com o que este aparelho tinha guardado. Nada foi " +
+            "alterado. Sincronize e tente de novo."
     SyncResolutionProblem.FAILED ->
         "Não foi possível aplicar a escolha agora. Nada foi alterado."
 }

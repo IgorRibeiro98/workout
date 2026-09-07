@@ -30,6 +30,15 @@ object SyncProtocol {
     const val PULL_PATH: String = "v1/sync/pull"
 
     /**
+     * A leitura do estado **atual** de um agregado (T16.7.1).
+     *
+     * `v1/sync/entities/{entityType}/{entitySyncId}`. Ela existe para uma pergunta só — *a cópia
+     * remota guardada neste conflito ainda é a que o servidor tem?* — e é estritamente somente
+     * leitura: não gasta revision, não anexa mudança ao change log e não move cursor nenhum.
+     */
+    const val ENTITY_PATH: String = "v1/sync/entities"
+
+    /**
      * Mutações por requisição de push.
      *
      * Nem uma requisição por campo editado, nem um lote ilimitado: a Outbox é fatiada em lotes
@@ -147,6 +156,32 @@ data class SyncChangeDto(
     @SerialName("originDeviceId") val originDeviceId: String = "",
     val createdAt: Long = 0,
     /** `null` quando [operation] é `DELETE`: um tombstone não devolve o que foi apagado. */
+    val payload: JsonElement? = null
+)
+
+/**
+ * O estado **atual** de um agregado no servidor (T16.7.1).
+ *
+ * A resposta de `GET /v1/sync/entities/...`. Ela responde "o que o servidor tem **agora**", que é
+ * uma pergunta diferente da que o pull responde ("o que mudou depois do cursor") — e é a que
+ * faltava para "usar a versão da nuvem" não aplicar localmente uma revision já superada.
+ *
+ * [ownerUid] é a conta que o **servidor** autenticou nesta requisição, derivada do Firebase ID
+ * Token. Ela vem na resposta para que este aparelho possa provar, **depois** da chamada, que o
+ * estado que ele está prestes a gravar pertence à mesma conta dona do dataset local. Uma troca de
+ * conta no meio do voo não pode terminar em escrita cruzada.
+ */
+@Serializable
+data class SyncEntityStateDto(
+    val ownerUid: String,
+    val entityType: String,
+    val entitySyncId: String,
+    val entitySchemaVersion: Int,
+    val serverRevision: Long,
+    /** `true` quando o servidor tem um tombstone desta identidade. */
+    val deleted: Boolean = false,
+    /** `null` num tombstone: uma exclusão não afirma conteúdo. */
+    val payloadHash: String? = null,
     val payload: JsonElement? = null
 )
 

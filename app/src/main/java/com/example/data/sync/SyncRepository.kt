@@ -3,6 +3,8 @@ package com.example.data.sync
 import com.example.data.backup.BackupCanonicalJson
 import com.example.data.backup.CloudDataBindingDao
 import com.example.data.backup.CloudDataBindingEntity
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -23,7 +25,8 @@ import kotlinx.serialization.json.encodeToJsonElement
  * A Outbox descreve o que este aparelho decidiu; mandá-la primeiro é o que garante que uma
  * alteração local não seja transformada em conflito por uma mudança remota que chegaria no mesmo
  * ciclo. Quando o push encontra `STALE`, o conflito é registrado e o pull seguinte **traz o lado
- * remoto** — sem aplicá-lo por cima do local sujo. É a preparação que a T16.7 vai consumir.
+ * remoto** — sem aplicá-lo por cima do local sujo. É sobre esses dois lados guardados que o usuário
+ * decide (T16.7), e é essa decisão que a T16.7.1 passou a confirmar contra o servidor.
  *
  * ## O que este repositório nunca faz
  *
@@ -58,6 +61,16 @@ class SyncRepository(
      * onde a identidade mora — só precisa dela no momento de montar o corpo do push.
      */
     private val deviceId: suspend () -> String,
+    /**
+     * A sessão do Firebase **agora**, sob demanda (T16.7.1).
+     *
+     * O repositório já recebe um `currentUid` de quem chama, e ainda assim precisa desta leitura:
+     * aquele valor é um retrato de **antes** da requisição HTTP. Entre o começo de uma consulta
+     * remota e a resposta dela, o usuário pode ter saído e entrado com outra conta — e uma
+     * resposta obtida como B jamais pode virar escrita no dataset de A. A conta é reconferida
+     * imediatamente antes de qualquer aplicação, com o valor lido **depois** da resposta.
+     */
+    private val accounts: SyncAccountProvider,
     private val transactions: TransactionRunner,
     /**
      * A trava compartilhada com backup e restore (T16.4/T16.5).
@@ -71,6 +84,16 @@ class SyncRepository(
 ) {
 
     val isConfigured: Boolean get() = api.isConfigured
+
+    /**
+     * Uma resolução de conflito por vez, neste processo (T16.7.1).
+     *
+     * Não é a `CloudOperationLock` de propósito: aquela recusa quem chega, e recusar a segunda
+     * metade de um toque duplo faria a tela mostrar erro para algo que já deu certo. Aqui a
+     * segunda entra **depois** da primeira, encontra o conflito já resolvido e desiste em
+     * silêncio — que é o que o usuário espera de tocar duas vezes no mesmo botão.
+     */
+    private val resolutionMutex = Mutex()
 
     /** O vínculo atual do dataset, ou `null` se ele ainda não tem dono. */
     suspend fun binding(): CloudDataBindingEntity? = bindingDao.get()
@@ -107,16 +130,184 @@ class SyncRepository(
         conflictResolver.conflicts(currentUid)
 
     /**
-     * Aplica a decisão do usuário sobre um conflito (T16.7).
+     * Aplica a decisão do usuário sobre um conflito (T16.7, revisada na T16.7.1).
      *
-     * Não fala com a rede: o que precisa subir vira entrada de Outbox e sobe no ciclo seguinte.
-     * É isso que faz uma escolha feita sem conexão continuar valendo — e sobreviver ao processo.
+     * ```text
+     * escolha do usuário
+     *   ├── depende do estado remoto?  (só "usar a versão da nuvem")
+     *   │      ↓ sim
+     *   │   GET /v1/sync/entities/...        ← o estado de AGORA
+     *   │      ↓
+     *   │   revalida a conta DEPOIS da resposta
+     *   │      ↓
+     *   │   ainda é a mesma revision?
+     *   │      ├── sim  →  SyncConflictResolver  →  transação Room
+     *   │      └── não  →  conflito atualizado, PENDING, nada aplicado
+     *   │
+     *   └── não  →  SyncConflictResolver  →  transação Room     ← funciona offline
+     * ```
+     *
+     * ## Por que a confirmação vive aqui
+     *
+     * O [SyncConflictResolver] continua sendo só transação: ele não conhece [SyncApi] e não abre
+     * conexão. Este repositório já é a fronteira pública que a tela usa e já conhece o transporte,
+     * então é ele quem faz a pergunta e ele quem decide se a decisão pode virar escrita.
+     *
+     * ## Um toque, uma operação
+     *
+     * O `Mutex` serializa resoluções deste aparelho. Dois toques rápidos em "Usar versão da nuvem"
+     * produzem **uma** consulta remota e **uma** aplicação: o segundo entra depois do commit do
+     * primeiro, encontra o conflito já resolvido e desiste. A trava é de processo e não substitui
+     * a idempotência durável do banco — ela evita a corrida que a escrita condicional não pega,
+     * que é a de duas requisições HTTP simultâneas para a mesma decisão.
      */
     suspend fun resolveConflict(
         currentUid: String?,
         id: SyncConflictId,
         choice: SyncConflictChoice
-    ): SyncConflictResolution = conflictResolver.resolve(currentUid, id, choice)
+    ): SyncConflictResolution = resolutionMutex.withLock {
+        if (!choice.requiresRemotePreflight) {
+            // Manter o local, excluir mesmo assim, confirmar uma exclusão que a nuvem já fez,
+            // recriar como item novo: nenhuma delas sobrescreve dado local com conteúdo remoto, e
+            // todas continuam funcionando em modo avião. Pedir rede aqui só para "padronizar"
+            // transformaria "escolhi" em "escolhi se a rede estiver boa".
+            return@withLock conflictResolver.resolve(currentUid, id, choice)
+        }
+        resolveAgainstCurrentRemote(currentUid, id, choice)
+    }
+
+    /**
+     * "Usar a versão da nuvem", com o estado remoto reconferido antes de virar escrita (T16.7.1).
+     *
+     * As pré-condições são checadas **antes** da rede, para que um conflito já resolvido ou de
+     * outra conta não vire requisição. E a conta é checada **de novo** depois da resposta, porque
+     * é entre esses dois pontos que ela pode ter mudado.
+     */
+    private suspend fun resolveAgainstCurrentRemote(
+        currentUid: String?,
+        id: SyncConflictId,
+        choice: SyncConflictChoice
+    ): SyncConflictResolution {
+        val binding = bindingDao.get() ?: return SyncConflictResolution.NotEnabled
+        if (binding.state != CloudSyncState.ENABLED.name) return SyncConflictResolution.NotEnabled
+        if (binding.ownerUid.isBlank()) return SyncConflictResolution.NotEnabled
+        if (currentUid.isNullOrBlank()) return SyncConflictResolution.AuthRequired
+        if (currentUid != binding.ownerUid) return SyncConflictResolution.AccountMismatch
+
+        val ownerUid = binding.ownerUid
+        val type = SyncEntityType.entries.firstOrNull { it.name == id.entityType }
+            ?: return SyncConflictResolution.NotFound
+        val conflict = conflictDao.get(ownerUid, id.entityType, id.entitySyncId)
+            ?: return SyncConflictResolution.NotFound
+        if (conflict.status != SyncConflictStatus.PENDING.name) {
+            return SyncConflictResolution.AlreadyResolved
+        }
+        if (choice !in SyncConflictPreview.choicesFor(conflict, type)) {
+            return SyncConflictResolution.NotAvailable
+        }
+
+        // Sem endereço de backend não há como confirmar nada — e sem confirmação, nada é aplicado.
+        if (!api.isConfigured) return SyncConflictResolution.RemoteUnavailable
+
+        val state = when (val outcome = api.entityState(type, conflict.entitySyncId)) {
+            is SyncEntityStateOutcome.Success -> outcome.state
+
+            // O servidor respondeu, e a resposta é "esta identidade não existe nesta conta". Não
+            // dá para provar que a cópia guardada é a atual, então ela não é aplicada.
+            SyncEntityStateOutcome.NotFound -> return SyncConflictResolution.RemoteInconsistent
+
+            // Falha de transporte, sessão ausente ou recusa. **Nada** muda: nem o Room, nem a
+            // Outbox, nem o conflito. Aplicar o snapshot guardado como plano B seria justamente o
+            // que a confirmação existe para impedir.
+            SyncEntityStateOutcome.Network,
+            SyncEntityStateOutcome.Unavailable,
+            SyncEntityStateOutcome.RateLimited,
+            SyncEntityStateOutcome.AuthRequired,
+            SyncEntityStateOutcome.NotConfigured,
+            is SyncEntityStateOutcome.Rejected -> return SyncConflictResolution.RemoteUnavailable
+        }
+
+        // ---------------------------------------------------------------- revalidação de conta
+        //
+        // Três coisas precisam ser a mesma conta, e a prova é feita **depois** da resposta:
+        //
+        //   1. quem o servidor autenticou nesta requisição  (`state.ownerUid`, do token verificado)
+        //   2. o dono do dataset deste aparelho             (`cloud_data_binding`, relido agora)
+        //   3. a sessão do Firebase neste instante          (`accounts.currentUid()`)
+        //
+        // O `currentUid` que chegou aqui é anterior à requisição e não serve para isso: uma troca
+        // de conta durante o voo o deixaria descrevendo uma sessão que já não existe.
+        val bindingNow = bindingDao.get()
+        if (bindingNow == null ||
+            bindingNow.state != CloudSyncState.ENABLED.name ||
+            bindingNow.ownerUid != ownerUid
+        ) {
+            return SyncConflictResolution.AccountMismatch
+        }
+        val liveUid = accounts.currentUid()
+        if (liveUid.isNullOrBlank()) return SyncConflictResolution.AuthRequired
+        if (liveUid != ownerUid) return SyncConflictResolution.AccountMismatch
+        if (state.ownerUid != ownerUid) return SyncConflictResolution.AccountMismatch
+
+        return when (SyncRemotePreflight.evaluate(conflict, type, state)) {
+            // A cópia guardada é a atual. A decisão do usuário descreve o estado real do servidor,
+            // e pode virar escrita — pelo mesmo resolvedor transacional de sempre.
+            SyncRemotePreflightVerdict.Current ->
+                conflictResolver.resolve(liveUid, id, choice)
+
+            SyncRemotePreflightVerdict.Changed -> {
+                refreshRemoteSide(ownerUid, type, conflict, state)
+                SyncConflictResolution.RemoteChanged
+            }
+
+            SyncRemotePreflightVerdict.Resurrected,
+            SyncRemotePreflightVerdict.Mismatched ->
+                SyncConflictResolution.RemoteInconsistent
+        }
+    }
+
+    /**
+     * Substitui o lado remoto do conflito pelo estado atual do servidor (T16.7.1).
+     *
+     * O lado **local** é preservado inteiro: a entidade no Room, a entrada bloqueada da Outbox, a
+     * `baseRevision`, o hash local e a tentativa que ficou guardada. O que muda é a versão da
+     * nuvem entre as quais o usuário escolhe — e o `status`, que volta para `PENDING` porque a
+     * decisão anterior descrevia um conteúdo que já não é o que a nuvem tem.
+     */
+    private suspend fun refreshRemoteSide(
+        ownerUid: String,
+        type: SyncEntityType,
+        conflict: SyncConflictEntity,
+        state: SyncEntityStateDto
+    ) {
+        transactions.runInTransaction {
+            conflictDao.upsert(
+                conflict.copy(
+                    // Um tombstone muda **o que o conflito é**: as escolhas que faziam sentido
+                    // deixam de fazer, e a tela passa a oferecer as da exclusão. É a mesma regra
+                    // que o pull já aplica quando o tombstone chega pelo change log.
+                    kind = if (state.deleted) {
+                        SyncConflictKind.REMOTE_DELETED_LOCAL_MODIFIED.name
+                    } else {
+                        conflict.kind
+                    },
+                    status = SyncConflictStatus.PENDING.name,
+                    remoteRevision = state.serverRevision,
+                    // Esta leitura é por identidade, não por cursor: ela não tem posição no change
+                    // log, e inventar uma seria mentir sobre de onde o conteúdo veio.
+                    remoteServerSequence = conflict.remoteServerSequence,
+                    remotePayloadHash = state.payloadHash,
+                    // Num tombstone não há conteúdo a guardar, e o que já estava guardado é
+                    // preservado: ele continua sendo a única cópia daquele conteúdo aqui. Sem
+                    // hash, "usar a versão da nuvem" deixa de ser oferecida — que é o correto para
+                    // algo que a nuvem não tem mais.
+                    remotePayload = state.payload
+                        ?.let { BackupCanonicalJson.canonicalize(it) }
+                        ?: conflict.remotePayload
+                )
+            )
+        }
+    }
 
     /**
      * Um ciclo completo de sincronização.

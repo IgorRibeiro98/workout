@@ -231,6 +231,34 @@ function reject(reason: string, unsupported: boolean): MutationVerdict {
   return { ok: false, rejected: { reason, unsupported } };
 }
 
+/** Uma consulta de estado atual que passou pelo contrato (T16.7.1). */
+export interface EntityLookup {
+  readonly entityType: SyncEntityType;
+  readonly entitySyncId: string;
+}
+
+/**
+ * A identidade pedida em `GET /v1/sync/entities/{entityType}/{entitySyncId}` (T16.7.1).
+ *
+ * Um `entityType` fora do registry é `400`, e **não** `404`: a lista de agregados é contrato
+ * público (`contracts/sync/v1/README.md`), então dizer "este servidor não conhece esse tipo" não
+ * revela nada sobre dado de ninguém. Já uma identidade que não existe **nesta conta** é `404`, e
+ * quem decide isso é a consulta filtrada por `owner_uid` — não este validador.
+ */
+export function parseEntityLookup(rawType: unknown, rawSyncId: unknown): EntityLookup {
+  if (typeof rawType !== 'string' || !isSyncEntityType(rawType)) {
+    throw SyncErrors.invalid('entityType fora do registry de sincronização');
+  }
+  if (typeof rawSyncId !== 'string') {
+    throw SyncErrors.invalid('entitySyncId ausente');
+  }
+  const entitySyncId = rawSyncId.trim();
+  if (entitySyncId.length === 0 || entitySyncId.length > SYNC_LIMITS.maxIdLength) {
+    throw SyncErrors.invalid('entitySyncId fora do tamanho aceito');
+  }
+  return { entityType: rawType, entitySyncId };
+}
+
 /**
  * O cursor do pull, validado.
  *

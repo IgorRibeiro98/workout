@@ -417,6 +417,14 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
                 transactions = com.example.data.sync.RoomTransactionRunner(database)
             ),
             deviceId = { deviceIdProvider.deviceId() },
+            // A sessão **atual**, relida depois de cada resposta remota (T16.7.1). O `currentUid`
+            // que a tela passa é anterior à requisição: se a conta trocar durante o voo, é esta
+            // leitura — e não aquela — que impede uma resposta obtida como B de virar escrita no
+            // dataset de A.
+            accounts = com.example.data.sync.SyncAccountProvider {
+                (authGateway.state.value as? com.example.domain.auth.AuthState.SignedIn)
+                    ?.account?.uid
+            },
             transactions = com.example.data.sync.RoomTransactionRunner(database),
             operationLock = cloudOperationLock
         )

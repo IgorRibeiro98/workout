@@ -3,13 +3,15 @@
 Fronteira online do Spark. Monólito modular em NestJS sobre SQLite, pensado para rodar em **uma**
 VPS com Docker Compose.
 
-> **Estado (T16.7): fundação + identidade + Coach IA + backup + restore + sync + tombstones.**
+> **Estado (T16.7.1): fundação + identidade + Coach IA + backup + restore + sync + tombstones.**
 > Existe verificação de Firebase ID Token (`GET /v1/auth/me`), a fronteira com o Gemini
 > (`POST /v1/ai/coach`), o **backup estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`), o
-> **download do conteúdo** para restore (`GET /v1/backups`, `/{id}`, `/{id}/content`) e a
+> **download do conteúdo** para restore (`GET /v1/backups`, `/{id}`, `/{id}/content`), a
 > **sincronização incremental** (`POST /v1/sync/push`, `GET /v1/sync/pull`) com `serverRevision`,
 > ledger de idempotência, change log e — desde a T16.7 — **tombstone** (`sync_entities.deleted`) com
-> prevenção de ressurreição.
+> prevenção de ressurreição, e — desde a T16.7.1 — a leitura **somente leitura** do estado atual de
+> um agregado (`GET /v1/sync/entities/{entityType}/{entitySyncId}`), que o aparelho consulta antes
+> de aplicar a versão da nuvem numa resolução de conflito.
 >
 > O servidor **detecta e recusa**; ele nunca resolve conflito. Não existe `force`/`overwrite`, merge
 > por campo, realtime, WebSocket, push do servidor nem limpeza de tombstone. Sob `/v1` há `auth`,
@@ -129,14 +131,20 @@ A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive for
 | `POST /v1/ai/coach` | **Bearer** | Coach IA: recebe contexto + intenção, decide prompt e modelo, chama o Gemini e devolve a resposta validada. |
 | `POST /v1/backups` | **Bearer** | Recebe um snapshot completo do estado pessoal, valida por inteiro, guarda em uma transação e devolve **metadata**. |
 | `GET /v1/backups/latest` | **Bearer** | Metadata do backup mais recente **daquela conta**. `404` quando não há nenhum. |
+| `GET /v1/backups` | **Bearer** | Metadata dos backups retidos daquela conta, na ordem do servidor (T16.5). |
+| `GET /v1/backups/{id}` | **Bearer** | Metadata de um backup daquela conta (T16.5). |
+| `GET /v1/backups/{id}/content` | **Bearer** | O snapshot canônico, verbatim, para o restore (T16.5). Baixar não marca, não consome e não apaga. |
+| `POST /v1/sync/push` | **Bearer** | Mutações deste aparelho. Resultado **por item**: `APPLIED`, `STALE`, `REMOTE_DELETED`... (T16.6/T16.7). |
+| `GET /v1/sync/pull` | **Bearer** | Mudanças da conta depois do cursor, em ordem de `serverSequence` (T16.6). |
+| `GET /v1/sync/entities/{entityType}/{entitySyncId}` | **Bearer** | O estado **atual** de um agregado. **Somente leitura**: não gasta revision, não anexa mudança ao change log, não escreve no ledger e não move cursor (T16.7.1). |
 
-Não existe `GET /v1/backups/{id}/content`. Devolver o snapshot já seria metade do restore, sem a
-validação, o preview e a escrita transacional que a T16.5 precisa desenhar — e há teste que exige
-`404` nessa rota.
+**Nenhuma rota de dado pessoal tem parâmetro de usuário.** O dono sai do token verificado, e um
+`ownerUid` no corpo ou na query string não influencia a resposta. Dado de outra conta é
+indistinguível de inexistente: `404`, nunca `403`.
 
-Health é infraestrutura e fica **fora** de `/v1`. Toda API de produto futura nasce sob `/v1` —
-o versionamento por URI já está configurado, então um `@Controller('sync')` responde em `/v1/sync`
-sem ninguém precisar lembrar do prefixo.
+Health é infraestrutura e fica **fora** de `/v1`. Toda API de produto nasce sob `/v1` — o
+versionamento por URI está configurado, então um `@Controller('sync')` responde em `/v1/sync` sem
+ninguém precisar lembrar do prefixo.
 
 A resposta de readiness é deliberadamente pobre (booleanos por verificação): não expõe caminho de
 arquivo, variável de ambiente, credencial nem stack trace.
@@ -287,7 +295,7 @@ backend/
 └── test/
 ```
 
-Os módulos futuros (`sync` T16.6+, `social` T17) entram em `src/modules/`, no mesmo processo e no
+O módulo futuro (`social`, T17) entra em `src/modules/`, no mesmo processo e no
 mesmo banco. Não haverá `auth-service`, `sync-service` etc.
 
 O contrato de backup é compartilhado com o Android em

@@ -50,6 +50,14 @@ class SyncDevice(
 
     val api: FakeSyncApi = FakeSyncApi(server, ownerUid, deviceId)
 
+    /**
+     * O `uid` da sessão do Firebase **agora**, como o app o leria (T16.7.1).
+     *
+     * Começa igual ao dono do dataset, que é o caso normal. Um teste que troca de conta muda este
+     * valor — e o repositório o relê **depois** da resposta remota, que é onde a proteção mora.
+     */
+    var sessionUid: String? = ownerUid
+
     /** A mesma trava que backup e restore compartilham no app. */
     val operationLock = CloudOperationLock()
 
@@ -120,6 +128,10 @@ class SyncDevice(
             clock = { CLOCK }
         ),
         deviceId = { deviceId },
+        // A sessão **atual** deste aparelho, relida depois de cada resposta remota (T16.7.1).
+        // `sessionUid` é var justamente para que um teste possa trocá-la no meio de uma chamada e
+        // provar que a resposta da conta B não entra no dataset da conta A.
+        accounts = SyncAccountProvider { sessionUid },
         transactions = transactions,
         operationLock = operationLock,
         clock = { CLOCK }

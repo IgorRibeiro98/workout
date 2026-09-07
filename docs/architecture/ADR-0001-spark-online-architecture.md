@@ -1,9 +1,16 @@
 # ADR-0001 — Spark Online Architecture
 
-- **Status:** aceito
-- **Data:** 2026-09-06
-- **Tarefa:** T16.0 — Fundação do Spark Backend
+- **Status:** aceito e **em vigor**
+- **Data da decisão:** 2026-09-06 (T16.0 — Fundação do Spark Backend)
+- **Estado revisado em:** 2026-09-07 (T16.7.1 — fechamento técnico da sincronização)
 - **Substitui:** nada. Complementa `ARCHITECTURE.md`, que continua sendo a autoridade sobre o app Android.
+
+> **Como ler este documento.** A **decisão** (contexto, autoridades, invariantes, política de custo)
+> é de 2026-09-06 e não mudou. A seção *Estado: implementado x planejado* descreve o que existe
+> **hoje** e é atualizada a cada fase — a T16.7.1 a reescreveu porque ela ainda dizia que o sync
+> não existia e que o Coach falava com o Firebase, duas coisas que deixaram de ser verdade nas
+> T16.6 e T16.2. Quando este documento e o código divergirem, o código vence e o documento é
+> corrigido.
 
 ## Contexto
 
@@ -28,11 +35,11 @@ Adotar três autoridades distintas, com responsabilidades que não se sobrepõem
 │ Spark Android           │          │ Spark Backend / VPS             │
 │                         │          │                                 │
 │ UI                      │          │ API HTTPS  (/v1)                │
-│ Domain                  │  futuro  │ Auth boundary       [T16.1]     │
+│ Domain                  │   push   │ Auth boundary       [T16.1]     │
 │ Room  ◄── autoridade    │◄────────►│ Gemini Gateway      [T16.2]     │
-│ DataStore   operacional │   sync   │ Sync                [T16.3+]    │
+│ DataStore   operacional │   pull   │ Sync   [T16.6 / T16.7 / T16.7.1]│
 │ Outbox        [T16.3]   │          │ Backup [T16.4] / Restore [T16.5]│
-│                         │          │ Social              [T17]       │
+│ Conflitos     [T16.7]   │          │ Social              [T17]       │
 │ AiCoachGateway          │          │ SQLite                          │
 └─────────────────────────┘          └─────────────────────────────────┘
 ```
@@ -48,10 +55,10 @@ Adotar três autoridades distintas, com responsabilidades que não se sobrepõem
 
 ### Direção de fluxo obrigatória
 
-O fluxo correto, quando o sync existir:
+O fluxo correto, implementado na T16.6:
 
 ```text
-ação do usuário → domínio → Room → (outbox) → sync → Spark Backend
+ação do usuário → domínio → Room → outbox → sync → Spark Backend
 Spark Backend → sync → validação → Room → UI observa Room
 ```
 
@@ -135,6 +142,30 @@ O que a T16.1 **não** fez, deliberadamente: nenhum dado pessoal é enviado ou b
 não tocam em Room ou DataStore, trocar de conta não reassocia nada, e não existe tabela de usuários
 no servidor.
 
+### IMPLEMENTADO EM T16.2
+
+- **O Coach IA deixou de falar com o Firebase.** `POST /v1/ai/coach` no Spark Backend: o servidor
+  decide prompt e modelo, chama o Gemini, valida a resposta e devolve o resultado já validado.
+- No Android sobrou **um** gateway, `SparkBackendAiCoachGateway`, atrás da mesma interface
+  `AiCoachGateway`. `FirebaseAiCoachGateway` **não existe mais**, e há teste estrutural que falha
+  se o Firebase AI Logic voltar ao aplicativo.
+- A credencial do Gemini é **server-only**: ela não entra no APK, no `BuildConfig`, em resource,
+  em DataStore, no Git nem em teste. Nome de modelo também não existe no app.
+- Quota diária por conta e global, uma chamada ativa por conta, dedupe por `clientRequestId`, sem
+  retry automático em nenhum dos dois lados.
+- Consequência aceita e registrada: uma chamada **nova** ao modelo passou a exigir Conta Spark.
+  Isso não torna a conta necessária para usar o Spark — torna-a necessária só para o que depende
+  do servidor.
+
+### IMPLEMENTADO EM T16.3
+
+- **Identidade global dos dados** no Android: `syncId` (UUID v4) nas raízes dos agregados pessoais,
+  gerado offline na criação e imutável. Room `version = 31`, com migração aditiva e índice único.
+- **Outbox transacional** (`sync_outbox`): a intenção de sincronizar é gravada na **mesma**
+  transação Room da alteração de domínio, atrás de `SyncMutationCoordinator.mutate { }`.
+- `deviceId` (DataStore) e `clientMutationId` por mutação.
+- Nada disso envia dado: com a nuvem desligada — o padrão — **nenhuma entrada é produzida**.
+
 ### IMPLEMENTADO EM T16.4
 
 - **Adoção explícita** do conjunto de dados local por uma Conta Spark: `cloud_data_binding` no Room
@@ -176,15 +207,58 @@ O que a T16.5 **não** fez, deliberadamente: merge, sync incremental, push/pull,
 convergência multi-device ao vivo, conflito, tombstone remoto, rebind de dataset entre contas,
 mídia e backup automático.
 
+### IMPLEMENTADO — T16.6 (sync incremental multi-device)
+
+- **`POST /v1/sync/push`** e **`GET /v1/sync/pull`**: dois aparelhos da mesma Conta Spark convergem
+  sozinhos, por mudança e não por snapshot.
+- Estado remoto por agregado (`sync_entities`) com `serverRevision`; ledger de idempotência por
+  `clientMutationId` (`sync_mutations`); change log append-only com sequência global
+  (`sync_changes`).
+- No Android: cursor durável por conta (`sync_cursor`), revision conhecida por agregado
+  (`sync_entity_metadata`), apply remoto transacional fora do coordenador de mutações
+  (`SyncRemoteApplier`) e **um** trabalho único de `WorkManager` com restrição de rede. Room
+  `version = 34`.
+- **`revision` decide, relógio não.** Escrita stale é `STALE`, e um `STALE` **não** atualiza a
+  revision conhecida — fazer isso seria *last write wins* com outro nome.
+- Conflito é **detectado, isolado e preservado** (`sync_conflicts` + Outbox `BLOCKED`). A T16.6 não
+  resolvia nenhum.
+
+### IMPLEMENTADO — T16.7 (conflitos, deletes e tombstones)
+
+- **Resolução explícita de conflito**: o usuário escolhe entre a versão deste aparelho e a da
+  nuvem, na Conta Spark dentro do Perfil. A escolha é durável e idempotente (escrita condicional
+  no banco, `sync_conflicts.status`). Room `version = 35`.
+- **Exclusão propaga como mudança versionada**: `DELETE` sobe da Outbox, o servidor cria tombstone
+  (`sync_entities.deleted`, migration `0006_sync_tombstones.sql`), gasta uma `revision` e anexa a
+  mudança ao change log.
+- **Tombstone impede ressurreição**: `UPSERT` contra tombstone é `REMOTE_DELETED`, sempre, e a
+  garantia é do banco (`AND sync_entities.deleted = 0`). Recriar produz `syncId` novo.
+- **Política por agregado sem `default`**: `SyncEntityPolicies` (app) e `SyncEntityPolicyRegistry`
+  (`sync.policy.ts`). `LAST_WRITE_WINS_ALLOWED` existe como valor e **nenhum agregado o usa**.
+- `CURSOR_EXPIRED` com orientação de rebaseline — nunca `cursor = 0` em silêncio.
+
+### IMPLEMENTADO — T16.7.1 (fechamento técnico da sincronização)
+
+- **`GET /v1/sync/entities/{entityType}/{entitySyncId}`**: leitura **somente leitura** do estado
+  atual de um agregado, autenticada, com ownership derivado do token. Ela não gasta revision, não
+  anexa mudança ao change log, não escreve no ledger e não move cursor.
+- **"Usar a versão da nuvem" confirma antes de sobrescrever.** A cópia remota guardada em um
+  conflito foi validada no passado; se a revision remota tiver avançado, o conflito é **atualizado**
+  e o usuário decide de novo — a revision antiga não é aplicada, e a decisão anterior não é
+  reaproveitada.
+- **A conta é revalidada depois da resposta**, não antes da requisição: uma resposta autenticada
+  como B nunca entra no dataset de A.
+- Manter o local, excluir mesmo assim e confirmar uma exclusão que a nuvem já fez **continuam
+  funcionando offline** — nenhuma delas grava conteúdo vindo do servidor.
+- **CI do Android no GitHub** (`.github/workflows/android.yml`): `:app:testDebugUnitTest` e
+  `:app:assembleDebug` em checkout limpo, sem Firebase real, sem Gemini e sem VPS.
+
 ### PLANEJADO — ainda **não** existe
 
-- **T16.6** — Sync incremental multi-device.
-- **T16.7** — Conflitos, deletes, tombstones e consistência offline. **Implementado.**
 - **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
 - **T17** — Amigos, convites, desafios e social.
 
-Nada acima está implementado. Sob `/v1` existem hoje `auth`, `ai` e `backups` — não existe
-endpoint de sync, e há teste que garante isso.
+Sob `/v1` existem hoje `auth`, `ai`, `backups` e `sync`.
 
 ## Backup dos dados do usuário ≠ backup do servidor
 
@@ -202,27 +276,31 @@ Hoje, um `docker compose down -v` na VPS destrói os backups de todo mundo. Isso
 registrada da fase de hardening, não um detalhe operacional esquecido — e a UI do app não promete
 o contrário.
 
-## Coach IA — migração prevista, não executada
+## Coach IA — migração executada na T16.2
 
-O `FirebaseAiCoachGateway` (T14) **permanece funcional e inalterado**. Nem a T16.0 nem a T16.1
-removeram, migraram ou tocaram em Firebase AI Logic, App Check ou configuração do Gemini. A T16.1
-introduziu identidade de **usuário** (Firebase Auth), que é responsabilidade diferente do App Check
-— este atesta o app, aquela identifica quem está usando.
-
-A migração prevista para a **T16.2**:
+O estado atual, e o único:
 
 ```text
-AiCoachGateway                     ← a interface não muda
-├── FirebaseAiCoachGateway         ← atual, em uso
-└── SparkBackendAiCoachGateway     ← T16.2
+AiCoachGateway                     ← a interface não mudou
+└── SparkBackendAiCoachGateway     ← o gateway do app
+
+Android  →  Spark Backend  →  Gemini
 ```
 
-Quando a implementação HTTP estiver validada, `SparkBackendAiCoachGateway` vira o default; o
-`FirebaseAiCoachGateway` só é removido depois disso, em uma tarefa própria. Não há big bang.
+`FirebaseAiCoachGateway` **não existe mais**, e `AiCoachSecurityConfigTest` falha se o Firebase AI
+Logic voltar ao aplicativo. Quem instala o App Check hoje é o `FirebaseAuthGateway`: ele atesta o
+app perante o Firebase, que serve à **autenticação** — responsabilidade diferente da identidade de
+usuário, e diferente do Coach.
 
-O motivo de a migração valer a pena: hoje a chave do Gemini e a política de uso vivem no cliente.
-Com o backend no caminho, a cota, o rate limit e o prompt passam a ser controlados no servidor —
-que é também onde o `uid` autenticado existe.
+O motivo pelo qual a migração valeu a pena, registrado porque ele continua sendo a razão de o
+desenho ser este: a chave do Gemini e a política de uso viviam no cliente. Com o backend no
+caminho, cota, rate limit e prompt são controlados no servidor — que é também onde o `uid`
+autenticado existe.
+
+> **Registro histórico.** Até a T16.1 este ADR previa a migração como futura e descrevia
+> `FirebaseAiCoachGateway` como "atual, em uso". Isso era verdade quando foi escrito e deixou de
+> ser na T16.2; o texto foi corrigido na T16.7.1 porque um documento vigente que descreve um
+> gateway inexistente como atual convida a recriá-lo.
 
 ## Consequências
 
@@ -245,7 +323,14 @@ que é também onde o `uid` autenticado existe.
 
 ## Referências
 
+O detalhamento fica nos documentos abaixo — este ADR registra a **decisão**, não cada classe.
+
 - [`data-classification-matrix.md`](./data-classification-matrix.md) — o que sincroniza e o que não.
 - [`identity-contract.md`](./identity-contract.md) — `localId`, `syncId`, `deviceId`, ownership.
 - [`sync-protocol.md`](./sync-protocol.md) — push/pull, cursor, idempotência, conflitos, tombstones.
+- [`../../contracts/sync/v1/README.md`](../../contracts/sync/v1/README.md) — o contrato de sync que
+  os dois lados precisam cumprir, com os corpos de requisição e resposta.
+- [`../../contracts/backup/v1/README.md`](../../contracts/backup/v1/README.md) — o formato do
+  snapshot e a forma canônica cujo SHA-256 os dois lados reproduzem.
+- [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §17 — o desenho de cada fase da T16 no app.
 - [`../../backend/README.md`](../../backend/README.md) — como rodar o backend.

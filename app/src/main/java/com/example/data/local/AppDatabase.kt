@@ -135,7 +135,7 @@ abstract class AppDatabase : RoomDatabase() {
          * ```text
          * sync_entity_metadata   qual revision remota este aparelho conhece de cada agregado
          * sync_cursor            até onde ele já leu o change log do servidor, por conta
-         * sync_conflicts         a divergência que a T16.6 detecta e a T16.7 vai resolver
+         * sync_conflicts         a divergência preservada até a decisão do usuário (T16.7)
          * sync_outbox.blockedReason  por que uma entrada saiu da fila de envio
          * ```
          *

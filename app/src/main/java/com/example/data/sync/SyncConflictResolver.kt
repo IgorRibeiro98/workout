@@ -39,6 +39,19 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **não fala com a rede.** Uma resolução termina no Room. O que precisa subir sobe no ciclo
  *   seguinte, pelo caminho normal — inclusive se o app morrer no meio, porque o que ficou gravado
  *   foi uma entrada de Outbox durável.
+ *
+ * ## Onde a confirmação remota entra (T16.7.1)
+ *
+ * "Usar a versão da nuvem" passou a exigir que o estado remoto seja reconferido antes de virar
+ * escrita. Essa confirmação **não** mora aqui: ela é do [SyncRepository], que é a fronteira
+ * pública e já conhece a [SyncApi]. Quando ele chama este resolvedor, a pergunta já foi
+ * respondida — e o que acontece aqui continua sendo uma transação Room, sem socket no meio.
+ *
+ * A divisão é deliberada. Um resolvedor que também fizesse HTTP seria cliente HTTP, DAO, regra de
+ * domínio e coordenador ao mesmo tempo; e transformaria em "escolhi se a rede estiver boa" as
+ * escolhas que **precisam** continuar funcionando offline — manter o local, excluir mesmo assim,
+ * confirmar uma exclusão que a nuvem já fez. Ver
+ * [SyncConflictChoice.requiresRemotePreflight].
  */
 class SyncConflictResolver(
     private val bindingDao: CloudDataBindingDao,
@@ -202,11 +215,14 @@ class SyncConflictResolver(
      * baixarem o que já têm — um laço que não fecha.
      *
      * O snapshot remoto guardado é uma cópia **validada**: ele veio de uma página de pull, com o
-     * hash canônico que o servidor calculou, e é reconferido aqui antes de virar escrita. Se o
-     * servidor tiver avançado desde então, a revision mais nova chega no ciclo seguinte e é
-     * aplicada normalmente — o local já estará limpo, então ela não vira conflito. Nada se perde
-     * por resolver com a cópia guardada; o que se perderia era **não** ter cópia nenhuma para
-     * mostrar ao usuário.
+     * hash canônico que o servidor calculou, e é reconferido aqui antes de virar escrita.
+     *
+     * Reconferir o hash prova que a cópia não corrompeu — **não** prova que ela ainda é a atual.
+     * Essa é outra pergunta, e desde a T16.7.1 ela é feita ao servidor **antes** desta chamada,
+     * pelo [SyncRepository]: se a revision remota tiver avançado, este método não chega a ser
+     * chamado, o conflito é atualizado e o usuário escolhe de novo. Aplicar aqui uma revision que
+     * o servidor já sabe estar superada seria sobrescrever dado local de propósito com uma versão
+     * velha.
      */
     private suspend fun useRemote(
         ownerUid: String,
@@ -439,7 +455,32 @@ enum class SyncConflictChoice {
     CONFIRM_REMOTE_DELETE,
 
     /** O usuário apagou aqui, a nuvem tem versão mais nova, e ele confirma a exclusão. */
-    CONFIRM_LOCAL_DELETE
+    CONFIRM_LOCAL_DELETE;
+
+    /**
+     * Esta escolha só é segura se o estado remoto for reconferido **antes** de virar escrita
+     * local (T16.7.1).
+     *
+     * Vale para uma escolha só, e o motivo é assimétrico:
+     *
+     * - **[USE_REMOTE] sobrescreve dado local com uma cópia da nuvem.** Aquela cópia veio de uma
+     *   página de pull que já passou, e entre a chegada dela e o toque do usuário um terceiro
+     *   aparelho pode ter escrito. Aplicar sem perguntar seria gravar aqui, de propósito, uma
+     *   versão que o servidor **já sabe** estar superada;
+     * - **[KEEP_LOCAL] e [CONFIRM_LOCAL_DELETE] não sobrescrevem nada.** Elas mantêm o que já está
+     *   no Room e viram mutação nova, com `baseRevision` igual à revision que o usuário recusou.
+     *   Se o servidor tiver andado, o push volta `STALE` e o conflito reabre — a proteção já
+     *   existe, e é ela que faz uma decisão tomada em modo avião continuar valendo;
+     * - **[CONFIRM_REMOTE_DELETE] depende de um tombstone, e tombstone não muda.** `deleted = 1`
+     *   é terminal: o `ON CONFLICT DO UPDATE` do servidor tem `AND sync_entities.deleted = 0`, e
+     *   não existe `force` nem endpoint paralelo. Confirmar uma exclusão que a nuvem fez continua
+     *   correto em qualquer revision futura, porque nenhuma revision futura desfaz a exclusão.
+     *   Exigir rede aqui seria complexidade sem invariante a proteger — e custaria o
+     *   funcionamento offline;
+     * - **[KEEP_LOCAL_AS_NEW] cria uma entidade com `syncId` novo.** O que o servidor tem na
+     *   identidade morta não muda o que essa criação significa.
+     */
+    val requiresRemotePreflight: Boolean get() = this == USE_REMOTE
 }
 
 /** O desfecho de uma resolução. */
@@ -480,4 +521,32 @@ sealed interface SyncConflictResolution {
 
     /** Há alterações locais pendentes dentro deste item que seriam perdidas. */
     data object PendingChildChanges : SyncConflictResolution
+
+    /**
+     * A versão da nuvem mudou enquanto o usuário decidia (T16.7.1).
+     *
+     * O conflito foi **atualizado** com o estado atual do servidor e voltou a esperar decisão.
+     * Nada local foi escrito, e a escolha anterior não é reaproveitada: ela descrevia um conteúdo
+     * que o usuário viu e que já não é o que a nuvem tem. "Ele já escolheu remoto, então aplica a
+     * revision nova" seria aplicar algo que ninguém conferiu.
+     */
+    data object RemoteChanged : SyncConflictResolution
+
+    /**
+     * Não foi possível confirmar o estado atual da nuvem (T16.7.1).
+     *
+     * Rede, servidor indisponível, rate limit, sessão ausente ou backend não configurado. O
+     * conflito continua **inteiro** e o Room continua intacto: aplicar a cópia guardada como
+     * "plano B" seria exatamente o defeito que a confirmação existe para impedir.
+     */
+    data object RemoteUnavailable : SyncConflictResolution
+
+    /**
+     * O servidor contradiz o que este aparelho tinha guardado sobre o lado remoto (T16.7.1).
+     *
+     * Um tombstone que voltou vivo, uma resposta sobre outra identidade, ou uma identidade que a
+     * conta já não tem. Nenhum destes é um estado que o protocolo produz, e nenhum é reconciliado
+     * por heurística: nada é aplicado e nada é apagado.
+     */
+    data object RemoteInconsistent : SyncConflictResolution
 }

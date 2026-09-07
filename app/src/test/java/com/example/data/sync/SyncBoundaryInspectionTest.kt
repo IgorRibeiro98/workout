@@ -179,11 +179,14 @@ class SyncBoundaryInspectionTest {
     }
 
     @Test
-    fun `a resolucao de conflito nunca fala com a rede`() {
-        // Uma resolução termina no Room. O que precisa subir vira entrada de Outbox e sobe no
-        // ciclo seguinte — é isso que faz uma escolha feita sem conexão continuar valendo, e
-        // sobreviver a um process death. Uma requisição aqui transformaria "escolhi" em "escolhi
-        // se a rede estiver boa".
+    fun `o resolvedor de conflito nunca fala com a rede`() {
+        // Uma resolução termina no Room, em transação. Um resolvedor que também fizesse HTTP seria
+        // cliente HTTP, DAO, regra de domínio e coordenador ao mesmo tempo.
+        //
+        // A T16.7.1 acrescentou a confirmação remota de "usar a versão da nuvem" — e ela mora no
+        // `SyncRepository`, que já é a fronteira pública e já conhece o transporte. Este teste
+        // continua valendo exatamente como estava: quando o resolvedor é chamado, a pergunta já
+        // foi respondida.
         val resolver = AuthSourceInspection.sources(syncPackage)
             .single { it.name == "SyncConflictResolver.kt" }
         val code = AuthSourceInspection.code(resolver)
@@ -192,6 +195,37 @@ class SyncBoundaryInspectionTest {
             "a resolução não pode chamar a fronteira HTTP",
             code.contains("SyncApi") || code.contains("api.push") || code.contains("api.pull")
         )
+    }
+
+    @Test
+    fun `so a escolha que sobrescreve dado local exige confirmacao remota`() {
+        // A assimetria é o ponto da T16.7.1, e ela é fácil de perder de vista: exigir rede "para
+        // padronizar" transformaria em "escolhi se a rede estiver boa" as decisões que precisam
+        // continuar valendo em modo avião — manter o local, excluir mesmo assim, confirmar uma
+        // exclusão que a nuvem já fez.
+        //
+        // `USE_REMOTE` é a única que grava conteúdo vindo do servidor por cima do local, e por
+        // isso é a única que precisa provar que aquele conteúdo ainda é o atual.
+        val exigem = SyncConflictChoice.entries.filter { it.requiresRemotePreflight }
+
+        assertEquals(listOf(SyncConflictChoice.USE_REMOTE), exigem)
+    }
+
+    @Test
+    fun `a leitura de estado atual nao escreve nada`() {
+        // Ela existe para responder "isto ainda é o atual?", e só. Se este caminho registrasse
+        // mutação, aplicasse domínio ou mexesse no cursor, consultar o estado viraria um evento na
+        // vida da entidade — e os outros aparelhos baixariam uma "mudança" que ninguém fez.
+        val preflight = AuthSourceInspection.sources(syncPackage)
+            .single { it.name == "SyncRemotePreflight.kt" }
+        val code = AuthSourceInspection.code(preflight)
+
+        listOf("Dao", "outbox", "cursor", "runInTransaction", "SyncApi").forEach { forbidden ->
+            assertFalse(
+                "a regra de confirmação é pura: encostou em '$forbidden'",
+                code.contains(forbidden)
+            )
+        }
     }
 
     @Test

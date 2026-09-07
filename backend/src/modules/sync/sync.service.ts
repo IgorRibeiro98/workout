@@ -6,6 +6,7 @@ import { sha256Hex } from '../backup/canonical-json';
 import { SyncEntityPolicyRegistry } from './sync.policy';
 import {
   SYNC_MUTATION_REASONS,
+  type SyncEntityStateResponse,
   type SyncMutationResult,
   type SyncMutationStatus,
   type SyncPullResponse,
@@ -16,6 +17,7 @@ import { SyncRateLimiter } from './sync.rate-limit';
 import { SyncRepository, type StoredSyncEntity } from './sync.repository';
 import {
   parseCursor,
+  parseEntityLookup,
   parseLimit,
   parsePushRequest,
   validateMutation,
@@ -133,6 +135,76 @@ export class SyncService {
     });
 
     return { changes, nextCursor, hasMore };
+  }
+
+  /**
+   * O estado **atual** de um agregado da conta autenticada (T16.7.1).
+   *
+   * ## Por que esta leitura existe
+   *
+   * Um conflito guarda a cópia remota que o pull trouxe — validada quando chegou, e potencialmente
+   * velha quando o usuário decide. Sem uma forma de perguntar "isso ainda é o que você tem?", o
+   * aparelho aplicaria localmente uma versão que o servidor **já sabe** estar superada, e só
+   * descobriria no ciclo seguinte. O pull não responde a essa pergunta: ele entrega mudanças em
+   * sequência, e depois que o cursor passa de uma sequência aquela versão não é mais pedível.
+   *
+   * ## Estritamente somente leitura
+   *
+   * Um `SELECT`, e mais nada. Nenhuma `revision` é gasta, nenhuma linha entra em `sync_changes`,
+   * nenhuma entrada nasce em `sync_mutations` e nenhum tombstone muda. Consultar o estado não é
+   * um evento na vida da entidade, e transformá-lo em um faria os outros aparelhos baixarem uma
+   * "mudança" que ninguém fez.
+   *
+   * ## Ownership
+   *
+   * O dono é `principal.uid`, do token verificado. Não existe `?ownerUid=`, e a consulta filtra
+   * por conta no `WHERE`. Uma identidade que existe para **outra** conta é `404` — a mesma
+   * resposta de uma que nunca existiu.
+   */
+  entityState(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+    rawEntityType: unknown,
+    rawEntitySyncId: unknown,
+  ): SyncEntityStateResponse {
+    this.assertWithinRateLimit(principal.uid);
+
+    const startedAt = Date.now();
+    const lookup = parseEntityLookup(rawEntityType, rawEntitySyncId);
+    const entity = this.repository.findEntitySnapshot(
+      principal.uid,
+      lookup.entityType,
+      lookup.entitySyncId,
+    );
+    if (!entity) {
+      throw SyncErrors.entityNotFound();
+    }
+
+    this.logger.info('sync.entity', {
+      requestId,
+      uidPrefix: uidPrefix(principal.uid),
+      // Tipo e desfecho, nunca a identidade do agregado nem o conteúdo.
+      entityType: lookup.entityType,
+      serverRevision: entity.serverRevision,
+      deleted: entity.deleted,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return {
+      // Derivado do token verificado. É o que permite ao aparelho provar, **depois** da resposta,
+      // que ela foi autenticada pela mesma conta dona do dataset local — uma troca de conta no
+      // meio do voo não pode terminar em escrita cruzada.
+      ownerUid: principal.uid,
+      entityType: lookup.entityType,
+      entitySyncId: lookup.entitySyncId,
+      entitySchemaVersion: entity.entitySchemaVersion,
+      serverRevision: entity.serverRevision,
+      deleted: entity.deleted,
+      payloadHash: entity.deleted ? null : entity.payloadHash,
+      // O texto canônico guardado volta como valor JSON, igual ao pull. O que o cliente confere é
+      // o `payloadHash`, calculado sobre a forma canônica.
+      payload: entity.payload === null ? null : (JSON.parse(entity.payload) as unknown),
+    };
   }
 
   private assertWithinRateLimit(uid: string): void {

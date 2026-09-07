@@ -1,8 +1,8 @@
 # CI do Spark Backend (T16.0 → T16.2).
 #
-# Escopo deliberadamente restrito a `backend/**`: o CI do Android foi removido em df63791 e esta
-# tarefa não o ressuscita — os testes do app rodam localmente com
-# `./gradlew :app:testDebugUnitTest`.
+# Escopo deliberadamente restrito a `backend/**`. O Android tem o próprio workflow desde a T16.7.1
+# (`android.yml`), e os dois não se misturam: eles têm gatilhos, toolchain e tempo de execução
+# diferentes, e juntá-los faria uma mudança de documentação do backend recompilar o app.
 #
 # Nada neste workflow depende de rede além do registro do npm: **sem Firebase, sem Gemini, sem
 # VPS, sem credencial**. Os testes do Coach (T16.2) usam `FakeAiProviderGateway` e
@@ -143,7 +143,8 @@ jobs:
             console.log('schema de restore, de sync e de tombstone ok');
             db.close();"
 
-          for path in /v1/backups /v1/backups/abc /v1/backups/abc/content /v1/sync/pull; do
+          for path in /v1/backups /v1/backups/abc /v1/backups/abc/content /v1/sync/pull \
+                      /v1/sync/entities/WORKOUT_TEMPLATE/abc; do
             status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$path")
             if [ "$status" != "401" ]; then
               echo "rota $path deveria exigir autenticação; respondeu $status"; exit 1

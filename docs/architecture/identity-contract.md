@@ -1,7 +1,8 @@
 # Contrato de identidade global do Spark
 
 - **Tarefa:** T16.0 (documentação) — implementação em **T16.1** (identidade da conta), **T16.3**
-  (identidade dos dados) e **T16.6** (identidade em movimento).
+  (identidade dos dados), **T16.6** (identidade em movimento), **T16.7** (identidade de uma
+  exclusão) e **T16.7.1** (revalidação de conta depois de uma resposta remota).
 - **Status (verificado em 2026-09-07):**
   - **implementado na T16.1:** a identidade da **conta**. O Firebase UID chega ao servidor por
     Firebase ID Token, é verificado pelo Admin SDK e vira `AuthenticatedPrincipal { uid }`;
@@ -23,6 +24,12 @@
     e um campo desses recusa a requisição inteira. Room `version = 34`;
   - **implementado na T16.7:** o tombstone e a identidade de uma exclusão — a exclusão é uma
     mudança versionada da mesma identidade (`sync_entities.deleted`), e recriar usa `syncId` novo.
+    Room `version = 35`;
+  - **implementado na T16.7.1:** a identidade **revalidada depois da resposta**. Uma leitura de
+    estado atual (`GET /v1/sync/entities/...`) devolve o `ownerUid` que o servidor autenticou
+    naquela requisição, e o aparelho só grava quando ele, o dono do dataset local
+    (`cloud_data_binding`) e a sessão do Firebase **neste instante** são a mesma conta. O `uid`
+    capturado antes da chamada HTTP não basta: a conta pode trocar durante o voo.
 
 ---
 
@@ -186,13 +193,17 @@ uid confiável extraído do token verificado
         ↓
 AuthenticatedPrincipal { uid }           [T16.1 — implementado]
         ↓
-ownership de tudo que a requisição escreve ou lê   [T16.4+ — não implementado]
+ownership de tudo que a requisição escreve ou lê   [T16.4+ — implementado]
 ```
 
 O caminho até `AuthenticatedPrincipal` existe e é testado: `BearerAuthGuard` recusa token ausente,
 malformado ou inválido com 401, distingue "não consegui verificar" com 503, e nenhum `uid` vindo de
-query string, header ou corpo influencia a resposta. O que ainda **não** existe é o que vem depois:
-não há dado pessoal no servidor para filtrar por `ownerUid`.
+query string, header ou corpo influencia a resposta.
+
+O que vem depois **também** existe desde a T16.4, e cada rota de dado pessoal filtra por `ownerUid`
+do principal: backup (`POST /v1/backups`, `GET /v1/backups`, `/{id}`, `/{id}/content`), sync
+(`POST /v1/sync/push`, `GET /v1/sync/pull`) e, desde a **T16.7.1**, a leitura de estado atual
+(`GET /v1/sync/entities/{entityType}/{entitySyncId}`). Nenhuma delas tem parâmetro de usuário.
 
 Se o corpo da requisição trouxer um `ownerUid`, ele é **ignorado**, não validado — aceitar um
 `ownerUid` "conferindo se bate com o token" já seria um caminho a mais para errar. O único `uid` que
@@ -201,7 +212,10 @@ existe no servidor é o que veio do token.
 Consequências, **valendo desde a T16.4**, quando passou a existir dado pessoal remoto:
 
 - toda leitura é filtrada por `ownerUid` do principal — `GET /v1/backups/latest` não tem parâmetro
-  de usuário, e não há como pedir o backup de outra conta;
+  de usuário, e não há como pedir o backup de outra conta. O mesmo vale para o change log
+  (`GET /v1/sync/pull`) e para o estado atual de um agregado (`GET /v1/sync/entities/...`,
+  T16.7.1), onde uma identidade que existe para **outra** conta responde `404` — indistinguível de
+  inexistente, para que a rota não vire um oráculo de existência do dado alheio;
 - toda escrita grava o `ownerUid` do principal;
 - uma requisição sem token válido não acessa dado pessoal nenhum;
 - o contrato de backup **não tem** campo `ownerUid`. Um campo desconhecido no corpo é recusado, e
@@ -323,3 +337,4 @@ precisar reconciliar nada.
 | Cursor por conta e por banco local (`sync_cursor`) | T16.0 | **T16.6 — feito** |
 | Registro de dispositivos no servidor | T16.0 | não implementado — o `deviceId` é metadado, e uma tabela de dispositivos só passa a valer a pena com revogação por aparelho (T16.8) |
 | Identidade de uma exclusão (tombstone) | T16.0 | **implementado na T16.7** |
+| Revalidação de conta depois de uma resposta remota | T16.7.1 | **T16.7.1 — feito** |

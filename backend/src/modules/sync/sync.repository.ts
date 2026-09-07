@@ -14,6 +14,18 @@ export interface StoredSyncEntity {
   readonly deleted: boolean;
 }
 
+/**
+ * O estado atual de um agregado **com o conteúdo** (T16.7.1).
+ *
+ * Separado de [StoredSyncEntity] de propósito: o push consulta a entidade uma vez por mutação e
+ * precisa só de revision, hash e tombstone. Carregar o payload — até 256 KiB — em todas essas
+ * leituras seria pagar o conteúdo inteiro para responder "qual é a revision?".
+ */
+export interface StoredSyncEntitySnapshot extends StoredSyncEntity {
+  /** O texto canônico guardado, ou `null` num tombstone (que não afirma conteúdo). */
+  readonly payload: string | null;
+}
+
 /** Uma tentativa de mutação já registrada no ledger. */
 export interface StoredMutation {
   readonly clientMutationId: string;
@@ -98,6 +110,45 @@ export class SyncRepository {
       lastServerSequence: row.last_server_sequence,
       payloadHash: row.payload_hash,
       deleted: row.deleted === 1,
+    };
+  }
+
+  /**
+   * O estado atual de um agregado **daquela conta**, com o conteúdo (T16.7.1).
+   *
+   * `owner_uid` está no `WHERE`, e não numa verificação depois da leitura: a consulta que não pode
+   * devolver dado de outra conta é a que nunca o carrega. Uma identidade que existe para outro
+   * dono devolve `null` aqui, e o serviço a transforma em `404` — indistinguível de inexistente.
+   *
+   * **Somente leitura.** Nenhuma revision é gasta, nenhuma linha é anexada a `sync_changes` e
+   * nenhuma entrada nasce em `sync_mutations`.
+   */
+  findEntitySnapshot(
+    ownerUid: string,
+    entityType: string,
+    entitySyncId: string,
+  ): StoredSyncEntitySnapshot | null {
+    const row = this.sqlite.connection
+      .prepare(
+        `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
+                last_server_sequence, payload, payload_hash, deleted
+         FROM sync_entities
+         WHERE owner_uid = ? AND entity_type = ? AND entity_sync_id = ?`,
+      )
+      .get(ownerUid, entityType, entitySyncId) as (EntityRow & { payload: string }) | undefined;
+    if (!row) return null;
+    const deleted = row.deleted === 1;
+    return {
+      entityType: row.entity_type as SyncEntityType,
+      entitySyncId: row.entity_sync_id,
+      entitySchemaVersion: row.entity_schema_version,
+      serverRevision: row.server_revision,
+      lastServerSequence: row.last_server_sequence,
+      payloadHash: row.payload_hash,
+      deleted,
+      // Um tombstone esvazia payload e hash na própria linha. Devolver `''` deixaria o cliente
+      // decidir o que uma string vazia significa; `null` só tem uma leitura possível.
+      payload: deleted || row.payload === '' ? null : row.payload,
     };
   }
 

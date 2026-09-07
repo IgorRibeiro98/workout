@@ -30,7 +30,13 @@ sealed interface SyncOutcome {
          * pull (remoto adiante) continua sendo um item só.
          */
         val conflicts: Int = 0,
-        /** Exclusões locais que continuam pendentes: a T16.7 é quem as propaga. */
+        /**
+         * Exclusões locais que **não viajam** por política do agregado.
+         *
+         * Desde a T16.7 a exclusão propaga com tombstone, e nenhum caminho do app chega a produzir
+         * uma exclusão que a política recuse — hoje este número é sempre zero. Ele continua aqui
+         * porque uma limitação de convergência precisa ser visível quando existir.
+         */
         val deferredDeletes: Int = 0,
         val pausedAt: SyncApplyStop? = null
     ) : SyncOutcome

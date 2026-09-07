@@ -24,7 +24,7 @@ formato sem mudar as fixtures faz os dois lados falharem juntos, que é o objeti
 ```text
 T16.4   Android ──full snapshot──▶ Spark Backend        (backup)
 T16.5   Android ◀──full snapshot── Spark Backend        (restore, por ação explícita)
-T16.6   Android ⇄ Spark Backend, incremental            (NÃO existe)
+T16.6   Android ⇄ Spark Backend, incremental            (sync — outra coisa, e coexiste)
 ```
 
 Um backup é uma cópia **completa e autocontida** do estado pessoal atual. Ele não depende de
@@ -104,9 +104,11 @@ schema estrito daquele tipo — campo desconhecido é erro, não é ignorado.
 Os seis primeiros são exatamente os `SyncEntityType` da T16.3 e reusam
 `SyncAggregateSnapshotBuilder` — não existe um segundo serializador de treino no Spark.
 
-Os três últimos **não** produzem entrada de Outbox hoje (a matriz da T16.3 já os marcava como
-"T16.4"): eles entram no snapshot completo, e não no incremental, que não existe. Quando a T16.6
-trouxer push incremental, eles precisam ganhar mutação própria — está registrado como pendência.
+Os três últimos **não** produzem entrada de Outbox (a matriz da T16.3 já os marcava como "T16.4"):
+eles entram no snapshot completo e ficam **fora** do sync incremental, que o servidor recusa
+explicitamente com `UNSUPPORTED` em vez de aceitar pela metade. Isso continua valendo depois da
+T16.6 e da T16.7: trazê-los para o incremental é mudar **onde a escrita nasce**, que é refatoração
+de outra tarefa. Está registrado como pendência em `ARCHITECTURE.md`.
 
 ## 5. Identidade portátil
 

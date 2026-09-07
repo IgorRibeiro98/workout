@@ -1,7 +1,7 @@
 # Protocolo de sincronização do Spark
 
 - **Tarefa:** T16.0 (documentação) — **implementado na T16.6**; conflitos, deletes e tombstones
-  **implementados na T16.7**.
+  **implementados na T16.7**; confirmação do estado remoto **implementada na T16.7.1**.
 - **Status (verificado em 2026-09-07):**
   - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
     `clientMutationId`, `deviceId` e os DTOs de agregado;
@@ -22,6 +22,10 @@
     `0006_sync_tombstones.sql`), **propagação de exclusão** pelo change log, **prevenção de
     ressurreição** (`REMOTE_DELETED`), **política por agregado** em um registry sem `default`, e
     `CURSOR_EXPIRED` com orientação de rebaseline;
+  - **implementado na T16.7.1:** a **confirmação do estado remoto** antes de aplicar a versão da
+    nuvem. `GET /v1/sync/entities/{entityType}/{entitySyncId}` é uma leitura somente-leitura, por
+    identidade, que responde "o que o servidor tem **agora**" — pergunta que o pull, sendo por
+    cursor, não responde;
   - **não implementado, e deliberadamente:** merge por campo, CRDT/OT/event sourcing, edição
     colaborativa em tempo real, compactação do change log e limpeza de tombstone.
 
@@ -30,8 +34,9 @@
 > que ele precisa de versão por entidade, sequência do servidor e política de conflito, que
 > backup e restore não precisam ter.
 
-Este documento existe para que as decisões difíceis do sync estejam tomadas antes de a primeira
-linha de sync ser escrita.
+Este documento nasceu para que as decisões difíceis do sync estivessem tomadas antes de a primeira
+linha de sync ser escrita. Hoje ele descreve o protocolo **implementado**, e continua sendo onde as
+decisões — e os motivos delas — moram.
 
 ---
 
@@ -779,9 +784,14 @@ devolver o resultado antigo do ledger em vez de julgar a decisão nova. E isso *
 `force`/`overwrite` — se um terceiro aparelho escreveu no meio, a mutação volta `STALE` e o conflito
 reabre com a revision nova. Esse é o desenho funcionando.
 
-**Usar o remoto** aplica e fecha:
+**Usar o remoto** confirma, aplica e fecha:
 
 ```text
+GET /v1/sync/entities/…  → o estado de AGORA          ← T16.7.1
+   ↓
+mesma revision, mesmo hash, mesmo tombstone?
+   ├── não  →  conflito ATUALIZADO, status PENDING, NADA aplicado
+   └── sim  ↓
 payload remoto guardado → hash reconferido → escrita pelo MESMO caminho do pull
    + revision conhecida := remoteRevision
    + tentativa local descartada
@@ -790,6 +800,39 @@ payload remoto guardado → hash reconferido → escrita pelo MESMO caminho do p
 ```
 
 A ausência da mutação é o ponto: gerar uma devolveria ao servidor o que acabou de vir dele.
+
+### Por que só esta resolução pergunta ao servidor (T16.7.1)
+
+A cópia remota guardada foi validada **quando chegou**, não agora. Entre a página de pull que a
+trouxe e o toque do usuário, um terceiro aparelho pode ter escrito — e aplicar aquela cópia seria
+gravar localmente, de propósito, uma revision que o servidor já sabe estar superada.
+
+Reconferir o hash responde "esta cópia corrompeu?". Não responde "esta cópia ainda é a atual?".
+
+A confirmação é **só** desta escolha, e a assimetria é a razão:
+
+| Escolha | Pergunta ao servidor? | Por quê |
+| --- | --- | --- |
+| "Usar versão da nuvem" | **sim** | é a única que grava conteúdo remoto por cima do local |
+| "Manter deste aparelho" | não | mantém o Room e vira mutação nova; um servidor que andou devolve `STALE` e o conflito reabre — a proteção já existe |
+| "Excluir mesmo assim" | não | idem, com `DELETE` |
+| "Confirmar exclusão" | não | tombstone é terminal (`AND sync_entities.deleted = 0` no banco): `deleted = 1` não volta atrás em revision nenhuma |
+| "Manter como item novo" | não | cria `syncId` novo; o estado da identidade morta não muda o que isso significa |
+
+Fazer as outras dependerem de rede transformaria "escolhi" em "escolhi se a rede estiver boa", e
+destruiria a propriedade offline-first que o resto do protocolo protege.
+
+**Falha de rede não é fallback.** Sem confirmação nada é aplicado: Room, Outbox e conflito ficam
+exatamente como estavam. E a conta é revalidada **depois** da resposta — o `ownerUid` que o
+servidor autenticou, o dono do dataset local e a sessão do Firebase neste instante precisam ser a
+mesma conta, porque o `uid` capturado antes da requisição pode descrever uma sessão que já não
+existe.
+
+**A escolha anterior não é reaproveitada.** Quando o servidor está adiante, o conflito é atualizado
+com o estado atual e volta para `PENDING`. "Ele já escolheu remoto, então usa a revision nova"
+aplicaria conteúdo que ninguém conferiu — e o conteúdo pode ter mudado de um jeito que muda a
+decisão. Se a nuvem tiver passado a ter um tombstone, o conflito vira o caso de exclusão e as
+escolhas oferecidas mudam junto.
 
 ### Durabilidade e idempotência
 

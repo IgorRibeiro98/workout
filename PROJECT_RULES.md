@@ -295,9 +295,9 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
   já cobriu, **depois** da confirmação do servidor. Desde a **T16.6** ela também é a fila do push
   incremental — que igualmente só a libera com confirmação. O que continua proibido é o que a
   regra sempre quis dizer: trabalho **periódico**, polling e retry automático de recusa. Ver §13.4.
-- **Migrations.** Room é `version = 34` (era 33 na T16.5) com schema exportado versionado em
-  `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da versão
-  anterior; `fallbackToDestructiveMigration` é proibido.
+- **Migrations.** Room é `version = 35` (34 na T16.6, 33 na T16.5) com schema exportado versionado
+  em `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da
+  versão anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
   abreviado).
 
@@ -463,8 +463,12 @@ o que impede a resolução de virar perda de dado, e a exclusão de virar ressur
   `clientMutationId` recusado faria o servidor devolver o resultado antigo do ledger. Se o servidor
   tiver andado de novo no meio, o resultado é `STALE` e o conflito **reabre** — isso é o desenho, e
   não um defeito a contornar.
-- **Escolher o remoto não gera mutação.** Aplica no Room, descarta a tentativa local, grava a
-  revision e fecha o conflito. Uma mutação aqui devolveria ao servidor o que veio dele.
+- **Escolher o remoto não gera mutação, e desde a T16.7.1 confirma antes.** A cópia remota guardada
+  foi validada **quando chegou**; antes de sobrescrever o local, o app pergunta ao servidor qual é o
+  estado de **agora** (`GET /v1/sync/entities/...`). Revision igual: aplica no Room, descarta a
+  tentativa local, grava a revision e fecha o conflito — sem mutação, porque uma aqui devolveria ao
+  servidor o que veio dele. Revision diferente: o conflito é **atualizado** e o usuário decide de
+  novo. Ver §13.6.
 - **Resolução é transacional e idempotente.** Uma transação por decisão, e a idempotência é uma
   escrita condicional no banco (`status = PENDING`), não uma flag em memória: dois toques rápidos
   produzem **uma** mutação, e a decisão sobrevive ao processo morrer.
@@ -493,6 +497,50 @@ o que impede a resolução de virar perda de dado, e a exclusão de virar ressur
   Android: **nada** — o pacote de sync continua sem log, e a ausência é testada. Nunca payload, nome
   de treino, nota, medida ou `Authorization`.
 - **Testes.** Toda mudança em conflito/exclusão roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
+  As duas são offline.
+
+## 13.6 Confirmação do estado remoto e CI (T16.7.1)
+
+A T16.7 deu ao usuário a escolha. A T16.7.1 garante que ela seja tomada sobre um estado que ainda é
+verdade — e põe o Android no CI. As regras abaixo são o que impede a correção de virar um app
+dependente de rede.
+
+- **Só "usar a versão da nuvem" pergunta ao servidor.** Ela é a única escolha que grava conteúdo
+  remoto por cima do local. `KEEP_LOCAL`, `CONFIRM_LOCAL_DELETE`, `CONFIRM_REMOTE_DELETE` e
+  `KEEP_LOCAL_AS_NEW` **continuam funcionando offline**, e transformá-las em operação online "para
+  padronizar" quebraria o local-first que a T16.6 e a T16.7 assumem. `CONFIRM_REMOTE_DELETE` é o
+  caso interessante: ela depende de um tombstone, e tombstone é **terminal** — `deleted = 1` não
+  volta atrás em revision nenhuma, e a garantia é do banco. Há teste estrutural sobre a lista.
+- **Falha de rede nunca é fallback.** Sem confirmação, o snapshot guardado **não** é aplicado: Room,
+  Outbox e conflito ficam exatamente como estavam. Aplicar "porque é melhor que nada" é a perda que
+  a confirmação existe para impedir.
+- **Estado remoto novo não é aceito automaticamente.** O conflito é atualizado, volta para `PENDING`
+  e o usuário decide de novo. "Ele já escolheu remoto, então usa a revision nova" aplicaria conteúdo
+  que ninguém conferiu — e o conteúdo pode ter mudado de um jeito que muda a decisão. Se a nuvem
+  passou a ter tombstone, o conflito vira o caso de exclusão e as escolhas mudam junto.
+- **A conta é revalidada depois da resposta.** O `ownerUid` que o servidor autenticou, o dono do
+  dataset (`cloud_data_binding`) e a sessão do Firebase **neste instante** precisam ser a mesma
+  conta. O `uid` capturado antes da requisição não serve: a conta pode trocar durante o voo.
+- **A leitura é estritamente somente leitura.** `GET /v1/sync/entities/...` não gasta `revision`,
+  não anexa linha a `sync_changes`, não escreve em `sync_mutations`, não altera tombstone e não move
+  cursor. Ownership vem do token; identidade de outra conta é `404`, indistinguível de inexistente.
+- **Onde cada coisa mora.** O `SyncConflictResolver` continua sendo **só transação** e não conhece
+  `SyncApi` — há teste estrutural. Quem faz a pergunta e decide se a decisão vira escrita é o
+  `SyncRepository`; a regra de comparação é pura (`SyncRemotePreflight`).
+- **Um toque, uma operação.** Três camadas: `isBusy` na tela, `Mutex` no repositório (impede duas
+  consultas remotas simultâneas para a mesma decisão) e escrita condicional no banco — que é a única
+  que sobrevive ao processo morrer.
+- **CI.** `backend.yml` e `android.yml` são gates de verdade: sem `continue-on-error`, sem `|| true`,
+  sem `ignoreFailures`. O Android roda a suíte **inteira** de uma vez (dividir em shards esconderia
+  interferência entre classes, que foi um defeito real em 23d3779) mais `:app:assembleDebug`.
+  Nenhum dos dois usa Firebase real, Gemini real, VPS ou segredo.
+- **`google-services.json` real continua fora do Git.** O CI gera um **sintético e inerte**
+  (`CI_ONLY`, `ci-only-not-a-real-firebase-project`) com o `applicationId` real e identificadores
+  obviamente falsos, e um passo do job falha se o arquivo real for versionado. É **proibido**
+  enfraquecer a produção para o CI passar: nada de `if (CI)`, de remover o plugin Google Services ou
+  de criar uma variante especial. O que o runner compila é estruturalmente o mesmo debug de sempre.
+- **Testes.** Toda mudança na confirmação remota roda
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
   As duas são offline.
 

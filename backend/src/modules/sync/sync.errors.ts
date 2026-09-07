@@ -2,6 +2,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { SYNC_ERROR_CODES, type SyncErrorCode } from './sync.contract';
@@ -20,6 +21,8 @@ function syncException(status: HttpStatus, code: SyncErrorCode, message: string)
       return new PayloadTooLargeException(body);
     case HttpStatus.TOO_MANY_REQUESTS:
       return new HttpException(body, HttpStatus.TOO_MANY_REQUESTS);
+    case HttpStatus.NOT_FOUND:
+      return new NotFoundException(body);
     default:
       return new BadRequestException(body);
   }
@@ -54,6 +57,20 @@ export const SyncErrors = {
       HttpStatus.BAD_REQUEST,
       SYNC_ERROR_CODES.CURSOR_EXPIRED,
       'a sincronização deste aparelho precisa ser reconstruída',
+    ),
+
+  /**
+   * O agregado não existe **para a conta autenticada** (T16.7.1).
+   *
+   * A mesma resposta para "nunca existiu" e para "existe, mas é de outra conta". Distinguir os
+   * dois transformaria a rota num oráculo de existência do dado alheio: bastaria variar o
+   * `syncId` e ler o status.
+   */
+  entityNotFound: () =>
+    syncException(
+      HttpStatus.NOT_FOUND,
+      SYNC_ERROR_CODES.SYNC_ENTITY_NOT_FOUND,
+      'agregado não encontrado nesta conta',
     ),
 
   rateLimited: () =>

@@ -1,0 +1,165 @@
+# CI do Spark Android (T16.7.1).
+#
+# O CI do Android foi removido em df63791 e não voltou nas fases seguintes: a T16.3 (Room 31,
+# Outbox), a T16.4 (backup), a T16.5 (restore, Room 33), a T16.6 (sync, Room 34) e a T16.7
+# (conflitos e tombstones, Room 35) foram entregues com validação só local. Este workflow fecha
+# esse buraco — e o do backend (`backend.yml`) continua exatamente como está.
+#
+# ## Nada de serviço real
+#
+# **Sem Firebase, sem Gemini, sem VPS, sem conta Google, sem segredo.** Os testes do Spark são
+# offline por construção: `FakeSparkSyncServer` e `FakeSyncApi` (`app/src/test/.../data/sync`),
+# dublês de Coach e de autenticação. O único tráfego deste job é o download de dependências
+# Maven/Gradle, que não é chamada de produto.
+#
+# `SPARK_BACKEND_BASE_URL` nasce vazio nas duas variantes quando `-PsparkBackendBaseUrl` não é
+# passado, e vazio significa "backend não configurado": nenhuma requisição sai. É por isso que não
+# há endereço nenhum aqui.
+#
+# ## Por que só debug
+#
+# `testDebugUnitTest` + `assembleDebug` são os dois portões desta tarefa. `assembleRelease` fica
+# para a T16.8: ele passa por `lintVitalRelease`, que hoje falha por um falso positivo preexistente
+# de `androidx.fragment` — e resolver isso com um baseline esconderia problemas reais.
+
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # O app, óbvio — mas não só ele: a configuração de build e os contratos compartilhados
+      # também quebram o Android, e restringir a `app/**` faria a quebra aparecer só no próximo
+      # commit que tocasse o app.
+      - 'app/**'
+      - 'gradle/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradlew'
+      - 'contracts/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradlew'
+      - 'contracts/**'
+      - '.github/workflows/android.yml'
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: unit tests + debug build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # O `google-services.json` de verdade está no `.gitignore` (ARCHITECTURE §15.7). Se algum dia
+      # ele for versionado por engano, este job precisa gritar antes de qualquer outra coisa — e
+      # não continuar com a configuração real do projeto Firebase de produção dentro do runner.
+      - name: Nenhuma configuração Firebase real versionada
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch app/google-services.json > /dev/null 2>&1; then
+            echo "app/google-services.json está versionado — ele não pode estar no Git."
+            exit 1
+          fi
+
+      # JDK 21: a mesma versão com que o projeto é construído localmente. AGP 9.1.1 + Gradle 9.3.1
+      # exigem 17+, e o `compileOptions` do app continua mirando bytecode 11 — quem decide isso é
+      # `app/build.gradle.kts`, não esta linha.
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # `gradlew` está no Git como 100644 (sem bit de execução).
+      - name: Wrapper executável
+        run: chmod +x ./gradlew
+
+      # O plugin `com.google.gms.google-services` roda em `processDebugGoogleServices` e falha sem
+      # este arquivo — então um checkout limpo não compila sem ele.
+      #
+      # A saída aqui é gerar uma configuração **sintética e inerte**, não enfraquecer o app: nada
+      # de `if (CI)`, nada de remover o plugin, nada de variante especial. O que o runner compila é
+      # estruturalmente o mesmo debug de sempre; só os identificadores do projeto Firebase são
+      # falsos, e nenhum teste fala com o Firebase.
+      #
+      # `package_name` **precisa** ser o `applicationId` real (`com.aistudio.workout.v2`): o plugin
+      # procura o cliente correspondente e falha se não achar. O resto é reconhecivelmente fake, e
+      # o `project_id` diz isso em letras maiúsculas.
+      #
+      # `oauth_client` vazio é o mesmo estado do arquivo real: o provedor Google não está
+      # habilitado no console, `default_web_client_id` não é gerado, e `GoogleServerClientId` já o
+      # resolve por `getIdentifier` justamente por causa disso.
+      - name: Configuração Firebase sintética (CI_ONLY)
+        run: |
+          set -euo pipefail
+          cat > app/google-services.json <<'JSON'
+          {
+            "_comment": "CI_ONLY — NOT_A_REAL_FIREBASE_PROJECT. Gerado pelo workflow android.yml apenas para satisfazer o Google Services Plugin durante a compilação. Nenhum identificador aqui existe: não use, não copie para uma máquina de desenvolvimento e não trate como configuração de produção.",
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "ci-only-not-a-real-firebase-project",
+              "storage_bucket": "ci-only-not-a-real-firebase-project.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": {
+                    "package_name": "com.aistudio.workout.v2"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyCI0000000000000000000000000000000"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+
+      # A suíte inteira de uma vez, e não em shards: uma classe que deixa estado vivo entre testes
+      # (um `viewModelScope` não encerrado, por exemplo — corrigido em 23d3779) só aparece quando
+      # tudo roda junto. Dividir cedo demais esconderia exatamente essa classe de defeito.
+      #
+      # Inclui os testes de migration do Room, que leem os schemas exportados em `app/schemas` —
+      # versionados no Git e disponíveis no runner pelo `sourceSets` de `debug`/`test`.
+      - name: Testes unitários (debug)
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build de debug
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      # Só quando algo falha, e sem APK: um relatório de teste ajuda a diagnosticar; um artefato de
+      # build assinado com configuração sintética não serve para nada e só convida ao engano.
+      - name: Relatório de testes (em caso de falha)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest
+          retention-days: 7

@@ -139,6 +139,37 @@ export interface SyncChangeResponse {
   readonly payload: unknown;
 }
 
+/**
+ * O estado **atual** de um agregado no servidor (T16.7.1).
+ *
+ * Resposta de `GET /v1/sync/entities/{entityType}/{entitySyncId}` — a leitura que existe para uma
+ * pergunta só: *a cópia remota que o usuário está vendo ainda é a que o servidor tem?*
+ *
+ * Ela não é o pull. O pull entrega **mudanças em sequência**, e uma vez que o cursor passou de uma
+ * sequência não há como pedir aquela versão de novo; esta rota entrega **o estado de agora**, por
+ * identidade, sem mexer no cursor de ninguém. E não é o backup, que move um snapshot inteiro da
+ * conta.
+ *
+ * `ownerUid` vem do **token verificado**, nunca do cliente. Ele viaja na resposta — e só na
+ * resposta — para que o aparelho possa provar que o estado que ele está prestes a gravar foi
+ * autenticado pela mesma conta dona do dataset local. É a mesma coisa que `GET /v1/auth/me` já
+ * devolve, na resposta da própria leitura que vai ser usada.
+ */
+export interface SyncEntityStateResponse {
+  /** A conta autenticada desta requisição, derivada do Firebase ID Token. */
+  readonly ownerUid: string;
+  readonly entityType: SyncEntityType;
+  readonly entitySyncId: string;
+  readonly entitySchemaVersion: number;
+  readonly serverRevision: number;
+  /** `true` quando a linha é um tombstone: a entidade existiu e foi excluída (T16.7). */
+  readonly deleted: boolean;
+  /** `null` num tombstone — uma exclusão não afirma conteúdo. */
+  readonly payloadHash: string | null;
+  /** O agregado inteiro como está agora, ou `null` num tombstone. */
+  readonly payload: unknown;
+}
+
 export interface SyncPullResponse {
   readonly changes: readonly SyncChangeResponse[];
   /** Onde o cliente deve retomar. Igual ao cursor pedido quando nada veio. */
@@ -170,6 +201,14 @@ export const SYNC_ERROR_CODES = {
   CURSOR_EXPIRED: 'CURSOR_EXPIRED',
   /** Proteção simples por conta contra um app em laço. */
   SYNC_RATE_LIMITED: 'SYNC_RATE_LIMITED',
+  /**
+   * A leitura de estado atual não encontrou o agregado **naquela conta** (T16.7.1).
+   *
+   * Uma identidade que existe para outro `ownerUid` recebe exatamente esta resposta: para a conta
+   * autenticada, ela não existe. Distinguir "não é sua" de "não existe" confirmaria a existência
+   * de dado alheio a quem perguntou.
+   */
+  SYNC_ENTITY_NOT_FOUND: 'SYNC_ENTITY_NOT_FOUND',
 } as const;
 
 export type SyncErrorCode = (typeof SYNC_ERROR_CODES)[keyof typeof SYNC_ERROR_CODES];

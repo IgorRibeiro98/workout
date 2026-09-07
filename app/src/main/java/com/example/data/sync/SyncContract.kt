@@ -68,8 +68,9 @@ enum class SyncOutboxStatus {
      *
      * Escrita stale, conflito de histórico imutável, payload inválido ou operação não suportada.
      * A entrada não é apagada — ela é a alteração local, e apagá-la seria descartar em silêncio o
-     * que o usuário fez. Ela sai da fila de envio e passa a esperar a T16.7, que é quem resolve
-     * conflito. O lado remoto correspondente está em [SyncConflictEntity].
+     * que o usuário fez. Ela sai da fila de envio e passa a esperar a **decisão do usuário**, que
+     * existe desde a T16.7: manter esta versão reemite a mutação com base nova, usar a da nuvem a
+     * descarta. O lado remoto correspondente está em [SyncConflictEntity].
      */
     BLOCKED
 }

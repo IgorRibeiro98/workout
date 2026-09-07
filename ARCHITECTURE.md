@@ -526,8 +526,7 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-07): fundação, identidade, Coach online, backup, restore e
-> sincronização incremental implementados; resolução de conflito e exclusão, não.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-07): T16.0 a T16.7.1 implementadas.** A T16.0 criou o backend em `backend/` com
 > configuração, SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -541,10 +540,14 @@ Be especially cautious around:
 > T16.6 acrescentou **sincronização incremental multi-device**: `POST /v1/sync/push` e
 > `GET /v1/sync/pull`, estado remoto por agregado com `serverRevision`, ledger de idempotência,
 > change log append-only com sequência global, cursor durável no Android, apply transacional e
-> conflitos detectados e preservados.
-> **Não existe** resolução de conflito, UI de merge, propagação de exclusão, tombstone, prevenção
-> completa de ressurreição, merge por campo, *last write wins*, realtime/WebSocket, backup
-> automático ou backup off-site da VPS.
+> conflitos detectados e preservados. A T16.7 acrescentou **resolução explícita de conflito,
+> exclusão versionada e tombstone**: o usuário escolhe, a exclusão propaga pelo change log e a
+> identidade morta não ressuscita. A T16.7.1 fechou o bloco: **`GET /v1/sync/entities/...`**, a
+> leitura somente-leitura que confirma o estado remoto antes de "usar a versão da nuvem"
+> sobrescrever o local, com a conta revalidada **depois** da resposta — e o **CI do Android**
+> (`.github/workflows/android.yml`).
+> **Não existe** merge por campo, *last write wins*, CRDT, resolução automática em background,
+> realtime/WebSocket, limpeza de tombstone, backup automático ou backup off-site da VPS.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -670,6 +673,7 @@ persistência do domínio        validação da resposta
 | T16.5 | Restore seguro | **implementado** |
 | T16.6 | Sync incremental multi-device | **implementado** |
 | T16.7 | Conflitos, deletes, tombstones e consistência offline | **implementado** |
+| T16.7.1 | Fechamento técnico: confirmação do estado remoto, CI do Android, documentação | **implementado** |
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
 | T17 | Amigos, convites, desafios e social | planejado |
 
@@ -693,13 +697,22 @@ persistência do domínio        validação da resposta
 - contrato de ownership/adoção — `CloudSyncScope` (`Disabled` / `Preparing` / `Enabled`), com
   `Disabled` como padrão.
 
-#### NÃO IMPLEMENTADO
+#### O que a T16.3 deliberadamente não fez — e onde cada item foi feito depois
 
-- upload, download, backup, restore, sync;
-- acknowledgment, `revision`, `cursor`, conflitos, tombstone remoto;
-- ownership remoto persistido e adoção real de dados locais;
-- `WorkManager`, HTTP, polling ou retry para a Outbox;
-- qualquer tabela de domínio do Spark no servidor.
+Esta lista é o **escopo da T16.3**, não o estado do projeto. Ao final dela nada saía do aparelho; o
+que faltava foi entregue nas fases seguintes, e o link diz onde:
+
+| O que faltava na T16.3 | Onde existe hoje |
+| --- | --- |
+| upload, download | **T16.4** (backup) e **T16.5** (restore) |
+| sync, acknowledgment, `revision`, `cursor` | **T16.6** (§ sync incremental, abaixo) |
+| conflitos resolvidos, tombstone remoto | **T16.7** (§ conflitos e tombstones, abaixo) |
+| confirmação do estado remoto antes de sobrescrever o local | **T16.7.1** |
+| ownership remoto persistido, adoção real | **T16.4** (`cloud_data_binding`) |
+| `WorkManager` para a Outbox | **T16.6** — trabalho **único**, com rede e backoff. Continua sem `PeriodicWorkRequest`, sem polling e sem retry automático de recusa |
+
+O que continua **não** existindo, por decisão: qualquer tabela de domínio do Spark espelhada no
+servidor. O schema remoto guarda agregados como payload versionado, e não uma cópia do Room.
 
 #### Operação local
 
@@ -1204,7 +1217,7 @@ sendo a autoridade operacional do aparelho, e o servidor é autoridade **de orde
 5. **Escrita stale não sobrescreve nada.** Nem o remoto (o servidor recusa), nem o local (o app
    preserva). A revision conhecida **não** é atualizada por um `STALE`.
 6. **Conflito é detectado, isolado e preservado.** Um agregado em conflito não impede os outros de
-   convergirem, e os dois lados ficam guardados para a T16.7.
+   convergirem, e os dois lados ficam guardados até a decisão explícita do usuário (T16.7).
 7. **Histórico concluído é imutável.** `revision = 1` e nunca mais; conteúdo divergente é conflito
    de integridade dos dois lados.
 8. **O cursor só avança depois do apply**, na mesma transação. Uma mudança que o app não sabe ler
@@ -1358,6 +1371,152 @@ Device B: apaga localmente, guarda a revision, NENHUMA Outbox
 8. **Exclusão remota não gera Outbox** e não quebra sessão ativa, histórico nem gamificação.
 9. **Tombstone não é apagado**, e um cursor irrecuperável recusa em vez de reiniciar em silêncio.
 10. **O worker não resolve nada.** Ele continua sincronizando o que é independente.
+
+### Fechamento técnico da sincronização (T16.7.1)
+
+> **Status (verificado em 2026-09-07): implementado.** Sem migration nova dos dois lados: Room
+> continua em `version = 35` e o servidor em `0006_sync_tombstones.sql`. A T16.7.1 não acrescenta
+> feature de sync — ela fecha três buracos que uma auditoria encontrou depois da T16.7.
+
+#### 1. "Usar a versão da nuvem" confirma antes de sobrescrever
+
+O defeito era silencioso e custava dado:
+
+```text
+conflito de B guarda a revision 5 da nuvem
+        ↓
+aparelho C edita          →  servidor vai para 6
+        ↓
+B ainda mostra a 5, e o usuário escolhe "Usar versão da nuvem"
+        ↓
+ANTES:  B grava localmente a revision 5, que o servidor já sabe estar superada,
+        e só descobre a 6 no ciclo seguinte
+```
+
+A cópia remota guardada em `sync_conflicts.remotePayload` veio de uma página de pull e foi validada
+**naquele momento**. Reconferir o hash prova que ela não corrompeu — não prova que ela ainda é a
+atual, e essas são perguntas diferentes.
+
+```text
+DEPOIS:
+USE_REMOTE
+   ↓
+GET /v1/sync/entities/{entityType}/{entitySyncId}     ← o estado de AGORA
+   ↓
+revalida a conta com o valor lido DEPOIS da resposta
+   ↓
+mesma revision, mesmo hash, mesmo tombstone?
+   ├── sim  →  SyncConflictResolver  →  transação Room  →  zero Outbox
+   └── não  →  conflito ATUALIZADO com o estado atual, status PENDING
+                nada local é escrito, e o usuário decide de novo
+```
+
+**A escolha anterior não é reaproveitada.** "Ele já escolheu remoto, então usa a revision nova"
+aplicaria um conteúdo que ninguém conferiu.
+
+#### 2. A assimetria é deliberada
+
+Só **uma** escolha exige rede, e é a única que sobrescreve dado local com conteúdo do servidor:
+
+| Escolha | Precisa de rede? | Por quê |
+| --- | --- | --- |
+| `USE_REMOTE` | **sim** | grava conteúdo remoto por cima do local |
+| `KEEP_LOCAL` | não | mantém o Room, vira mutação nova; um servidor que andou devolve `STALE` e o conflito reabre |
+| `CONFIRM_LOCAL_DELETE` | não | idem, com `DELETE` |
+| `CONFIRM_REMOTE_DELETE` | não | depende de um tombstone, e tombstone é terminal: `deleted = 1` nunca volta atrás |
+| `KEEP_LOCAL_AS_NEW` | não | cria entidade com `syncId` novo; o que a nuvem tem na identidade morta é irrelevante |
+
+Exigir confirmação nas outras "para padronizar" transformaria "escolhi" em "escolhi se a rede
+estiver boa" — e a T16.6 e a T16.7 existem em cima de local-first. Há teste estrutural sobre a
+tabela acima.
+
+#### 3. Falha de rede não é fallback
+
+Sem confirmação, **nada** é aplicado: o Room fica intacto, a Outbox fica intacta e o conflito fica
+inteiro. Aplicar o snapshot guardado como plano B seria exatamente o defeito que a confirmação
+existe para impedir.
+
+#### 4. A conta é revalidada depois da resposta
+
+```text
+1. quem o servidor autenticou nesta requisição   (ownerUid da resposta, do token verificado)
+2. o dono do dataset deste aparelho              (cloud_data_binding, relido agora)
+3. a sessão do Firebase neste instante           (AuthState, relido agora)
+```
+
+Os três precisam ser a mesma conta. O `uid` capturado **antes** da requisição não serve: entre o
+começo da chamada e a resposta, o usuário pode ter saído e entrado com outra conta — e uma resposta
+obtida como B jamais pode virar escrita no dataset de A.
+
+#### 5. Um toque, uma operação
+
+Dois toques rápidos produzem **uma** consulta remota e **uma** aplicação. A proteção tem três
+camadas: o `isBusy` da tela, um `Mutex` no `SyncRepository` que serializa resoluções deste processo,
+e a escrita condicional no banco — que é a única que sobrevive ao processo morrer.
+
+#### Componentes reais (T16.7.1)
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Rota de estado atual | `SyncController.entityState` + `SyncService.entityState` (`GET /v1/sync/entities/...`) |
+| Leitura somente-leitura | `SyncRepository.findEntitySnapshot` (backend) — um `SELECT`, filtrado por `owner_uid` |
+| Contrato | `SyncEntityStateResponse` (TS) / `SyncEntityStateDto` (Kotlin) |
+| Transporte | `SyncApi.entityState` / `SparkSyncApi` |
+| Regra de comparação | `SyncRemotePreflight` — pura: sem DAO, sem rede, sem transação |
+| Coordenação e revalidação de conta | `SyncRepository.resolveConflict` |
+| Resultados novos | `SyncConflictResolution.RemoteChanged` / `RemoteUnavailable` / `RemoteInconsistent` |
+| Tela | `SyncResolutionProblem.REMOTE_CHANGED` / `REMOTE_UNAVAILABLE` / `REMOTE_INCONSISTENT` |
+| CI do Android | `.github/workflows/android.yml` |
+
+#### Invariantes da T16.7.1
+
+1. **`USE_REMOTE` nunca aplica uma revision que o servidor já sabe estar superada.**
+2. **A leitura de estado atual é somente leitura**: não gasta `revision`, não anexa mudança ao
+   change log, não escreve no ledger, não move cursor e não altera tombstone. Há teste que conta as
+   três tabelas antes e depois.
+3. **Ownership sai do token.** Não existe `?ownerUid=`; uma identidade de outra conta é `404`,
+   indistinguível de inexistente.
+4. **Falha de rede não altera nada** — nem Room, nem Outbox, nem conflito.
+5. **`KEEP_LOCAL` continua offline**, com `clientMutationId` novo e proteção por `STALE` posterior.
+6. **`USE_REMOTE` continua gerando zero Outbox.**
+7. **Uma resposta autenticada como B não entra no dataset de A.**
+8. **Tombstone não ressuscita**, e um tombstone que voltasse vivo é tratado como violação de
+   integridade — nunca aceito em silêncio.
+
+#### Integração contínua
+
+| Workflow | O que roda | O que ele **não** usa |
+| --- | --- | --- |
+| `backend.yml` | `npm ci`, lint, `format:check`, test, build, `docker build` + smoke (health, persistência, schema, rotas fechadas com 401) | Firebase real, Gemini real, VPS |
+| `android.yml` | `:app:testDebugUnitTest` (suíte inteira, inclusive migrations do Room) e `:app:assembleDebug`, em checkout limpo | Firebase real, Gemini real, VPS, Google Sign-In real, segredo |
+
+O `google-services.json` real continua **fora do Git**. O plugin Google Services falha sem um
+arquivo, então o workflow gera um **sintético e inerte** (`CI_ONLY`,
+`ci-only-not-a-real-firebase-project`) com o `applicationId` real e identificadores obviamente
+falsos. O que o runner compila é estruturalmente o mesmo debug de sempre: nenhuma variante especial,
+nenhum `if (CI)`, nenhum plugin removido — e há um passo que falha o job se o arquivo real for
+versionado por engano.
+
+`assembleRelease` fica para a T16.8: ele passa por `lintVitalRelease`, que hoje falha por um falso
+positivo preexistente de `androidx.fragment`, e um baseline esconderia problemas reais.
+
+#### Pendências registradas para a T16.8
+
+Encontradas durante a T16.7.1 e **deliberadamente não tratadas aqui**, porque hardening é uma fase
+com escopo próprio e mexer em dependência no meio de uma correção de corretude troca um risco
+conhecido por vários desconhecidos:
+
+- **Vulnerabilidades de dependências npm no backend.** `npm audit` reporta 21 avisos (7 *high*,
+  13 *moderate*, 1 *low*, **zero críticas**, verificado em 2026-09-07). As *high* são DoS/ReDoS em
+  transitivas (`path-to-regexp` e `multer`, via `@nestjs/platform-express`) e em ferramenta de
+  desenvolvimento (`@nestjs/cli`, `glob`, `picomatch`), e nenhuma é execução remota de código.
+  O tratamento é upgrade coordenado do NestJS com a suíte verde — não `npm audit fix --force`.
+- **`assembleRelease` no CI**, junto com a correção do falso positivo de `androidx.fragment` (forçar
+  a versão, nunca baseline).
+- **Backup off-site da VPS** — hoje um `docker compose down -v` destrói os backups de todo mundo.
+- **Retenção/limpeza de tombstone e compactação do change log**, que só são seguras junto com o
+  registro do menor cursor entre os aparelhos ativos da conta.
+- **Observabilidade de produção**, TLS, firewall, secrets manager e revogação por aparelho.
 
 ### Conta opcional e identidade (T16.1)
 

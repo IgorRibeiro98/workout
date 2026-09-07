@@ -2,7 +2,8 @@
 
 - **Tarefa:** T16.6. Conflitos, deletes e tombstones foram **implementados na T16.7** — o
   envelope de mutação passou a aceitar `operation = "DELETE"` com `payload` nulo, e uma mudança de
-  `operation = "DELETE"` no pull vem com `payload: null`.
+  `operation = "DELETE"` no pull vem com `payload: null`. A **T16.7.1** acrescentou uma terceira
+  rota, somente leitura: `GET /v1/sync/entities/{entityType}/{entitySyncId}` (§5.1).
 - **Implementações:**
   - Android — `com.example.data.sync.SyncProtocol` e `com.example.data.sync.*`
   - Backend — `backend/src/modules/sync/sync.contract.ts` e `backend/src/modules/sync/*`
@@ -21,6 +22,7 @@ POST /v1/backups            snapshot completo, imutável, sob demanda        (T1
 GET  /v1/backups/{id}/…     o mesmo snapshot de volta, sob demanda          (T16.5)
 POST /v1/sync/push          mudanças deste aparelho                         (T16.6)
 GET  /v1/sync/pull          mudanças dos outros aparelhos                   (T16.6)
+GET  /v1/sync/entities/…    o estado ATUAL de um agregado, por identidade   (T16.7.1)
 ```
 
 Os quatro coexistem. Um snapshot é um ponto no tempo ao qual dá para voltar; o sync converge cópias
@@ -130,6 +132,7 @@ pendente.
 | 400 | `INVALID_SYNC_REQUEST` |
 | 400 | `INVALID_CURSOR` (no pull) |
 | 401 | `UNAUTHENTICATED` |
+| 404 | `SYNC_ENTITY_NOT_FOUND` (na leitura de estado atual) |
 | 413 | `SYNC_PAYLOAD_TOO_LARGE` |
 | 429 | `SYNC_RATE_LIMITED` |
 
@@ -166,6 +169,65 @@ Authorization: Bearer <Firebase ID Token>
 - cursor negativo, não numérico ou além do que o servidor emitiu é `INVALID_CURSOR`. **Nunca** um
   reset silencioso para zero;
 - uma conta jamais recebe o change log de outra.
+
+## 5.1 `GET /v1/sync/entities/{entityType}/{entitySyncId}` (T16.7.1)
+
+```http
+GET /v1/sync/entities/WORKOUT_TEMPLATE/2f0c…
+Authorization: Bearer <Firebase ID Token>
+```
+
+```json
+{
+  "ownerUid": "…",
+  "entityType": "WORKOUT_TEMPLATE",
+  "entitySyncId": "…",
+  "entitySchemaVersion": 1,
+  "serverRevision": 6,
+  "deleted": false,
+  "payloadHash": "…",
+  "payload": { }
+}
+```
+
+Num tombstone:
+
+```json
+{
+  "ownerUid": "…",
+  "entityType": "WORKOUT_TEMPLATE",
+  "entitySyncId": "…",
+  "entitySchemaVersion": 1,
+  "serverRevision": 6,
+  "deleted": true,
+  "payloadHash": null,
+  "payload": null
+}
+```
+
+Ela responde uma pergunta que o pull não responde. O pull entrega **mudanças em sequência**, e uma
+vez que o cursor passou de uma sequência aquela versão não é mais pedível; esta rota entrega **o
+estado de agora**, por identidade. O cliente a usa antes de aplicar "usar a versão da nuvem" numa
+resolução de conflito.
+
+**Garantias, e elas são o contrato:**
+
+- **somente leitura.** Não gasta `revision`, não anexa linha a `sync_changes`, não escreve em
+  `sync_mutations`, não altera tombstone e não move cursor. Há teste que conta as três tabelas
+  antes e depois;
+- **autenticada, e o dono sai do token.** Não existe `?ownerUid=` nem `?uid=`; um uid no query
+  string não influencia a resposta;
+- **isolamento por conta.** Uma identidade que existe para **outra** conta responde `404`
+  `SYNC_ENTITY_NOT_FOUND` — a mesma resposta de uma que nunca existiu. Distinguir as duas
+  transformaria a rota num oráculo de existência do dado alheio;
+- **`ownerUid` na resposta é a conta que o servidor autenticou** nesta requisição, derivada do token
+  verificado. Ele existe para que o aparelho possa provar, **depois** da resposta, que o estado que
+  vai gravar pertence à mesma conta dona do dataset local. Ele continua não existindo em nenhum
+  **corpo de requisição**;
+- `entityType` fora do registry é `400 INVALID_SYNC_REQUEST` — a lista de agregados é contrato
+  público e dizer "não conheço esse tipo" não revela dado nenhum. O que precisa ser indistinguível é
+  a identidade, e essa continua sendo `404`;
+- o mesmo teto de requisições por conta do push e do pull.
 
 ## 6. Hash canônico
 
@@ -204,6 +266,7 @@ identidade que não bate são recusados dos dois lados — nunca preenchidos com
 ✓ tombstone, propagação de exclusão, prevenção de ressurreição   → T16.7
 ✓ resolução explícita de conflito (escolha do usuário)           → T16.7
 ✓ CURSOR_EXPIRED                                                 → T16.7
+✓ leitura do estado atual de um agregado                         → T16.7.1
 ✗ merge por campo, CRDT, edição colaborativa       → deliberadamente fora
 ✗ WebSocket, SSE, push do servidor                 → não planejado
 ✗ compactação do change log / limpeza de tombstone → deliberadamente não feita

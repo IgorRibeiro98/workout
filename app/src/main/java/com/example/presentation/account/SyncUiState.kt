@@ -114,6 +114,30 @@ enum class SyncResolutionProblem {
     /** A conta conectada mudou desde que a tela abriu. */
     ACCOUNT_MISMATCH,
 
+    /**
+     * A versão da nuvem mudou enquanto o usuário decidia (T16.7.1).
+     *
+     * Não é erro: é a proteção funcionando. A lista já foi atualizada com o que a nuvem tem agora,
+     * e a escolha anterior não é reaproveitada — o conteúdo pode ter mudado de um jeito que muda a
+     * decisão.
+     */
+    REMOTE_CHANGED,
+
+    /**
+     * Não deu para confirmar qual é a versão atual da nuvem (T16.7.1).
+     *
+     * Sem essa confirmação, a versão local **não** é substituída: aplicar a cópia guardada como
+     * plano B seria gravar aqui, de propósito, algo que pode já estar velho.
+     */
+    REMOTE_UNAVAILABLE,
+
+    /**
+     * A nuvem respondeu algo que não corresponde ao que este aparelho tinha guardado (T16.7.1).
+     *
+     * Nada foi aplicado e nada foi apagado.
+     */
+    REMOTE_INCONSISTENT,
+
     /** Não deu para aplicar a decisão. Nada foi alterado. */
     FAILED
 }
