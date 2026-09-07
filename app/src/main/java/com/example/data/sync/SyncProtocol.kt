@@ -68,6 +68,14 @@ enum class SyncMutationStatus {
     UNSUPPORTED,
     IMMUTABLE_HISTORY_CONFLICT,
     IDEMPOTENCY_CONFLICT,
+
+    /**
+     * A entidade tem tombstone no servidor: outro aparelho a excluiu (T16.7).
+     *
+     * O `UPSERT` **não** foi aplicado, e não vai ser: recriar o que alguém apagou é decisão do
+     * usuário, e ela nasce com `syncId` novo. A alteração local fica guardada e vira conflito.
+     */
+    REMOTE_DELETED,
     UNKNOWN;
 
     companion object {
@@ -85,7 +93,14 @@ data class SyncPushMutationDto(
     val operation: String,
     /** A revision remota conhecida por este aparelho. `null` = criação. */
     val baseRevision: Long? = null,
-    val payload: JsonElement
+    /**
+     * O agregado inteiro — e `null` quando [operation] é `DELETE` (T16.7).
+     *
+     * Uma exclusão não carrega conteúdo: ela afirma que a entidade deixou de existir, e
+     * identidade mais `baseRevision` são tudo que o servidor precisa. Mandar um payload junto
+     * seria ambíguo ("apague, mas com este conteúdo?").
+     */
+    val payload: JsonElement? = null
 )
 
 /**
@@ -131,7 +146,8 @@ data class SyncChangeDto(
     val payloadHash: String,
     @SerialName("originDeviceId") val originDeviceId: String = "",
     val createdAt: Long = 0,
-    val payload: JsonElement
+    /** `null` quando [operation] é `DELETE`: um tombstone não devolve o que foi apagado. */
+    val payload: JsonElement? = null
 )
 
 @Serializable

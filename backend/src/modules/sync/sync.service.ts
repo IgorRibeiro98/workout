@@ -3,8 +3,8 @@ import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import { sha256Hex } from '../backup/canonical-json';
+import { SyncEntityPolicyRegistry } from './sync.policy';
 import {
-  policyOf,
   SYNC_MUTATION_REASONS,
   type SyncMutationResult,
   type SyncMutationStatus,
@@ -13,7 +13,7 @@ import {
 } from './sync.contract';
 import { SyncErrors } from './sync.errors';
 import { SyncRateLimiter } from './sync.rate-limit';
-import { SyncRepository } from './sync.repository';
+import { SyncRepository, type StoredSyncEntity } from './sync.repository';
 import {
   parseCursor,
   parseLimit,
@@ -24,18 +24,29 @@ import {
 } from './sync.validator';
 
 /**
- * O caso de uso do sync incremental (T16.6).
+ * O caso de uso do sync incremental (T16.6) e das exclusões versionadas (T16.7).
  *
  * ## O que este serviço decide — e o que ele deliberadamente não decide
  *
  * Ele **detecta**: reenvio, conteúdo convergente, escrita stale, divergência de histórico
- * imutável, operação não suportada e payload fora do contrato.
+ * imutável, exclusão stale, `UPSERT` contra tombstone, operação não permitida pela política do
+ * agregado e payload fora do contrato.
  *
  * Ele **não resolve** conflito. Não existe aqui *last write wins*, "manda de novo com a revision
- * atual", desempate por `updatedAt` nem merge por campo. Uma mutação stale é recusada com a
- * revision atual, e a decisão volta para o aparelho — onde ela é preservada até a T16.7. Resolver
- * automaticamente seria apagar em silêncio a alteração de outro dispositivo, que é exatamente o
- * defeito que este protocolo existe para impedir.
+ * atual", desempate por `updatedAt`, merge por campo nem `force`/`overwrite`. Uma mutação stale é
+ * recusada com a revision atual, e a decisão volta para o aparelho — onde ela é preservada e onde
+ * o **usuário** escolhe (T16.7). Resolver automaticamente seria apagar em silêncio a alteração de
+ * outro dispositivo, que é exatamente o defeito que este protocolo existe para impedir.
+ *
+ * ## Exclusão é uma mudança, não a ausência de uma
+ *
+ * ```text
+ * DELETE baseRevision = 5  →  tombstone revision 6  →  sync_change operation = DELETE
+ * ```
+ *
+ * O tombstone é o que faz um aparelho que ficou meses offline **aprender** que a entidade morreu,
+ * em vez de reenviá-la e ressuscitá-la. E `UPSERT` contra tombstone é sempre conflito: recriar o
+ * que outro aparelho apagou é decisão do usuário, e ela nasce com `syncId` novo.
  *
  * ## Ownership
  *
@@ -100,7 +111,11 @@ export class SyncService {
     this.assertWithinRateLimit(principal.uid);
 
     const startedAt = Date.now();
-    const cursor = parseCursor(rawCursor, this.repository.maxSequence());
+    const cursor = parseCursor(
+      rawCursor,
+      this.repository.maxSequence(),
+      this.repository.oldestSequence(principal.uid),
+    );
     const limit = parseLimit(rawLimit);
 
     const { changes, hasMore } = this.repository.changesAfter(principal.uid, cursor, limit);
@@ -138,7 +153,14 @@ export class SyncService {
     // faria o aparelho reenviar para sempre algo que o servidor já tem.
     const ledger = this.repository.findMutation(ownerUid, mutation.clientMutationId);
     if (ledger) {
-      const hash = mutation.canonicalPayload ? sha256Hex(mutation.canonicalPayload) : '';
+      // Uma exclusão não tem conteúdo, então o hash dela é vazio — e é a **intenção** (tipo,
+      // identidade, operação) que o ledger compara para distinguir reenvio de mutação nova.
+      const hash =
+        mutation.operation === 'DELETE'
+          ? ''
+          : mutation.canonicalPayload
+            ? sha256Hex(mutation.canonicalPayload)
+            : '';
       const sameIntent =
         ledger.entityType === mutation.entityType &&
         ledger.entitySyncId === mutation.entitySyncId &&
@@ -175,8 +197,26 @@ export class SyncService {
     const entity = this.repository.findEntity(ownerUid, accepted.entityType, mutation.entitySyncId);
     const now = Date.now();
 
-    // 3. Política do agregado. Histórico concluído e plano mutável não têm a mesma semântica.
-    if (policyOf(accepted.entityType) === 'IMMUTABLE_HISTORY') {
+    if (accepted.operation === 'DELETE') {
+      return this.applyDelete(ownerUid, deviceId, mutation, accepted, entity, now);
+    }
+
+    // 3. Tombstone antes de tudo: a entidade foi excluída, e este `UPSERT` a recriaria.
+    //
+    // É o caso do aparelho que ficou offline com a cópia antiga. Aceitar aqui — mesmo com
+    // `baseRevision` "correta" — desfaria em silêncio uma exclusão que o usuário fez em outro
+    // aparelho. Recriar é decisão dele, e ela nasce com `syncId` novo.
+    if (entity?.deleted) {
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'REMOTE_DELETED',
+        currentRevision: entity.serverRevision,
+        reason: SYNC_MUTATION_REASONS.ENTITY_DELETED,
+      };
+    }
+
+    // 4. Política do agregado. Histórico concluído e plano mutável não têm a mesma semântica.
+    if (SyncEntityPolicyRegistry.isImmutableHistory(accepted.entityType)) {
       if (!entity) {
         return this.apply(ownerUid, deviceId, mutation, accepted, 1, now, 'APPLIED');
       }
@@ -200,7 +240,7 @@ export class SyncService {
         return this.apply(ownerUid, deviceId, mutation, accepted, 1, now, 'APPLIED');
       }
       // O cliente diz conhecer uma revision que este servidor nunca emitiu para esta entidade.
-      // Não é criação e não é atualização: é estado divergente, e quem decide é a T16.7.
+      // Não é criação e não é atualização: é estado divergente, e quem decide é o usuário.
       return {
         clientMutationId: mutation.clientMutationId,
         status: 'STALE',
@@ -242,6 +282,105 @@ export class SyncService {
       clientMutationId: mutation.clientMutationId,
       status: 'STALE',
       currentRevision: entity.serverRevision,
+    };
+  }
+
+  /**
+   * Uma exclusão (T16.7).
+   *
+   * ```text
+   * Template X revision 5
+   *      ↓ DELETE baseRevision = 5
+   * tombstone revision 6  +  sync_change operation = DELETE
+   * ```
+   *
+   * As três decisões que importam:
+   *
+   * 1. **exclusão gasta revision.** Ela é uma mudança como qualquer outra, entra no change log e
+   *    tem posição na sequência — é assim que o aparelho que ficou offline aprende que a entidade
+   *    morreu, em vez de reenviá-la;
+   * 2. **exclusão stale não apaga nada.** Se outro aparelho escreveu depois da `baseRevision`, o
+   *    servidor devolve `STALE` com a revision atual. Apagar aqui destruiria em silêncio uma
+   *    alteração mais nova que quem pediu a exclusão nunca viu;
+   * 3. **exclusão de identidade desconhecida também cria tombstone.** Dois aparelhos podem ter o
+   *    mesmo `syncId` sem que o servidor jamais o tenha visto — dataset restaurado do mesmo
+   *    backup. Sem o tombstone, o segundo aparelho criaria a entidade depois, e a exclusão do
+   *    primeiro teria sido desfeita por ninguém.
+   */
+  private applyDelete(
+    ownerUid: string,
+    deviceId: string,
+    mutation: ParsedMutation,
+    accepted: AcceptedMutation,
+    entity: StoredSyncEntity | null,
+    now: number,
+  ): SyncMutationResult {
+    if (entity?.deleted) {
+      // Já é tombstone. Idempotente: nenhuma revision nova, nenhuma mudança nova no log — e a
+      // tentativa passa a ter resposta guardada, para que um reenvio não recomece o raciocínio.
+      return this.converged(ownerUid, deviceId, mutation, accepted, entity, now);
+    }
+
+    const base = mutation.baseRevision ?? 0;
+
+    if (!entity) {
+      return this.deleteEntity(ownerUid, deviceId, mutation, accepted, 1, now);
+    }
+
+    if (base > entity.serverRevision) {
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'INVALID',
+        currentRevision: entity.serverRevision,
+        reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
+      };
+    }
+
+    if (base !== entity.serverRevision) {
+      // O aparelho quis apagar uma versão que já não é a atual. Quem chegou primeiro definiu a
+      // revision seguinte, e o segundo recebe conflito — nunca uma exclusão silenciosa por cima
+      // de uma alteração mais nova.
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'STALE',
+        currentRevision: entity.serverRevision,
+      };
+    }
+
+    return this.deleteEntity(
+      ownerUid,
+      deviceId,
+      mutation,
+      accepted,
+      entity.serverRevision + 1,
+      now,
+    );
+  }
+
+  private deleteEntity(
+    ownerUid: string,
+    deviceId: string,
+    mutation: ParsedMutation,
+    accepted: AcceptedMutation,
+    nextRevision: number,
+    now: number,
+  ): SyncMutationResult {
+    const applied = this.repository.applyDelete({
+      ownerUid,
+      deviceId,
+      clientMutationId: mutation.clientMutationId,
+      entityType: accepted.entityType,
+      entitySyncId: mutation.entitySyncId,
+      entitySchemaVersion: mutation.entitySchemaVersion,
+      baseRevision: mutation.baseRevision,
+      nextRevision,
+      now,
+    });
+    return {
+      clientMutationId: mutation.clientMutationId,
+      status: 'APPLIED',
+      serverRevision: applied.serverRevision,
+      serverSequence: applied.serverSequence,
     };
   }
 

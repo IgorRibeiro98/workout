@@ -45,31 +45,22 @@ export function isSyncEntityType(value: string): value is SyncEntityType {
   return (SYNC_ENTITY_TYPES as readonly string[]).includes(value);
 }
 
-/**
- * A política de atualização de cada agregado. Ela **não** é genérica.
+/*
+ * A política de cada agregado — mutabilidade, exclusão e estratégia de conflito — vive em
+ * [SyncEntityPolicyRegistry] (`sync.policy.ts`), com o espelho Kotlin em
+ * `com.example.data.sync.SyncEntityPolicies`.
  *
- * `UPSERT qualquer coisa` trataria uma sessão concluída como um documento colaborativo. Um
- * template é um plano e muda; um histórico registra o que aconteceu e não muda.
+ * Ela saiu daqui na T16.7 porque deixou de ser um enum de duas opções: `UPSERT qualquer coisa`
+ * trataria uma sessão concluída como documento colaborativo, e `DELETE qualquer coisa` criaria
+ * tombstone para um tipo que o domínio não sabe apagar.
  */
-export type SyncEntityPolicy = 'MUTABLE_SNAPSHOT' | 'IMMUTABLE_HISTORY';
 
-const POLICIES: Record<SyncEntityType, SyncEntityPolicy> = {
-  WORKOUT_PROGRAM: 'MUTABLE_SNAPSHOT',
-  WORKOUT_TEMPLATE: 'MUTABLE_SNAPSHOT',
-  CUSTOM_EXERCISE: 'MUTABLE_SNAPSHOT',
-  BODY_MEASUREMENT: 'MUTABLE_SNAPSHOT',
-  CHECK_IN: 'MUTABLE_SNAPSHOT',
-  // Uma `WorkoutSession` só entra no sync quando `COMPLETED` (o registry do backup recusa
-  // qualquer outro status). Depois disso ela é histórico: divergência é conflito de integridade,
-  // nunca `revision++`.
-  WORKOUT_SESSION: 'IMMUTABLE_HISTORY',
-};
-
-export function policyOf(entityType: SyncEntityType): SyncEntityPolicy {
-  return POLICIES[entityType];
-}
-
-/** As operações que uma mutação pode declarar. As mesmas duas da Outbox (T16.3). */
+/**
+ * As operações que uma mutação pode declarar. As mesmas duas da Outbox (T16.3).
+ *
+ * Desde a T16.7 as duas são aceitas: `DELETE` produz tombstone e entra no change log como
+ * qualquer outra mudança (`sync.policy.ts` decide para quais agregados).
+ */
 export const SYNC_OPERATIONS = ['UPSERT', 'DELETE'] as const;
 export type SyncOperation = (typeof SYNC_OPERATIONS)[number];
 
@@ -92,8 +83,15 @@ export const SYNC_MUTATION_STATUSES = [
   'STALE',
   /** Fora do contrato: payload, identidade ou relação inválida. Não adianta reenviar igual. */
   'INVALID',
-  /** O servidor entende o pedido e não o suporta nesta versão — hoje, `DELETE`. */
+  /** O servidor entende o pedido e não o suporta — tipo desconhecido, versão futura, exclusão de um agregado que o domínio não apaga. */
   'UNSUPPORTED',
+  /**
+   * A entidade tem tombstone no servidor: ela foi excluída, e este `UPSERT` a recriaria (T16.7).
+   *
+   * Nunca é aplicado. Recriar o que outro aparelho apagou é decisão do usuário, e ela nasce com
+   * `syncId` novo — reaproveitar a identidade morta apagaria o significado do tombstone.
+   */
+  'REMOTE_DELETED',
   /** Sessão concluída com o mesmo `syncId` e conteúdo divergente. Nunca sobrescrita. */
   'IMMUTABLE_HISTORY_CONFLICT',
   /** Mesmo `clientMutationId`, conteúdo ou alvo diferente. Não reaplica. */
@@ -131,7 +129,13 @@ export interface SyncChangeResponse {
   /** Qual instalação originou a mudança. Diagnóstico e *echo suppression* — nunca segurança. */
   readonly originDeviceId: string;
   readonly createdAt: number;
-  /** O agregado inteiro, como estava naquela sequência. */
+  /**
+   * O agregado inteiro, como estava naquela sequência — e `null` quando `operation` é `DELETE`.
+   *
+   * Um tombstone não carrega conteúdo: ele afirma que a entidade deixou de existir, e a identidade
+   * mais a `serverRevision` são tudo que o outro aparelho precisa para aplicar isso. O estado
+   * anterior continua no change log, nas sequências que vieram antes.
+   */
   readonly payload: unknown;
 }
 
@@ -155,6 +159,15 @@ export const SYNC_ERROR_CODES = {
   SYNC_PAYLOAD_TOO_LARGE: 'SYNC_PAYLOAD_TOO_LARGE',
   /** Cursor negativo, não inteiro ou além do que o servidor já emitiu. */
   INVALID_CURSOR: 'INVALID_CURSOR',
+  /**
+   * O cursor aponta para antes da mudança mais antiga que o servidor ainda guarda desta conta.
+   *
+   * Hoje nada compacta o change log e nada apaga tombstone, então isto só acontece se o banco do
+   * servidor for restaurado de uma cópia mais nova que o aparelho. O aparelho precisa de um
+   * rebaseline explícito — e **não** de um `cursor = 0` silencioso, que faria ele reprocessar a
+   * conta inteira sem ninguém saber por quê.
+   */
+  CURSOR_EXPIRED: 'CURSOR_EXPIRED',
   /** Proteção simples por conta contra um app em laço. */
   SYNC_RATE_LIMITED: 'SYNC_RATE_LIMITED',
 } as const;
@@ -163,7 +176,10 @@ export type SyncErrorCode = (typeof SYNC_ERROR_CODES)[keyof typeof SYNC_ERROR_CO
 
 /** Motivos curtos devolvidos em `SyncMutationResult.reason`. Vocabulário fechado. */
 export const SYNC_MUTATION_REASONS = {
-  DELETE_NOT_SUPPORTED: 'DELETE_NOT_SUPPORTED',
+  /** Exclusão de um agregado cuja política não permite `DELETE` remoto (`sync.policy.ts`). */
+  DELETE_NOT_ALLOWED: 'DELETE_NOT_ALLOWED',
+  /** `UPSERT` contra uma entidade com tombstone. */
+  ENTITY_DELETED: 'ENTITY_DELETED',
   UNKNOWN_ENTITY_TYPE: 'UNKNOWN_ENTITY_TYPE',
   UNSUPPORTED_ENTITY_SCHEMA_VERSION: 'UNSUPPORTED_ENTITY_SCHEMA_VERSION',
   INVALID_PAYLOAD: 'INVALID_PAYLOAD',

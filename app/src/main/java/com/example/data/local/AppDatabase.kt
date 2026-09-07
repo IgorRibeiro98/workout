@@ -45,7 +45,7 @@ import kotlinx.coroutines.launch
         com.example.data.sync.SyncCursorEntity::class,
         com.example.data.sync.SyncConflictEntity::class
     ],
-    version = 34,
+    version = 35,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -74,7 +74,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 34
+        const val SCHEMA_VERSION: Int = 35
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -148,6 +148,33 @@ abstract class AppDatabase : RoomDatabase() {
          * `blockedReason` é anulável porque toda entrada existente é `PENDING` e continua sendo:
          * a migração não muda o significado de nenhuma linha.
          */
+        /**
+         * T16.7 — conflitos resolvíveis, exclusão que propaga e tombstone.
+         *
+         * **Uma coluna**, em uma tabela de mecanismo. Nenhuma tabela de domínio é tocada: o
+         * tombstone do Spark mora no **servidor** (`sync_entities.deleted`), e não como linhas
+         * "apagadas mas presentes" no banco de todo usuário. Localmente, apagar continua sendo
+         * apagar — a linha some, com o mesmo cascade de sempre.
+         *
+         * ```text
+         * sync_conflicts.status   PENDING | AWAITING_PUSH
+         * ```
+         *
+         * `AWAITING_PUSH` é o que faz uma escolha do usuário sobreviver ao processo: ele tocou em
+         * "Manter deste aparelho", a mutação nasceu na Outbox e o app morreu antes de enviá-la —
+         * a intenção continua lá, e um segundo toque não vira uma segunda mutação.
+         *
+         * `DEFAULT 'PENDING'` porque toda linha existente descreve exatamente isso: um conflito
+         * que ninguém resolveu ainda. A migração não muda o significado de nenhuma delas.
+         */
+        val MIGRATION_34_35 = object : Migration(34, 35) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `sync_conflicts` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'PENDING'"
+                )
+            }
+        }
+
         val MIGRATION_33_34 = object : Migration(33, 34) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -741,7 +768,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35
                 )
                 .addCallback(DatabaseCallback())
                 .build()

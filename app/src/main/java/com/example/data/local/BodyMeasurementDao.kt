@@ -45,6 +45,15 @@ interface BodyMeasurementDao {
     @Query("SELECT * FROM body_measurements WHERE syncId = :syncId LIMIT 1")
     suspend fun getMeasurementBySyncId(syncId: String): BodyMeasurementEntity?
 
+    /**
+     * Apaga a medida pela identidade global (T16.7).
+     *
+     * Usado pelo apply remoto quando outro aparelho excluiu a medida. Local, direto, sem carregar
+     * a entidade — e sem efeito colateral: gamificação e evolução são derivadas e reconciliadas.
+     */
+    @Query("DELETE FROM body_measurements WHERE syncId = :syncId")
+    suspend fun deleteMeasurementBySyncId(syncId: String): Int
+
     @Query("SELECT syncId FROM body_measurements WHERE id = :id LIMIT 1")
     suspend fun getMeasurementSyncId(id: Long): String?
 

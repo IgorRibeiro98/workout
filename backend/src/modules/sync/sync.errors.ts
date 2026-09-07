@@ -41,6 +41,21 @@ export const SyncErrors = {
   invalidCursor: (reason: string) =>
     syncException(HttpStatus.BAD_REQUEST, SYNC_ERROR_CODES.INVALID_CURSOR, reason),
 
+  /**
+   * O cursor é anterior ao que o servidor ainda pode entregar.
+   *
+   * Recusa explícita, e nunca um `cursor = 0` silencioso: entre os dois pontos houve mudanças —
+   * possivelmente exclusões — que o aparelho nunca vai receber, e reprocessar do começo sem saber
+   * disso ressuscitaria dado apagado. O aparelho precisa de rebaseline, e quem decide isso é o
+   * usuário.
+   */
+  cursorExpired: () =>
+    syncException(
+      HttpStatus.BAD_REQUEST,
+      SYNC_ERROR_CODES.CURSOR_EXPIRED,
+      'a sincronização deste aparelho precisa ser reconstruída',
+    ),
+
   rateLimited: () =>
     syncException(
       HttpStatus.TOO_MANY_REQUESTS,

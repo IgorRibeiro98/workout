@@ -269,7 +269,7 @@ class SyncPushAckTest {
     // ------------------------------------------------------------------ delete
 
     @Test
-    fun exclusaoLocalNaoViraUpsertRemotoEFicaPendente() = runTest {
+    fun exclusaoLocalViraTombstoneENuncaUpsert() = runTest {
         device.bind()
         val templateSyncId = device.newTemplate("Treino A")
         device.sync()
@@ -277,12 +277,34 @@ class SyncPushAckTest {
         device.deleteTemplate(templateSyncId)
         val outcome = device.sync() as SyncOutcome.Success
 
-        // A intenção de exclusão continua guardada, sem virar outra coisa.
-        assertTrue(outcome.deferredDeletes > 0)
-        assertEquals(0, outcome.pushed)
-        // E o treino **não** foi recriado no servidor pela `UPSERT` anterior a ela.
-        assertEquals(1L, server.revisionOf(ownerUid, SyncEntityType.WORKOUT_TEMPLATE, templateSyncId))
+        // A exclusão sobe como exclusão. O que **não** pode acontecer é a `UPSERT` anterior a ela
+        // ser enviada: isso recriaria no servidor exatamente o que o usuário apagou aqui.
+        assertEquals(1, outcome.pushed)
+        assertEquals(0, outcome.deferredDeletes)
+        assertTrue(server.isDeleted(ownerUid, SyncEntityType.WORKOUT_TEMPLATE, templateSyncId))
+        // Exclusão também gasta revision: ela é uma mudança como qualquer outra.
+        assertEquals(2L, server.revisionOf(ownerUid, SyncEntityType.WORKOUT_TEMPLATE, templateSyncId))
+        assertEquals(2, server.changeCount)
+        // E a fila fica limpa: a intenção foi cumprida.
+        assertEquals(0, device.pendingCount())
+        assertEquals(0, device.blockedCount())
+    }
+
+    @Test
+    fun criarEExcluirOfflineSobeApenasAExclusao() = runTest {
+        device.bind()
+        // Nada sincronizou no meio: o servidor nunca viu este treino.
+        val templateSyncId = device.newTemplate("Treino efêmero")
+        device.deleteTemplate(templateSyncId)
+
+        val outcome = device.sync() as SyncOutcome.Success
+
+        assertEquals(1, outcome.pushed)
+        // Uma mudança só, e é o tombstone. Enviar a criação antes seria criar para apagar em
+        // seguida — e faria os outros aparelhos baixarem um treino que já não existe.
         assertEquals(1, server.changeCount)
+        assertTrue(server.isDeleted(ownerUid, SyncEntityType.WORKOUT_TEMPLATE, templateSyncId))
+        assertEquals(0, device.pendingCount())
     }
 
     // ------------------------------------------------------------------ ciclo

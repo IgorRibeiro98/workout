@@ -1,6 +1,8 @@
 # Contrato de sincronização incremental do Spark — v1
 
-- **Tarefa:** T16.6. Conflitos, deletes e tombstones são **T16.7**.
+- **Tarefa:** T16.6. Conflitos, deletes e tombstones foram **implementados na T16.7** — o
+  envelope de mutação passou a aceitar `operation = "DELETE"` com `payload` nulo, e uma mudança de
+  `operation = "DELETE"` no pull vem com `payload: null`.
 - **Implementações:**
   - Android — `com.example.data.sync.SyncProtocol` e `com.example.data.sync.*`
   - Backend — `backend/src/modules/sync/sync.contract.ts` e `backend/src/modules/sync/*`
@@ -55,12 +57,20 @@ Os payloads são **os mesmos** do backup, validados pelo **mesmo** registry
 `EXERCISE_OVERRIDE`, `WEEKLY_GOAL` e `USER_PREFERENCES` existem no backup e **não** no sync
 incremental — o servidor os recusa com `UNSUPPORTED`. Motivo em `sync-protocol.md`.
 
-Política por agregado:
+Política por agregado (`SyncEntityPolicies` no app, `sync.policy.ts` no servidor — os dois precisam
+concordar, e nenhum tem `default`):
 
-| Agregado | Política |
-| --- | --- |
-| `WORKOUT_SESSION` (só `COMPLETED`) | `IMMUTABLE_HISTORY` |
-| os outros cinco | `MUTABLE_SNAPSHOT` |
+| Agregado | Mutabilidade | Delete remoto | Conflito |
+| --- | --- | --- | --- |
+| `WORKOUT_PROGRAM` | `MUTABLE_SNAPSHOT` | sim | `USER_CHOICE` |
+| `WORKOUT_TEMPLATE` | `MUTABLE_SNAPSHOT` | sim | `USER_CHOICE` |
+| `CUSTOM_EXERCISE` | `MUTABLE_SNAPSHOT` | sim | `USER_CHOICE` |
+| `BODY_MEASUREMENT` | `MUTABLE_SNAPSHOT` | sim | `USER_CHOICE` |
+| `CHECK_IN` | `MUTABLE_SNAPSHOT` | **não** | `USER_CHOICE` |
+| `WORKOUT_SESSION` (só `COMPLETED`) | `IMMUTABLE_HISTORY` | sim | `IMMUTABLE_CONFLICT` |
+
+`LAST_WRITE_WINS_ALLOWED` existe como estratégia declarável e **nenhum agregado a usa** — há teste
+dos dois lados. Ela nunca é padrão.
 
 ## 4. `POST /v1/sync/push`
 
@@ -105,7 +115,8 @@ Content-Type: application/json
 | `ALREADY_APPLIED` | reenvio, ou conteúdo já idêntico | idem — nenhuma revision foi gasta |
 | `STALE` | `baseRevision` desatualizada; `currentRevision` vem junto | bloqueia a entrada, registra conflito, **não** grava a revision |
 | `INVALID` | fora do contrato | bloqueia; reenviar produziria o mesmo |
-| `UNSUPPORTED` | o servidor entende e não suporta (hoje: `DELETE`, tipo/versão desconhecidos) | bloqueia |
+| `UNSUPPORTED` | o servidor entende e não suporta (tipo/versão desconhecidos, `DELETE` de agregado com `deleteAllowed = false`) | bloqueia |
+| `REMOTE_DELETED` | a entidade tem tombstone: este `UPSERT` a recriaria (T16.7) | bloqueia, registra conflito de exclusão |
 | `IMMUTABLE_HISTORY_CONFLICT` | mesma sessão concluída, conteúdo divergente | bloqueia, registra conflito |
 | `IDEMPOTENCY_CONFLICT` | mesmo `clientMutationId`, conteúdo ou alvo diferente | bloqueia |
 
@@ -190,9 +201,40 @@ identidade que não bate são recusados dos dois lados — nunca preenchidos com
 ## 9. O que este contrato deliberadamente não tem
 
 ```text
-✗ tombstone, deletedAt, propagação de exclusão      → T16.7
-✗ resolução de conflito e merge                     → T16.7
-✗ WebSocket, SSE, push do servidor                  → não planejado
-✗ compactação/retenção do change log + CURSOR_EXPIRED → T16.7/T16.8
-✗ registro de dispositivos no servidor              → T16.8, se houver revogação por aparelho
+✓ tombstone, propagação de exclusão, prevenção de ressurreição   → T16.7
+✓ resolução explícita de conflito (escolha do usuário)           → T16.7
+✓ CURSOR_EXPIRED                                                 → T16.7
+✗ merge por campo, CRDT, edição colaborativa       → deliberadamente fora
+✗ WebSocket, SSE, push do servidor                 → não planejado
+✗ compactação do change log / limpeza de tombstone → deliberadamente não feita
+✗ registro de dispositivos no servidor             → T16.8, se houver revogação por aparelho
 ```
+
+### O que a T16.7 acrescentou ao envelope
+
+```jsonc
+// mutação de exclusão: sem payload
+{
+  "clientMutationId": "…",
+  "entityType": "WORKOUT_TEMPLATE",
+  "entitySyncId": "…",
+  "entitySchemaVersion": 1,
+  "operation": "DELETE",
+  "baseRevision": 5,
+  "payload": null
+}
+
+// mudança de exclusão, no pull
+{
+  "serverSequence": 42,
+  "entityType": "WORKOUT_TEMPLATE",
+  "entitySyncId": "…",
+  "serverRevision": 6,
+  "operation": "DELETE",
+  "payloadHash": "",
+  "payload": null
+}
+```
+
+Um tombstone não afirma conteúdo: identidade e `serverRevision` são tudo que o outro aparelho
+precisa, e devolver o que foi apagado só duplicaria dado pessoal.

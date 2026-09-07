@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.sync.SyncActivity
 import com.example.data.sync.SyncApplyStop
+import com.example.data.sync.SyncConflictChoice
+import com.example.data.sync.SyncConflictId
+import com.example.data.sync.SyncConflictResolution
 import com.example.data.sync.SyncCoordinator
 import com.example.data.sync.SyncOutcome
 import com.example.data.sync.SyncRepository
@@ -70,6 +73,55 @@ class SyncViewModel(
         coordinator.syncNow()
     }
 
+    /**
+     * O usuário escolheu o que fazer com um conflito (T16.7).
+     *
+     * A proteção contra duplo toque é dupla, de propósito: aqui, para que a tela nem chame duas
+     * vezes; e na resolução, com uma escrita condicional no banco — porque duas corrotinas podem
+     * entrar antes de o estado da tela mudar, e é o banco que decide.
+     *
+     * Uma decisão que virou mutação dispara um ciclo: o usuário acabou de agir, e esperar o
+     * agendamento faria a tela dizer "aguardando envio" sem motivo visível.
+     */
+    fun resolveConflict(id: SyncConflictId, choice: SyncConflictChoice) {
+        if (_uiState.value.isBusy) return
+        _uiState.value = _uiState.value.copy(resolving = id, resolutionProblem = null)
+        viewModelScope.launch {
+            val resolution = repository.resolveConflict(currentUid, id, choice)
+            _uiState.value = _uiState.value.copy(
+                resolving = null,
+                resolutionProblem = problemOf(resolution)
+            )
+            render(coordinator.activity.value)
+            if (resolution is SyncConflictResolution.Queued) coordinator.syncNow()
+        }
+    }
+
+    /** O usuário leu o aviso da última tentativa de resolução. */
+    fun dismissResolutionProblem() {
+        _uiState.value = _uiState.value.copy(resolutionProblem = null)
+    }
+
+    private fun problemOf(resolution: SyncConflictResolution): SyncResolutionProblem? =
+        when (resolution) {
+            // "Já resolvido" não é falha: outro toque chegou antes, e o resultado é o mesmo.
+            SyncConflictResolution.Applied,
+            SyncConflictResolution.Queued,
+            SyncConflictResolution.AlreadyResolved,
+            SyncConflictResolution.NotFound -> null
+
+            SyncConflictResolution.NoRemoteCopy -> SyncResolutionProblem.NO_REMOTE_COPY
+            SyncConflictResolution.StillReferenced -> SyncResolutionProblem.STILL_REFERENCED
+            SyncConflictResolution.PendingChildChanges ->
+                SyncResolutionProblem.PENDING_CHILD_CHANGES
+            SyncConflictResolution.AccountMismatch -> SyncResolutionProblem.ACCOUNT_MISMATCH
+
+            SyncConflictResolution.AuthRequired,
+            SyncConflictResolution.NotEnabled,
+            SyncConflictResolution.NotAvailable,
+            SyncConflictResolution.NoLocalCopy -> SyncResolutionProblem.FAILED
+        }
+
     private suspend fun render(activity: SyncActivity) {
         if (!repository.isConfigured) {
             _uiState.value = SyncUiState(phase = SyncPhase.NotConfigured)
@@ -84,7 +136,9 @@ class SyncViewModel(
             // O que "precisa de atenção" é a soma do que ficou travado na fila com o que divergiu
             // do servidor — do ponto de vista de quem olha a tela, é uma coisa só.
             needsAttention = maxOf(snapshot.blocked, snapshot.conflicts),
-            lastSyncedAt = snapshot.lastSyncedAt
+            lastSyncedAt = snapshot.lastSyncedAt,
+            // Leitura pura do Room: listar conflitos não sincroniza e não resolve nada.
+            conflicts = repository.conflicts(currentUid)
         )
 
         val phase = when {
@@ -115,7 +169,14 @@ class SyncViewModel(
             SyncOutcome.RateLimited ->
                 return SyncPhase.Failed(SyncFailure.RATE_LIMITED, base.lastSyncedAt)
             is SyncOutcome.Rejected ->
-                return SyncPhase.Failed(SyncFailure.REJECTED, base.lastSyncedAt)
+                // O cursor deste aparelho aponta para antes do que o servidor ainda guarda. Não é
+                // erro recuperável: continuar andando pularia mudanças — possivelmente exclusões —
+                // e ressuscitaria dado apagado. A tela orienta; ela não reconstrói sozinha.
+                return if (outcome.code == CURSOR_EXPIRED) {
+                    SyncPhase.NeedsRebaseline(base.lastSyncedAt)
+                } else {
+                    SyncPhase.Failed(SyncFailure.REJECTED, base.lastSyncedAt)
+                }
             is SyncOutcome.Success -> when (outcome.pausedAt) {
                 // Este app não sabe ler algo que outro aparelho enviou, ou uma referência do
                 // payload não existe aqui (catálogo desatualizado). Nada foi perdido: o sync
@@ -138,3 +199,5 @@ class SyncViewModel(
         }
     }
 }
+
+private const val CURSOR_EXPIRED = "CURSOR_EXPIRED"

@@ -115,6 +115,27 @@ interface SyncOutboxDao {
     )
     suspend fun block(ownerUid: String, ids: List<Long>, reason: String, now: Long): Int
 
+    /**
+     * Descarta as entradas de um agregado que ficaram fora da fila de envio (T16.7).
+     *
+     * Chamado **só** a partir de uma resolução de conflito escolhida pelo usuário: ele decidiu
+     * ficar com a versão da nuvem, ou confirmar a exclusão feita em outro aparelho, e a tentativa
+     * local que estava bloqueada deixou de descrever algo que ele quer. Fora daí, uma entrada
+     * `BLOCKED` nunca é apagada — ela é a alteração da pessoa.
+     *
+     * Só `BLOCKED`: uma entrada `PENDING` do mesmo agregado nasceu **depois** do conflito (o
+     * usuário voltou a editar), e apagá-la seria descartar em silêncio uma alteração que nem
+     * chegou a ser recusada.
+     */
+    @Query(
+        """
+        DELETE FROM sync_outbox
+        WHERE ownerUid = :ownerUid AND entityType = :entityType AND entitySyncId = :entitySyncId
+          AND status = 'BLOCKED'
+        """
+    )
+    suspend fun discardBlockedFor(ownerUid: String, entityType: String, entitySyncId: String): Int
+
     /** Quantas alterações locais ainda não subiram. É o "3 alterações aguardando conexão". */
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE ownerUid = :ownerUid AND status = 'PENDING'")
     suspend fun pendingCountFor(ownerUid: String): Int

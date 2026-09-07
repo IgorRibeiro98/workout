@@ -3,11 +3,17 @@
 Fronteira online do Spark. Monólito modular em NestJS sobre SQLite, pensado para rodar em **uma**
 VPS com Docker Compose.
 
-> **Estado (T16.4): fundação + identidade + Coach IA + backup.** Existe verificação de Firebase ID
-> Token (`GET /v1/auth/me`), a fronteira com o Gemini (`POST /v1/ai/coach`) e o **backup
-> estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`). **Não** existe restore, download do
-> conteúdo do backup, sincronização incremental, pull, conflito nem tombstone — sob `/v1` há
-> `auth`, `ai` e `backups`. Ver
+> **Estado (T16.7): fundação + identidade + Coach IA + backup + restore + sync + tombstones.**
+> Existe verificação de Firebase ID Token (`GET /v1/auth/me`), a fronteira com o Gemini
+> (`POST /v1/ai/coach`), o **backup estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`), o
+> **download do conteúdo** para restore (`GET /v1/backups`, `/{id}`, `/{id}/content`) e a
+> **sincronização incremental** (`POST /v1/sync/push`, `GET /v1/sync/pull`) com `serverRevision`,
+> ledger de idempotência, change log e — desde a T16.7 — **tombstone** (`sync_entities.deleted`) com
+> prevenção de ressurreição.
+>
+> O servidor **detecta e recusa**; ele nunca resolve conflito. Não existe `force`/`overwrite`, merge
+> por campo, realtime, WebSocket, push do servidor nem limpeza de tombstone. Sob `/v1` há `auth`,
+> `ai`, `backups` e `sync`. Ver
 > [ADR-0001](../docs/architecture/ADR-0001-spark-online-architecture.md).
 
 O Spark Android **não depende deste backend**. Sem ele — e sem internet — treino, execução,

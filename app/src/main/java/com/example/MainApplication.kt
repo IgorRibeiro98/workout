@@ -379,6 +379,21 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
         // payloads (não há um segundo serializador de treino no Spark), o `SparkBackendClient` da
         // T16.1 é o transporte, e a **mesma** `CloudOperationLock` do backup e do restore impede
         // um ciclo de rodar no meio de uma substituição de dataset.
+        // O apply remoto é compartilhado entre o ciclo de sync e a resolução de conflito (T16.7):
+        // "usar a versão da nuvem" escreve pelo **mesmo** caminho que uma mudança recém-chegada, e
+        // "confirmar exclusão" usa as **mesmas** guardas de referência. Duas instâncias seriam duas
+        // regras sobre o que é um treino válido.
+        val syncRemoteApplier = com.example.data.sync.SyncRemoteApplier(
+            transactions = com.example.data.sync.RoomTransactionRunner(database),
+            workoutDao = database.workoutDao(),
+            bodyMeasurementDao = database.bodyMeasurementDao(),
+            outboxDao = database.syncOutboxDao(),
+            metadataDao = database.entitySyncMetadataDao(),
+            cursorDao = database.syncCursorDao(),
+            conflictDao = database.syncConflictDao(),
+            snapshotBuilder = syncAggregateSnapshotBuilder
+        )
+
         syncRepository = com.example.data.sync.SyncRepository(
             bindingDao = database.cloudDataBindingDao(),
             outboxDao = database.syncOutboxDao(),
@@ -390,17 +405,17 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
                 metadataDao = database.entitySyncMetadataDao(),
                 snapshotBuilder = syncAggregateSnapshotBuilder
             ),
-            applier = com.example.data.sync.SyncRemoteApplier(
-                transactions = com.example.data.sync.RoomTransactionRunner(database),
-                workoutDao = database.workoutDao(),
-                bodyMeasurementDao = database.bodyMeasurementDao(),
+            applier = syncRemoteApplier,
+            api = com.example.data.sync.SparkSyncApi(sparkBackendClient),
+            conflictResolver = com.example.data.sync.SyncConflictResolver(
+                bindingDao = database.cloudDataBindingDao(),
                 outboxDao = database.syncOutboxDao(),
                 metadataDao = database.entitySyncMetadataDao(),
-                cursorDao = database.syncCursorDao(),
                 conflictDao = database.syncConflictDao(),
-                snapshotBuilder = syncAggregateSnapshotBuilder
+                applier = syncRemoteApplier,
+                snapshotBuilder = syncAggregateSnapshotBuilder,
+                transactions = com.example.data.sync.RoomTransactionRunner(database)
             ),
-            api = com.example.data.sync.SparkSyncApi(sparkBackendClient),
             deviceId = { deviceIdProvider.deviceId() },
             transactions = com.example.data.sync.RoomTransactionRunner(database),
             operationLock = cloudOperationLock

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BackupEntityRegistry, identityMismatch } from '../backup/backup-entity.registry';
 import { parseCanonical, sha256Hex, type CanonicalNode } from '../backup/canonical-json';
+import { SyncEntityPolicyRegistry } from './sync.policy';
 import {
   isSyncEntityType,
   SYNC_MUTATION_REASONS,
@@ -176,10 +177,19 @@ export function validateMutation(mutation: ParsedMutation): MutationVerdict {
   const entityType = mutation.entityType;
 
   if (operation === 'DELETE') {
-    // T16.6 não propaga exclusão. Recusar explicitamente é o contrato: converter em `UPSERT`
-    // ressuscitaria o que o usuário apagou, e aceitar em silêncio apagaria em outro aparelho sem
-    // política de tombstone. A intenção continua pendente no aparelho até a T16.7.
-    return reject(SYNC_MUTATION_REASONS.DELETE_NOT_SUPPORTED, true);
+    // A política do agregado decide, e não uma condicional espalhada: um tipo que o domínio não
+    // sabe apagar (`CHECK_IN`) não ganha tombstone só porque um cliente pediu.
+    if (!SyncEntityPolicyRegistry.isDeleteAllowed(entityType)) {
+      return reject(SYNC_MUTATION_REASONS.DELETE_NOT_ALLOWED, true);
+    }
+    // Uma exclusão não carrega payload — ela afirma que a entidade deixou de existir, e
+    // identidade mais `baseRevision` são tudo que o servidor precisa. Um payload junto seria
+    // ambíguo ("apague, mas com este conteúdo?"), então ele é ignorado de propósito e o hash de
+    // uma exclusão é vazio: o que o ledger compara em um reenvio é a **intenção**.
+    return {
+      ok: true,
+      accepted: { entityType, operation, canonicalPayload: '', payloadHash: '' },
+    };
   }
 
   const definition = BackupEntityRegistry.definitionOf(entityType);
@@ -227,8 +237,14 @@ function reject(reason: string, unsupported: boolean): MutationVerdict {
  * Ausente é zero — o começo. Negativo, não inteiro ou além do que o servidor já emitiu é recusa
  * explícita: recomeçar do zero em silêncio faria o aparelho reprocessar a conta inteira sem
  * ninguém saber por quê.
+ *
+ * Desde a T16.7 há uma segunda recusa: um cursor **anterior** à mudança mais antiga que o servidor
+ * ainda guarda desta conta é `CURSOR_EXPIRED`, e o aparelho precisa de rebaseline explícito. Hoje
+ * nada compacta o change log e nada apaga tombstone, então isso só acontece se o banco do servidor
+ * for restaurado de uma cópia mais nova que o aparelho — exatamente o caso em que continuar
+ * andando pularia deletes e ressuscitaria dado.
  */
-export function parseCursor(raw: unknown, maxSequence: number): number {
+export function parseCursor(raw: unknown, maxSequence: number, oldestSequence = 0): number {
   if (raw === undefined || raw === null || raw === '') {
     return 0;
   }
@@ -245,6 +261,14 @@ export function parseCursor(raw: unknown, maxSequence: number): number {
   }
   if (value > maxSequence) {
     throw SyncErrors.invalidCursor('cursor além da sequência conhecida pelo servidor');
+  }
+  // O cursor aponta para antes da mudança mais antiga que o servidor ainda tem desta conta: as
+  // mudanças entre os dois pontos existiram e não podem mais ser entregues. Recomeçar do zero em
+  // silêncio faria o aparelho reprocessar tudo — e, pior, sem saber que perdeu algo no meio.
+  // `oldestSequence` é a **primeira** mudança da conta, então um cursor legítimo é sempre `0` ou
+  // `>= oldestSequence - 1`; qualquer valor entre os dois só existe se algo foi compactado.
+  if (value > 0 && oldestSequence > 0 && value < oldestSequence - 1) {
+    throw SyncErrors.cursorExpired();
   }
   return value;
 }

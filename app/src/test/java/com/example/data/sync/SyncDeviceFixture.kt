@@ -31,15 +31,22 @@ import com.example.data.repository.WorkoutRepository
 class SyncDevice(
     val server: FakeSparkSyncServer,
     val ownerUid: String,
-    val deviceId: String
-) {
-
-    private val context: Context = ApplicationProvider.getApplicationContext()
-
+    val deviceId: String,
+    /**
+     * O banco deste aparelho.
+     *
+     * Recebido de fora quando o teste precisa **recriar o aparelho sobre o mesmo estado durável** —
+     * é o que um process death faz: os objetos somem, o banco fica. Por padrão, um banco em
+     * memória próprio, que é o que dois celulares diferentes têm.
+     */
     val database: AppDatabase = Room
-        .inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+        .inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(),
+            AppDatabase::class.java
+        )
         .allowMainThreadQueries()
         .build()
+) {
 
     val api: FakeSyncApi = FakeSyncApi(server, ownerUid, deviceId)
 
@@ -76,6 +83,19 @@ class SyncDevice(
         bodyMeasurementDao = database.bodyMeasurementDao()
     )
 
+    /** O mesmo applier que o ciclo de sync e a resolução de conflito compartilham em produção. */
+    val applier: SyncRemoteApplier = SyncRemoteApplier(
+        transactions = transactions,
+        workoutDao = database.workoutDao(),
+        bodyMeasurementDao = database.bodyMeasurementDao(),
+        outboxDao = database.syncOutboxDao(),
+        metadataDao = database.entitySyncMetadataDao(),
+        cursorDao = database.syncCursorDao(),
+        conflictDao = database.syncConflictDao(),
+        snapshotBuilder = aggregates,
+        clock = { CLOCK }
+    )
+
     val repository: SyncRepository = SyncRepository(
         bindingDao = database.cloudDataBindingDao(),
         outboxDao = database.syncOutboxDao(),
@@ -87,18 +107,18 @@ class SyncDevice(
             metadataDao = database.entitySyncMetadataDao(),
             snapshotBuilder = aggregates
         ),
-        applier = SyncRemoteApplier(
-            transactions = transactions,
-            workoutDao = database.workoutDao(),
-            bodyMeasurementDao = database.bodyMeasurementDao(),
+        applier = applier,
+        api = api,
+        conflictResolver = SyncConflictResolver(
+            bindingDao = database.cloudDataBindingDao(),
             outboxDao = database.syncOutboxDao(),
             metadataDao = database.entitySyncMetadataDao(),
-            cursorDao = database.syncCursorDao(),
             conflictDao = database.syncConflictDao(),
+            applier = applier,
             snapshotBuilder = aggregates,
+            transactions = transactions,
             clock = { CLOCK }
         ),
-        api = api,
         deviceId = { deviceId },
         transactions = transactions,
         operationLock = operationLock,
@@ -303,12 +323,65 @@ class SyncDevice(
         workouts.updateTemplateExercises(reordered)
     }
 
+    /**
+     * O que o restore da T16.5 faz com o estado de sync, dentro do commit dele: cursor, revision
+     * conhecida e conflitos são zerados, porque descreviam o dataset que acabou de ser substituído.
+     *
+     * O teste usa isto para reproduzir "aparelho restaurou um backup antigo" sem subir a máquina de
+     * restore inteira — o que importa aqui é o **estado resultante**, e ele é este.
+     */
+    suspend fun resetSyncStateAsRestoreDoes() {
+        database.syncCursorDao().deleteAll()
+        database.entitySyncMetadataDao().deleteAll()
+        database.syncConflictDao().deleteAll()
+    }
+
+    /** Reinsere um treino com a **mesma identidade global**, como um restore faria. */
+    suspend fun restoreTemplate(entitySyncId: String, name: String): Long =
+        database.workoutDao().insertTemplate(
+            com.example.data.local.WorkoutTemplateEntity(
+                programId = ensureProgram(),
+                name = name,
+                shortIdentifier = name.take(1),
+                orderInProgram = 0,
+                syncId = entitySyncId
+            )
+        )
+
     suspend fun pendingCount(): Int = database.syncOutboxDao().pendingCountFor(ownerUid)
 
     suspend fun blockedCount(): Int = database.syncOutboxDao().blockedCountFor(ownerUid)
 
     suspend fun conflicts(): List<SyncConflictEntity> =
         database.syncConflictDao().allFor(ownerUid)
+
+    /** Os conflitos como a tela os veria, pelo caminho real do repositório (T16.7). */
+    suspend fun conflictSummaries(): List<SyncConflictSummary> = repository.conflicts(ownerUid)
+
+    /** Resolve pelo caminho real: mesma validação de conta, mesma transação. */
+    suspend fun resolve(
+        id: SyncConflictId,
+        choice: SyncConflictChoice,
+        currentUid: String? = ownerUid
+    ): SyncConflictResolution = repository.resolveConflict(currentUid, id, choice)
+
+    /** Uma medida apagada pelo caminho real do repositório, que registra `DELETE` na Outbox. */
+    suspend fun deleteMeasurement(entitySyncId: String) {
+        val measurement = database.bodyMeasurementDao().getMeasurementBySyncId(entitySyncId)!!
+        measurements.deleteMeasurement(measurement)
+    }
+
+    /** Um exercício personalizado apagado pelo caminho real do repositório. */
+    suspend fun deleteCustomExercise(entitySyncId: String) {
+        val exercise = database.workoutDao().getExerciseBySyncId(entitySyncId)!!
+        workouts.deleteExercise(exercise)
+    }
+
+    suspend fun templateExists(entitySyncId: String): Boolean =
+        database.workoutDao().getTemplateBySyncId(entitySyncId) != null
+
+    suspend fun measurementExists(entitySyncId: String): Boolean =
+        database.bodyMeasurementDao().getMeasurementBySyncId(entitySyncId) != null
 
     suspend fun cursor(): Long =
         database.syncCursorDao().get(ownerUid)?.lastPulledServerSequence ?: 0
@@ -317,6 +390,14 @@ class SyncDevice(
         database.entitySyncMetadataDao().get(ownerUid, type.name, syncId)?.lastKnownServerRevision
 
     fun close() = database.close()
+
+    /**
+     * Descarta este "aparelho" sem fechar o banco.
+     *
+     * Usado quando o banco é de fora e continua vivo — o caso de recriar os objetos sobre o mesmo
+     * estado durável.
+     */
+    fun closeWithoutDatabase() = Unit
 
     companion object {
         const val CLOCK = 1_700_000_000_000L

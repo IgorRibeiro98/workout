@@ -156,18 +156,56 @@ class SyncBoundaryInspectionTest {
 
     @Test
     fun `o sync nao resolve conflito sozinho`() {
-        // T16.6 detecta e preserva; T16.7 resolve. Nenhuma heurística de desempate pode existir
-        // aqui — nem por relógio, nem por "o mais novo vence", nem por campo.
+        // A T16.7 acrescentou resolução **explícita**: o usuário escolhe. O que continua não
+        // podendo existir é resolução automática — desempate por relógio, "o mais novo vence",
+        // merge por campo ou uma rotina que limpa conflitos antigos sozinha.
+        //
+        // `SyncEntityPolicies` é a exceção declarada: ele **nomeia**
+        // `LAST_WRITE_WINS_ALLOWED` como estratégia possível justamente para que usá-la exija uma
+        // linha escrita de propósito, com motivo de domínio. Que nenhum agregado a use é
+        // verificado por comportamento em `SyncEntityPolicyTest`.
         val offenders = AuthSourceInspection.sources(syncPackage)
+            .filter { it.name != "SyncEntityPolicies.kt" }
             .filter { file ->
                 val code = AuthSourceInspection.code(file).lowercase()
                 listOf("lastwritewins", "last_write_wins", "mergefields", "autoresolve")
                     .any { code.contains(it) }
             }
         assertEquals(
-            "resolução automática de conflito não existe na T16.6: ${offenders.map { it.name }}",
+            "resolução automática de conflito não pode existir: ${offenders.map { it.name }}",
             emptyList<String>(),
             offenders.map { it.name }
+        )
+    }
+
+    @Test
+    fun `a resolucao de conflito nunca fala com a rede`() {
+        // Uma resolução termina no Room. O que precisa subir vira entrada de Outbox e sobe no
+        // ciclo seguinte — é isso que faz uma escolha feita sem conexão continuar valendo, e
+        // sobreviver a um process death. Uma requisição aqui transformaria "escolhi" em "escolhi
+        // se a rede estiver boa".
+        val resolver = AuthSourceInspection.sources(syncPackage)
+            .single { it.name == "SyncConflictResolver.kt" }
+        val code = AuthSourceInspection.code(resolver)
+
+        assertFalse(
+            "a resolução não pode chamar a fronteira HTTP",
+            code.contains("SyncApi") || code.contains("api.push") || code.contains("api.pull")
+        )
+    }
+
+    @Test
+    fun `o apply remoto de exclusao nao registra mutacao de saida`() {
+        // Apagar o que o servidor mandou apagar não é uma decisão nova deste aparelho. Se ela
+        // virasse `DELETE` na Outbox, o aparelho devolveria ao servidor a exclusão que acabou de
+        // receber dele — e um `DELETE` a mais é indistinguível de um pedido novo.
+        val applier = AuthSourceInspection.sources(syncPackage)
+            .single { it.name == "SyncRemoteApplier.kt" }
+        val code = AuthSourceInspection.code(applier)
+
+        assertFalse(
+            "o apply remoto não pode inserir na Outbox",
+            code.contains("outboxDao.insert")
         )
     }
 

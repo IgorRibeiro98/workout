@@ -34,14 +34,26 @@ import kotlinx.serialization.json.JsonElement
  *   outras nunca foram enviadas, então nenhuma idempotência é quebrada;
  * - **não junta agregados diferentes.** Cada um tem revision própria.
  *
- * ## `DELETE` não sai daqui
+ * ## `DELETE` sai daqui desde a T16.7
  *
- * A T16.6 não propaga exclusão: sem tombstone, apagar em outro aparelho é uma decisão que a T16.7
- * precisa tomar junto com retenção e prevenção de ressurreição. Então uma entrada `DELETE`
- * permanece `PENDING`, intocada, e **bloqueia o agregado dela** — porque enviar a `UPSERT`
- * anterior a ela ressuscitaria no servidor o que o usuário apagou aqui.
+ * A T16.6 não propagava exclusão: sem tombstone no servidor, apagar em outro aparelho seria uma
+ * decisão sem política de retenção nem prevenção de ressurreição. Agora o servidor tem tombstone,
+ * e a exclusão viaja como qualquer outra mudança.
  *
- * Convertê-la silenciosamente em `UPSERT` seria pior de todas as formas possíveis.
+ * A coalescência decide pela **última** entrada do agregado, e não pela primeira:
+ *
+ * ```text
+ * UPSERT, UPSERT, DELETE   →   uma mutação DELETE       (o estado final é "não existe")
+ * DELETE, UPSERT           →   uma mutação UPSERT        (a entidade voltou a existir aqui)
+ * ```
+ *
+ * É a mesma regra que já valia para o conteúdo: o que sobe é **o que o Room diz agora**, e as
+ * entradas intermediárias descreviam estados que o usuário já abandonou. Todas são confirmadas
+ * juntas porque a mutação despachada as satisfaz todas.
+ *
+ * Uma exclusão de agregado cuja política proíbe `DELETE` remoto ([SyncEntityPolicies]) **não** é
+ * enviada: ela ficaria pendente para sempre recebendo `UNSUPPORTED` do servidor. Ela é contada
+ * como adiada, e a exclusão local continua valendo — o que não acontece é a propagação.
  */
 class SyncPushBuilder(
     private val outboxDao: SyncOutboxDao,
@@ -74,8 +86,31 @@ class SyncPushBuilder(
         var unavailable = 0
 
         for ((key, entries) in grouped) {
-            if (entries.any { it.operation == SyncOperation.DELETE.name }) {
-                deferredDeletes += entries.size
+            val dispatched = entries.last()
+
+            if (dispatched.operation == SyncOperation.DELETE.name) {
+                if (!SyncEntityPolicies.isDeleteAllowed(key.entityType)) {
+                    // O servidor recusaria com `DELETE_NOT_ALLOWED`, e reenviar produziria a mesma
+                    // recusa para sempre. A exclusão local continua feita; ela é que não viaja.
+                    deferredDeletes += entries.size
+                    continue
+                }
+                mutations += PreparedMutation(
+                    entryIds = entries.map { it.id },
+                    clientMutationId = dispatched.clientMutationId,
+                    entityType = key.entityType,
+                    entitySyncId = key.entitySyncId,
+                    // A exclusão não carrega conteúdo, então não há schema de payload a declarar.
+                    // A versão vai assim mesmo porque o envelope da mutação a exige, e é a versão
+                    // que este app fala.
+                    entitySchemaVersion = SyncProtocol.SUPPORTED_ENTITY_SCHEMA_VERSION,
+                    operation = SyncOperation.DELETE,
+                    payload = null,
+                    payloadHash = "",
+                    baseRevision = metadataDao
+                        .get(ownerUid, key.entityType.name, key.entitySyncId)
+                        ?.lastKnownServerRevision
+                )
                 continue
             }
 
@@ -88,7 +123,6 @@ class SyncPushBuilder(
             }
 
             val canonical = BackupCanonicalJson.canonicalHash(envelope.payload)
-            val dispatched = entries.last()
             mutations += PreparedMutation(
                 // Todas as entradas do agregado são confirmadas juntas: elas descreviam a mesma
                 // coisa, e o que sobe é o estado atual, que as satisfaz todas.
@@ -97,6 +131,7 @@ class SyncPushBuilder(
                 entityType = key.entityType,
                 entitySyncId = key.entitySyncId,
                 entitySchemaVersion = envelope.schemaVersion,
+                operation = SyncOperation.UPSERT,
                 payload = envelope.payload,
                 payloadHash = canonical.hash,
                 baseRevision = metadataDao
@@ -122,7 +157,10 @@ data class PreparedMutation(
     val entityType: SyncEntityType,
     val entitySyncId: String,
     val entitySchemaVersion: Int,
-    val payload: JsonElement,
+    val operation: SyncOperation,
+    /** `null` numa exclusão: ela não afirma conteúdo. */
+    val payload: JsonElement?,
+    /** Vazio numa exclusão, pelo mesmo motivo. */
     val payloadHash: String,
     /** A última revision remota conhecida. `null` significa "o servidor ainda não tem isto". */
     val baseRevision: Long?
@@ -131,7 +169,13 @@ data class PreparedMutation(
 /** O que a Outbox tem para oferecer neste ciclo. */
 data class PreparedPush(
     val mutations: List<PreparedMutation> = emptyList(),
-    /** Entradas de exclusão que continuam pendentes — a T16.7 é quem as resolve. */
+    /**
+     * Entradas de exclusão que não viajam porque a política do agregado não permite (T16.7).
+     *
+     * Nenhum agregado do Spark cai aqui hoje pelo caminho do app — só `CHECK_IN` proíbe exclusão
+     * remota, e não existe tela que apague um check-in. O contador existe para que, se algum dia
+     * existir, a limitação seja **visível** em vez de silenciosa.
+     */
     val deferredDeletes: Int = 0,
     /** Entradas cujo agregado não pôde ser montado. Continuam pendentes. */
     val unavailable: Int = 0

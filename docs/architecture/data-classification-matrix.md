@@ -22,7 +22,7 @@ colaborativo.
 | `WORKOUT_TEMPLATE` | sim | não | físico local (cascata), **não propaga** | **sim** | snapshot do treino inteiro, filhos substituídos; stale = conflito |
 | `WORKOUT_SESSION` (`COMPLETED`) | **não** | sim | físico local, **não propaga** | **sim** | histórico imutável: `revision = 1` e nunca mais; divergência = `IMMUTABLE_HISTORY_CONFLICT` |
 | `CUSTOM_EXERCISE` | sim | não | físico local, **não propaga** | **sim** | snapshot; precisa chegar **antes** dos treinos que o referenciam |
-| `BODY_MEASUREMENT` | sim | não | físico local, **não propaga** | **sim** | snapshot; "mesma data com conteúdo divergente" é T16.7 |
+| `BODY_MEASUREMENT` | sim | não | físico local, **propaga com tombstone** (T16.7) | **sim** | snapshot; medidas distintas coexistem — conflito é editar a **mesma** medida |
 | `CHECK_IN` | sim | não | físico local, **não propaga** | **sim** | snapshot; referência de sessão pode ficar nula até ela chegar |
 | `EXERCISE_OVERRIDE` | sim | não | cascata com o exercício | **não** | só backup completo — escrito hoje por ViewModel direto no DAO |
 | `WEEKLY_GOAL` | sim | não | físico local | **não** | só backup completo — derivado de preferência do DataStore |
@@ -72,7 +72,7 @@ código do montador de snapshot.
 | `deviceId`, estado da nuvem, versões de conteúdo instaladas | **LOCAL_ONLY** | identidade/estado da instalação | — | — | não restaura |
 | `sync_outbox`, `backup_attempts`, `cloud_data_binding`, `restore_attempts`, `sync_entity_metadata`, `sync_cursor`, `sync_conflicts` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura. **T16.5/T16.6:** a Outbox, a revision conhecida, o cursor e os conflitos são zerados **dentro do commit** do restore — eles descreviam o dataset que acabou de ser substituído |
 | Firebase ID Token, credencial Google, App Check, credencial/prompt/contexto/resposta do Gemini | **nunca** | segredo ou estado transitório | — | — | — |
-| Vínculo `uid` ↔ dataset no servidor, `sync_entities`, `sync_changes`, `sync_mutations`, quota de IA | **SERVER_ONLY** | só faz sentido com identidade autenticada; **existe desde a T16.6** (tombstones continuam sendo T16.7) | — | — | — |
+| Vínculo `uid` ↔ dataset no servidor, `sync_entities` (com tombstone desde a T16.7), `sync_changes`, `sync_mutations`, quota de IA | **SERVER_ONLY** | só faz sentido com identidade autenticada; **existe desde a T16.6** | — | — | — |
 
 **Três agregados entram no backup e continuam sem mutação incremental** — `EXERCISE_OVERRIDE`,
 `WEEKLY_GOAL` e `USER_PREFERENCES`. A T16.6 **não** fechou essa pendência, e a decisão está
@@ -249,7 +249,7 @@ autenticada e visão entre usuários.
 | Registro de dispositivos (`deviceId`) | server-only | T16.3 |
 | Sequência de mudanças e cursor de sync | server-only | T16.6 |
 | Registro de `clientMutationId` para idempotência | server-only | T16.3 |
-| Tombstones e retenção | server-only | T16.7 |
+| Tombstones e retenção | server-only | **implementado na T16.7** (`sync_entities.deleted`; nada os apaga) |
 | Rate limit e controle de uso da IA | server-only | T16.2 |
 | Amizades, convites, desafios | server-only | T17 |
 

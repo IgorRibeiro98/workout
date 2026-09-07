@@ -519,6 +519,58 @@ interface WorkoutDao {
     )
     suspend fun getActiveSessionTemplateId(): Long?
 
+    // ---- Exclusão pela identidade global, para o apply remoto (T16.7) ------------------------
+    //
+    // O sync recebe "esta identidade foi excluída" e precisa apagar a linha correspondente **sem**
+    // carregar a entidade inteira só para passá-la a um `@Delete`. Os cascades continuam sendo os
+    // do schema: apagar um treino leva os `workout_template_exercises` dele, apagar uma sessão
+    // leva `exercise_sessions` e `set_logs`, apagar um programa leva os treinos. É a mesma regra
+    // canônica que a exclusão feita pelo usuário já usa — o sync não inventa uma segunda.
+
+    @Query("DELETE FROM workout_programs WHERE syncId = :syncId")
+    suspend fun deleteProgramBySyncId(syncId: String): Int
+
+    @Query("DELETE FROM workout_templates WHERE syncId = :syncId")
+    suspend fun deleteTemplateBySyncId(syncId: String): Int
+
+    @Query("DELETE FROM workout_sessions WHERE syncId = :syncId")
+    suspend fun deleteSessionBySyncId(syncId: String): Int
+
+    @Query("DELETE FROM exercises WHERE syncId = :syncId AND isUserCreated = 1")
+    suspend fun deleteCustomExerciseBySyncId(syncId: String): Int
+
+    @Query("DELETE FROM check_ins WHERE syncId = :syncId")
+    suspend fun deleteCheckInBySyncId(syncId: String): Int
+
+    /**
+     * Quantos treinos ainda usam este exercício (T16.7).
+     *
+     * `workout_template_exercises.exerciseId` é `ON DELETE RESTRICT`: apagar um exercício ainda
+     * referenciado **falha** no banco. O apply remoto pergunta antes, para pausar o sync com um
+     * motivo legível em vez de estourar uma constraint no meio de uma transação.
+     */
+    @Query("SELECT COUNT(*) FROM workout_template_exercises WHERE exerciseId = :exerciseId")
+    suspend fun countTemplateReferencesToExercise(exerciseId: Long): Int
+
+    /**
+     * Quantas alterações locais pendentes existem nos treinos de um programa (T16.7).
+     *
+     * Apagar um programa leva os treinos junto (cascade). Se algum deles tiver alteração local que
+     * ainda não subiu, aplicar a exclusão remota destruiria o trabalho da pessoa sem ela ver nada
+     * — então o apply prefere registrar conflito e não apagar coisa nenhuma.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_outbox
+        WHERE ownerUid = :ownerUid
+          AND entityType = 'WORKOUT_TEMPLATE'
+          AND entitySyncId IN (
+            SELECT syncId FROM workout_templates WHERE programId = :programId
+          )
+        """
+    )
+    suspend fun countPendingTemplateMutationsForProgram(ownerUid: String, programId: Long): Int
+
     // ---- Enumeração por identidade global, para o snapshot de backup (T16.4) ----------------
     //
     // O backup percorre o dataset **pela identidade global**, e não por `localId`: o que ele

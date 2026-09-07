@@ -20,6 +20,7 @@ import com.example.data.sync.dto.WorkoutProgramSyncDto
 import com.example.data.sync.dto.WorkoutSessionSyncDto
 import com.example.data.sync.dto.WorkoutTemplateSyncDto
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Aplica no Room as mudanças que vieram do servidor (T16.6).
@@ -161,24 +162,32 @@ class SyncRemoteApplier(
 
     private fun decode(change: SyncChangeDto): DecodedChange? {
         val type = SyncEntityType.entries.firstOrNull { it.name == change.entityType } ?: return null
-        if (change.operation != SyncOperation.UPSERT.name) return null
+        val operation = SyncOperation.entries.firstOrNull { it.name == change.operation } ?: return null
         if (change.entitySchemaVersion != SyncProtocol.SUPPORTED_ENTITY_SCHEMA_VERSION) return null
         if (change.entitySyncId.isBlank()) return null
+
+        if (operation == SyncOperation.DELETE) {
+            // Um tombstone não carrega conteúdo: identidade e `serverRevision` são tudo. Não há
+            // payload para decodificar, e exigir um recusaria uma exclusão perfeitamente válida.
+            return DecodedChange(change = change, type = type, operation = operation, payload = null)
+        }
+
+        val body = change.payload ?: return null
 
         val payload = try {
             when (type) {
                 SyncEntityType.WORKOUT_PROGRAM ->
-                    json.decodeFromJsonElement(WorkoutProgramSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(WorkoutProgramSyncDto.serializer(), body)
                 SyncEntityType.WORKOUT_TEMPLATE ->
-                    json.decodeFromJsonElement(WorkoutTemplateSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(WorkoutTemplateSyncDto.serializer(), body)
                 SyncEntityType.WORKOUT_SESSION ->
-                    json.decodeFromJsonElement(WorkoutSessionSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(WorkoutSessionSyncDto.serializer(), body)
                 SyncEntityType.CUSTOM_EXERCISE ->
-                    json.decodeFromJsonElement(CustomExerciseSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(CustomExerciseSyncDto.serializer(), body)
                 SyncEntityType.BODY_MEASUREMENT ->
-                    json.decodeFromJsonElement(BodyMeasurementSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(BodyMeasurementSyncDto.serializer(), body)
                 SyncEntityType.CHECK_IN ->
-                    json.decodeFromJsonElement(CheckInSyncDto.serializer(), change.payload)
+                    json.decodeFromJsonElement(CheckInSyncDto.serializer(), body)
             }
         } catch (e: Exception) {
             // Payload que não casa com o contrato deste app. Servidor confiável não significa
@@ -202,7 +211,12 @@ class SyncRemoteApplier(
         // Só sessão concluída viaja: `IN_PROGRESS`/`PAUSED` é execução **daquele** aparelho.
         if (payload is WorkoutSessionSyncDto && payload.status != COMPLETED_STATUS) return null
 
-        return DecodedChange(change = change, type = type, payload = payload)
+        return DecodedChange(
+            change = change,
+            type = type,
+            operation = operation,
+            payload = payload
+        )
     }
 
     /**
@@ -222,10 +236,22 @@ class SyncRemoteApplier(
      * sequência.
      */
     private suspend fun interferesWithActiveWorkout(item: DecodedChange): Boolean {
-        if (item.type != SyncEntityType.WORKOUT_TEMPLATE) return false
         val activeTemplateId = workoutDao.getActiveSessionTemplateId() ?: return false
-        val localTemplateId = workoutDao.getTemplateBySyncId(item.change.entitySyncId)?.id
-        return localTemplateId != null && localTemplateId == activeTemplateId
+        return when (item.type) {
+            SyncEntityType.WORKOUT_TEMPLATE ->
+                workoutDao.getTemplateBySyncId(item.change.entitySyncId)?.id == activeTemplateId
+
+            // Apagar o programa leva os treinos dele junto (cascade). Se o treino em execução for
+            // um deles, aplicar agora removeria por baixo do usuário a configuração de série que o
+            // motor está lendo. A sessão continua; o programa é apagado quando ela terminar.
+            SyncEntityType.WORKOUT_PROGRAM -> {
+                if (item.operation != SyncOperation.DELETE) return false
+                workoutDao.getTemplateById(activeTemplateId)?.programId ==
+                    workoutDao.getProgramBySyncId(item.change.entitySyncId)?.id
+            }
+
+            else -> false
+        }
     }
 
     // ------------------------------------------------------------------ decisão por mudança
@@ -242,7 +268,19 @@ class SyncRemoteApplier(
         }
 
         val entries = outboxDao.entriesFor(ownerUid, type.name, change.entitySyncId)
+        val localIntent = entries.lastOrNull()?.operation
+
+        if (item.operation == SyncOperation.DELETE) {
+            return handleRemoteDelete(ownerUid, item, localIntent)
+        }
+
         if (entries.isNotEmpty()) {
+            if (localIntent == SyncOperation.DELETE.name) {
+                // Este aparelho apagou; o servidor tem uma alteração mais nova. Nem se recria o
+                // que o usuário apagou, nem se descarta a edição que ele nunca viu.
+                recordConflict(ownerUid, item, SyncConflictKind.LOCAL_DELETED_REMOTE_MODIFIED, null)
+                return Outcome.CONFLICT
+            }
             val localHash = localHashOf(type, change.entitySyncId)
             if (localHash != null && localHash == change.payloadHash) {
                 // Local sujo, mas com o **mesmo conteúdo** do remoto. Não é conflito: as duas
@@ -276,6 +314,174 @@ class SyncRemoteApplier(
         conflictDao.clear(ownerUid, type.name, change.entitySyncId)
         rememberRevision(ownerUid, type, change)
         return Outcome.APPLIED
+    }
+
+    /**
+     * Uma exclusão feita em outro aparelho (T16.7).
+     *
+     * ```text
+     * local limpo          →  apaga aqui também, e **não** registra Outbox
+     * local com DELETE     →  os dois apagaram: converge
+     * local com alteração  →  conflito, e nada é apagado
+     * ```
+     *
+     * O caso do meio da lista é o que impede um laço: aplicar uma exclusão remota pelo caminho de
+     * domínio registraria um `DELETE` de saída, que voltaria ao servidor como se fosse uma decisão
+     * nova deste aparelho. Aqui a escrita é por DAO, fora do coordenador de mutações — a mesma
+     * regra de sempre.
+     *
+     * O último é o que impede perda: uma alteração local pendente é trabalho que a pessoa fez e
+     * que quem apagou nunca viu. As duas intenções ficam guardadas até ela escolher.
+     */
+    private suspend fun handleRemoteDelete(
+        ownerUid: String,
+        item: DecodedChange,
+        localIntent: String?
+    ): Outcome {
+        val change = item.change
+        val type = item.type
+
+        if (localIntent == SyncOperation.DELETE.name) {
+            // Os dois aparelhos apagaram a mesma coisa. A intenção local foi cumprida pelo
+            // tombstone que já existe no servidor: confirmar a entrada aqui evita um push que
+            // voltaria como `ALREADY_APPLIED` de qualquer forma.
+            outboxDao.acknowledge(
+                ownerUid,
+                outboxDao.entriesFor(ownerUid, type.name, change.entitySyncId).map { it.id }
+            )
+            conflictDao.clear(ownerUid, type.name, change.entitySyncId)
+            rememberRevision(ownerUid, type, change)
+            return Outcome.CONVERGED
+        }
+
+        if (localIntent != null) {
+            recordConflict(ownerUid, item, SyncConflictKind.REMOTE_DELETED_LOCAL_MODIFIED, null)
+            return Outcome.CONFLICT
+        }
+
+        if (!deleteLocally(ownerUid, item)) return Outcome.CONFLICT
+
+        conflictDao.clear(ownerUid, type.name, change.entitySyncId)
+        // A revision do tombstone é guardada: é ela que faz este aparelho reconhecer a exclusão
+        // como conhecida se a mesma mudança voltar, e é ela que impede um `UPSERT` futuro deste
+        // agregado de nascer achando que o servidor está atrás.
+        rememberRevision(ownerUid, type, change)
+        return Outcome.APPLIED
+    }
+
+    /**
+     * Apaga localmente o que o servidor diz ter sido apagado.
+     *
+     * Devolve `false` quando a exclusão foi **registrada como conflito** em vez de aplicada; nada
+     * é escrito nessa hipótese.
+     */
+    private suspend fun deleteLocally(ownerUid: String, item: DecodedChange): Boolean {
+        return when (deleteAggregateLocally(ownerUid, item.type, item.change.entitySyncId)) {
+            SyncLocalDeleteGuard.Deleted -> true
+
+            // Um treino deste programa tem alteração local que ainda não subiu. Apagar levaria o
+            // trabalho da pessoa junto, sem ela ver nada — então nada é apagado e a decisão volta
+            // para ela.
+            SyncLocalDeleteGuard.PendingChildMutations -> {
+                recordConflict(ownerUid, item, SyncConflictKind.REMOTE_DELETED_LOCAL_MODIFIED, null)
+                false
+            }
+
+            // `ON DELETE RESTRICT`: o exercício ainda é usado por um treino deste aparelho. Pausar
+            // com um motivo legível é melhor do que estourar a constraint no meio da transação — e
+            // a mudança que remove a referência normalmente vem logo atrás no change log.
+            SyncLocalDeleteGuard.StillReferenced -> fail(item, REASON_EXERCISE_STILL_REFERENCED)
+        }
+    }
+
+    /**
+     * Apaga um agregado deste aparelho pela identidade global, com as guardas do domínio (T16.7).
+     *
+     * Público porque a **resolução de conflito** também precisa dele: quando o usuário confirma
+     * uma exclusão feita em outro aparelho, o que acontece aqui é exatamente o que aconteceria se
+     * a exclusão tivesse chegado com o local limpo. Duplicar esse caminho criaria duas regras de
+     * exclusão, e a segunda esqueceria uma das guardas.
+     *
+     * **Não abre transação**: quem chama já está em uma. E não registra Outbox — apagar o que o
+     * servidor mandou apagar não é uma decisão nova deste aparelho.
+     *
+     * Os cascades são os do schema, os mesmos que a exclusão feita pelo usuário já usa: um treino
+     * leva seus exercícios de treino, uma sessão leva `exercise_sessions` e `set_logs`, um programa
+     * leva seus treinos. O sync não inventa uma segunda regra de exclusão.
+     */
+    suspend fun deleteAggregateLocally(
+        ownerUid: String,
+        type: SyncEntityType,
+        entitySyncId: String
+    ): SyncLocalDeleteGuard {
+        when (type) {
+            SyncEntityType.WORKOUT_PROGRAM -> {
+                val program = workoutDao.getProgramBySyncId(entitySyncId)
+                    ?: return SyncLocalDeleteGuard.Deleted
+                if (workoutDao.countPendingTemplateMutationsForProgram(ownerUid, program.id) > 0) {
+                    return SyncLocalDeleteGuard.PendingChildMutations
+                }
+                workoutDao.deleteProgramBySyncId(entitySyncId)
+            }
+
+            SyncEntityType.WORKOUT_TEMPLATE -> workoutDao.deleteTemplateBySyncId(entitySyncId)
+
+            // Apagar uma sessão concluída não toca em template nenhum, e apagar um template nunca
+            // toca em sessão: `workout_sessions` não tem chave estrangeira para
+            // `workout_templates` — o histórico carrega `templateNameSnapshot` e sobrevive ao
+            // plano que o originou.
+            SyncEntityType.WORKOUT_SESSION -> workoutDao.deleteSessionBySyncId(entitySyncId)
+
+            SyncEntityType.CUSTOM_EXERCISE -> {
+                val exercise = workoutDao.getExerciseBySyncId(entitySyncId)
+                    ?: return SyncLocalDeleteGuard.Deleted
+                if (workoutDao.countTemplateReferencesToExercise(exercise.id) > 0) {
+                    return SyncLocalDeleteGuard.StillReferenced
+                }
+                workoutDao.deleteCustomExerciseBySyncId(entitySyncId)
+            }
+
+            SyncEntityType.CHECK_IN -> workoutDao.deleteCheckInBySyncId(entitySyncId)
+
+            SyncEntityType.BODY_MEASUREMENT ->
+                bodyMeasurementDao.deleteMeasurementBySyncId(entitySyncId)
+        }
+        return SyncLocalDeleteGuard.Deleted
+    }
+
+    /**
+     * Escreve no Room um agregado que veio do servidor, fora de um ciclo de pull (T16.7).
+     *
+     * É o caminho da resolução "usar a versão da nuvem": o payload guardado no conflito passa pela
+     * **mesma** decodificação estrita e pela **mesma** escrita que uma mudança recém-chegada. Um
+     * segundo caminho de escrita aqui seria uma segunda autoridade sobre o que é um treino válido.
+     *
+     * `false` significa que o payload não pôde ser lido neste aparelho — versão futura, campo
+     * desconhecido, identidade que não bate. Nada é escrito, e quem chama desfaz a transação.
+     *
+     * **Não abre transação**, e pode lançar [SyncRemoteApplyException] quando uma referência do
+     * payload não resolve aqui; quem chama trata.
+     */
+    suspend fun writeRemoteAggregate(
+        type: SyncEntityType,
+        entitySyncId: String,
+        entitySchemaVersion: Int,
+        payload: JsonElement
+    ): Boolean {
+        val item = decode(
+            SyncChangeDto(
+                serverSequence = 0,
+                entityType = type.name,
+                entitySyncId = entitySyncId,
+                entitySchemaVersion = entitySchemaVersion,
+                serverRevision = 0,
+                operation = SyncOperation.UPSERT.name,
+                payloadHash = "",
+                payload = payload
+            )
+        ) ?: return false
+        write(item)
+        return true
     }
 
     private suspend fun localHashOf(type: SyncEntityType, syncId: String): String? =
@@ -317,16 +523,28 @@ class SyncRemoteApplier(
                 ownerUid = ownerUid,
                 entityType = item.type.name,
                 entitySyncId = change.entitySyncId,
-                kind = existing?.kind ?: kind.name,
+                // A classificação de origem é preservada — ela diz **onde** a divergência foi
+                // detectada, e é o que a resolução precisa saber. A exceção é a exclusão: um
+                // conflito de edição concorrente que depois recebe o tombstone deixou de ser
+                // aquilo, e continuar oferecendo "usar a versão da nuvem" para algo que não existe
+                // mais na nuvem seria mentira.
+                kind = if (kind.isDeletion) kind.name else existing?.kind ?: kind.name,
+                status = existing?.status ?: SyncConflictStatus.PENDING.name,
                 baseRevision = existing?.baseRevision,
                 localPayloadHash = localHash ?: existing?.localPayloadHash,
                 remoteRevision = change.serverRevision,
                 remoteServerSequence = change.serverSequence,
-                remotePayloadHash = change.payloadHash,
+                remotePayloadHash = change.payloadHash.ifEmpty { null },
                 // O payload remoto é guardado porque o pull é por cursor: depois que ele passar
                 // desta sequência, buscar de novo **esta** versão exigiria um endpoint que não
-                // existe. É o lado remoto que a T16.7 vai precisar.
-                remotePayload = BackupCanonicalJson.canonicalize(change.payload),
+                // existe. É o lado remoto entre os quais o usuário vai escolher.
+                //
+                // Numa exclusão não há o que guardar, e o que já estava guardado é preservado: se
+                // o conflito nasceu de uma edição concorrente e depois chegou o tombstone, a
+                // versão remota anterior continua sendo a única cópia daquele conteúdo aqui.
+                remotePayload = change.payload
+                    ?.let { BackupCanonicalJson.canonicalize(it) }
+                    ?: existing?.remotePayload,
                 clientMutationId = existing?.clientMutationId,
                 detectedAt = existing?.detectedAt ?: clock()
             )
@@ -612,23 +830,34 @@ class SyncRemoteApplier(
     private data class DecodedChange(
         val change: SyncChangeDto,
         val type: SyncEntityType,
-        val payload: Any
+        val operation: SyncOperation,
+        /** `null` numa exclusão: um tombstone não traz conteúdo. */
+        val payload: Any?
     ) {
         /**
-         * A ordem de dependência dentro da página.
+         * A ordem de aplicação dentro da página.
          *
-         * Exercícios personalizados e programas primeiro (treinos os referenciam), treinos antes
-         * das sessões (que apontam para eles), sessões antes dos check-ins. Medidas não dependem
-         * de nada.
+         * As criações e edições vêm primeiro, em ordem de **dependência**: exercícios
+         * personalizados e programas antes dos treinos (que os referenciam), treinos antes das
+         * sessões, sessões antes dos check-ins. Medidas não dependem de nada.
+         *
+         * As exclusões vêm depois, em ordem **inversa** — e isso não é simetria estética. Um
+         * aparelho que tirou um exercício de um treino e depois apagou o exercício produz duas
+         * mudanças; aplicar a exclusão antes da edição esbarraria no `ON DELETE RESTRICT` da
+         * referência que a edição ia justamente remover. Excluindo por último, e do filho para o
+         * pai, a página aplica inteira.
          */
         val rank: Int
-            get() = when (type) {
-                SyncEntityType.CUSTOM_EXERCISE -> 0
-                SyncEntityType.WORKOUT_PROGRAM -> 1
-                SyncEntityType.WORKOUT_TEMPLATE -> 2
-                SyncEntityType.WORKOUT_SESSION -> 3
-                SyncEntityType.CHECK_IN -> 4
-                SyncEntityType.BODY_MEASUREMENT -> 5
+            get() {
+                val dependency = when (type) {
+                    SyncEntityType.CUSTOM_EXERCISE -> 0
+                    SyncEntityType.WORKOUT_PROGRAM -> 1
+                    SyncEntityType.WORKOUT_TEMPLATE -> 2
+                    SyncEntityType.WORKOUT_SESSION -> 3
+                    SyncEntityType.CHECK_IN -> 4
+                    SyncEntityType.BODY_MEASUREMENT -> 5
+                }
+                return if (operation == SyncOperation.DELETE) DELETE_RANK_OFFSET - dependency else dependency
             }
     }
 
@@ -643,7 +872,36 @@ class SyncRemoteApplier(
         const val REASON_MISSING_PROGRAM = "MISSING_PROGRAM"
         const val REASON_UNKNOWN_CANONICAL = "UNKNOWN_CANONICAL_EXERCISE"
         const val REASON_MISSING_CUSTOM = "MISSING_CUSTOM_EXERCISE"
+
+        /** O exercício ainda é usado por um treino deste aparelho — `ON DELETE RESTRICT`. */
+        const val REASON_EXERCISE_STILL_REFERENCED = "EXERCISE_STILL_REFERENCED"
+
+        /**
+         * Onde a faixa das exclusões começa. Maior que qualquer `dependency`, e subtraindo para
+         * inverter a ordem: check-in e medida saem antes de sessão, sessão antes de treino,
+         * treino antes de programa e de exercício.
+         */
+        const val DELETE_RANK_OFFSET = 100
     }
+}
+
+/**
+ * O que a guarda de exclusão local decidiu (T16.7).
+ *
+ * Três respostas, e não um booleano: "apagou", "não apaguei porque o usuário perderia trabalho" e
+ * "não apaguei porque o banco não deixa" pedem tratamentos diferentes — conflito, pausa e
+ * mensagem. Um booleano colapsaria os três em "não deu".
+ */
+sealed interface SyncLocalDeleteGuard {
+
+    /** A linha foi apagada — ou já não existia, o que dá no mesmo. */
+    data object Deleted : SyncLocalDeleteGuard
+
+    /** Um filho do agregado tem alteração local pendente. Nada foi apagado. */
+    data object PendingChildMutations : SyncLocalDeleteGuard
+
+    /** Outra linha ainda referencia esta (`ON DELETE RESTRICT`). Nada foi apagado. */
+    data object StillReferenced : SyncLocalDeleteGuard
 }
 
 /** Uma referência do payload remoto que não resolve neste aparelho. Desfaz a transação inteira. */

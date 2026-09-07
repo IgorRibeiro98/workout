@@ -49,10 +49,22 @@ sealed interface SyncPhase {
     /**
      * Há itens que precisam de decisão do usuário.
      *
-     * A T16.6 **detecta e preserva**; quem resolve é a T16.7. A tela diz que existe algo a
-     * resolver e não promete uma tela de resolução que ainda não existe.
+     * Desde a T16.7 a decisão existe de verdade: a seção lista os itens e oferece as escolhas que
+     * fazem sentido para cada um. Nada é resolvido sozinho enquanto ninguém escolhe.
      */
     data class NeedsAttention(val items: Int, val lastSyncedAt: Long?) : SyncPhase
+
+    /**
+     * A posição deste aparelho no histórico do servidor não pode mais ser retomada (T16.7).
+     *
+     * Acontece quando o servidor já não guarda as mudanças que faltavam — na prática, quando o
+     * banco dele voltou de uma cópia mais nova que a deste aparelho. Continuar andando pularia
+     * mudanças, possivelmente exclusões, e ressuscitaria dado apagado.
+     *
+     * A tela **orienta** e não age: reconstruir a sincronização é uma operação com consequências,
+     * e ela é do usuário. Nada é apagado, nada é restaurado automaticamente.
+     */
+    data class NeedsRebaseline(val lastSyncedAt: Long?) : SyncPhase
 
     /** O ciclo terminou com erro recuperável. [reason] é classe de falha, nunca código interno. */
     data class Failed(val reason: SyncFailure, val lastSyncedAt: Long?) : SyncPhase
@@ -83,20 +95,55 @@ enum class SyncFailure {
 }
 
 /**
+ * Por que uma resolução de conflito não pôde ser aplicada (T16.7).
+ *
+ * Só os casos em que o usuário pode fazer alguma coisa. "Já resolvido" não está aqui porque não é
+ * falha: um segundo toque encontra a decisão já tomada, e a tela simplesmente mostra o resultado.
+ */
+enum class SyncResolutionProblem {
+
+    /** A versão da nuvem ainda não chegou a este aparelho. Sincronize e tente de novo. */
+    NO_REMOTE_COPY,
+
+    /** Outra coisa ainda usa este item; apagá-lo deixaria uma referência quebrada. */
+    STILL_REFERENCED,
+
+    /** Há alterações dentro deste item que seriam perdidas junto. */
+    PENDING_CHILD_CHANGES,
+
+    /** A conta conectada mudou desde que a tela abriu. */
+    ACCOUNT_MISMATCH,
+
+    /** Não deu para aplicar a decisão. Nada foi alterado. */
+    FAILED
+}
+
+/**
  * O que a tela de sincronização precisa saber.
  *
- * `deferredDeletes` existe porque a limitação precisa ser **visível**: exclusões feitas neste
- * aparelho ainda não chegam aos outros (T16.7). Esconder isso faria o usuário confiar em uma
- * convergência que não acontece.
+ * `deferredDeletes` conta as exclusões que **não viajam** por política do agregado — hoje nenhuma
+ * chega a existir pelo caminho do app. Ele continua aqui porque uma limitação de convergência
+ * precisa ser visível quando existir: esconder faria o usuário confiar em algo que não acontece.
  */
 data class SyncUiState(
     val phase: SyncPhase = SyncPhase.NotConfigured,
     val pending: Int = 0,
     val needsAttention: Int = 0,
     val deferredDeletes: Int = 0,
-    val lastSyncedAt: Long? = null
+    val lastSyncedAt: Long? = null,
+    /**
+     * Os itens que precisam de decisão, já traduzidos (T16.7).
+     *
+     * A lista chega pronta da camada de dados: título, as diferenças que importam e as escolhas
+     * que fazem sentido. A tela **não** interpreta conflito — ela mostra e devolve o toque.
+     */
+    val conflicts: List<com.example.data.sync.SyncConflictSummary> = emptyList(),
+    /** O conflito cuja resolução está sendo aplicada agora. Evita duplo toque. */
+    val resolving: com.example.data.sync.SyncConflictId? = null,
+    /** Por que a última resolução não pôde ser aplicada, quando foi o caso. */
+    val resolutionProblem: SyncResolutionProblem? = null
 ) {
 
     /** Enquanto um ciclo roda, toques novos são ignorados. */
-    val isBusy: Boolean get() = phase is SyncPhase.Syncing
+    val isBusy: Boolean get() = phase is SyncPhase.Syncing || resolving != null
 }

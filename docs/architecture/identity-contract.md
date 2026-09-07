@@ -21,7 +21,8 @@
     autoriza nada, `syncId` é a identidade do agregado em `sync_entities` e no change log, e
     `ownerUid` continua saindo **só** do token verificado — o corpo do push não tem campo de dono,
     e um campo desses recusa a requisição inteira. Room `version = 34`;
-  - **não implementado (T16.7):** tombstone e a identidade de uma exclusão.
+  - **implementado na T16.7:** o tombstone e a identidade de uma exclusão — a exclusão é uma
+    mudança versionada da mesma identidade (`sync_entities.deleted`), e recriar usa `syncId` novo.
 
 ---
 
@@ -321,4 +322,4 @@ precisar reconciliar nada.
 | `deviceId` como origem de uma mudança (`originDeviceId`) | T16.0 | **T16.6 — feito** |
 | Cursor por conta e por banco local (`sync_cursor`) | T16.0 | **T16.6 — feito** |
 | Registro de dispositivos no servidor | T16.0 | não implementado — o `deviceId` é metadado, e uma tabela de dispositivos só passa a valer a pena com revogação por aparelho (T16.8) |
-| Identidade de uma exclusão (tombstone) | T16.0 | T16.7 |
+| Identidade de uma exclusão (tombstone) | T16.0 | **implementado na T16.7** |

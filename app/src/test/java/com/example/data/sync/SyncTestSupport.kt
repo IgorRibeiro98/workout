@@ -45,6 +45,10 @@ class FakeSparkSyncServer {
     fun payloadOf(ownerUid: String, entityType: SyncEntityType, entitySyncId: String): String? =
         entities[EntityKey(ownerUid, entityType.name, entitySyncId)]?.payloadText
 
+    /** `true` quando a identidade tem tombstone no servidor de teste (T16.7). */
+    fun isDeleted(ownerUid: String, entityType: SyncEntityType, entitySyncId: String): Boolean =
+        entities[EntityKey(ownerUid, entityType.name, entitySyncId)]?.deleted == true
+
     fun push(
         ownerUid: String,
         deviceId: String,
@@ -71,7 +75,10 @@ class FakeSparkSyncServer {
         deviceId: String,
         mutation: SyncPushMutationDto
     ): SyncMutationResultDto {
-        val hash = BackupCanonicalJson.canonicalHash(mutation.payload).hash
+        // Exclusão não carrega conteúdo, e o hash dela é vazio — igual ao servidor real.
+        val hash = mutation.payload
+            ?.let { BackupCanonicalJson.canonicalHash(it).hash }
+            .orEmpty()
 
         // 1. Idempotência primeiro: um reenvio devolve o resultado original.
         ledger[ownerUid to mutation.clientMutationId]?.let { row ->
@@ -94,9 +101,6 @@ class FakeSparkSyncServer {
             }
         }
 
-        if (mutation.operation != SyncOperation.UPSERT.name) {
-            return rejected(mutation, SyncMutationStatus.UNSUPPORTED, "DELETE_NOT_SUPPORTED")
-        }
         val type = SyncEntityType.entries.firstOrNull { it.name == mutation.entityType }
             ?: return rejected(mutation, SyncMutationStatus.UNSUPPORTED, "UNKNOWN_ENTITY_TYPE")
         if (mutation.entitySchemaVersion != 1) {
@@ -110,7 +114,49 @@ class FakeSparkSyncServer {
         val key = EntityKey(ownerUid, type.name, mutation.entitySyncId)
         val existing = entities[key]
 
-        // 2. Histórico concluído é imutável.
+        // 2. Exclusão: tombstone versionado, com as mesmas regras de base do servidor real.
+        if (mutation.operation == SyncOperation.DELETE.name) {
+            if (!SyncEntityPolicies.isDeleteAllowed(type)) {
+                return rejected(mutation, SyncMutationStatus.UNSUPPORTED, "DELETE_NOT_ALLOWED")
+            }
+            if (existing != null && existing.deleted) {
+                return converged(ownerUid, deviceId, mutation, hash, existing)
+            }
+            val base = mutation.baseRevision ?: 0L
+            if (existing == null) {
+                return commit(ownerUid, deviceId, mutation, type, hash, 1, deleted = true)
+            }
+            if (base > existing.revision) {
+                return SyncMutationResultDto(
+                    clientMutationId = mutation.clientMutationId,
+                    status = SyncMutationStatus.INVALID.name,
+                    currentRevision = existing.revision,
+                    reason = "BASE_REVISION_AHEAD"
+                )
+            }
+            if (base != existing.revision) {
+                return SyncMutationResultDto(
+                    clientMutationId = mutation.clientMutationId,
+                    status = SyncMutationStatus.STALE.name,
+                    currentRevision = existing.revision
+                )
+            }
+            return commit(
+                ownerUid, deviceId, mutation, type, hash, existing.revision + 1, deleted = true
+            )
+        }
+
+        // 3. Tombstone: um `UPSERT` contra ele nunca recria a entidade.
+        if (existing != null && existing.deleted) {
+            return SyncMutationResultDto(
+                clientMutationId = mutation.clientMutationId,
+                status = SyncMutationStatus.REMOTE_DELETED.name,
+                currentRevision = existing.revision,
+                reason = "ENTITY_DELETED"
+            )
+        }
+
+        // 4. Histórico concluído é imutável.
         if (type == SyncEntityType.WORKOUT_SESSION) {
             return when {
                 existing == null -> commit(ownerUid, deviceId, mutation, type, hash, 1)
@@ -164,10 +210,11 @@ class FakeSparkSyncServer {
         mutation: SyncPushMutationDto,
         type: SyncEntityType,
         hash: String,
-        revision: Long
+        revision: Long,
+        deleted: Boolean = false
     ): SyncMutationResultDto {
         val sequence = (changes.lastOrNull()?.serverSequence ?: 0L) + 1
-        val canonical = BackupCanonicalJson.canonicalize(mutation.payload)
+        val canonical = mutation.payload?.let { BackupCanonicalJson.canonicalize(it) }
 
         changes += StoredChange(
             serverSequence = sequence,
@@ -178,13 +225,15 @@ class FakeSparkSyncServer {
             revision = revision,
             payloadText = canonical,
             hash = hash,
-            originDeviceId = deviceId
+            originDeviceId = deviceId,
+            operation = if (deleted) SyncOperation.DELETE else SyncOperation.UPSERT
         )
         entities[EntityKey(ownerUid, type.name, mutation.entitySyncId)] = StoredEntity(
             revision = revision,
             lastSequence = sequence,
             payloadText = canonical,
-            hash = hash
+            hash = hash,
+            deleted = deleted
         )
         ledger[ownerUid to mutation.clientMutationId] = LedgerRow(
             entityType = type.name,
@@ -240,8 +289,9 @@ class FakeSparkSyncServer {
     private data class StoredEntity(
         val revision: Long,
         val lastSequence: Long,
-        val payloadText: String,
-        val hash: String
+        val payloadText: String?,
+        val hash: String,
+        val deleted: Boolean = false
     )
 
     private data class LedgerRow(
@@ -260,9 +310,10 @@ class FakeSparkSyncServer {
         val entitySyncId: String,
         val entitySchemaVersion: Int,
         val revision: Long,
-        val payloadText: String,
+        val payloadText: String?,
         val hash: String,
-        val originDeviceId: String
+        val originDeviceId: String,
+        val operation: SyncOperation = SyncOperation.UPSERT
     ) {
         fun toDto(): SyncChangeDto = SyncChangeDto(
             serverSequence = serverSequence,
@@ -270,11 +321,11 @@ class FakeSparkSyncServer {
             entitySyncId = entitySyncId,
             entitySchemaVersion = entitySchemaVersion,
             serverRevision = revision,
-            operation = SyncOperation.UPSERT.name,
+            operation = operation.name,
             payloadHash = hash,
             originDeviceId = originDeviceId,
             createdAt = serverSequence,
-            payload = Json.parseToJsonElement(payloadText)
+            payload = payloadText?.let { Json.parseToJsonElement(it) }
         )
     }
 }

@@ -179,7 +179,7 @@ mídia e backup automático.
 ### PLANEJADO — ainda **não** existe
 
 - **T16.6** — Sync incremental multi-device.
-- **T16.7** — Conflitos, deletes e consistência offline.
+- **T16.7** — Conflitos, deletes, tombstones e consistência offline. **Implementado.**
 - **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
 - **T17** — Amigos, convites, desafios e social.
 

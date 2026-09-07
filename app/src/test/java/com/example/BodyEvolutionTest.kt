@@ -60,6 +60,7 @@ class BodyEvolutionTest {
             override suspend fun updateMeasurement(measurement: BodyMeasurementEntity) {}
             override suspend fun deleteMeasurement(measurement: BodyMeasurementEntity) {}
             override suspend fun deleteMeasurementById(id: Long) {}
+            override suspend fun deleteMeasurementBySyncId(syncId: String): Int = 0
             override suspend fun getMeasurementBySyncId(syncId: String): BodyMeasurementEntity? =
                 flow.value.find { it.syncId == syncId }
             override suspend fun getMeasurementSyncId(id: Long): String? =

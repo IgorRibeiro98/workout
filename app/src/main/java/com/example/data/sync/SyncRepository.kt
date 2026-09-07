@@ -45,6 +45,13 @@ class SyncRepository(
     private val applier: SyncRemoteApplier,
     private val api: SyncApi,
     /**
+     * Quem aplica a decisão do usuário sobre um conflito (T16.7).
+     *
+     * Fica atrás do repositório porque a tela já conversa com ele: um segundo objeto público para
+     * a mesma conversa faria a UI precisar saber quando falar com qual.
+     */
+    private val conflictResolver: SyncConflictResolver,
+    /**
      * A identidade da instalação (T16.3), sob demanda.
      *
      * Uma função e não o `DeviceIdProvider`: ele vive no DataStore, e o sync não precisa conhecer
@@ -90,6 +97,26 @@ class SyncRepository(
             cursor = cursor?.lastPulledServerSequence ?: 0
         )
     }
+
+    /**
+     * Os conflitos que esperam decisão, prontos para a tela (T16.7).
+     *
+     * Leitura pura: abrir a lista não sincroniza, não resolve e não envia nada.
+     */
+    suspend fun conflicts(currentUid: String?): List<SyncConflictSummary> =
+        conflictResolver.conflicts(currentUid)
+
+    /**
+     * Aplica a decisão do usuário sobre um conflito (T16.7).
+     *
+     * Não fala com a rede: o que precisa subir vira entrada de Outbox e sobe no ciclo seguinte.
+     * É isso que faz uma escolha feita sem conexão continuar valendo — e sobreviver ao processo.
+     */
+    suspend fun resolveConflict(
+        currentUid: String?,
+        id: SyncConflictId,
+        choice: SyncConflictChoice
+    ): SyncConflictResolution = conflictResolver.resolve(currentUid, id, choice)
 
     /**
      * Um ciclo completo de sincronização.
@@ -212,7 +239,7 @@ class SyncRepository(
                     entityType = mutation.entityType.name,
                     entitySyncId = mutation.entitySyncId,
                     entitySchemaVersion = mutation.entitySchemaVersion,
-                    operation = SyncOperation.UPSERT.name,
+                    operation = mutation.operation.name,
                     baseRevision = mutation.baseRevision,
                     payload = mutation.payload
                 )
@@ -246,13 +273,17 @@ class SyncRepository(
                     transactions.runInTransaction {
                         // A revision conhecida e a saída da fila são gravadas juntas: uma sem a
                         // outra faria o próximo push nascer com `baseRevision` errada.
+                        //
+                        // Uma exclusão confirmada também guarda a revision do **tombstone**: é ela
+                        // que faz o eco daquela mudança, quando ela voltar no pull, ser
+                        // reconhecido em vez de reprocessado.
                         metadataDao.upsert(
                             EntitySyncMetadataEntity(
                                 ownerUid = ownerUid,
                                 entityType = mutation.entityType.name,
                                 entitySyncId = mutation.entitySyncId,
                                 lastKnownServerRevision = revision,
-                                lastSyncedPayloadHash = mutation.payloadHash,
+                                lastSyncedPayloadHash = mutation.payloadHash.ifEmpty { null },
                                 lastSyncedAt = now
                             )
                         )
@@ -271,11 +302,35 @@ class SyncRepository(
                     // `currentRevision` faria o próximo push nascer com a base do servidor e
                     // sobrescrever a alteração do outro aparelho — que é exatamente o
                     // last-write-wins que esta tarefa proíbe.
+                    //
+                    // Uma exclusão stale é um conflito **diferente** de uma edição stale: aqui o
+                    // usuário mandou apagar e o servidor tem uma versão mais nova que ele nunca
+                    // viu. Chamar os dois de "mudança stale" faria a tela oferecer a escolha
+                    // errada.
                     block(
                         ownerUid,
                         mutation,
-                        SyncConflictKind.STALE_LOCAL_CHANGE,
+                        if (mutation.operation == SyncOperation.DELETE) {
+                            SyncConflictKind.LOCAL_DELETED_REMOTE_MODIFIED
+                        } else {
+                            SyncConflictKind.STALE_LOCAL_CHANGE
+                        },
                         result.status,
+                        result.currentRevision,
+                        now
+                    )
+                    conflicts++
+                }
+
+                SyncMutationStatus.REMOTE_DELETED -> {
+                    // Outro aparelho excluiu esta entidade. A alteração local **não** é aplicada
+                    // no servidor (isso a ressuscitaria) e **não** é apagada aqui (isso perderia
+                    // o trabalho da pessoa). As duas intenções ficam guardadas até ela escolher.
+                    block(
+                        ownerUid,
+                        mutation,
+                        SyncConflictKind.REMOTE_DELETED_LOCAL_MODIFIED,
+                        result.reason ?: result.status,
                         result.currentRevision,
                         now
                     )
@@ -336,6 +391,10 @@ class SyncRepository(
         now: Long
     ) {
         transactions.runInTransaction {
+            // O lado remoto guardado de um conflito anterior é preservado: ele foi obtido de uma
+            // página de pull que já passou, e o cursor não volta. Perdê-lo aqui tiraria do usuário
+            // justamente a versão entre as quais ele precisa escolher (§57).
+            val existing = conflictDao.get(ownerUid, mutation.entityType.name, mutation.entitySyncId)
             outboxDao.block(ownerUid, mutation.entryIds, reason, now)
             conflictDao.upsert(
                 SyncConflictEntity(
@@ -343,11 +402,18 @@ class SyncRepository(
                     entityType = mutation.entityType.name,
                     entitySyncId = mutation.entitySyncId,
                     kind = kind.name,
+                    // Uma tentativa que voltou a falhar volta a esperar o usuário. Se ela ficasse
+                    // em `AWAITING_PUSH`, a escolha anterior — que o servidor recusou — bloquearia
+                    // a próxima para sempre.
+                    status = SyncConflictStatus.PENDING.name,
                     baseRevision = mutation.baseRevision,
-                    localPayloadHash = mutation.payloadHash,
-                    remoteRevision = remoteRevision,
+                    localPayloadHash = mutation.payloadHash.ifEmpty { null },
+                    remoteRevision = remoteRevision ?: existing?.remoteRevision,
+                    remoteServerSequence = existing?.remoteServerSequence,
+                    remotePayloadHash = existing?.remotePayloadHash,
+                    remotePayload = existing?.remotePayload,
                     clientMutationId = mutation.clientMutationId,
-                    detectedAt = now
+                    detectedAt = existing?.detectedAt ?: now
                 )
             )
         }

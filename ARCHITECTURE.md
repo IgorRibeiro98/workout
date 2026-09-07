@@ -669,7 +669,7 @@ persistência do domínio        validação da resposta
 | T16.4 | Backup estruturado | **implementado** |
 | T16.5 | Restore seguro | **implementado** |
 | T16.6 | Sync incremental multi-device | **implementado** |
-| T16.7 | Conflitos, deletes e consistência offline | planejado |
+| T16.7 | Conflitos, deletes, tombstones e consistência offline | **implementado** |
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
 | T17 | Amigos, convites, desafios e social | planejado |
 
@@ -947,13 +947,15 @@ T16.5 precisa desenhar.
 produzem entrada de Outbox. Enquanto só existir backup completo isso é consistente: todo "Fazer
 backup agora" recaptura os três.
 
-**A T16.6 não fechou esta pendência**, e a decisão está documentada com o motivo de cada um em
+**Nem a T16.6 nem a T16.7 fecharam esta pendência**, e a decisão está documentada com o motivo de
+cada um em
 [`sync-protocol.md`](docs/architecture/sync-protocol.md): a customização de exercício é escrita hoje
 direto pelo DAO a partir de um ViewModel, a meta semanal é derivada de uma preferência do DataStore,
 e as preferências vivem no DataStore, que não participa da transação Room. O servidor os recusa com
 `UNSUPPORTED` em vez de aceitá-los pela metade, e o snapshot completo continua cobrindo os três.
 Consequência aceita: uma alteração nesses três propaga por **backup completo**, não por sync
-incremental. Endereçado à T16.7.
+incremental. A T16.7 é sobre conflito e exclusão — trazer os três para o incremental é mudar **onde
+a escrita nasce**, e continua endereçado a uma tarefa própria.
 
 ### Restore seguro (T16.5)
 
@@ -1121,11 +1123,11 @@ a seção abaixo.
 
 ### Sync incremental multi-device (T16.6)
 
-> **Status (verificado em 2026-09-07): implementado.** Room `version = 34`; backend com a migration
-> `0005_sync.sql`. Dois aparelhos da mesma Conta Spark convergem sem que o usuário exporte nada.
-> **Não existe** resolução de conflito, UI de merge, propagação de exclusão, tombstone, prevenção
-> completa de ressurreição, merge por campo, *last write wins*, realtime, WebSocket ou push do
-> servidor.
+> **Status (verificado em 2026-09-07): implementado.** Room `version = 35`; backend com as
+> migrations `0005_sync.sql` e `0006_sync_tombstones.sql`. Dois aparelhos da mesma Conta Spark
+> convergem sem que o usuário exporte nada, exclusões propagam com tombstone e um conflito é
+> resolvido por escolha explícita dele (§ T16.7, abaixo). **Não existe** merge por campo, *last
+> write wins*, CRDT, realtime, WebSocket ou push do servidor.
 
 #### Sync não é backup, e não substitui nada
 
@@ -1214,22 +1216,148 @@ sendo a autoridade operacional do aparelho, e o servidor é autoridade **de orde
     mais parecido".
 12. **Nada é periódico.** Um trabalho único, com rede e backoff, disparado por alteração local;
     foreground conservador; toque manual. Sem polling, sem WebSocket, sem push do servidor.
-13. **Exclusão não propaga, e a tela diz isso.** `DELETE` é recusado explicitamente e a intenção
-    fica pendente — nunca convertida em `UPSERT`.
+13. **A `UPSERT` anterior a um `DELETE` nunca é enviada em lugar dele.** Convertê-la ressuscitaria
+    no servidor o que o usuário apagou. A T16.6 mantinha a exclusão pendente; a T16.7 a propaga
+    com tombstone — e essa regra continua valendo.
 14. **Treino em execução não é alterado por baixo.** Uma mudança remota no template que está sendo
     executado é **adiada** até a sessão terminar; o histórico já gravado nunca é afetado, porque
     `exercise_sessions` e `set_logs` carregam os próprios snapshots desde a T16.3.
 
-#### Pendências que a T16.6 deixou para a T16.7
+#### O que a T16.6 deixou para a T16.7 — e o que foi fechado
 
 ```text
-✗ resolução de conflito e UI de escolha entre as duas versões
-✗ propagação de exclusão, tombstone e retenção de tombstone
-✗ prevenção completa de ressurreição
-✗ EXERCISE_OVERRIDE, WEEKLY_GOAL e USER_PREFERENCES no incremental
-✗ política por tipo de agregado além de "mutável × histórico imutável"
-✗ retenção do change log + CURSOR_EXPIRED + rebaseline
+✓ resolução de conflito e UI de escolha entre as duas versões
+✓ propagação de exclusão, tombstone e retenção de tombstone
+✓ prevenção de ressurreição
+✓ política por tipo de agregado (registry, sem default)
+✓ CURSOR_EXPIRED + orientação de rebaseline
+✗ EXERCISE_OVERRIDE, WEEKLY_GOAL e USER_PREFERENCES no incremental   ← continua aberto
+✗ compactação do change log                                          ← deliberadamente não feita
 ```
+
+### Conflitos, exclusão e tombstones (T16.7)
+
+> **Status (verificado em 2026-09-07): implementado.** Room `version = 35`
+> (`sync_conflicts.status`); backend com `0006_sync_tombstones.sql`. Um conflito é resolvido pelo
+> **usuário**, e uma exclusão viaja como mudança versionada. **Não existe** merge por campo,
+> resolução automática, CRDT, `force`/`overwrite` no servidor, nem limpeza de tombstone.
+
+#### Conflito é um estado, não um erro
+
+```text
+A e B na revision 4
+     ↓
+A edita  →  servidor revision 5
+B edita sobre 4  →  STALE
+     ↓
+sync_conflicts (durável)   ← local no Room + Outbox BLOCKED, remoto guardado com payload e hash
+     ↓
+decisão do usuário
+ ├── "Manter deste aparelho"  →  mutação NOVA, baseRevision = 5  →  servidor 6
+ └── "Usar versão da nuvem"   →  aplica local, descarta a tentativa, ZERO mutação
+```
+
+Nada disso acontece sozinho. Um ciclo de sync com conflito pendente continua sincronizando **todos
+os outros agregados** e não toca no conflitado; o trabalho em background nunca resolve.
+
+#### Matriz de política por agregado
+
+Declarada em `SyncEntityPolicies` (Kotlin) e `SyncEntityPolicyRegistry` (`sync.policy.ts`) — os dois
+precisam concordar, e nenhum tem `default`.
+
+| Agregado | Mutável | Delete remoto | Conflito | Resolução |
+| --- | --- | --- | --- | --- |
+| `WORKOUT_PROGRAM` | sim | sim | edição concorrente | `USER_CHOICE` |
+| `WORKOUT_TEMPLATE` | sim | sim | edição concorrente | `USER_CHOICE` |
+| `CUSTOM_EXERCISE` | sim | sim | edição concorrente | `USER_CHOICE` |
+| `BODY_MEASUREMENT` | sim | sim | edição da **mesma** medida | `USER_CHOICE` |
+| `CHECK_IN` | sim | **não** | edição concorrente | `USER_CHOICE` |
+| `WORKOUT_SESSION` (`COMPLETED`) | **não** | sim | divergência de histórico | `IMMUTABLE_CONFLICT` |
+
+Notas que a tabela não cabe:
+
+- **medida corporal é *append-only* por identidade.** Cada registro tem `syncId` próprio, então dois
+  aparelhos criando medidas no mesmo dia **coexistem** — isso nunca é conflito. Conflito é editar a
+  mesma medida nos dois;
+- **check-in não aceita exclusão remota** porque o domínio não a produz: não há tela, repositório
+  nem mutação que apague um check-in. O servidor recusa com `DELETE_NOT_ALLOWED`;
+- **sessão concluída é imutável e ainda assim excluível.** Apagar não é reescrever;
+- `LAST_WRITE_WINS_ALLOWED` **existe como valor declarável e nenhum agregado o usa** — teste dos
+  dois lados.
+
+#### Tipos de conflito
+
+| `SyncConflictKind` | Quando |
+| --- | --- |
+| `STALE_LOCAL_CHANGE` | o push local foi recusado: o servidor já estava adiante |
+| `REMOTE_AHEAD_LOCAL_DIRTY` | chegou mudança remota para um agregado com alteração local pendente |
+| `REMOTE_DELETED_LOCAL_MODIFIED` | a nuvem tem tombstone e este aparelho tem alteração pendente |
+| `LOCAL_DELETED_REMOTE_MODIFIED` | este aparelho apagou e a nuvem tem versão mais nova |
+| `IMMUTABLE_HISTORY` | mesma sessão concluída, conteúdo divergente |
+| `REJECTED_BY_SERVER` | recusa de contrato — defeito, não divergência entre pessoas |
+| `IDEMPOTENCY` | mesmo `clientMutationId`, alvo ou conteúdo outro |
+
+Os dois primeiros dizem **onde** a divergência foi detectada e recebem as mesmas escolhas. Uma
+classificação já registrada é preservada, exceto quando a nova é uma exclusão: um tombstone muda o
+que o conflito **é**.
+
+#### Exclusão e tombstone
+
+```text
+Template X revision 5
+     ↓ DELETE baseRevision = 5
+sync_entities.deleted = 1, revision 6      ← uma autoridade só: a própria linha da entidade
+     +
+sync_changes operation = DELETE, revision 6, payload null
+     ↓ pull
+Device B: apaga localmente, guarda a revision, NENHUMA Outbox
+```
+
+- exclusão **gasta revision** e entra no change log como qualquer mudança;
+- exclusão **stale** é `STALE`, nunca exclusão por cima de algo mais novo;
+- exclusão de identidade que o servidor nunca viu **também** cria tombstone — dois aparelhos podem
+  ter o mesmo `syncId` vindo do mesmo backup restaurado;
+- `UPSERT` contra tombstone é `REMOTE_DELETED`, **sempre**, inclusive com a `baseRevision` do
+  próprio tombstone. A garantia é do banco (`AND sync_entities.deleted = 0`), não do serviço;
+- **recriar é criar**: manter um item que a nuvem apagou produz `syncId` novo. Não é oferecido para
+  programa nem exercício pessoal, porque outros agregados os referenciam por `localId`;
+- o apply remoto respeita as guardas do domínio: `ON DELETE RESTRICT` de exercício pausa o cursor
+  com motivo, programa com alteração pendente dentro vira conflito, e template em execução é
+  **adiado** — a sessão em andamento nunca é destruída;
+- **nada apaga tombstone.** `SYNC_TOMBSTONE_RETENTION_DAYS` declara a retenção pretendida; a limpeza
+  não existe, e o motivo é o custo assimétrico: guardar custa uma linha, apagar cedo custa
+  ressurreição.
+
+#### Componentes reais (T16.7)
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Política por agregado | `SyncEntityPolicies` (app) + `sync.policy.ts` (backend) |
+| Tombstone | `sync_entities.deleted` + `0006_sync_tombstones.sql` |
+| Exclusão no servidor | `SyncService.applyDelete` + `SyncRepository.applyDelete` |
+| Conflito durável | `SyncConflictEntity` + `SyncConflictStatus` (`PENDING` / `AWAITING_PUSH`) |
+| Resolução | `SyncConflictResolver` (uma transação por decisão) |
+| Tradução para a tela | `SyncConflictSummary` + `SyncConflictPreview` |
+| Exclusão local pelo sync | `SyncRemoteApplier.deleteAggregateLocally` + `SyncLocalDeleteGuard` |
+| Cursor irrecuperável | `CURSOR_EXPIRED` → `SyncPhase.NeedsRebaseline` |
+| Tela | `SyncSection` (lista de conflitos, diferenças e escolhas) |
+
+#### Invariantes da T16.7
+
+1. **Nenhum conflito é resolvido sozinho.** Sem *last write wins*, sem relógio, sem "server vence",
+   sem merge por campo. Há teste estrutural e de comportamento.
+2. **Os dois lados sobrevivem até a decisão** — e a decisão sobrevive ao processo morrer.
+3. **Escolher o local gera mutação nova**, com `clientMutationId` novo e `baseRevision` igual à
+   revision remota atual. Se o servidor andou de novo, volta a ser conflito.
+4. **Escolher o remoto não gera mutação** — e o snapshot guardado é reconferido pelo hash antes de
+   virar escrita.
+5. **Resolução é idempotente** por escrita condicional no banco, não por flag de tela.
+6. **A conta é revalidada imediatamente antes de gravar.** Conflito de A nunca aparece nem é
+   resolvido por B.
+7. **Tombstone impede ressurreição**, e recriar usa identidade nova.
+8. **Exclusão remota não gera Outbox** e não quebra sessão ativa, histórico nem gamificação.
+9. **Tombstone não é apagado**, e um cursor irrecuperável recusa em vez de reiniciar em silêncio.
+10. **O worker não resolve nada.** Ele continua sincronizando o que é independente.
 
 ### Conta opcional e identidade (T16.1)
 

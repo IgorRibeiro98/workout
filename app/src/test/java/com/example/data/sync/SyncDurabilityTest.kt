@@ -143,4 +143,60 @@ class SyncDurabilityTest {
             second.close()
         }
     }
+
+    @Test
+    fun aDecisaoDoUsuarioSobreUmConflitoSobreviveAoProcessoMorrer() = runTest {
+        // O cenário do §95: ele tocou em "Manter deste aparelho", a mutação nasceu na fila e o app
+        // morreu antes de enviá-la. Se a decisão vivesse em memória, ela desapareceria — e o
+        // usuário voltaria a ver o mesmo conflito, sem saber que já tinha decidido.
+        context.deleteDatabase(dbName)
+        val entitySyncId = "ffffffff-0000-4000-8000-000000000009"
+
+        val first = open()
+        val server = FakeSparkSyncServer()
+        val device = SyncDevice(server, ownerUid, "device-a", database = first)
+        device.bind()
+        first.syncConflictDao().upsert(
+            SyncConflictEntity(
+                ownerUid = ownerUid,
+                entityType = SyncEntityType.WORKOUT_TEMPLATE.name,
+                entitySyncId = entitySyncId,
+                kind = SyncConflictKind.STALE_LOCAL_CHANGE.name,
+                baseRevision = 4,
+                remoteRevision = 5,
+                remotePayloadHash = "hash-remoto",
+                remotePayload = "{}",
+                detectedAt = 100
+            )
+        )
+
+        val resolution = device.resolve(
+            SyncConflictId(SyncEntityType.WORKOUT_TEMPLATE.name, entitySyncId),
+            SyncConflictChoice.KEEP_LOCAL
+        )
+        assertEquals(SyncConflictResolution.Queued, resolution)
+        first.close()
+
+        val second = open()
+        try {
+            // A mutação continua na fila, com identidade própria...
+            val pendentes = second.syncOutboxDao().pendingFor(ownerUid)
+            assertEquals(1, pendentes.size)
+            assertEquals(entitySyncId, pendentes.single().entitySyncId)
+            // ...o conflito lembra que já foi decidido, então um toque novo não duplica nada...
+            assertEquals(
+                SyncConflictStatus.AWAITING_PUSH.name,
+                second.syncConflictDao().allFor(ownerUid).single().status
+            )
+            // ...e a base da próxima tentativa é a revision remota que o usuário viu e recusou.
+            assertEquals(
+                5L,
+                second.entitySyncMetadataDao()
+                    .get(ownerUid, SyncEntityType.WORKOUT_TEMPLATE.name, entitySyncId)
+                    ?.lastKnownServerRevision
+            )
+        } finally {
+            second.close()
+        }
+    }
 }

@@ -1,6 +1,9 @@
 package com.example.presentation.account
 
 import android.os.Build
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.sync.CloudSyncState
 import com.example.data.sync.FakeSparkSyncServer
@@ -12,6 +15,9 @@ import com.example.data.sync.SyncScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -47,6 +53,21 @@ class SyncViewModelTest {
     private lateinit var scheduler: RecordingScheduler
     private var currentUid: String? = ownerUid
 
+    /**
+     * O trabalho lançado pelo coordenador, sob controle do teste.
+     *
+     * `syncNow()` e `onAppForeground()` **lançam** corrotinas e voltam na hora — é assim que o app
+     * funciona. Sem um `Job` para cancelar e esperar, uma delas pode ainda estar consultando o Room
+     * quando o teste termina; fechar o banco embaixo dela lança uma exceção não capturada, e o
+     * `kotlinx-coroutines-test` a reporta na **próxima** classe de teste — um problema local vira
+     * falha em outra suíte, sem relação aparente.
+     */
+    private lateinit var coordinatorJob: Job
+    private lateinit var coordinatorScope: CoroutineScope
+
+    /** Os ViewModels do teste, para que `viewModelScope` seja encerrado antes do banco fechar. */
+    private lateinit var viewModelStore: ViewModelStore
+
     @Before
     fun setUp() {
         // Dispatcher real, e não virtual: o Room roda nos executores dele, e um relógio virtual
@@ -56,10 +77,18 @@ class SyncViewModelTest {
         device = SyncDevice(server, ownerUid, "device-a")
         scheduler = RecordingScheduler()
         currentUid = ownerUid
+        coordinatorJob = SupervisorJob()
+        coordinatorScope = CoroutineScope(coordinatorJob + Dispatchers.Unconfined)
+        viewModelStore = ViewModelStore()
     }
 
     @After
     fun tearDown() {
+        // A ordem é o ponto: primeiro encerra quem pode estar falando com o banco, depois fecha o
+        // banco. `clear()` cancela o `viewModelScope`; `cancelAndJoin` espera o trabalho do
+        // coordenador realmente terminar em vez de só pedir para parar.
+        viewModelStore.clear()
+        runBlocking { withTimeout(5_000) { coordinatorJob.cancelAndJoin() } }
         device.close()
         Dispatchers.resetMain()
     }
@@ -68,14 +97,19 @@ class SyncViewModelTest {
         repository = device.repository,
         accounts = SyncAccountProvider { currentUid },
         scheduler = scheduler,
-        scope = CoroutineScope(Dispatchers.Unconfined),
+        scope = coordinatorScope,
         // O mesmo relógio do repositório: "faz quanto tempo que sincronizei?" só faz sentido se
         // os dois lados medirem o tempo da mesma origem.
         clock = { SyncDevice.CLOCK }
     )
 
     private fun viewModel(): SyncViewModel {
-        val model = SyncViewModel(device.repository, coordinator())
+        val factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                SyncViewModel(device.repository, coordinator()) as T
+        }
+        val model = ViewModelProvider(viewModelStore, factory)[SyncViewModel::class.java]
         model.onAccountChanged(currentUid)
         return model
     }
@@ -221,6 +255,78 @@ class SyncViewModelTest {
         assertEquals(1, phase.items)
         // E a alteração local continua na tela do usuário, intacta.
         assertEquals("Escrito aqui", device.templateName(templateSyncId))
+
+        // A tela recebe o item com as duas versões e as escolhas — sem jargão de protocolo.
+        val conflict = model.uiState.value.conflicts.single()
+        assertEquals("Escrito aqui", conflict.title)
+        assertEquals(
+            listOf(
+                com.example.data.sync.SyncConflictChoice.KEEP_LOCAL,
+                com.example.data.sync.SyncConflictChoice.USE_REMOTE
+            ),
+            conflict.choices
+        )
+    }
+
+    @Test
+    fun `escolher manter a versao deste aparelho converge e limpa o aviso`() = runBlocking {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+        device.sync()
+
+        val outro = SyncDevice(server, ownerUid, "device-b")
+        try {
+            outro.bind()
+            outro.sync()
+            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
+            outro.sync()
+        } finally {
+            outro.close()
+        }
+
+        device.renameTemplate(templateSyncId, "Escrito aqui")
+        val model = viewModel()
+        model.syncNow()
+        awaitPhase(model) { it is SyncPhase.NeedsAttention }
+
+        val conflict = model.uiState.value.conflicts.single()
+        model.resolveConflict(conflict.id, com.example.data.sync.SyncConflictChoice.KEEP_LOCAL)
+
+        awaitPhase(model) { it is SyncPhase.UpToDate }
+        assertEquals("Escrito aqui", device.templateName(templateSyncId))
+        assertEquals(0, model.uiState.value.conflicts.size)
+        assertEquals(null, model.uiState.value.resolutionProblem)
+    }
+
+    @Test
+    fun `escolher a versao da nuvem aplica aqui e nao enfileira nada`() = runBlocking {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+        device.sync()
+
+        val outro = SyncDevice(server, ownerUid, "device-b")
+        try {
+            outro.bind()
+            outro.sync()
+            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
+            outro.sync()
+        } finally {
+            outro.close()
+        }
+
+        device.renameTemplate(templateSyncId, "Escrito aqui")
+        val model = viewModel()
+        model.syncNow()
+        awaitPhase(model) { it is SyncPhase.NeedsAttention }
+
+        val conflict = model.uiState.value.conflicts.single()
+        model.resolveConflict(conflict.id, com.example.data.sync.SyncConflictChoice.USE_REMOTE)
+
+        awaitPhase(model) { it is SyncPhase.UpToDate }
+        assertEquals("Escrito pelo outro", device.templateName(templateSyncId))
+        // Aplicar o remoto não devolve nada ao servidor.
+        assertEquals(0, device.pendingCount())
+        assertEquals(0, device.blockedCount())
     }
 
     // ------------------------------------------------------------------- gatilhos

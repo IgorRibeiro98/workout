@@ -104,7 +104,8 @@ fun ProfileScreen(
         onCancelReplacement = { restoreViewModel?.cancelReplacement() },
         onCancelRestore = { restoreViewModel?.cancel() },
         syncState = syncState,
-        onSyncNow = { syncViewModel?.syncNow() }
+        onSyncNow = { syncViewModel?.syncNow() },
+        onResolveConflict = { id, choice -> syncViewModel?.resolveConflict(id, choice) }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -149,7 +150,11 @@ private fun ProfileScreenContent(
     onCancelRestore: () -> Unit = {},
     /** Sync multi-device (T16.6). `null` quando não há Spark Backend configurado neste build. */
     syncState: com.example.presentation.account.SyncUiState? = null,
-    onSyncNow: () -> Unit = {}
+    onSyncNow: () -> Unit = {},
+    onResolveConflict: (
+        com.example.data.sync.SyncConflictId,
+        com.example.data.sync.SyncConflictChoice
+    ) -> Unit = { _, _ -> }
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -277,7 +282,8 @@ private fun ProfileScreenContent(
             if (syncState != null) {
                 com.example.presentation.account.SyncSection(
                     uiState = syncState,
-                    onSyncNow = onSyncNow
+                    onSyncNow = onSyncNow,
+                    onResolveConflict = onResolveConflict
                 )
             }
 

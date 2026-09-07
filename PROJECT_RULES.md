@@ -405,9 +405,10 @@ virar perda de dado — ou de virar backup, ou de virar tempo real.
 - **`revision` decide, relógio não.** Escrita stale é detectada por `baseRevision` × `serverRevision`
   — nunca por `updatedAt`. E um `STALE` **não** atualiza a revision conhecida: fazer isso seria
   *last write wins* com outro nome. Há teste estrutural e de comportamento.
-- **Conflito é detectado e preservado, não resolvido.** Sem *keep both*, sem merge por campo, sem
-  "reenvia com a revision atual", sem retry automático de `STALE`/`INVALID`/`UNSUPPORTED`. O lado
-  local fica no Room e na Outbox (`BLOCKED`), o remoto em `sync_conflicts`. A escolha é da T16.7.
+- **Conflito é detectado e preservado, não resolvido sozinho.** Sem *keep both*, sem merge por
+  campo, sem "reenvia com a revision atual", sem retry automático de
+  `STALE`/`INVALID`/`UNSUPPORTED`. O lado local fica no Room e na Outbox (`BLOCKED`), o remoto em
+  `sync_conflicts`. Desde a **T16.7** a escolha existe — e é do usuário (§13.5).
 - **Um conflito não bloqueia o app.** O isolamento é por agregado: um treino em conflito não impede
   medidas, check-ins e sessões de convergirem.
 - **Histórico concluído é imutável.** `revision = 1` e nunca mais. Mesmo conteúdo é idempotente;
@@ -419,9 +420,9 @@ virar perda de dado — ou de virar backup, ou de virar tempo real.
 - **O cursor só avança depois do apply**, na mesma transação. Mudança que este app não sabe ler
   pausa o sync naquele ponto; ela nunca é pulada. `canonicalId` que não resolve pausa também —
   *fuzzy matching* não existe.
-- **Exclusão não propaga.** `DELETE` é recusado explicitamente (`DELETE_NOT_SUPPORTED`), a intenção
-  fica pendente e **bloqueia o agregado dela** — mandar a `UPSERT` anterior ressuscitaria no
-  servidor o que o usuário apagou. Não esconda o botão de excluir por causa disso: a tela avisa.
+- **Exclusão propaga desde a T16.7**, com tombstone no servidor (§13.5). O que a T16.6 estabeleceu e
+  continua valendo é que a `UPSERT` anterior a um `DELETE` **nunca** é enviada em lugar dele: isso
+  ressuscitaria no servidor o que o usuário apagou.
 - **Nada é periódico.** Um trabalho **único** do `WorkManager`, com restrição de rede e backoff
   exponencial, agendado por alteração local; foreground conservador (15 min); toque manual. Sem
   `PeriodicWorkRequest`, sem polling, sem WebSocket, sem push do servidor.
@@ -442,6 +443,58 @@ virar perda de dado — ou de virar backup, ou de virar tempo real.
 - **Testes.** Toda mudança no sync roda
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
   As duas são offline e não dependem de Firebase, VPS ou internet.
+
+## 13.5 Conflitos, exclusão e tombstones (T16.7)
+
+Dois aparelhos que discordam agora **resolvem** — e é o usuário quem resolve. As regras abaixo são
+o que impede a resolução de virar perda de dado, e a exclusão de virar ressurreição.
+
+- **Conflito não é erro; é um estado legítimo.** Ele é detectado, isolado e **preservado até uma
+  decisão segura**. Continua proibido resolver por *last write wins*, por `updatedAt`, por "device
+  mais recente", por "server sempre vence" ou "local sempre vence" — em nenhum lugar, em nenhum
+  agregado, sem política explícita.
+- **A política é por agregado, e mora em um lugar só.** `SyncEntityPolicies` (app) e
+  `SyncEntityPolicyRegistry` (`sync.policy.ts`) declaram mutabilidade, se a exclusão remota é
+  permitida e a estratégia de conflito. Não existe `default`, e um `if (entityType == ...)` espalhado
+  é exatamente o que eles existem para impedir. `LAST_WRITE_WINS_ALLOWED` **existe como valor e
+  nenhum agregado o usa** — há teste dos dois lados.
+- **Escolher o local gera mutação nova.** Novo `clientMutationId`, `baseRevision` igual à revision
+  remota que o usuário viu e recusou, e a tentativa anterior é descartada. Reaproveitar o
+  `clientMutationId` recusado faria o servidor devolver o resultado antigo do ledger. Se o servidor
+  tiver andado de novo no meio, o resultado é `STALE` e o conflito **reabre** — isso é o desenho, e
+  não um defeito a contornar.
+- **Escolher o remoto não gera mutação.** Aplica no Room, descarta a tentativa local, grava a
+  revision e fecha o conflito. Uma mutação aqui devolveria ao servidor o que veio dele.
+- **Resolução é transacional e idempotente.** Uma transação por decisão, e a idempotência é uma
+  escrita condicional no banco (`status = PENDING`), não uma flag em memória: dois toques rápidos
+  produzem **uma** mutação, e a decisão sobrevive ao processo morrer.
+- **Histórico concluído não recebe escolha.** Divergência de conteúdo é conflito de integridade:
+  informa-se, registra-se, e nenhuma versão é sobrescrita. Excluir continua permitido — apagar não
+  é reescrever.
+- **A exclusão viaja, e ela é uma mudança.** `DELETE` sobe da Outbox, o servidor cria tombstone em
+  `sync_entities` (`deleted = 1`), gasta uma `revision` e anexa a mudança ao change log. Exclusão
+  stale é `STALE`, nunca exclusão silenciosa por cima de algo mais novo.
+- **Tombstone impede ressurreição.** `UPSERT` contra tombstone é `REMOTE_DELETED`, sempre — inclusive
+  com a `baseRevision` do próprio tombstone. Não existe `force`, `overwrite` nem endpoint paralelo:
+  a garantia é do banco (`AND sync_entities.deleted = 0`), não da disciplina do serviço.
+- **Recriar é criar.** Manter um item que a nuvem apagou produz **`syncId` novo**; a identidade
+  morta continua morta. Recriar não é oferecido para programa nem para exercício pessoal — outros
+  agregados os referenciam por `localId`, e recriá-los exigiria reescrever os dependentes.
+- **Aplicar exclusão remota não gera Outbox**, pelo mesmo motivo de sempre: seria devolver ao
+  servidor o que acabou de vir dele. E ela respeita as guardas do domínio — `ON DELETE RESTRICT` de
+  exercício, cascade de programa com alteração pendente dentro, e treino em execução (adiado).
+- **Tombstone não é apagado.** `SYNC_TOMBSTONE_RETENTION_DAYS` declara a retenção pretendida e
+  **nada** a executa: um aparelho que ficou meses offline precisa receber o delete quando voltar.
+  Um cursor anterior ao que o servidor guarda é `CURSOR_EXPIRED` e exige rebaseline explícito —
+  nunca `cursor = 0` em silêncio.
+- **Merge por campo continua fora.** Sem CRDT, sem OT, sem event sourcing, sem consenso
+  distribuído. Revision + escolha explícita basta para a escala do Spark.
+- **Logs.** No servidor: contagens por desfecho, prefixo de uid e de `deviceId`, cursor, duração. No
+  Android: **nada** — o pacote de sync continua sem log, e a ausência é testada. Nunca payload, nome
+  de treino, nota, medida ou `Authorization`.
+- **Testes.** Toda mudança em conflito/exclusão roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
+  As duas são offline.
 
 ## 14. Tests and build are part of implementation
 

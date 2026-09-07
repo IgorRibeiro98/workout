@@ -49,3 +49,22 @@ export const SYNC_RATE_LIMIT = {
   windowMs: 60_000,
   maxRequestsPerWindow: 60,
 } as const;
+
+/**
+ * Retenção de tombstone, em dias (T16.7).
+ *
+ * **Nada apaga tombstone hoje, e isso é a decisão — não uma pendência.** A constante existe para
+ * que a retenção pretendida seja explícita e localizável no dia em que alguém for escrever a
+ * limpeza; enquanto ela não existir, o servidor guarda.
+ *
+ * O motivo é o custo assimétrico. Guardar um tombstone custa uma linha estreita em SQLite; apagá-lo
+ * cedo demais custa **ressurreição**: um aparelho que ficou offline mais tempo do que a retenção
+ * volta com a cópia antiga, não encontra a evidência da exclusão e reenvia o que o usuário apagou.
+ * Na escala do Spark — um grupo pequeno de usuários (ADR-0001) — o volume nunca justifica correr
+ * esse risco.
+ *
+ * Uma limpeza futura só é segura se considerar, no mínimo, o **menor cursor entre os aparelhos
+ * ativos da conta** — informação que o servidor hoje não guarda, porque o cursor é durável no
+ * aparelho. Implementá-la exigiria primeiro registrar isso, e é por isso que ela não está aqui.
+ */
+export const SYNC_TOMBSTONE_RETENTION_DAYS = 365 * 5;

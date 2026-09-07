@@ -111,7 +111,7 @@ jobs:
             console.log('persistência ok');
             db.close();"
 
-          # T16.5/T16.6 — o schema do restore e o do sync incremental.
+          # T16.5/T16.6/T16.7 — o schema do restore, o do sync incremental e o do tombstone.
           #
           # Sem service account não há como autenticar aqui, e é exatamente isso que o smoke
           # verifica: as rotas existem e nascem **fechadas**. 401 (e não 404) é a prova.
@@ -130,11 +130,17 @@ jobs:
                 console.error('migration 0005 não aplicada: sem tabela ' + table); process.exit(1);
               }
             }
+            const entity=db.prepare('PRAGMA table_info(sync_entities)').all().map(c=>c.name);
+            for (const column of ['deleted','deleted_at','deleted_by_device_id']) {
+              if (!entity.includes(column)) {
+                console.error('migration 0006 não aplicada: sem coluna ' + column); process.exit(1);
+              }
+            }
             const applied=db.prepare('SELECT COUNT(*) AS total FROM schema_migrations').get();
-            if (applied.total < 5) {
+            if (applied.total < 6) {
               console.error('migrations pendentes: ' + applied.total); process.exit(1);
             }
-            console.log('schema de restore e de sync ok');
+            console.log('schema de restore, de sync e de tombstone ok');
             db.close();"
 
           for path in /v1/backups /v1/backups/abc /v1/backups/abc/content /v1/sync/pull; do

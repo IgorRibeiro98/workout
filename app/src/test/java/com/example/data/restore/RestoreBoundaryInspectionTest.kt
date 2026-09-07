@@ -143,19 +143,36 @@ class RestoreBoundaryInspectionTest {
 
     @Test
     fun `o restore nao mescla nem resolve conflito`() {
-        // T16.5 é substituição. Merge, *last write wins*, união de campo e tombstone remoto são
-        // T16.6/T16.7 — e um merge silencioso seria a forma mais fácil de o usuário perder dado
-        // achando que ganhou.
-        assertNoneReference(
-            listOf(restorePackage, "app/src/main/java/com/example/presentation/account"),
-            listOf(
-                "lastWriteWins",
-                "mergeInto",
-                "resolveConflict",
-                "keepBoth",
-                "tombstone",
-                "fieldLevelMerge"
-            )
+        // T16.5 é substituição, e continua sendo. Merge, *last write wins*, união de campo e
+        // tombstone não pertencem a ele — um merge silencioso seria a forma mais fácil de o usuário
+        // perder dado achando que ganhou.
+        //
+        // O escopo é o **restore**, e não a tela inteira: desde a T16.7 a mesma área do Perfil
+        // hospeda a resolução de conflito de sync, que é outra coisa e é explicitamente escolhida
+        // pelo usuário. Por isso a verificação na `presentation/account` olha só os arquivos de
+        // restore.
+        val forbidden = listOf(
+            "lastWriteWins",
+            "mergeInto",
+            "resolveConflict",
+            "keepBoth",
+            "tombstone",
+            "fieldLevelMerge"
+        )
+        assertNoneReference(listOf(restorePackage), forbidden)
+
+        val restoreScreens = AuthSourceInspection
+            .sources("app/src/main/java/com/example/presentation/account")
+            .filter { it.name.startsWith("Restore") }
+        assertTrue("os arquivos de restore da tela precisam existir", restoreScreens.isNotEmpty())
+        val offenders = restoreScreens.filter { file ->
+            val code = AuthSourceInspection.code(file)
+            forbidden.any { code.contains(it) }
+        }
+        assertEquals(
+            "a tela de restore violou o limite: ${offenders.map { it.name }}",
+            emptyList<String>(),
+            offenders.map { it.name }
         )
     }
 

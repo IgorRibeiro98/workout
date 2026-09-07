@@ -1,6 +1,7 @@
 # Protocolo de sincronização do Spark
 
-- **Tarefa:** T16.0 (documentação) — **implementado na T16.6**; conflitos e deletes em **T16.7**.
+- **Tarefa:** T16.0 (documentação) — **implementado na T16.6**; conflitos, deletes e tombstones
+  **implementados na T16.7**.
 - **Status (verificado em 2026-09-07):**
   - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
     `clientMutationId`, `deviceId` e os DTOs de agregado;
@@ -16,9 +17,13 @@
     com sequência global, cursor durável por conta no Android (`sync_cursor`), revision conhecida
     por agregado (`sync_entity_metadata`), conflitos preservados (`sync_conflicts`) e um trabalho
     único de `WorkManager` com restrição de rede;
-  - **não implementado (T16.7):** resolução de conflito, tombstone, propagação de exclusão,
-    prevenção de ressurreição e política avançada de consistência offline. Um push de `DELETE` é
-    recusado explicitamente com `DELETE_NOT_SUPPORTED` e a intenção continua pendente no aparelho.
+  - **implementado na T16.7:** **resolução explícita de conflito** (o usuário escolhe, e a escolha
+    é durável e idempotente), **tombstone** no servidor (`sync_entities.deleted`, migration
+    `0006_sync_tombstones.sql`), **propagação de exclusão** pelo change log, **prevenção de
+    ressurreição** (`REMOTE_DELETED`), **política por agregado** em um registry sem `default`, e
+    `CURSOR_EXPIRED` com orientação de rebaseline;
+  - **não implementado, e deliberadamente:** merge por campo, CRDT/OT/event sourcing, edição
+    colaborativa em tempo real, compactação do change log e limpeza de tombstone.
 
 > **Backup/restore ≠ sync.** Os dois movem um snapshot **inteiro**, em uma direção, quando o
 > usuário manda. O protocolo abaixo move **mudanças**, nos dois sentidos, sozinho — e é por isso
@@ -55,7 +60,7 @@ servidor**. Timestamps continuam existindo como metadado informativo, nunca como
 | `changeSeq` | sequência global e monotônica de mudanças da conta | servidor |
 | `cursor` | posição do cliente na sequência do servidor | servidor |
 | `deviceId` | qual instalação originou a mudança | dispositivo |
-| `deletedAt` | marcação de tombstone | servidor |
+| `deleted` / `deletedAt` | tombstone da entidade (T16.7) | servidor |
 
 ---
 
@@ -226,7 +231,7 @@ motivo é que a alternativa seria pior:
 
 Ou seja: "cursor = 0" aqui não é rebaixar a conta, é a forma de **aprender** o que o servidor sabe.
 Um baseline explícito só passa a valer a pena junto com retenção do change log — e retenção é
-T16.7/T16.8, com `CURSOR_EXPIRED` e rebaseline, nunca com um recomeço silencioso.
+T16.7: `CURSOR_EXPIRED` e orientação de rebaseline, nunca um recomeço silencioso.
 
 O que o backup **não** faz, e continua não fazendo: ele não vira mudança no change log. Um snapshot
 completo enviado não é interpretado como milhares de mudanças novas — há teste sobre isso.
@@ -245,7 +250,8 @@ explicitamente com `UNSUPPORTED` em vez de aceitar pela metade:
   transacional é o que garante que intenção e alteração vivam ou morram juntas.
 
 Consequência aceita e registrada: uma alteração nesses três propaga por **backup completo**, não por
-sync incremental. Está em `ARCHITECTURE.md` como pendência da T16.7.
+sync incremental. A T16.7 **não** fechou esta pendência — ela é sobre onde a escrita nasce, e não
+sobre conflito ou exclusão. Continua registrada em `ARCHITECTURE.md`.
 
 ## Push incremental (T16.6 — implementado)
 
@@ -303,14 +309,16 @@ A ordem das perguntas é o protocolo:
 | --- | --- | --- |
 | 1 | `clientMutationId` já registrado, mesmo alvo e mesmo hash? | `ALREADY_APPLIED` com a `revision`/`sequence` originais |
 | 2 | `clientMutationId` já registrado, conteúdo ou alvo diferente? | `IDEMPOTENCY_CONFLICT` — não reaplica |
-| 3 | `operation` é `DELETE`? | `UNSUPPORTED` (`DELETE_NOT_SUPPORTED`) — T16.7 |
-| 4 | `entityType` fora do registry, `entitySchemaVersion` desconhecida? | `UNSUPPORTED` |
+| 3 | `entityType` fora do registry, `entitySchemaVersion` desconhecida? | `UNSUPPORTED` |
+| 4 | `operation` é `DELETE` de um agregado que a política não permite apagar? | `UNSUPPORTED` (`DELETE_NOT_ALLOWED`) |
 | 5 | payload fora do schema, identidade que não bate, item grande demais? | `INVALID` |
-| 6 | histórico imutável já gravado com **outro** conteúdo? | `IMMUTABLE_HISTORY_CONFLICT` |
-| 7 | conteúdo idêntico ao que já está gravado? | `ALREADY_APPLIED` — nenhuma `revision` é gasta |
-| 8 | `baseRevision` == `revision` atual? | `APPLIED`, `revision + 1` |
-| 9 | `baseRevision` < `revision` atual, ou criação sobre entidade existente | `STALE` com `currentRevision` |
-| 10 | `baseRevision` > `revision` atual | `INVALID` (`BASE_REVISION_AHEAD`) |
+| 6 | `operation` é `DELETE`? | ver a tabela de exclusão em **Deletes e tombstones (T16.7)** |
+| 6b | a entidade tem tombstone e a operação é `UPSERT`? | `REMOTE_DELETED` (`ENTITY_DELETED`) — nunca recria |
+| 7 | histórico imutável já gravado com **outro** conteúdo? | `IMMUTABLE_HISTORY_CONFLICT` |
+| 8 | conteúdo idêntico ao que já está gravado? | `ALREADY_APPLIED` — nenhuma `revision` é gasta |
+| 9 | `baseRevision` == `revision` atual? | `APPLIED`, `revision + 1` |
+| 10 | `baseRevision` < `revision` atual, ou criação sobre entidade existente | `STALE` com `currentRevision` |
+| 11 | `baseRevision` > `revision` atual | `INVALID` (`BASE_REVISION_AHEAD`) |
 
 A idempotência é verificada **antes** da validação de conteúdo, de propósito: um reenvio precisa
 devolver o resultado original mesmo que o servidor tenha ficado mais exigente entre as duas
@@ -612,8 +620,8 @@ Na prática, **implementado na T16.6**:
   tocado;
 - receber uma sessão concluída de outro aparelho **não** dispara XP, conquista, recorde nem
   notificação;
-- a exceção legítima continua sendo o **tombstone**: o usuário pode apagar a própria sessão. Apagar
-  não é reescrever — e o tombstone é T16.7.
+- a exceção legítima é o **tombstone**: o usuário pode apagar a própria sessão. Apagar não é
+  reescrever, e desde a T16.7 essa exclusão propaga como qualquer outra.
 
 Isso é a mesma invariante que o Coach IA já respeita hoje (`PROJECT_RULES` §13: "Sessão concluída é
 imutável"). O sync não pode ser a porta dos fundos que ela não tem.
@@ -624,22 +632,7 @@ depois — nada muda.
 
 ---
 
-## Deletes e tombstones (T16.7 — o que a T16.6 deliberadamente não fez)
-
-A T16.6 **não propaga exclusão**, e é explícita sobre isso em vez de silenciosa:
-
-```text
-push com operation = DELETE   →   UNSUPPORTED (DELETE_NOT_SUPPORTED)
-entrada DELETE na Outbox      →   permanece PENDING, e bloqueia o agregado dela
-```
-
-O agregado é bloqueado — e não parcialmente enviado — porque mandar a `UPSERT` anterior a um
-`DELETE` pendente ressuscitaria no servidor exatamente o que o usuário apagou aqui. Converter um
-`DELETE` em `UPSERT` é o defeito que essa regra existe para tornar impossível.
-
-A UI **não esconde** a exclusão por causa disso: o usuário continua apagando o que quiser,
-localmente. O que a tela faz é dizer a verdade — "itens excluídos neste aparelho ainda não são
-removidos nos outros".
+## Deletes e tombstones (T16.7 — implementado)
 
 Delete físico imediato não funciona em multi-device:
 
@@ -652,60 +645,169 @@ aparelho B reconecta com a cópia antiga
 o item ressuscita
 ```
 
-O protocolo precisa suportar **tombstone**: a exclusão é uma mudança versionada como qualquer
-outra, com `deletedAt`, e entra na sequência do servidor. O aparelho B recebe "isto foi apagado" em
-vez de reenviar "isto existe".
+Por isso a exclusão é **uma mudança versionada**, e não a ausência de uma:
 
-Um tombstone participa de `revision` e de `changeSeq` normalmente; um push de UPDATE sobre uma
-entidade com tombstone é conflito, não recriação silenciosa.
+```text
+Template X revision 5
+     ↓ DELETE baseRevision = 5
+sync_entities.deleted = 1, server_revision 6
+     +
+sync_changes operation = DELETE, server_revision 6, payload null
+     ↓ pull
+Device B apaga localmente, guarda a revision, e NÃO registra Outbox
+```
 
-A política de retenção — por quanto tempo um tombstone é guardado antes da limpeza definitiva —
-fica para a **T16.7**. Ela depende de uma decisão que ainda não foi tomada: quanto tempo um
-dispositivo pode ficar offline e ainda convergir corretamente.
+### Uma autoridade, e não duas
+
+O tombstone mora em `sync_entities`, como estado da própria entidade — não em uma tabela
+`sync_tombstones` paralela. A identidade `(owner_uid, entity_type, entity_sync_id)` já é única ali,
+e é sobre ela que todo push decide. Com duas tabelas, "esta entidade existe?" teria duas respostas
+possíveis, e o dia em que elas discordassem seria o dia em que um dado ressuscitaria.
+
+| Decisão | Comportamento |
+| --- | --- |
+| `DELETE` com `baseRevision` correta | tombstone, `revision + 1`, mudança no log |
+| `DELETE` stale | `STALE` com a revision atual — nunca apagar por cima de algo mais novo |
+| `DELETE` de identidade desconhecida | **também** cria tombstone (dataset restaurado do mesmo backup) |
+| `DELETE` repetido | `ALREADY_APPLIED` — idempotente, sem revision nova |
+| `DELETE` de agregado com `deleteAllowed = false` | `UNSUPPORTED` (`DELETE_NOT_ALLOWED`) |
+| `UPSERT` contra tombstone | `REMOTE_DELETED` — **sempre**, inclusive com a revision do tombstone |
+
+A garantia contra ressurreição é do banco, e não da disciplina do serviço: o
+`ON CONFLICT DO UPDATE` de `applyMutation` tem `AND sync_entities.deleted = 0`.
+
+### Recriar é criar
+
+Manter um item que a nuvem apagou produz **`syncId` novo**. Reusar a identidade morta pediria ao
+servidor para desdizer o tombstone, e todo aparelho que já aplicou a exclusão veria o item voltar
+sem ninguém ter pedido.
+
+Recriar não é oferecido para `WORKOUT_PROGRAM` nem `CUSTOM_EXERCISE`: outros agregados os
+referenciam por `localId` (cascade e `ON DELETE RESTRICT`), e recriá-los exigiria reescrever os
+dependentes junto — outra decisão, para outra tarefa.
+
+### Deletes locais continuam físicos
+
+O delete local não mudou: apagar um treino ou uma sessão apaga a linha, com o cascade do schema, e
+a intenção fica registrada na Outbox. O banco de todo usuário **não** ganha linhas "apagadas mas
+presentes" — o tombstone é remoto, e é lá que ele precisa existir para impedir a ressurreição.
+
+Um `DELETE` também nunca é enviado como a `UPSERT` anterior a ele: a coalescência do push decide
+pela **última** entrada do agregado, e converter uma exclusão em atualização ressuscitaria no
+servidor exatamente o que o usuário apagou.
+
+### Retenção
+
+`SYNC_TOMBSTONE_RETENTION_DAYS` declara a retenção pretendida e **nada a executa**. O custo é
+assimétrico: guardar um tombstone custa uma linha estreita em SQLite; apagá-lo cedo demais custa
+ressurreição para todo aparelho que ficou offline mais tempo do que a retenção. Uma limpeza segura
+precisaria conhecer o **menor cursor entre os aparelhos ativos da conta** — informação que o
+servidor não guarda, porque o cursor é durável no aparelho.
+
+Pelo mesmo motivo o change log não é compactado. Se algum dia for, um cursor anterior à mudança mais
+antiga da conta recebe `CURSOR_EXPIRED` — nunca um `cursor = 0` silencioso, que faria o aparelho
+reprocessar tudo sem saber o que perdeu no meio.
 
 ---
 
-## Conflitos (T16.7)
+## Conflitos (T16.7 — implementado)
 
-A T16.6 **detecta, isola e preserva**. Ela não resolve — e não resolver foi a decisão, não uma
-omissão: qualquer heurística de desempate apagaria em silêncio a alteração de um dos dois lados.
+A T16.6 detectava, isolava e preservava. A T16.7 acrescenta a **decisão** — e ela é do usuário.
 
-O que já existe:
+```text
+A e B na revision 4
+     ↓
+A edita  →  servidor revision 5
+B edita sobre 4  →  STALE
+     ↓
+sync_conflicts (durável)
+ ├── lado local:  Room intacto + Outbox BLOCKED
+ └── lado remoto: revision, hash e payload daquela sequência
+     ↓
+decisão do usuário
+ ├── "Manter deste aparelho"  →  mutação NOVA, baseRevision = 5  →  servidor 6
+ └── "Usar versão da nuvem"   →  aplica local, descarta a tentativa, ZERO mutação
+```
 
-| O que a T16.6 faz | Onde |
+### Tipos de conflito
+
+| `SyncConflictKind` | Quando |
 | --- | --- |
-| detecta escrita stale por `revision`, nunca por relógio | servidor |
-| detecta divergência de histórico imutável | servidor |
-| guarda a alteração local intacta, fora da fila de envio | `sync_outbox` em `BLOCKED` |
-| guarda o lado remoto — revision, hash e payload daquela sequência | `sync_conflicts` |
-| isola: um agregado em conflito não impede os outros de convergirem | cliente |
-| reconhece convergência quando os dois lados têm o mesmo hash canônico | cliente e servidor |
+| `STALE_LOCAL_CHANGE` | o push local foi recusado: o servidor já estava adiante |
+| `REMOTE_AHEAD_LOCAL_DIRTY` | chegou mudança remota para um agregado com alteração local pendente |
+| `REMOTE_DELETED_LOCAL_MODIFIED` | a nuvem tem tombstone e este aparelho tem alteração pendente |
+| `LOCAL_DELETED_REMOTE_MODIFIED` | este aparelho apagou e a nuvem tem versão mais nova |
+| `IMMUTABLE_HISTORY` | mesma sessão concluída, conteúdo divergente |
+| `REJECTED_BY_SERVER` | recusa de contrato — defeito, não divergência entre pessoas |
+| `IDEMPOTENCY` | mesmo `clientMutationId`, alvo ou conteúdo outro |
 
-O que **não** existe, e é a T16.7:
+### Política por agregado
 
-| Tipo de entidade | Política prevista |
-| --- | --- |
-| Template, programa, exercício pessoal, customização | escolha explícita entre as duas versões, com histórico preservado no servidor |
-| Sessão concluída e seus filhos | **imutável** — divergência é conflito de integridade, sem resolução automática |
-| Medida corporal | mesma data com conteúdo divergente = conflito explícito |
-| Tombstone vs. update | conflito — o delete não é desfeito silenciosamente |
+Declarada em `SyncEntityPolicies` (Kotlin) e `SyncEntityPolicyRegistry` (`sync.policy.ts`). Os dois
+precisam concordar — o servidor é quem recusa, o app é quem oferece a escolha — e nenhum tem
+`default`, porque o padrão que dá menos trabalho é sempre *last write wins*.
 
-E, explicitamente ausentes da T16.6: *last write wins*, desempate por `updatedAt`, merge por campo,
-"reenvia com a revision atual" e retry automático de `STALE`/`INVALID`/`UNSUPPORTED`. Há teste
-estrutural e testes de comportamento sobre cada um.
+| Agregado | Mutável | Delete remoto | Resolução |
+| --- | --- | --- | --- |
+| `WORKOUT_PROGRAM` | sim | sim | `USER_CHOICE` |
+| `WORKOUT_TEMPLATE` | sim | sim | `USER_CHOICE` |
+| `CUSTOM_EXERCISE` | sim | sim | `USER_CHOICE` |
+| `BODY_MEASUREMENT` | sim | sim | `USER_CHOICE` |
+| `CHECK_IN` | sim | **não** | `USER_CHOICE` |
+| `WORKOUT_SESSION` | **não** | sim | `IMMUTABLE_CONFLICT` |
 
----
+- **medida corporal é *append-only* por identidade**: cada registro tem `syncId` próprio, então dois
+  aparelhos criando medidas no mesmo dia coexistem. Isso nunca é conflito;
+- **check-in não aceita exclusão remota** porque o domínio não a produz;
+- **sessão concluída é imutável e ainda assim excluível**: apagar não é reescrever;
+- `LAST_WRITE_WINS_ALLOWED` existe como valor declarável e **nenhum agregado o usa**. Há teste dos
+  dois lados.
 
-## Deletes locais (T16.3 → T16.6)
+### As duas resoluções, em detalhe
 
-O delete local continua **físico**, exatamente como era. Apagar um treino ou uma sessão apaga a
-linha, e a intenção fica registrada como `DELETE` do agregado — o suficiente para o servidor criar
-o tombstone quando o tombstone existir.
+**Manter o local** rebaseia e reemite:
 
-A T16.6 não mudou isso, e a razão é a mesma de antes invertida: agora **há** algo consumindo a
-fila, e é justamente por isso que a exclusão precisa de política antes de viajar. Adicionar linhas
-"apagadas mas presentes" no banco de todo usuário sem a política de retenção e de prevenção de
-ressurreição trocaria um problema conhecido por um pior.
+```text
+revision conhecida := remoteRevision   ← a base passa a ser a versão que o usuário viu e recusou
+tentativa anterior descartada          ← ela nasceu de uma base que já não existe
+mutação NOVA (clientMutationId novo)
+conflito := AWAITING_PUSH
+```
+
+O `clientMutationId` é novo de propósito: reaproveitar o da tentativa recusada faria o servidor
+devolver o resultado antigo do ledger em vez de julgar a decisão nova. E isso **não** é
+`force`/`overwrite` — se um terceiro aparelho escreveu no meio, a mutação volta `STALE` e o conflito
+reabre com a revision nova. Esse é o desenho funcionando.
+
+**Usar o remoto** aplica e fecha:
+
+```text
+payload remoto guardado → hash reconferido → escrita pelo MESMO caminho do pull
+   + revision conhecida := remoteRevision
+   + tentativa local descartada
+   + conflito removido
+   → NENHUMA mutação de saída
+```
+
+A ausência da mutação é o ponto: gerar uma devolveria ao servidor o que acabou de vir dele.
+
+### Durabilidade e idempotência
+
+`sync_conflicts.status` vale `PENDING` ou `AWAITING_PUSH`, e a idempotência é uma **escrita
+condicional** (`... AND status = 'PENDING'`), não uma flag de tela: dois toques rápidos afetam uma
+linha, e o segundo encontra zero e desiste. Se o app morrer entre a escolha e o envio, a decisão
+continua na Outbox e o conflito continua marcado — tocar de novo não duplica nada.
+
+Não existem `RESOLVING_REMOTE` nem `RESOLVING_DELETE`: essas resoluções terminam dentro da própria
+transação, e um estado intermediário durável só criaria uma linha que ninguém sabe destravar depois
+de um crash — o mesmo motivo pelo qual a Outbox não tem `IN_FLIGHT`.
+
+### O que continua fora
+
+*Last write wins* como padrão, desempate por `updatedAt`, merge por campo, `force`/`overwrite` no
+servidor, resolução automática em background, CRDT, OT, event sourcing e consenso distribuído. Para
+um grupo pequeno de usuários, `revision` + escolha explícita basta — e cada uma das alternativas
+custaria complexidade permanente para resolver um problema que o Spark não tem.
 
 ---
 

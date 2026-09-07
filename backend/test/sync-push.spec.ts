@@ -445,14 +445,17 @@ describe('Sync push (/v1/sync/push)', () => {
 
   // ---------------------------------------------------------------------- delete
 
-  it('DELETE não é suportado e nunca vira UPSERT', async () => {
+  it('DELETE de um agregado que o domínio não apaga é recusado, e nada vira tombstone', async () => {
+    // O Spark não tem caminho de exclusão de check-in — nenhuma tela, nenhum repositório. Um
+    // `DELETE` deste tipo só pode vir de um cliente defeituoso, e criar tombstone para ele
+    // esconderia o dado de todos os aparelhos sem que ninguém tenha pedido isso.
     const syncId = uuid();
     const response = await push(
-      pushBody([{ entityType: 'WORKOUT_TEMPLATE', entitySyncId: syncId, operation: 'DELETE' }]),
+      pushBody([{ entityType: 'CHECK_IN', entitySyncId: syncId, operation: 'DELETE' }]),
     );
 
     expect(response.body.results[0].status).toBe('UNSUPPORTED');
-    expect(response.body.results[0].reason).toBe('DELETE_NOT_SUPPORTED');
+    expect(response.body.results[0].reason).toBe('DELETE_NOT_ALLOWED');
 
     const pull = await request(app.getHttpServer())
       .get('/v1/sync/pull?cursor=0')

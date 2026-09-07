@@ -10,6 +10,8 @@ export interface StoredSyncEntity {
   readonly serverRevision: number;
   readonly lastServerSequence: number;
   readonly payloadHash: string;
+  /** `true` quando a linha é um tombstone: a entidade existiu e foi excluída (T16.7). */
+  readonly deleted: boolean;
 }
 
 /** Uma tentativa de mutação já registrada no ledger. */
@@ -35,6 +37,20 @@ export interface ApplyMutationInput {
   readonly canonicalPayload: string;
   readonly payloadHash: string;
   /** A revision que esta aplicação produz. Calculada pelo serviço, aplicada aqui. */
+  readonly nextRevision: number;
+  readonly now: number;
+}
+
+/** Uma exclusão pronta para virar tombstone. Não há payload: uma exclusão não afirma conteúdo. */
+export interface ApplyDeleteInput {
+  readonly ownerUid: string;
+  readonly deviceId: string;
+  readonly clientMutationId: string;
+  readonly entityType: SyncEntityType;
+  readonly entitySyncId: string;
+  readonly entitySchemaVersion: number;
+  readonly baseRevision: number | null;
+  /** A revision que o tombstone produz. Exclusão também gasta revision (T16.7). */
   readonly nextRevision: number;
   readonly now: number;
 }
@@ -68,7 +84,7 @@ export class SyncRepository {
     const row = this.sqlite.connection
       .prepare(
         `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
-                last_server_sequence, payload_hash
+                last_server_sequence, payload_hash, deleted
          FROM sync_entities
          WHERE owner_uid = ? AND entity_type = ? AND entity_sync_id = ?`,
       )
@@ -81,6 +97,7 @@ export class SyncRepository {
       serverRevision: row.server_revision,
       lastServerSequence: row.last_server_sequence,
       payloadHash: row.payload_hash,
+      deleted: row.deleted === 1,
     };
   }
 
@@ -153,7 +170,10 @@ export class SyncRepository {
            payload_hash          = excluded.payload_hash,
            origin_device_id      = excluded.origin_device_id,
            updated_at            = excluded.updated_at
-         WHERE sync_entities.server_revision < excluded.server_revision`,
+         WHERE sync_entities.server_revision < excluded.server_revision
+           -- Ressurreição é impossível no banco, e não só por disciplina do serviço: um UPSERT
+           -- que chegasse a um tombstone não atualiza linha nenhuma (T16.7).
+           AND sync_entities.deleted = 0`,
       ).run(
         input.ownerUid,
         input.entityType,
@@ -236,6 +256,115 @@ export class SyncRepository {
   }
 
   /**
+   * Marca a entidade como excluída — tombstone, change log e ledger, **na mesma transação**
+   * (T16.7).
+   *
+   * A linha de `sync_entities` continua existindo, uma `revision` adiante: é ela que responde
+   * "esta identidade morreu" para todo push futuro. O payload é esvaziado porque um tombstone não
+   * afirma conteúdo nenhum — e o estado anterior continua no change log, nas sequências que vieram
+   * antes, para quem ainda não as leu.
+   *
+   * A mudança anexada ao log carrega `payload = 'null'`: o outro aparelho precisa da identidade e
+   * da `serverRevision`, e mandar de volta o conteúdo do que foi apagado só duplicaria dado
+   * pessoal sem ninguém ter o que fazer com ele.
+   */
+  applyDelete(input: ApplyDeleteInput): AppliedMutation {
+    const db = this.sqlite.connection;
+
+    const transaction = db.transaction((): AppliedMutation => {
+      const change = db
+        .prepare(
+          `INSERT INTO sync_changes
+             (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+              operation, payload, payload_hash, origin_device_id, created_at)
+           VALUES (?, ?, ?, ?, ?, 'DELETE', 'null', '', ?, ?)`,
+        )
+        .run(
+          input.ownerUid,
+          input.entityType,
+          input.entitySyncId,
+          input.entitySchemaVersion,
+          input.nextRevision,
+          input.deviceId,
+          input.now,
+        );
+      const serverSequence = Number(change.lastInsertRowid);
+
+      // `INSERT ... ON CONFLICT DO UPDATE` de novo, e não `UPDATE`: uma exclusão pode chegar para
+      // uma identidade que este servidor nunca viu (dois aparelhos com o mesmo dataset restaurado,
+      // e o primeiro push é o delete). Sem o tombstone nesse caso, o outro aparelho recriaria a
+      // entidade depois — que é exatamente a ressurreição que a T16.7 existe para impedir.
+      db.prepare(
+        `INSERT INTO sync_entities
+           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+            last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at,
+            deleted, deleted_at, deleted_by_device_id)
+         VALUES (?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 1, ?, ?)
+         ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
+           server_revision      = excluded.server_revision,
+           last_server_sequence = excluded.last_server_sequence,
+           payload              = '',
+           payload_hash         = '',
+           origin_device_id     = excluded.origin_device_id,
+           updated_at           = excluded.updated_at,
+           deleted              = 1,
+           deleted_at           = excluded.deleted_at,
+           deleted_by_device_id = excluded.deleted_by_device_id
+         WHERE sync_entities.server_revision < excluded.server_revision`,
+      ).run(
+        input.ownerUid,
+        input.entityType,
+        input.entitySyncId,
+        input.entitySchemaVersion,
+        input.nextRevision,
+        serverSequence,
+        input.deviceId,
+        input.now,
+        input.now,
+        input.now,
+        input.deviceId,
+      );
+
+      db.prepare(
+        `INSERT INTO sync_mutations
+           (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
+            base_revision, result_revision, result_sequence, payload_hash, applied_at)
+         VALUES (?, ?, ?, ?, ?, 'DELETE', ?, ?, ?, '', ?)`,
+      ).run(
+        input.ownerUid,
+        input.clientMutationId,
+        input.deviceId,
+        input.entityType,
+        input.entitySyncId,
+        input.baseRevision,
+        input.nextRevision,
+        serverSequence,
+        input.now,
+      );
+
+      return { serverRevision: input.nextRevision, serverSequence };
+    });
+
+    return transaction();
+  }
+
+  /**
+   * A **menor** sequência que o servidor ainda guarda desta conta, ou `0` se ela não tem mudanças.
+   *
+   * É contra ela que um cursor expirado é reconhecido. Hoje nada compacta o log, então o valor é
+   * sempre a primeira mudança da conta — e a verificação só dispara se o banco do servidor for
+   * restaurado de uma cópia mais nova que o aparelho.
+   */
+  oldestSequence(ownerUid: string): number {
+    const row = this.sqlite.connection
+      .prepare(
+        'SELECT COALESCE(MIN(server_sequence), 0) AS min FROM sync_changes WHERE owner_uid = ?',
+      )
+      .get(ownerUid) as { min: number } | undefined;
+    return row?.min ?? 0;
+  }
+
+  /**
    * A maior sequência já emitida pelo servidor.
    *
    * Global, e não por conta: `server_sequence` é uma coluna `AUTOINCREMENT` única, e é contra ela
@@ -307,6 +436,7 @@ interface EntityRow {
   server_revision: number;
   last_server_sequence: number;
   payload_hash: string;
+  deleted: number;
 }
 
 interface MutationRow {
