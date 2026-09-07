@@ -2,6 +2,7 @@ package com.example.data.remote.spark
 
 import android.util.Log
 import com.example.domain.auth.AuthTokenProvider
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -126,6 +127,73 @@ class SparkBackendClient(
         }
     }
 
+    /**
+     * `GET` autenticado que escreve o corpo **direto em um arquivo**, com teto de bytes.
+     *
+     * Existe para o restore (T16.5): um snapshot chega para ser validado e aplicado, não para ser
+     * concatenado em uma `String` na memória de um celular. O corpo é copiado em blocos, e o
+     * contador para no [maxBytes] — recusar durante a escrita é o que evita descobrir que o
+     * documento era absurdo depois de já ter gasto o disco do usuário.
+     *
+     * Só o caminho de sucesso escreve. Em qualquer outro desfecho o arquivo é apagado: um arquivo
+     * truncado com cara de download completo é exatamente o que o hash existe para pegar — e é
+     * melhor nem existir.
+     *
+     * Compressão, quando o servidor oferecer, é assunto do OkHttp: nada aqui inventa um formato
+     * próprio.
+     */
+    suspend fun getToFile(path: String, destination: File, maxBytes: Long): SparkDownloadOutcome =
+        withContext(Dispatchers.IO) {
+            if (!isConfigured) return@withContext SparkDownloadOutcome.NotConfigured
+
+            val url = "${baseUrl.trimEnd('/')}/$path"
+            val request = Request.Builder().url(url).get().build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        // Erro tem corpo pequeno e estruturado (o envelope da T16.0): ele pode ser
+                        // lido inteiro, e é dele que sai o `code` que a UI traduz.
+                        return@withContext SparkDownloadOutcome.Rejected(
+                            code = response.code,
+                            body = response.body?.string().orEmpty()
+                        )
+                    }
+
+                    val source = response.body?.byteStream()
+                        ?: return@withContext SparkDownloadOutcome.Rejected(response.code, "")
+
+                    destination.parentFile?.mkdirs()
+                    var total = 0L
+                    source.use { input ->
+                        destination.outputStream().use { output ->
+                            val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read <= 0) break
+                                total += read
+                                if (total > maxBytes) {
+                                    output.flush()
+                                    destination.delete()
+                                    return@withContext SparkDownloadOutcome.TooLarge
+                                }
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    SparkDownloadOutcome.Downloaded(total)
+                }
+            } catch (e: MissingAuthTokenException) {
+                destination.delete()
+                SparkDownloadOutcome.SignedOut
+            } catch (e: IOException) {
+                // Download interrompido: o arquivo parcial vai embora com ele.
+                destination.delete()
+                Log.i(TAG, "Download do Spark Backend interrompido: ${e.javaClass.simpleName}")
+                SparkDownloadOutcome.NetworkFailure
+            }
+        }
+
     private suspend fun <T> get(
         path: String,
         parse: (String) -> T?
@@ -171,5 +239,6 @@ class SparkBackendClient(
         const val HTTP_SERVER_ERROR = 500
         const val CONNECT_TIMEOUT_SECONDS = 10L
         const val READ_TIMEOUT_SECONDS = 20L
+        const val DOWNLOAD_BUFFER_BYTES = 16 * 1024
     }
 }

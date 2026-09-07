@@ -100,6 +100,19 @@ interface CloudDataBindingDao {
     @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
     suspend fun insertIfAbsent(binding: CloudDataBindingEntity): Long
 
+    /**
+     * Remove o vínculo.
+     *
+     * Existe para **um** caminho: o rollback de um restore que tinha estabelecido o vínculo em um
+     * dataset que era sem dono (T16.5). Desfazer a restauração e deixar o vínculo para trás faria a
+     * conta apontar para dados que não vieram do backup dela.
+     *
+     * Não é um "desativar backup": trocar o dono de um dataset com dados continua exigindo uma
+     * política de troca de conta que o Spark ainda não tem.
+     */
+    @Query("DELETE FROM cloud_data_binding")
+    suspend fun deleteBinding()
+
     @Query(
         """
         UPDATE cloud_data_binding

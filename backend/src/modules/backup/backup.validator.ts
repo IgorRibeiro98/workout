@@ -77,6 +77,14 @@ export interface ValidatedSnapshot {
   /** SHA-256 da forma canônica do corpo inteiro, calculado **aqui**, nunca recebido. */
   readonly payloadHash: string;
   readonly sizeBytes: number;
+  /**
+   * O documento inteiro na forma canônica — exatamente o texto que [payloadHash] resume.
+   *
+   * Guardado desde a T16.5 porque o restore precisa receber **estes bytes** de volta: o Android
+   * recalcula o SHA-256 sobre o que baixou, e remontar o documento a partir das colunas seria uma
+   * segunda canonicalização, capaz de divergir da primeira.
+   */
+  readonly canonicalText: string;
 }
 
 /**
@@ -121,6 +129,7 @@ export function validateBackupRequest(rawBody: string): ValidatedSnapshot {
     items,
     payloadHash: sha256Hex(document.text),
     sizeBytes: Buffer.byteLength(document.text, 'utf8'),
+    canonicalText: document.text,
   };
 }
 

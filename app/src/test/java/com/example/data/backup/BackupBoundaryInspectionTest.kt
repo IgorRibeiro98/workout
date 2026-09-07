@@ -86,15 +86,18 @@ class BackupBoundaryInspectionTest {
     }
 
     @Test
-    fun `restore e sync incremental nao foram implementados`() {
-        // A T16.4 sobe um snapshot completo. Baixar conteúdo, aplicar no Room, mesclar, resolver
-        // conflito ou percorrer cursor são T16.5+ — e meio restore é pior que nenhum.
+    fun `sync incremental nao foi implementado`() {
+        // O backup sobe um snapshot completo, e o restore (T16.5) baixa um snapshot completo por
+        // ação explícita. O que continua não existindo é o **incremental**: push por mutação, pull
+        // de mudanças, cursor e revisão de servidor são T16.6+.
+        //
         // Varrido nos pacotes que falam com o Spark Backend. `nextCursor` e afins existem no
         // catálogo de exercícios (paginação da ExerciseDB) desde antes da T16 e não têm relação
         // com sync — varrer o app inteiro por essas palavras acusaria o inocente.
         assertNoneReference(
             listOf(
                 backupPackage,
+                "app/src/main/java/com/example/data/restore",
                 "app/src/main/java/com/example/data/remote/spark",
                 "app/src/main/java/com/example/data/sync",
                 "app/src/main/java/com/example/presentation/account"
@@ -102,9 +105,6 @@ class BackupBoundaryInspectionTest {
             listOf(
                 "v1/sync/push",
                 "v1/sync/pull",
-                "/content",
-                "restoreBackup",
-                "downloadBackup",
                 "applyRemoteSnapshot",
                 "nextCursor",
                 "serverRevision",

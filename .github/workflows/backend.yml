@@ -68,7 +68,7 @@ jobs:
 
       # Sobe a imagem de verdade com um volume, confere o health e valida que o dado sobrevive
       # à destruição e recriação do container — o invariante que a T16.0 precisa garantir.
-      - name: Smoke test (health + persistência)
+      - name: Smoke test (health + persistência + schema de restore)
         run: |
           set -euo pipefail
           docker volume create spark-ci-data
@@ -110,6 +110,31 @@ jobs:
             }
             console.log('persistência ok');
             db.close();"
+
+          # T16.5 — a migration do documento do snapshot e as rotas de leitura do restore.
+          #
+          # Sem service account não há como autenticar aqui, e é exatamente isso que o smoke
+          # verifica: as rotas existem e nascem **fechadas**. 401 (e não 404) é a prova.
+          docker exec spark-ci-2 node -e "
+            const S=require('/app/node_modules/better-sqlite3');
+            const db=new S('/data/spark.db');
+            const columns=db.prepare('PRAGMA table_info(backup_snapshots)').all().map(c=>c.name);
+            if (!columns.includes('payload')) {
+              console.error('migration 0004 não aplicada: sem coluna payload'); process.exit(1);
+            }
+            const applied=db.prepare('SELECT COUNT(*) AS total FROM schema_migrations').get();
+            if (applied.total < 4) {
+              console.error('migrations pendentes: ' + applied.total); process.exit(1);
+            }
+            console.log('schema de restore ok');
+            db.close();"
+
+          for path in /v1/backups /v1/backups/abc /v1/backups/abc/content; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$path")
+            if [ "$status" != "401" ]; then
+              echo "rota $path deveria exigir autenticação; respondeu $status"; exit 1
+            fi
+          done
 
           docker rm -f spark-ci-2
           docker volume rm spark-ci-data

@@ -294,7 +294,7 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
 - **Nada consome a Outbox como fila de envio.** O backup da T16.4 a usa apenas para marcar o que
   um snapshot completo já cobriu, **depois** da confirmação do servidor. Não introduza
   `WorkManager`, polling, retry automático ou worker de sync.
-- **Migrations.** Room é `version = 32` (era 31 na T16.3) com schema exportado versionado em
+- **Migrations.** Room é `version = 33` (era 32 na T16.4) com schema exportado versionado em
   `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da versão
   anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
@@ -320,7 +320,8 @@ ou de virar perda de dado.
   Alteração feita durante o upload permanece pendente. Limpar antes é perda de dado sem conserto.
 - **Backup só lê.** Nada de corrigir PR, recalcular XP, normalizar sessão ou salvar template no
   caminho da serialização. Sessão concluída continua imutável.
-- **Fora do snapshot:** dado derivado (XP, conquistas, PRs, streak), catálogo e conteúdo premium,
+- **Fora do snapshot:** dado derivado (XP, conquistas, PRs, streak — o restore os recalcula),
+  catálogo e conteúdo premium,
   preferências de aparelho, estado do timer, `deviceId`, estado da nuvem, credenciais, a Outbox e
   **mídia local** (`content://` não é referência portátil, e Base64 não é a saída).
 - **Nada automático.** Sem `WorkManager`, agendador, polling, retry automático ou backup em
@@ -335,6 +336,51 @@ ou de virar perda de dado.
   status. Nunca corpo, payload, nome de treino, nota, medida ou token.
 - **Testes.** Toda mudança no backup roda
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.backup.*"` e `npm test` em
+  `backend/`. As duas são offline e não dependem de Firebase, VPS ou internet.
+
+## 13.3 Restore seguro (T16.5)
+
+O Spark **baixa** um snapshot da Conta Spark e substitui o dataset local por ele. As regras abaixo
+são o que impede o restore de virar perda de dado — ou de virar sync por acidente.
+
+- **Restore é substituição, não merge.** `REPLACE LOCAL DATASET WITH BACKUP`, e só isso. *Keep
+  both*, *last write wins* e merge por campo são T16.6/T16.7; introduzir qualquer um deles aqui faz
+  o usuário perder dado achando que ganhou. Há teste estrutural.
+- **A ordem não muda.** `download → hash → versão → schema → semântica → plano → preview →
+  confirmação → snapshot de segurança → transação`. Nada local pode ser alterado antes da
+  confirmação, e nenhuma etapa pode ser pulada "porque o servidor já validou".
+- **Hash é obrigatório.** HTTPS protege o transporte e não substitui a verificação: divergência é
+  sempre recusa, sempre antes de qualquer escrita.
+- **Versão desconhecida não é interpretada.** `RestoreContract.SUPPORTED_BACKUP_SCHEMA_VERSIONS` é
+  a lista, `BackupMigrator` é a fronteira, e migração de versão que ainda não existe não é
+  inventada.
+- **Nada parcial.** Um agregado inválido recusa o snapshot inteiro. Item desconhecido não é
+  ignorado; identidade que não bate não é "aproximada".
+- **O snapshot de segurança vem antes da mutação**, mora no armazenamento **privado** do app e
+  **nunca** é enviado ao servidor.
+- **Uma transação.** Limpeza e inserção do dataset pessoal têm um commit e um rollback. O vínculo
+  com a conta e o baseline da Outbox fazem parte do mesmo commit — nunca antes dele.
+- **A Outbox não é replay.** Restaurar não gera mutação por item; a fila anterior só é substituída
+  dentro do commit. Limpar antes é perda de dado sem conserto.
+- **Catálogo canônico e conteúdo premium não são apagados.** O restore substitui dado pessoal.
+- **Identidade.** `syncId` é preservado, `localId` é novo, relações são reconstruídas por
+  identidade portátil. Nada pode depender do `localId` do aparelho de origem.
+- **Histórico não é recalculado.** Sessão concluída volta como estava — duração, carga, repetições
+  e horários. Restore é reconstrução de um snapshot histórico, não permissão para editar histórico.
+- **Sem efeito colateral.** Restaurar não dá XP, não desbloqueia conquista, não cria recorde e não
+  notifica. Gamificação é derivada e é reconstruída pelas reconciliações que já existem.
+- **Conta.** Dataset sem dono pode receber restore da conta atual; dataset de A com a conta B
+  conectada é bloqueio (`ACCOUNT_MISMATCH`), nunca reatribuição. A conta é revalidada imediatamente
+  antes da aplicação.
+- **Recuperação.** Uma tentativa interrompida é resolvida na abertura do app, antes de qualquer
+  outra escrita, e enquanto isso nenhuma tela diz "restaurado".
+- **Nada automático.** Sem restore no login, na abertura, ao abrir o Perfil ou ao listar backups.
+  Sem `WorkManager`, polling ou retry automático. A recuperação não é exceção: ela só conclui o que
+  o usuário já confirmou.
+- **Logs.** O pacote de restore não registra nada hoje, e a ausência é testada. Se algum log for
+  adicionado, ele carrega metadata técnica — nunca snapshot, medida, histórico ou token.
+- **Testes.** Toda mudança no restore roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.restore.*"` e `npm test` em
   `backend/`. As duas são offline e não dependem de Firebase, VPS ou internet.
 
 ## 14. Tests and build are part of implementation

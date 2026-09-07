@@ -181,6 +181,17 @@ class SettingsManager(private val context: Context) {
     suspend fun setWeeklyGoal(goal: Int) {
         context.dataStore.edit { it[WEEKLY_GOAL] = goal }
     }
+
+    /**
+     * A unidade de carga do atleta.
+     *
+     * Só a leitura existia: a UI nunca ofereceu a troca, e o padrão (kg) servia. O restore (T16.5)
+     * precisa **aplicar** a preferência que veio no backup — e ela é uma das seis que descrevem a
+     * pessoa, não o aparelho (`UserPreferencesBackupDto`).
+     */
+    suspend fun setUseKg(useKg: Boolean) {
+        context.dataStore.edit { it[USE_KG] = useKg }
+    }
     
     suspend fun setAutoCheckIn(auto: Boolean) {
         context.dataStore.edit { it[AUTO_CHECK_IN] = auto }

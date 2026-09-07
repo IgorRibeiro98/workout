@@ -1,11 +1,17 @@
 # Matriz de dados do Spark — classificação para sincronização
 
-- **Tarefa:** T16.0 (classificação) — revisada contra o código na T16.3 e **na T16.4**
-- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 32` desde a
-  T16.4) e `SettingsManager` (DataStore), relidos em 2026-09-06.
+- **Tarefa:** T16.0 (classificação) — revisada contra o código na T16.3, na T16.4 e **na T16.5**
+- **Base:** código real em `app/src/main/java/com/example/data/` (Room `version = 33` desde a
+  T16.5) e `SettingsManager` (DataStore), relidos em 2026-09-06.
 - **Status:** a coluna `syncId` **está implementada** para as raízes de agregado do Grupo A, a
-  Outbox existe e é transacional, e desde a **T16.4** o Grupo A **sobe** para o Spark Backend como
-  snapshot completo, depois de adoção explícita. Nada é **baixado**: restore é T16.5.
+  Outbox existe e é transacional, desde a **T16.4** o Grupo A **sobe** para o Spark Backend como
+  snapshot completo (depois de adoção explícita) e desde a **T16.5** ele **volta**, por ação
+  explícita do usuário, substituindo o dataset local. Nada é sincronizado: incremental é T16.6.
+
+> **A coluna "Estratégia de restore" deixou de ser plano.** Ela está implementada em
+> `com.example.data.restore` e é exercitada por teste de ida e volta (dataset → backup → servidor →
+> restore → dataset semanticamente idêntico). Onde a estratégia mudou na implementação, a linha foi
+> corrigida abaixo — o código executável é a autoridade.
 
 ## Matriz de backup (T16.4)
 
@@ -17,24 +23,24 @@ código do montador de snapshot.
 | `workout_programs` | **BACKUP** | criado pelo usuário, insuperável se perdido | `syncId` (UUID) | `entitySchemaVersion` 1 | recriar por `syncId` |
 | `workout_templates` (+ `workout_template_exercises`) | **BACKUP** | idem; filhos viajam no snapshot da raiz | `syncId` da raiz | 1 | recriar o agregado inteiro |
 | `workout_sessions` `COMPLETED` (+ `exercise_sessions`, `set_logs`) | **BACKUP** | histórico do que aconteceu | `syncId` da raiz | 1 | inserir se ausente; divergência = conflito de integridade, nunca sobrescrita |
-| `workout_sessions` `PLANNED` | **DERIVED** | derivável do template e da agenda | — | — | recalcular |
+| `workout_sessions` `PLANNED` | **DERIVED** | derivável do template e da agenda | — | — | não restaura (não entra no snapshot) |
 | `workout_sessions` `IN_PROGRESS` / `PAUSED` | **LOCAL_ONLY** | execução **neste** aparelho; sincronizar faria dois aparelhos disputarem o mesmo cursor | — | — | não restaura |
 | `workout_sessions` `CANCELLED` | **LOCAL_ONLY** (T16.4) | decisão adiada para a T16.6 pela própria matriz | — | — | decisão pendente |
 | `exercises` com `isUserCreated = 1` | **BACKUP** | criado pelo usuário | `syncId` (UUID) | 1 | recriar por `syncId` |
 | `exercises` de catálogo | **LOCAL_ONLY** | conteúdo do app, vem do manifesto versionado | `canonicalId` (já global) | — | reinstalar pelo manifesto |
-| `exercise_user_overrides` | **BACKUP** (sem `customPhotoUri`) | customização pessoal | identidade **do exercício alvo**: `canonical:<id>` ou `custom:<uuid>` | 1 | aplicar sobre o exercício resolvido |
+| `exercise_user_overrides` | **BACKUP** (sem `customPhotoUri`) | customização pessoal | identidade **do exercício alvo**: `canonical:<id>` ou `custom:<uuid>` | 1 | aplicar sobre o exercício resolvido; `customPhotoUri` volta nulo |
 | `body_measurements` | **BACKUP** | dado pessoal insubstituível | `syncId` (UUID) | 1 | inserir por `syncId` |
 | `check_ins` | **BACKUP** | dado pessoal | `syncId` (UUID) | 1 | inserir por `syncId` |
 | `weekly_goal_history` | **BACKUP** | histórico de meta do atleta | `week:<epochDay>` (PK natural, já global) | 1 | inserir por semana |
 | Preferências do atleta (`WEEKLY_GOAL`, `USE_KG`, `DEFAULT_REST_SECONDS`, `DEFAULT_EXERCISE_REST_SECONDS`, `RIR_RPE_ENABLED`, `AUTO_REST_TIMER_ON_SET`) | **BACKUP** | descrevem a pessoa, não o aparelho | `preferences` (singleton) | 1 | aplicar no DataStore |
 | Preferências do aparelho (tema, som, vibração, tela ligada, notificação de timer, GIFs) | **LOCAL_ONLY** | dependem da tela, do hardware e do contexto de uso | — | — | não restaura |
 | Estado do timer de descanso | **LOCAL_ONLY** | estado transitório de execução; restaurar dispararia timer em outro aparelho | — | — | não restaura |
-| `gamification_events`, `xp_transactions`, `achievement_unlocks`, `personal_records`, nível/XP/streak | **DERIVED** | reconstruíveis do histórico pelas regras que já existem | — | — | **recalcular** a partir do histórico restaurado |
+| `gamification_events`, `xp_transactions`, `achievement_unlocks`, `personal_records`, nível/XP/streak | **DERIVED** | reconstruíveis do histórico pelas regras que já existem | — | — | **T16.5:** limpos dentro da transação de restore e reconstruídos pelas reconciliações da abertura (`XpReconciler`, `AchievementReconciler`, `MissionReconciler`). Zero XP/conquista novos |
 | `exercise_alternatives` e catálogo premium | **LOCAL_ONLY** | conteúdo do app, do manifesto | — | — | reinstalar pelo manifesto |
 | Fotos personalizadas (`customPhotoUri` em `exercises` e `exercise_user_overrides`) | **LOCAL_ONLY** | é `content://` deste aparelho; sem object storage na T16.4, e Base64 no snapshot seria contornar a decisão | — | — | permanece local — a UI avisa |
 | Chave da ExerciseDB | **LOCAL_ONLY** | credencial | — | — | não restaura |
 | `deviceId`, estado da nuvem, versões de conteúdo instaladas | **LOCAL_ONLY** | identidade/estado da instalação | — | — | não restaura |
-| `sync_outbox`, `backup_attempts`, `cloud_data_binding` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura |
+| `sync_outbox`, `backup_attempts`, `cloud_data_binding`, `restore_attempts` | **LOCAL_ONLY** | mecanismo interno, não dado do usuário | — | — | não restaura. **T16.5:** a Outbox é zerada no commit do restore e o vínculo é gravado por ele |
 | Firebase ID Token, credencial Google, App Check, credencial/prompt/contexto/resposta do Gemini | **nunca** | segredo ou estado transitório | — | — | — |
 | Vínculo `uid` ↔ dataset no servidor, sequência/cursor de mudanças, registro de `clientMutationId`, tombstones, quota de IA | **FUTURE_SERVER_ONLY** | só faz sentido com identidade autenticada | — | — | — |
 
@@ -163,14 +169,20 @@ e reproduzível a partir dele. `gamification_events` já tem `dedupeKey` único 
 `xp_transactions` já tem `eventId` único, então a idempotência local existe sem `syncId`. Nenhuma
 das cinco linhas abaixo recebeu identidade global.
 
-**Consequência aceita:** ao restaurar em um aparelho novo (T16.5), gamificação é **recalculada** a
-partir do histórico restaurado, não copiada. É mais lento e é o comportamento correto: o XP passa a
-ser sempre consistente com a política vigente, e não um número herdado que ninguém consegue auditar.
+**Consequência aceita, e agora implementada (T16.5):** ao restaurar, a gamificação é **recalculada**
+a partir do histórico restaurado, não copiada. A transação de restore limpa as quatro tabelas junto
+com o histórico que elas descreviam — inclusive porque as `dedupeKey` daqueles eventos citam
+`localId` de sessões que o restore regenerou, e mantê-las faria eventos futuros serem suprimidos por
+engano. As reconciliações que já rodam na abertura do app reconstroem o que o histórico prova.
 
-**Revisão feita na T16.4:** os cinco continuam **fora** do backup. Há teste que varre o payload
-real procurando por PR, XP, conquista e streak. Se a recomputação em massa se mostrar cara no
-restore (T16.5), a saída continua sendo um *snapshot* de conveniência explicitamente marcado como
-cache — nunca promover estes dados a autoridade remota.
+O restore **não premia nada**: ele escreve por DAO, fora do `WorkoutEngine`, e nenhum evento é
+publicado. Há teste verificando zero XP, zero conquista e zero recorde depois de restaurar um
+histórico inteiro.
+
+**Revisão feita na T16.4 e confirmada na T16.5:** os cinco continuam **fora** do backup. Há teste
+que varre o payload real procurando por PR, XP, conquista e streak. Se a recomputação em massa se
+mostrar cara na prática, a saída continua sendo um *snapshot* de conveniência explicitamente marcado
+como cache — nunca promover estes dados a autoridade remota.
 
 ---
 

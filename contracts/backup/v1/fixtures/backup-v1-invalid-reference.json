@@ -1,0 +1,191 @@
+{
+  "backupSchemaVersion": 1,
+  "capturedAt": 1788700000000,
+  "clientBackupId": "4c7e9a02-6b18-4d35-a0f7-2e9c5b31d8f6",
+  "deviceId": "b1d4a6f2-7c33-4a51-9f0e-2d5c8b7a1e44",
+  "items": [
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "BODY_MEASUREMENT",
+      "payload": {
+        "abdomenCm": null,
+        "bodyFatPercentage": 18.5,
+        "calfCm": null,
+        "chestCm": null,
+        "createdAt": 1788600000000,
+        "date": 1788595200000,
+        "heightCm": 178.0,
+        "hipCm": null,
+        "leftArmCm": null,
+        "leftThighCm": null,
+        "rightArmCm": null,
+        "rightThighCm": null,
+        "syncId": "2a5f8c31-4b6d-4e19-9c02-7d1a3e6b8f40",
+        "waistCm": 82.0,
+        "weightKg": 79.4
+      },
+      "syncId": "2a5f8c31-4b6d-4e19-9c02-7d1a3e6b8f40"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "CHECK_IN",
+      "payload": {
+        "checkInTime": 1788580000000,
+        "checkOutTime": 1788586000000,
+        "gymName": "Academia do bairro",
+        "sessionSyncId": "6d4c2b90-8e17-4a35-bf62-0c9d1e5a7b38",
+        "syncId": "77e1a4c6-3b28-4d50-9f7a-5c62b0d84e19"
+      },
+      "syncId": "77e1a4c6-3b28-4d50-9f7a-5c62b0d84e19"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "EXERCISE_OVERRIDE",
+      "payload": {
+        "defaultRestSeconds": 75,
+        "displayName": "Supino reto (barra olímpica)",
+        "exercise": {
+          "id": "supino-reto-barra",
+          "kind": "CANONICAL"
+        },
+        "notes": "Pegada média, pés firmes.",
+        "updatedAt": 1788500000000
+      },
+      "syncId": "canonical:supino-reto-barra"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "USER_PREFERENCES",
+      "payload": {
+        "autoRestTimerOnSet": true,
+        "defaultExerciseRestSeconds": 120,
+        "defaultRestSeconds": 90,
+        "rirRpeEnabled": true,
+        "useKg": true,
+        "weeklyGoal": 4
+      },
+      "syncId": "preferences"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WEEKLY_GOAL",
+      "payload": {
+        "createdAt": 1788400000000,
+        "effectiveFromWeekStartEpochDay": 20700,
+        "goal": 4
+      },
+      "syncId": "week:20700"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WORKOUT_PROGRAM",
+      "payload": {
+        "contentVersion": 0,
+        "description": "Divisão de quatro dias",
+        "externalId": null,
+        "isCurrent": true,
+        "name": "Programa Hipertrofia",
+        "syncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95"
+      },
+      "syncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WORKOUT_SESSION",
+      "payload": {
+        "exercises": [
+          {
+            "actualExercise": {
+              "id": "supino-reto-barra",
+              "kind": "CANONICAL"
+            },
+            "executionOrder": 0,
+            "exerciseNameSnapshot": "Supino reto",
+            "finishedAt": 1788584000000,
+            "machineLabelSnapshot": null,
+            "notes": null,
+            "plannedExercise": {
+              "id": "supino-reto-barra",
+              "kind": "CANONICAL"
+            },
+            "plannedOrder": 0,
+            "primaryMuscleSnapshot": "Peito",
+            "replacementReason": null,
+            "restDurationSecondsSnapshot": 90,
+            "sets": [
+              {
+                "completed": true,
+                "durationSeconds": 42,
+                "finishedAt": 1788581000000,
+                "repetitions": 10,
+                "rir": 2,
+                "rpe": null,
+                "setNumber": 1,
+                "startedAt": 1788580900000,
+                "type": "NORMAL",
+                "weight": 60.0
+              }
+            ],
+            "startedAt": 1788580800000
+          }
+        ],
+        "finishedAt": 1788586000000,
+        "notes": null,
+        "startedAt": 1788580000000,
+        "status": "COMPLETED",
+        "syncId": "6d4c2b90-8e17-4a35-bf62-0c9d1e5a7b38",
+        "templateNameSnapshot": "Treino A",
+        "templateSyncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
+      },
+      "syncId": "6d4c2b90-8e17-4a35-bf62-0c9d1e5a7b38"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WORKOUT_TEMPLATE",
+      "payload": {
+        "dayOfWeek": "MONDAY",
+        "exercises": [
+          {
+            "exercise": {
+              "id": "supino-reto-barra",
+              "kind": "CANONICAL"
+            },
+            "machineLabel": null,
+            "maxReps": 12,
+            "minReps": 8,
+            "notes": null,
+            "plannedWeight": 60.0,
+            "position": 0,
+            "restDurationSeconds": 90,
+            "targetSets": 4
+          },
+          {
+            "exercise": {
+              "id": "c41f6d80-2a93-4b17-85e0-9f3c7a1d6b20",
+              "kind": "CUSTOM"
+            },
+            "machineLabel": null,
+            "maxReps": 15,
+            "minReps": 10,
+            "notes": null,
+            "plannedWeight": null,
+            "position": 1,
+            "restDurationSeconds": 60,
+            "targetSets": 3
+          }
+        ],
+        "name": "Treino A",
+        "orderInProgram": 0,
+        "programSyncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95",
+        "shortIdentifier": "A",
+        "syncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
+      },
+      "syncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
+    }
+  ],
+  "source": {
+    "appVersionCode": 1,
+    "appVersionName": "1.0",
+    "databaseVersion": 32
+  }
+}

@@ -91,11 +91,24 @@ describe('Health (liveness e readiness)', () => {
     expect((await request(app.getHttpServer()).post('/v1/backups').send({})).status).toBe(401);
   });
 
-  it('não existe endpoint de conteúdo de backup — restore é T16.5', async () => {
-    // Devolver o snapshot já seria metade do restore, sem a validação, o preview e a escrita
-    // transacional que a T16.5 precisa desenhar. A T16.4 entrega metadata e nada além disso.
-    for (const path of ['/v1/backups/latest/content', '/v1/backups/abc/content', '/v1/backups']) {
-      expect((await request(app.getHttpServer()).get(path)).status).toBe(404);
+  it('a leitura do backup para restore existe e nasceu fechada (T16.5)', async () => {
+    // Este teste substitui o da T16.4, que exigia a **ausência** destas rotas. Elas existem agora,
+    // e 401 — não 404 — é a prova de que nasceram protegidas.
+    for (const path of ['/v1/backups', '/v1/backups/abc', '/v1/backups/abc/content']) {
+      expect((await request(app.getHttpServer()).get(path)).status).toBe(401);
     }
+  });
+
+  it('restore não virou um endpoint de importação genérica', async () => {
+    // O servidor aceita **um** formato, em **uma** rota de escrita: `POST /v1/backups`, validado
+    // contra o registry fechado. Não existe "mande qualquer JSON e importe", e restaurar é leitura
+    // do lado do servidor — quem escreve é o Room do aparelho.
+    expect((await request(app.getHttpServer()).post('/v1/restore').send({})).status).toBe(404);
+    expect(
+      (await request(app.getHttpServer()).post('/v1/backups/abc/restore').send({})).status,
+    ).toBe(404);
+    expect((await request(app.getHttpServer()).post('/v1/import').send({})).status).toBe(404);
+    expect((await request(app.getHttpServer()).put('/v1/backups/abc').send({})).status).toBe(404);
+    expect((await request(app.getHttpServer()).delete('/v1/backups/abc')).status).toBe(404);
   });
 });

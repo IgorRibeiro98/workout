@@ -49,7 +49,10 @@ describe('Persistência do backup', () => {
       // A falha é forçada no repositório de propósito: a validação já recusaria isto no HTTP, e o
       // que este teste precisa provar é a camada **de baixo** — que a transação existe de verdade
       // e não é só uma sequência de INSERTs com sorte.
-      const duplicated = snapshotWith([item('CUSTOM_EXERCISE', UUID_1), item('CUSTOM_EXERCISE', UUID_1)]);
+      const duplicated = snapshotWith([
+        item('CUSTOM_EXERCISE', UUID_1),
+        item('CUSTOM_EXERCISE', UUID_1),
+      ]);
 
       expect(() => repository.insert(UID, duplicated, Date.now())).toThrow();
 
@@ -196,6 +199,7 @@ function snapshotWith(
     items,
     payloadHash: `hash-${clientBackupId}`,
     sizeBytes: 42,
+    canonicalText: `{"clientBackupId":"${clientBackupId}"}`,
   };
 }
 

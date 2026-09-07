@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  GoneException,
   HttpException,
   HttpStatus,
   NotFoundException,
@@ -19,7 +20,11 @@ import { BACKUP_ERROR_CODES, type BackupErrorCode } from './backup.contract';
  * série ou uma medida corporal não podem vazar numa mensagem de erro — que acaba em log do cliente,
  * em tela e em relato de suporte.
  */
-function backupException(status: HttpStatus, code: BackupErrorCode, message: string): HttpException {
+function backupException(
+  status: HttpStatus,
+  code: BackupErrorCode,
+  message: string,
+): HttpException {
   const body = { code, message };
   switch (status) {
     case HttpStatus.CONFLICT:
@@ -28,6 +33,8 @@ function backupException(status: HttpStatus, code: BackupErrorCode, message: str
       return new PayloadTooLargeException(body);
     case HttpStatus.NOT_FOUND:
       return new NotFoundException(body);
+    case HttpStatus.GONE:
+      return new GoneException(body);
     default:
       return new BadRequestException(body);
   }
@@ -73,5 +80,19 @@ export const BackupErrors = {
       HttpStatus.NOT_FOUND,
       BACKUP_ERROR_CODES.BACKUP_NOT_FOUND,
       'nenhum backup para esta conta',
+    ),
+
+  /**
+   * O snapshot existe e o documento original dele não.
+   *
+   * Erro próprio, e não `NOT_FOUND`: o backup **está** na lista da conta, e dizer "não existe"
+   * faria o app parecer quebrado. O cliente mostra que aquela cópia não pode ser restaurada e
+   * convida a criar uma nova.
+   */
+  contentUnavailable: () =>
+    backupException(
+      HttpStatus.GONE,
+      BACKUP_ERROR_CODES.BACKUP_CONTENT_UNAVAILABLE,
+      'este backup foi criado por uma versão anterior do servidor e não pode ser restaurado',
     ),
 };

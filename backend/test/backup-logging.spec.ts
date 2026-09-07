@@ -123,6 +123,48 @@ describe('Observabilidade do backup: metadata sim, conteúdo não', () => {
     expect(output).not.toContain('Treino A');
   });
 
+  it('baixar um backup registra correlação e volume, nunca o snapshot (T16.5)', async () => {
+    await start();
+
+    const created = await post(fixture('backup-v1-complete'));
+    const backupId = created.body.backupId as string;
+
+    written.length = 0;
+    const list = await request(app.getHttpServer())
+      .get('/v1/backups')
+      .set('Authorization', `Bearer ${TOKEN}`);
+    const content = await request(app.getHttpServer())
+      .get(`/v1/backups/${backupId}/content`)
+      .set('Authorization', `Bearer ${TOKEN}`);
+
+    expect(list.status).toBe(200);
+    expect(content.status).toBe(200);
+
+    const output = logs();
+
+    // Metadata técnica do download: existe.
+    expect(output).toContain('backup.content.served');
+    expect(output).toContain('"uidPrefix":"uid-da"');
+
+    // O snapshot atravessou a resposta; ele não pode ter atravessado o log.
+    for (const secret of [
+      'Treino A',
+      'Rosca martelo no banco inclinado',
+      'Academia do bairro',
+      'Pegada média, pés firmes.',
+      'Programa Hipertrofia',
+      '79.4',
+      '18.5',
+      'supino-reto-barra',
+    ]) {
+      expect(output).not.toContain(secret);
+    }
+    expect(output).not.toContain('"payload"');
+    expect(output).not.toContain(TOKEN);
+    expect(output).not.toContain('Bearer');
+    expect(output).not.toContain(UID);
+  });
+
   it('a resposta de erro não devolve conteúdo do snapshot', async () => {
     await start();
 

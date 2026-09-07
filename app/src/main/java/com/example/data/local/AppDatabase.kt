@@ -39,9 +39,10 @@ import kotlinx.coroutines.launch
         AchievementUnlockEntity::class,
         com.example.data.sync.SyncOutboxEntryEntity::class,
         com.example.data.backup.CloudDataBindingEntity::class,
-        com.example.data.backup.BackupAttemptEntity::class
+        com.example.data.backup.BackupAttemptEntity::class,
+        com.example.data.restore.RestoreAttemptEntity::class
     ],
-    version = 32,
+    version = 33,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -55,6 +56,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncOutboxDao(): com.example.data.sync.SyncOutboxDao
     abstract fun cloudDataBindingDao(): com.example.data.backup.CloudDataBindingDao
     abstract fun backupAttemptDao(): com.example.data.backup.BackupAttemptDao
+    abstract fun restoreAttemptDao(): com.example.data.restore.RestoreAttemptDao
+    abstract fun restoreDao(): com.example.data.restore.RestoreDao
 
     companion object {
 
@@ -65,7 +68,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 32
+        const val SCHEMA_VERSION: Int = 33
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -103,6 +106,52 @@ abstract class AppDatabase : RoomDatabase() {
          * que permite vincular, capturar o snapshot, ler o corte da Outbox e registrar a tentativa
          * na mesma transação.
          */
+        /**
+         * T16.5 — restore seguro: a tentativa de restauração precisa sobreviver ao processo.
+         *
+         * Uma tabela, e **nenhuma** alteração nas tabelas de domínio. O restore não acrescenta
+         * coluna a treino, sessão ou medida: ele substitui o conteúdo delas dentro de uma
+         * transação, e o que precisa ser durável é o *progresso* da operação — em que fase ela
+         * está e onde estão os arquivos dela.
+         *
+         * `restore_attempts` guarda caminho de arquivo, não o snapshot. O documento baixado e o
+         * snapshot de segurança vivem no armazenamento privado do app: eles são grandes, são
+         * rebaixáveis (o download é read-only no servidor) e não têm por que atravessar a
+         * transação que substitui o dataset.
+         */
+        val MIGRATION_32_33 = object : Migration(32, 33) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `restore_attempts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `restoreAttemptId` TEXT NOT NULL,
+                        `backupId` TEXT NOT NULL,
+                        `ownerUid` TEXT NOT NULL,
+                        `payloadHash` TEXT NOT NULL,
+                        `backupSchemaVersion` INTEGER NOT NULL,
+                        `backupCreatedAt` INTEGER NOT NULL,
+                        `datasetWasUnbound` INTEGER NOT NULL,
+                        `downloadPath` TEXT,
+                        `safetySnapshotPath` TEXT,
+                        `status` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        `failureReason` TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_restore_attempts_restoreAttemptId` " +
+                        "ON `restore_attempts` (`restoreAttemptId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_restore_attempts_ownerUid_status_id` " +
+                        "ON `restore_attempts` (`ownerUid`, `status`, `id`)"
+                )
+            }
+        }
+
         val MIGRATION_31_32 = object : Migration(31, 32) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Uma linha, sempre `id = 1`: um banco tem um dono, não uma lista deles.
@@ -615,7 +664,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33
                 )
                 .addCallback(DatabaseCallback())
                 .build()

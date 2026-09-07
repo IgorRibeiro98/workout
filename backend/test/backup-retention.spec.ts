@@ -96,11 +96,9 @@ describe('Retenção de backups', () => {
 
     // A limpeza quebra; o backup já foi confirmado antes dela.
     const repository = app.get(BackupRepository);
-    const prune = jest
-      .spyOn(repository, 'pruneOlderThan')
-      .mockImplementation(() => {
-        throw new Error('falha simulada na limpeza');
-      });
+    const prune = jest.spyOn(repository, 'pruneOlderThan').mockImplementation(() => {
+      throw new Error('falha simulada na limpeza');
+    });
 
     const second = await post(id(2));
 
@@ -117,6 +115,8 @@ describe('Retenção de backups', () => {
   });
 
   it('a configuração é validada no startup, como todo o resto', () => {
-    expect(() => AppConfig.fromEnv({ DATABASE_PATH: ':memory:', BACKUP_RETENTION_COUNT: 'muitos' })).toThrow();
+    expect(() =>
+      AppConfig.fromEnv({ DATABASE_PATH: ':memory:', BACKUP_RETENTION_COUNT: 'muitos' }),
+    ).toThrow();
   });
 });

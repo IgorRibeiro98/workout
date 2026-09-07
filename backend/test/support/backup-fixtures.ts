@@ -9,13 +9,23 @@ import { join } from 'node:path';
  * dois lados falharem juntos — que é exatamente o ponto de ter um diretório de contrato em vez de
  * duas definições independentes.
  */
-export const FIXTURES_DIR = join(__dirname, '..', '..', '..', 'contracts', 'backup', 'v1', 'fixtures');
+export const FIXTURES_DIR = join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'contracts',
+  'backup',
+  'v1',
+  'fixtures',
+);
 
 export type BackupFixtureName =
   | 'backup-v1-minimal'
   | 'backup-v1-complete'
   | 'backup-v1-invalid-id'
   | 'backup-v1-duplicate-item'
+  | 'backup-v1-invalid-reference'
   | 'backup-v1-unsupported-version';
 
 /** O texto cru da fixture — é o que o cliente enviaria, e é sobre ele que o hash é calculado. */

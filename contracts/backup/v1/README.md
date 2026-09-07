@@ -1,9 +1,16 @@
 # Contrato de backup do Spark — v1 (T16.4)
 
-- **Tarefa:** T16.4 — Backup estruturado no Spark Backend.
+- **Tarefas:** T16.4 — backup estruturado; **T16.5** — restore seguro (leitura do mesmo snapshot).
 - **Escopo:** o formato do *snapshot completo* que o Spark Android envia ao Spark Backend, a
-  representação canônica usada no hash e as fixtures que os testes dos **dois** lados consomem.
-- **Fora de escopo:** restore (T16.5), sync incremental (T16.6), conflitos/tombstones (T16.7).
+  representação canônica usada no hash, as rotas de **leitura** que o restore usa e as fixtures que
+  os testes dos **dois** lados consomem.
+- **Fora de escopo:** sync incremental (T16.6), conflitos/tombstones (T16.7).
+
+> **Um contrato, duas direções.** O restore da T16.5 **não** tem formato próprio: o documento que
+> ele valida e aplica é exatamente o que `BackupSnapshotBuilder` produziu e o servidor guardou,
+> byte a byte. Não existe `BackupFormatForUpload` ao lado de `RestoreFormatForDownload` — dois
+> formatos para o mesmo snapshot divergiriam, e a divergência apareceria como "backup corrompido"
+> no aparelho de um usuário.
 
 Este diretório existe para que Kotlin e TypeScript não tenham duas definições independentes do
 mesmo formato. As fixtures em [`fixtures/`](./fixtures) são lidas pelo teste do Android
@@ -12,16 +19,20 @@ formato sem mudar as fixtures faz os dois lados falharem juntos, que é o objeti
 
 ---
 
-## 1. Backup não é sincronização
+## 1. Backup e restore não são sincronização
 
 ```text
-T16.4   Android ──full snapshot──▶ Spark Backend        (existe)
-        Android ◀──────────────── Spark Backend         (NÃO existe)
+T16.4   Android ──full snapshot──▶ Spark Backend        (backup)
+T16.5   Android ◀──full snapshot── Spark Backend        (restore, por ação explícita)
+T16.6   Android ⇄ Spark Backend, incremental            (NÃO existe)
 ```
 
 Um backup é uma cópia **completa e autocontida** do estado pessoal atual. Ele não depende de
-backup anterior, de delta, de Outbox nem de servidor antigo. Não há download de conteúdo, merge,
-convergência multi-dispositivo nem resolução de conflito nesta fase.
+backup anterior, de delta, de Outbox nem de servidor antigo.
+
+Um restore **substitui** o dataset local por um desses snapshots, depois de o usuário escolher qual
+e confirmar. Ele não mescla, não resolve conflito, não baixa mudanças incrementais e não roda
+sozinho. Não há merge, convergência multi-dispositivo, cursor nem tombstone nesta fase.
 
 ## 2. Envelope do snapshot
 
@@ -202,7 +213,59 @@ Nunca devolve o snapshot. Metadata é o suficiente nesta fase.
 
 Mesma metadata do backup mais recente **daquela conta**, ou `404 BACKUP_NOT_FOUND`.
 
-Existe para preparar a T16.5 (descoberta) sem implementar restore: não há endpoint de conteúdo.
+### `GET /v1/backups` (T16.5)
+
+Os backups retidos **daquela conta**, do mais recente para o mais antigo:
+
+```json
+{
+  "items": [
+    {
+      "backupId": "0e2b...",
+      "clientBackupId": "3f2a1c88-...",
+      "backupSchemaVersion": 1,
+      "createdAt": 1788700123456,
+      "itemCount": 9,
+      "sizeBytes": 4821,
+      "payloadHash": "9f86d081..."
+    }
+  ]
+}
+```
+
+Só metadata: montar a lista da tela não pode custar o download de todos os snapshots. Conta sem
+backup recebe `{ "items": [] }` e `200` — "ainda não há backup" é um estado normal, não um erro.
+
+**A ordem é do servidor** (sequência interna, decrescente) e o cliente não reordena. Relógio de
+aparelho diverge, e um celular adiantado colocaria uma cópia velha no topo para sempre.
+
+Não existe `?uid=`, `ownerUid` nem `X-User-Id`: a única identidade aqui é a do token.
+
+### `GET /v1/backups/{backupId}` (T16.5)
+
+A metadata de um backup da conta autenticada, ou `404 BACKUP_NOT_FOUND`. Um `backupId` de outra
+conta responde **exatamente** como um inexistente — distinguir os dois transformaria a rota em um
+oráculo de "este backup existe em alguma conta".
+
+### `GET /v1/backups/{backupId}/content` (T16.5)
+
+O snapshot canônico daquele backup, **verbatim**, com `Content-Type: application/json`.
+
+O corpo é o documento em si, e não um envelope em volta dele: o Android calcula o SHA-256 do que
+recebeu e compara com `payloadHash` da metadata. Qualquer embrulho obrigaria o cliente a recortar o
+texto antes de hashear — um passo a mais capaz de errar exatamente onde a integridade importa.
+
+```text
+sha256(corpo recebido) == payloadHash   → o snapshot é o que a metadata descreve
+sha256(corpo recebido) != payloadHash   → RESTORE recusado, zero alteração local
+```
+
+**Leitura pura.** Baixar não marca, não consome, não move e não apaga: restaurar não gasta o
+backup, e ele continua disponível enquanto a retenção o mantiver. Repetir o download é seguro.
+
+Um snapshot criado antes da migration `0004_backup_payload.sql` tem metadata e não tem documento:
+ele responde `410 BACKUP_CONTENT_UNAVAILABLE`. Devolver uma reconstrução cujo hash talvez não
+feche seria pior do que dizer que não dá.
 
 ### Erros
 
@@ -215,7 +278,8 @@ Existe para preparar a T16.5 (descoberta) sem implementar restore: não há endp
 | `UNSUPPORTED_ENTITY_SCHEMA_VERSION` | 400 | `entitySchemaVersion` desconhecida para o tipo |
 | `BACKUP_IDEMPOTENCY_CONFLICT` | 409 | mesmo `clientBackupId`, conteúdo diferente |
 | `BACKUP_TOO_LARGE` | 413 | corpo, número de itens ou item acima do teto |
-| `BACKUP_NOT_FOUND` | 404 | `GET latest` sem backup para aquela conta |
+| `BACKUP_NOT_FOUND` | 404 | `GET latest` sem backup para aquela conta; `backupId` inexistente **ou de outra conta** |
+| `BACKUP_CONTENT_UNAVAILABLE` | 410 | o snapshot existe e o servidor não guardou o documento dele (criado antes da T16.5) |
 
 Nenhuma mensagem de erro repete conteúdo do snapshot.
 
@@ -240,6 +304,22 @@ proteção — o servidor não pode supor que só o APK oficial faz requisiçõe
 | `backup-v1-complete.json` | um item de cada `entityType`, com as relações do §6 satisfeitas |
 | `backup-v1-invalid-id.json` | `syncId` de item que não é identidade portátil |
 | `backup-v1-duplicate-item.json` | `(entityType, syncId)` repetido |
+| `backup-v1-invalid-reference.json` | treino que referencia um `CUSTOM_EXERCISE` ausente do snapshot |
 | `backup-v1-unsupported-version.json` | `backupSchemaVersion` desconhecida |
 
-As três últimas precisam ser **recusadas** pelos dois lados.
+As quatro últimas precisam ser **recusadas** pelos dois lados — pelo validador do servidor
+(`backup.validator.ts`) e pelo leitor do restore (`RestoreSnapshotReader`).
+
+## 12. O que o restore exige a mais (T16.5)
+
+O servidor guarda um snapshot opaco; o Android precisa **caber no Room dele**. Duas regras existem
+só do lado do cliente, e a diferença é deliberada:
+
+1. **`WORKOUT_TEMPLATE.programSyncId` é obrigatório no restore.** `workout_templates.programId` é
+   `NOT NULL` com chave estrangeira, então um treino sem programa não tem onde ser inserido — e
+   adivinhar um programa para ele seria inventar dado.
+2. **Todo `canonicalId` que vira linha precisa existir no catálogo local.** Vale para exercícios de
+   treino e para customizações; **não** vale para referências dentro de sessão concluída, que podem
+   não resolver porque a sessão carrega `exerciseNameSnapshot`. Faltando algum, o restore é
+   recusado **antes de qualquer escrita**, com `MISSING_CATALOG_EXERCISE`. Não há *fuzzy matching*:
+   o Spark não escolhe "o exercício mais parecido".

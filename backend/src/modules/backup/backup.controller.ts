@@ -1,11 +1,21 @@
-import { Controller, Get, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
 import type { RequestWithId } from '../../common/request-id.middleware';
 import type { RequestWithRawBody } from '../../common/raw-body';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { Principal } from '../auth/principal.decorator';
-import type { BackupMetadataResponse } from './backup.contract';
+import type { BackupListResponse, BackupMetadataResponse } from './backup.contract';
 import { BackupErrors } from './backup.errors';
 import { BackupService } from './backup.service';
 
@@ -26,11 +36,21 @@ import { BackupService } from './backup.service';
  * um precise imitar o formatador de ponto flutuante do outro (`canonical-json.ts`). Um corpo já
  * parseado teria perdido essa informação.
  *
- * ## O que **não** existe aqui
+ * ## Leitura para o restore (T16.5)
  *
- * `GET /v1/backups/{id}/content` não existe. Devolver o snapshot seria implementar metade do
- * restore — que a T16.5 vai desenhar com validação, preview e escrita transacional no Room. Nesta
- * fase, metadata basta e é o suficiente para a descoberta.
+ * ```text
+ * GET /v1/backups                    → metadata dos backups retidos daquela conta
+ * GET /v1/backups/latest             → metadata do mais recente
+ * GET /v1/backups/{backupId}         → metadata de um
+ * GET /v1/backups/{backupId}/content → o snapshot canônico, verbatim
+ * ```
+ *
+ * As quatro são **read-only**: nenhuma altera snapshot, item, `createdAt`, hash ou retenção.
+ * Restaurar não consome o backup, e baixar não o marca.
+ *
+ * O conteúdo mora em rota separada da metadata de propósito: montar a lista da tela não pode
+ * custar o download de todos os snapshots, e o app só baixa o documento inteiro quando o usuário
+ * escolhe um para restaurar.
  */
 @Controller('backups')
 export class BackupController {
@@ -61,10 +81,65 @@ export class BackupController {
    * Sem parâmetro de usuário: a única identidade que existe aqui é a do token. Uma conta nunca vê
    * o backup de outra, e não há como pedir.
    */
+  /**
+   * Os backups retidos **da conta autenticada**.
+   *
+   * Sem `?uid=`, sem `ownerUid`, sem `X-User-Id`: a única identidade que existe aqui é a do token.
+   * Uma conta sem backup recebe `{ "items": [] }` — estado normal, não erro.
+   */
+  @UseGuards(BearerAuthGuard)
+  @Get()
+  @HttpCode(HttpStatus.OK)
+  list(@Principal() principal: AuthenticatedPrincipal): BackupListResponse {
+    return this.service.list(principal);
+  }
+
   @UseGuards(BearerAuthGuard)
   @Get('latest')
   @HttpCode(HttpStatus.OK)
   latest(@Principal() principal: AuthenticatedPrincipal): BackupMetadataResponse {
     return this.service.latest(principal);
+  }
+
+  /**
+   * A metadata de um backup específico da conta autenticada.
+   *
+   * Declarado **depois** de `latest` porque a rota com parâmetro casaria com `/latest` primeiro se
+   * viesse antes — e a lista de rotas do Nest é ordenada por declaração.
+   */
+  @UseGuards(BearerAuthGuard)
+  @Get(':backupId')
+  @HttpCode(HttpStatus.OK)
+  metadata(
+    @Principal() principal: AuthenticatedPrincipal,
+    @Param('backupId') backupId: string,
+  ): BackupMetadataResponse {
+    return this.service.metadata(principal, backupId);
+  }
+
+  /**
+   * O snapshot canônico, verbatim — o corpo que o restore da T16.5 valida e aplica.
+   *
+   * A resposta é o **documento**, e não um envelope em volta dele: o Android calcula o SHA-256 do
+   * corpo recebido e compara com `payloadHash` da metadata. Qualquer embrulho obrigaria o cliente
+   * a recortar o texto antes de hashear — um passo a mais capaz de errar exatamente onde a
+   * integridade importa.
+   */
+  @UseGuards(BearerAuthGuard)
+  @Get(':backupId/content')
+  content(
+    @Principal() principal: AuthenticatedPrincipal,
+    @Param('backupId') backupId: string,
+    @Req() request: Request,
+    @Res() response: Response,
+  ): void {
+    const requestId = (request as RequestWithId).requestId ?? 'unknown';
+    const payload = this.service.content(principal, requestId, backupId);
+    response
+      .status(HttpStatus.OK)
+      .type('application/json')
+      // O texto vai como está. `res.json(...)` reserializaria o documento e desfaria a forma
+      // canônica — e com ela o hash que o cliente vai conferir.
+      .send(payload);
   }
 }

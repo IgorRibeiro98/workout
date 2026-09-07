@@ -3,7 +3,7 @@ import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
-import type { BackupMetadataResponse } from './backup.contract';
+import type { BackupListResponse, BackupMetadataResponse } from './backup.contract';
 import { BackupErrors } from './backup.errors';
 import { BackupRepository, type StoredSnapshot } from './backup.repository';
 import { validateBackupRequest } from './backup.validator';
@@ -94,6 +94,76 @@ export class BackupService {
       throw BackupErrors.notFound();
     }
     return metadataOf(latest);
+  }
+
+  /**
+   * Os backups retidos da conta autenticada — a descoberta do restore (T16.5).
+   *
+   * Metadata, na ordem do servidor. Nenhum snapshot é lido, e uma conta sem backup recebe uma
+   * lista vazia (`200`), não `404`: "você ainda não tem backup" é um estado normal da tela, e não
+   * um erro a tratar.
+   */
+  list(principal: AuthenticatedPrincipal): BackupListResponse {
+    return { items: this.repository.listFor(principal.uid).map(metadataOf) };
+  }
+
+  /**
+   * A metadata de **um** backup da conta autenticada.
+   *
+   * O `backupId` de outra conta responde exatamente como um inexistente: `404`. Distinguir os dois
+   * transformaria este endpoint em um oráculo de "este backup existe em alguma conta".
+   */
+  metadata(principal: AuthenticatedPrincipal, backupId: string): BackupMetadataResponse {
+    const stored = this.repository.findByBackupId(principal.uid, backupId);
+    if (!stored) {
+      throw BackupErrors.notFound();
+    }
+    return metadataOf(stored);
+  }
+
+  /**
+   * O documento canônico do snapshot, verbatim, para o restore.
+   *
+   * ## O que este método não faz
+   *
+   * Não marca, não consome, não move e não apaga nada: baixar um backup é leitura pura, e o
+   * snapshot continua imutável e disponível enquanto a retenção o mantiver. Restaurar não gasta o
+   * backup.
+   *
+   * Devolve o texto **exato** que produziu [BackupMetadataResponse.payloadHash]. O Android
+   * recalcula o SHA-256 sobre o que recebeu e compara com a metadata; qualquer diferença — no
+   * caminho, no servidor ou no disco — vira recusa lá, antes de qualquer escrita local.
+   */
+  content(principal: AuthenticatedPrincipal, requestId: string, backupId: string): string {
+    const stored = this.repository.findByBackupId(principal.uid, backupId);
+    if (!stored) {
+      // Metadata de log: quem pediu e o quê. Nunca o conteúdo, nunca o `backupId` de outra conta
+      // resolvido para um dono.
+      this.logger.info('backup.content.not_found', {
+        requestId,
+        uidPrefix: uidPrefix(principal.uid),
+      });
+      throw BackupErrors.notFound();
+    }
+
+    const payload = this.repository.findPayload(principal.uid, backupId);
+    if (payload === null) {
+      this.logger.warn('backup.content.unavailable', {
+        requestId,
+        uidPrefix: uidPrefix(principal.uid),
+        backupId: stored.backupId,
+      });
+      throw BackupErrors.contentUnavailable();
+    }
+
+    this.logger.info('backup.content.served', {
+      requestId,
+      uidPrefix: uidPrefix(principal.uid),
+      backupId: stored.backupId,
+      itemCount: stored.itemCount,
+      sizeBytes: stored.sizeBytes,
+    });
+    return payload;
   }
 
   /**

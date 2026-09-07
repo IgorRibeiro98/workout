@@ -74,6 +74,7 @@ describe('Fixtures compartilhadas do contrato', () => {
       'backup-v1-complete.json',
       'backup-v1-duplicate-item.json',
       'backup-v1-invalid-id.json',
+      'backup-v1-invalid-reference.json',
       'backup-v1-minimal.json',
       'backup-v1-unsupported-version.json',
     ]);
@@ -99,6 +100,7 @@ describe('Fixtures compartilhadas do contrato', () => {
     for (const name of [
       'backup-v1-invalid-id',
       'backup-v1-duplicate-item',
+      'backup-v1-invalid-reference',
       'backup-v1-unsupported-version',
     ] as const) {
       expect(() => validateBackupRequest(fixtureText(name))).toThrow();

@@ -31,7 +31,7 @@ Adotar três autoridades distintas, com responsabilidades que não se sobrepõem
 │ Domain                  │  futuro  │ Auth boundary       [T16.1]     │
 │ Room  ◄── autoridade    │◄────────►│ Gemini Gateway      [T16.2]     │
 │ DataStore   operacional │   sync   │ Sync                [T16.3+]    │
-│ Outbox        [T16.3]   │          │ Backup / Restore    [T16.4/5]   │
+│ Outbox        [T16.3]   │          │ Backup [T16.4] / Restore [T16.5]│
 │                         │          │ Social              [T17]       │
 │ AiCoachGateway          │          │ SQLite                          │
 └─────────────────────────┘          └─────────────────────────────────┘
@@ -154,16 +154,37 @@ O que a T16.4 **não** fez, deliberadamente: restore, download do conteúdo do b
 incremental, pull, convergência multi-device, conflito, tombstone remoto, backup automático em
 background e backup off-site da VPS.
 
+### IMPLEMENTADO — T16.5 (restore seguro)
+
+- **Leitura no servidor**: `GET /v1/backups` (metadata dos backups retidos daquela conta, na ordem
+  do servidor), `GET /v1/backups/{id}` e `GET /v1/backups/{id}/content` (o snapshot canônico,
+  verbatim). Ownership derivado do token; backup de outra conta é indistinguível de inexistente.
+  As três são **read-only**: baixar não marca, não consome e não apaga o snapshot.
+- **`backup_snapshots.payload`** (migration `0004`): o servidor passou a guardar o documento exato
+  que `payload_hash` resume, porque remontá-lo a partir das colunas seria uma segunda
+  canonicalização — capaz de divergir da primeira no ponto em que a divergência aparece como
+  "backup corrompido" no aparelho de um usuário.
+- **No Android**: download em streaming para arquivo privado, SHA-256 conferido contra a metadata,
+  validação integral (versão, schema, semântica, referências), `RestorePlan`, preview com contagens
+  reais, confirmação explícita (dupla quando há dado local), snapshot de segurança local,
+  substituição transacional do dataset, vínculo com a conta no mesmo commit, Outbox zerada no
+  commit, fase das preferências e recuperação determinística na abertura do app.
+- **O contrato é o mesmo do backup.** Não existe um formato de restore ao lado do formato de
+  backup: o documento validado é exatamente o que `BackupSnapshotBuilder` produziu.
+
+O que a T16.5 **não** fez, deliberadamente: merge, sync incremental, push/pull, cursor,
+convergência multi-device ao vivo, conflito, tombstone remoto, rebind de dataset entre contas,
+mídia e backup automático.
+
 ### PLANEJADO — ainda **não** existe
 
-- **T16.5** — Restore seguro.
 - **T16.6** — Sync incremental multi-device.
 - **T16.7** — Conflitos, deletes e consistência offline.
 - **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
 - **T17** — Amigos, convites, desafios e social.
 
-Nada acima está implementado. Não existe endpoint de sync, backup ou IA no backend hoje — sob
-`/v1` existe apenas `auth`, e há teste que garante isso.
+Nada acima está implementado. Sob `/v1` existem hoje `auth`, `ai` e `backups` — não existe
+endpoint de sync, e há teste que garante isso.
 
 ## Backup dos dados do usuário ≠ backup do servidor
 

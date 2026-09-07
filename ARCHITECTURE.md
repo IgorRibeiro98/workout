@@ -526,17 +526,20 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-06): fundação, identidade, Coach online, fundação de sync e
-> backup implementados; restore e sincronização, não.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-06): fundação, identidade, Coach online, fundação de sync,
+> backup e restore implementados; sincronização, não.** A T16.0 criou o backend em `backend/` com
 > configuração, SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
 > `POST /v1/ai/coach`, prompt/modelo/credencial server-side, quota e validação no servidor. A T16.3
 > acrescentou **identidade global dos dados e a Outbox transacional** no Android. A T16.4
 > acrescentou **backup estruturado**: adoção explícita do conjunto de dados por uma Conta Spark,
-> snapshot completo, `POST /v1/backups` e `GET /v1/backups/latest`. **Não existe** restore,
-> download do conteúdo, sincronização incremental, pull, convergência multi-device, conflito,
-> tombstone remoto, backup automático ou backup off-site da VPS.
+> snapshot completo, `POST /v1/backups` e `GET /v1/backups/latest`. A T16.5 acrescentou **restore
+> seguro**: descoberta (`GET /v1/backups`), download do conteúdo
+> (`GET /v1/backups/{id}/content`), verificação de integridade, validação integral, preview,
+> confirmação explícita, snapshot de segurança local e substituição transacional do dataset.
+> **Não existe** sincronização incremental, push/pull, convergência multi-device, conflito,
+> tombstone remoto, merge, backup automático ou backup off-site da VPS.
 
 A partir da T16, o Spark tem uma fronteira online oficial. Ela **não** transforma o Spark em um app
 dependente de servidor: o núcleo continua funcionando por completo sem internet, sem VPS, sem
@@ -659,7 +662,7 @@ persistência do domínio        validação da resposta
 | T16.2 | Migração do Coach IA para o Spark Backend | **implementado** |
 | T16.3 | Identidade global dos dados + Outbox | **implementado** |
 | T16.4 | Backup estruturado | **implementado** |
-| T16.5 | Restore seguro | planejado |
+| T16.5 | Restore seguro | **implementado** |
 | T16.6 | Sync incremental multi-device | planejado |
 | T16.7 | Conflitos, deletes e consistência offline | planejado |
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
@@ -938,6 +941,163 @@ T16.5 precisa desenhar.
 produzem entrada de Outbox. Enquanto só existir backup completo isso é consistente: todo "Fazer
 backup agora" recaptura os três. Quando a T16.6 trouxer push incremental, eles precisam ganhar
 mutação própria — senão uma alteração neles deixaria de ser propagada.
+
+### Restore seguro (T16.5)
+
+> **Status (verificado em 2026-09-06): implementado.** Room `version = 33`; backend com a migration
+> `0004_backup_payload.sql`. O Spark baixa um snapshot escolhido pelo usuário, verifica, valida,
+> mostra o que vai acontecer, pede confirmação e **substitui** o dataset local em uma transação.
+> **Não existe** merge, sync incremental, pull automático, push automático, convergência
+> multi-device ao vivo, resolução de conflito, tombstone remoto nem sync em background.
+
+#### Restore não é sincronização
+
+```text
+T16.4  BACKUP     Android ──snapshot completo──▶ VPS
+T16.5  RESTORE    Android ◀──snapshot completo── VPS      somente por ação explícita
+T16.6  SYNC       Android ⇄ VPS, incremental              NÃO EXISTE
+```
+
+Restore é uma **substituição explícita do dataset local**, não uma união. O que ele faz é
+`REPLACE LOCAL DATASET WITH BACKUP`; *keep both*, *last write wins* e merge por campo pertencem à
+T16.6/T16.7 e não existem no código — há teste estrutural sobre isso.
+
+#### A ordem, que é o invariante
+
+```text
+Conta Spark autenticada
+ ↓  listar backups            metadata; nenhum snapshot é baixado
+ ↓  escolher um
+ ↓  baixar                    arquivo privado do app, com teto de bytes
+ ↓  SHA-256                   conferido contra a metadata do servidor
+ ↓  versão + schema + semântica
+ ↓  RestorePlan  →  preview   contagens reais e avisos
+ ↓  CONFIRMAÇÃO EXPLÍCITA     dupla, quando há dado local a perder
+ ↓  snapshot de segurança     estado atual, em arquivo privado, sem rede
+ ↓  transação Room            apaga o dataset pessoal, insere, vincula, zera a Outbox
+ ↓  preferências (DataStore)
+COMPLETED
+```
+
+O fluxo proibido é o inverso — apagar, baixar, falhar, não ter para onde voltar. **Nada local é
+alterado antes da confirmação**, e a confirmação só é oferecida depois de o snapshot inteiro ter
+sido baixado, conferido e validado.
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Contrato compartilhado | [`contracts/backup/v1/`](contracts/backup/v1/README.md) — **o mesmo** do backup, agora com as rotas de leitura |
+| Fronteira HTTP | `RestoreApi` / `SparkRestoreApi` + `SparkBackendClient.getToFile` (download em streaming) |
+| Tentativa durável | `RestoreAttemptEntity` + `RestoreAttemptDao` (tabela `restore_attempts`) |
+| Fases | `RestorePhase` (`DOWNLOADING` → `VALIDATED` → `SAFETY_SNAPSHOT_CREATED` → `ROOM_APPLIED` → `PREFERENCES_APPLIED` → `COMPLETED`; `ABANDONED` terminal) |
+| Integridade | `BackupIntegrityVerifier` (SHA-256 do arquivo baixado) |
+| Fronteira de versão | `BackupMigrator` + `RestoreContract.SUPPORTED_BACKUP_SCHEMA_VERSIONS = {1}` |
+| Validação integral | `RestoreSnapshotReader` (estrutural + semântica, reusando os DTOs da T16.3/T16.4) |
+| Plano e preview | `RestorePlan` + `RestorePlanBuilder` + `RestoreCounts` + `RestoreWarning` |
+| Substituição | `RestoreTransaction` + `RestoreDao` (as únicas instruções destrutivas do app) |
+| Proteção local | `RestoreSafetySnapshotStore` + `RestoreFileStore` (armazenamento **privado**) |
+| Caso de uso e recuperação | `RestoreRepository` (`prepare` / `confirm` / `discard` / `recover`) |
+| Concorrência | `CloudOperationLock`, compartilhada com o backup |
+| UI | `RestoreViewModel` + `RestoreSection`, dentro do Perfil |
+| Migração local | `AppDatabase.MIGRATION_32_33` |
+| Leitura no servidor | `GET /v1/backups`, `GET /v1/backups/{id}`, `GET /v1/backups/{id}/content` |
+| Migração remota | `backend/migrations/0004_backup_payload.sql` (guarda o documento canônico) |
+
+#### O que o servidor passou a guardar — e por quê
+
+A T16.4 guardava a metadata e os itens, e isso bastava para o backup. Não bastava para o restore: o
+`payloadHash` é o SHA-256 **daquele texto**, e remontar o documento a partir das colunas seria uma
+segunda canonicalização — um segundo lugar capaz de divergir do primeiro, justamente no ponto em
+que a divergência aparece como "backup corrompido" no aparelho de um usuário.
+
+Então `backup_snapshots.payload` guarda o texto exato, e o download o devolve verbatim. Snapshots
+criados antes disso continuam válidos como backup e recusam o download com
+`BACKUP_CONTENT_UNAVAILABLE` — dizer a verdade sobre o que não dá para restaurar é melhor do que
+devolver uma reconstrução que talvez não feche o hash.
+
+#### Regras de conta
+
+```text
+dataset sem dono   + conta A  →  restore de A permitido  →  o dataset passa a ser de A
+dataset de A       + conta A  →  restore de A permitido  →  continua de A
+dataset de A       + conta B  →  BLOQUEADO (ACCOUNT_MISMATCH), nada muda
+sem sessão                     →  AUTH_REQUIRED; nem lista, nem baixa
+conta muda entre preview e aplicação →  ACCOUNT_CHANGED, zero alteração local
+```
+
+O vínculo nasce **no commit** da substituição, nunca antes: um vínculo gravado antes de a aplicação
+dar certo apontaria a conta nova para o dataset velho. E ele registra o backup restaurado como
+*última cópia conhecida* — não como backup novo: nada sobe, nenhuma tentativa de backup nasce.
+
+Rebind (transformar um dataset de A em dataset de B) continua **fora de escopo**: é política de
+troca de conta, não efeito colateral de um restore.
+
+#### Recuperação de processo
+
+A fase persistida é a autoridade sobre "o restore terminou?".
+
+```text
+DOWNLOADING / VALIDATED / SAFETY_SNAPSHOT_CREATED  → nada aplicado    → encerrar
+ROOM_APPLIED                                        → dado substituído → retomar (preferências)
+ROOM_APPLIED sem o snapshot baixado                 → não dá retomar   → desfazer pelo snapshot
+                                                                          de segurança
+PREFERENCES_APPLIED                                 → concluir
+```
+
+A recuperação roda na **abertura do app**, antes das reconciliações de gamificação e da importação
+de catálogo: estado derivado de um dataset em transição seria derivado do estado errado. Ela não é
+um restore automático — só termina o que o usuário já confirmou. Enquanto houver pendência, nenhuma
+tela diz "restaurado" e um novo restore é recusado.
+
+#### Gamificação depois de um restore
+
+XP, conquistas, recordes e eventos são **derivados** (matriz de dados, Grupo B) e não viajam no
+backup. A transação limpa essas tabelas junto com o histórico que elas descreviam — inclusive
+porque as `dedupeKey` daqueles eventos citam `localId` de sessões que o restore regenerou — e as
+reconciliações que já rodam na abertura (`XpReconciler`, `AchievementReconciler`,
+`MissionReconciler`) as reconstroem pelas regras vigentes.
+
+**O restore não premia nada**: ele escreve por DAO, fora do `WorkoutEngine`, e nenhum evento é
+publicado. Há teste verificando zero XP, zero conquista e zero recorde depois de restaurar um
+histórico inteiro.
+
+#### Invariantes da T16.5
+
+1. **Nada local muda antes da confirmação.** Download, hash, validação e preview acontecem com o
+   banco intacto — e uma recusa em qualquer ponto deixa o aparelho exatamente como estava.
+2. **Hash divergente bloqueia.** HTTPS protege o caminho; ele não diz nada sobre o arquivo depois
+   de escrito, sobre um proxy que reempacota resposta ou sobre um servidor que devolveu o snapshot
+   errado.
+3. **Versão desconhecida não é interpretada.** `backupSchemaVersion` acima do suportado é recusada
+   sem tentativa de leitura, e `entitySchemaVersion` desconhecida também.
+4. **Não existe restore parcial.** Um agregado inválido entre cem válidos recusa o restore inteiro.
+5. **Sem *fuzzy matching*.** Identidade que não bate, referência que não fecha ou `canonicalId`
+   ausente no catálogo local são recusas — nunca "provavelmente era este exercício".
+6. **O snapshot de segurança existe antes da mutação.** Ele é local, nunca é enviado ao servidor, e
+   some quando a tentativa termina.
+7. **Room é transacional.** Limpeza e inserção têm um commit e um rollback; falhar no meio devolve
+   o dataset inteiro.
+8. **A Outbox não vira replay.** Restaurar não gera mutação por item, e a fila anterior só é
+   substituída **dentro** do commit — nunca antes.
+9. **Catálogo canônico não é apagado.** O restore substitui dado pessoal; conteúdo do app vem do
+   manifesto.
+10. **`syncId` é a identidade; `localId` é novo.** Relações são reconstruídas por identidade
+    portátil, e nada depende do `localId` do aparelho de origem.
+11. **Histórico não é recalculado.** Duração, carga, repetições e horários voltam como estavam.
+12. **Restore não cria backup, não apaga o snapshot remoto e não liga sync.**
+
+#### O que continua não existindo
+
+```text
+✗ merge / keep both / last write wins / field-level merge
+✗ sync incremental (push, pull, cursor, serverRevision)
+✗ pull automático, push automático, sync em background, WorkManager
+✗ resolução de conflito e tombstone remoto
+✗ rebind de dataset entre contas
+✗ upload/download de mídia
+✗ backup automático
+```
 
 ### Conta opcional e identidade (T16.1)
 

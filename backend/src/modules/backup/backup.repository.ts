@@ -25,6 +25,63 @@ export interface StoredSnapshot extends BackupMetadataResponse {
 export class BackupRepository {
   constructor(private readonly sqlite: SqliteService) {}
 
+  /**
+   * Os backups retidos **daquela conta**, do mais recente para o mais antigo.
+   *
+   * Só metadata: o `payload` não é lido aqui. A lista é a descoberta do restore (T16.5), e baixar
+   * todos os snapshots inteiros para montar uma lista de datas seria trabalho e tráfego por nada.
+   *
+   * A ordem vem de `id` — sequência do **servidor** —, nunca de `captured_at`: relógio de aparelho
+   * diverge, e um celular adiantado colocaria um backup velho no topo da lista para sempre.
+   */
+  listFor(ownerUid: string): StoredSnapshot[] {
+    const rows = this.sqlite.connection
+      .prepare(
+        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+                payload_hash, item_count, size_bytes, created_at
+         FROM backup_snapshots
+         WHERE owner_uid = ?
+         ORDER BY id DESC`,
+      )
+      .all(ownerUid);
+    return (rows as SnapshotRow[]).map(toStored);
+  }
+
+  /**
+   * Um backup **da conta informada**, pelo `backupId` opaco.
+   *
+   * `owner_uid` está na cláusula `WHERE`, e não em uma verificação depois da leitura: a consulta
+   * que não pode devolver o backup de outra conta é a que nunca o carrega. Um `backupId` de outra
+   * conta é indistinguível de um inexistente — para quem pergunta e para este método.
+   */
+  findByBackupId(ownerUid: string, backupId: string): StoredSnapshot | null {
+    const row = this.sqlite.connection
+      .prepare(
+        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+                payload_hash, item_count, size_bytes, created_at
+         FROM backup_snapshots
+         WHERE owner_uid = ? AND backup_id = ?`,
+      )
+      .get(ownerUid, backupId);
+    return row ? toStored(row as SnapshotRow) : null;
+  }
+
+  /**
+   * O documento canônico do snapshot, verbatim.
+   *
+   * `null` quando a linha veio da T16.4, que não guardava o texto (ver `0004_backup_payload.sql`).
+   * Quem chama transforma isso em erro tipado; devolver uma reconstrução seria arriscar um hash
+   * que não fecha no aparelho do usuário.
+   *
+   * Leitura pura: nenhum caminho daqui escreve, marca, consome ou apaga o snapshot.
+   */
+  findPayload(ownerUid: string, backupId: string): string | null {
+    const row = this.sqlite.connection
+      .prepare(`SELECT payload FROM backup_snapshots WHERE owner_uid = ? AND backup_id = ?`)
+      .get(ownerUid, backupId) as { payload: string | null } | undefined;
+    return row?.payload ?? null;
+  }
+
   /** O backup já existente para aquela tentativa lógica, se houver. */
   findByClientBackupId(ownerUid: string, clientBackupId: string): StoredSnapshot | null {
     const row = this.sqlite.connection
@@ -73,8 +130,8 @@ export class BackupRepository {
         .prepare(
           `INSERT INTO backup_snapshots
              (backup_id, owner_uid, client_backup_id, device_id, backup_schema_version,
-              payload_hash, item_count, size_bytes, captured_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              payload_hash, item_count, size_bytes, captured_at, created_at, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           backupId,
@@ -87,6 +144,9 @@ export class BackupRepository {
           snapshot.sizeBytes,
           snapshot.capturedAt,
           now,
+          // O texto canônico inteiro, para que o restore (T16.5) receba exatamente os bytes que
+          // `payload_hash` resume. O servidor guarda; ele não interpreta.
+          snapshot.canonicalText,
         );
 
       const snapshotId = Number(result.lastInsertRowid);

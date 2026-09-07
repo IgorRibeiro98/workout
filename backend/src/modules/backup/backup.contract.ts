@@ -60,8 +60,16 @@ export const BACKUP_ERROR_CODES = {
   BACKUP_IDEMPOTENCY_CONFLICT: 'BACKUP_IDEMPOTENCY_CONFLICT',
   /** Corpo, número de itens ou item acima do teto. */
   BACKUP_TOO_LARGE: 'BACKUP_TOO_LARGE',
-  /** Nenhum backup desta conta. */
+  /** Nenhum backup desta conta — ou nenhum com aquele `backupId`, que é a mesma resposta. */
   BACKUP_NOT_FOUND: 'BACKUP_NOT_FOUND',
+  /**
+   * O snapshot existe, mas o servidor não tem o documento original dele (T16.5).
+   *
+   * Acontece com backups criados antes de `0004_backup_payload.sql`. Eles continuam válidos como
+   * metadata e não podem ser restaurados: devolver uma reconstrução cujo hash talvez não feche
+   * seria pior do que dizer que não dá.
+   */
+  BACKUP_CONTENT_UNAVAILABLE: 'BACKUP_CONTENT_UNAVAILABLE',
 } as const;
 
 export type BackupErrorCode = (typeof BACKUP_ERROR_CODES)[keyof typeof BACKUP_ERROR_CODES];
@@ -81,4 +89,14 @@ export interface BackupMetadataResponse {
   readonly itemCount: number;
   readonly sizeBytes: number;
   readonly payloadHash: string;
+}
+
+/**
+ * A lista de backups retidos da conta autenticada (T16.5).
+ *
+ * Só metadata, e a ordem é do **servidor**: do mais recente para o mais antigo, por sequência
+ * interna. O cliente não reordena por `createdAt` nem por relógio de aparelho.
+ */
+export interface BackupListResponse {
+  readonly items: readonly BackupMetadataResponse[];
 }

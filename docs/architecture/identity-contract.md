@@ -9,10 +9,14 @@
     pessoais (Room `version = 31`), `deviceId` no DataStore e `clientMutationId` por mutação na
     Outbox;
   - **implementado na T16.4:** o `ownerUid` persistido. O conjunto de dados local ganha dono por
-    adoção explícita (`cloud_data_binding`, Room `version = 32`), e o servidor guarda snapshots
-    sob o `uid` do token verificado (`backup_snapshots`);
-  - **não implementado:** qualquer caminho de volta. Nada **desce** do servidor: restore é T16.5,
-    sync incremental é T16.6.
+    adoção explícita (`cloud_data_binding`), e o servidor guarda snapshots sob o `uid` do token
+    verificado (`backup_snapshots`);
+  - **implementado na T16.5:** o caminho de volta, por ação explícita. Um snapshot escolhido pelo
+    usuário substitui o dataset local (Room `version = 33`), preservando `syncId` e **regenerando**
+    `localId` — as relações são reconstruídas por identidade portátil, e nada depende do `localId`
+    do aparelho de origem. Um restore bem-sucedido também dá dono a um dataset que não tinha, e
+    **nunca** transfere um dataset de uma conta para outra;
+  - **não implementado:** sync incremental (T16.6).
 
 ---
 

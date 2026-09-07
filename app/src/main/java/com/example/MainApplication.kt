@@ -87,6 +87,16 @@ class MainApplication : Application(), ImageLoaderFactory {
      */
     lateinit var backupRepository: com.example.data.backup.BackupRepository
         internal set
+
+    /**
+     * Restore seguro (T16.5).
+     *
+     * Idem: criar o repositório não lista, não baixa e não restaura. A única coisa que substitui o
+     * dataset é o usuário escolher um backup e confirmar — e a recuperação de abertura só conclui
+     * (ou desfaz) o que ele já havia confirmado.
+     */
+    lateinit var restoreRepository: com.example.data.restore.RestoreRepository
+        internal set
         
     lateinit var workoutEngine: WorkoutEngine
         internal set
@@ -261,25 +271,72 @@ class MainApplication : Application(), ImageLoaderFactory {
         // O montador de agregados é o **mesmo** da T16.3: não existe um segundo serializador de
         // treino no Spark. O que a T16.4 acrescenta é o envelope, a identidade da tentativa, o
         // corte da Outbox e o transporte.
+        val backupSnapshotBuilder = com.example.data.backup.BackupSnapshotBuilder(
+            workoutDao = database.workoutDao(),
+            bodyMeasurementDao = database.bodyMeasurementDao(),
+            weeklyGoalDao = database.weeklyGoalDao(),
+            aggregates = syncAggregateSnapshotBuilder
+        )
+        val backupSource = com.example.data.backup.BackupSourceDto(
+            appVersionName = BuildConfig.VERSION_NAME,
+            appVersionCode = BuildConfig.VERSION_CODE,
+            databaseVersion = com.example.data.local.AppDatabase.SCHEMA_VERSION
+        )
+        // Uma trava de nuvem para o aparelho inteiro (T16.5): backup e restore disputam o mesmo
+        // banco, e um snapshot capturado no meio de uma substituição descreveria um estado que
+        // nunca existiu.
+        val cloudOperationLock = com.example.data.sync.CloudOperationLock()
+
         backupRepository = com.example.data.backup.BackupRepository(
             bindingDao = database.cloudDataBindingDao(),
             attemptDao = database.backupAttemptDao(),
             outboxDao = database.syncOutboxDao(),
-            snapshotBuilder = com.example.data.backup.BackupSnapshotBuilder(
-                workoutDao = database.workoutDao(),
-                bodyMeasurementDao = database.bodyMeasurementDao(),
-                weeklyGoalDao = database.weeklyGoalDao(),
-                aggregates = syncAggregateSnapshotBuilder
-            ),
+            snapshotBuilder = backupSnapshotBuilder,
             api = com.example.data.backup.SparkBackupApi(sparkBackendClient),
             settingsManager = settingsManager,
             deviceIdProvider = deviceIdProvider,
             transactions = com.example.data.sync.RoomTransactionRunner(database),
-            source = com.example.data.backup.BackupSourceDto(
-                appVersionName = BuildConfig.VERSION_NAME,
-                appVersionCode = BuildConfig.VERSION_CODE,
-                databaseVersion = com.example.data.local.AppDatabase.SCHEMA_VERSION
-            )
+            source = backupSource,
+            operationLock = cloudOperationLock
+        )
+
+        // Restore seguro (T16.5) — Spark Backend → validação → preview → transação Room.
+        //
+        // Os arquivos vivem no armazenamento **privado** do app: um snapshot é o histórico inteiro
+        // da pessoa. O snapshot de segurança usa o mesmo montador do backup, então desfazer um
+        // restore é restaurar — mesmo leitor, mesmo validador, mesma transação.
+        val restoreFiles = com.example.data.restore.RestoreFileStore(
+            java.io.File(filesDir, "restore")
+        )
+        restoreRepository = com.example.data.restore.RestoreRepository(
+            api = com.example.data.restore.SparkRestoreApi(sparkBackendClient),
+            attemptDao = database.restoreAttemptDao(),
+            restoreDao = database.restoreDao(),
+            bindingDao = database.cloudDataBindingDao(),
+            outboxDao = database.syncOutboxDao(),
+            snapshotBuilder = backupSnapshotBuilder,
+            planBuilder = com.example.data.restore.RestorePlanBuilder(database.workoutDao()),
+            transaction = com.example.data.restore.RestoreTransaction(
+                transactions = com.example.data.sync.RoomTransactionRunner(database),
+                restoreDao = database.restoreDao(),
+                workoutDao = database.workoutDao(),
+                bodyMeasurementDao = database.bodyMeasurementDao(),
+                weeklyGoalDao = database.weeklyGoalDao(),
+                bindingDao = database.cloudDataBindingDao()
+            ),
+            safetySnapshots = com.example.data.restore.RestoreSafetySnapshotStore(
+                snapshotBuilder = backupSnapshotBuilder,
+                settingsManager = settingsManager,
+                deviceIdProvider = deviceIdProvider,
+                transactions = com.example.data.sync.RoomTransactionRunner(database),
+                files = restoreFiles,
+                source = backupSource
+            ),
+            files = restoreFiles,
+            settingsManager = settingsManager,
+            deviceIdProvider = deviceIdProvider,
+            transactions = com.example.data.sync.RoomTransactionRunner(database),
+            operationLock = cloudOperationLock
         )
 
         repository = WorkoutRepository(
@@ -349,6 +406,21 @@ class MainApplication : Application(), ImageLoaderFactory {
 
 
         CoroutineScope(Dispatchers.IO).launch {
+            // Recuperação de restore **antes** de qualquer outra coisa (T16.5).
+            //
+            // Um restore interrompido pode ter deixado o Room já substituído e as preferências
+            // não. Retomar ou desfazer é a primeira decisão da abertura: reconciliar gamificação,
+            // importar catálogo ou deixar o usuário treinar sobre um dataset em transição
+            // produziria estado derivado de um estado que ainda não é o final.
+            //
+            // Isto **não** é um restore automático: ele só termina o que o usuário já confirmou.
+            // Sem tentativa interrompida, a chamada não faz nada.
+            try {
+                restoreRepository.recover()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             try {
                 (consistencyRepository as? com.example.data.repository.ConsistencyRepositoryImpl)?.initialize()
             } catch (e: Exception) {

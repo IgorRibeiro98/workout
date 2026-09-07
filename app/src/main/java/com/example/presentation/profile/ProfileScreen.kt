@@ -51,13 +51,17 @@ fun ProfileScreen(
     /** Conta Spark (T16.1). `null` quando a identidade online não existe neste build. */
     accountViewModel: com.example.presentation.account.AccountViewModel? = null,
     /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
-    backupViewModel: com.example.presentation.account.BackupViewModel? = null
+    backupViewModel: com.example.presentation.account.BackupViewModel? = null,
+    /** Restore de backup (T16.5). `null` quando não há Spark Backend configurado neste build. */
+    restoreViewModel: com.example.presentation.account.RestoreViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
     val accountState = accountViewModel?.uiState?.collectAsState()?.value
     // Observar o estado é leitura: ele diz o que mostrar, e nenhum backup começa por isso.
     val backupState = backupViewModel?.uiState?.collectAsState()?.value
+    // Idem para o restore: observar o estado lista nada, baixa nada e restaura nada.
+    val restoreState = restoreViewModel?.uiState?.collectAsState()?.value
 
     ProfileScreenContent(
         uiState = uiState,
@@ -80,7 +84,14 @@ fun ProfileScreen(
         onActivateBackup = { backupViewModel?.startAdoption() },
         onConfirmBackupAdoption = { backupViewModel?.confirmAdoption() },
         onCancelBackupAdoption = { backupViewModel?.cancelAdoption() },
-        onBackupNow = { backupViewModel?.backupNow() }
+        onBackupNow = { backupViewModel?.backupNow() },
+        restoreState = restoreState,
+        onLoadBackups = { restoreViewModel?.loadBackups() },
+        onSelectBackup = { backupId -> restoreViewModel?.selectBackup(backupId) },
+        onRequestRestore = { restoreViewModel?.requestRestore() },
+        onConfirmReplacement = { restoreViewModel?.confirmReplacement() },
+        onCancelReplacement = { restoreViewModel?.cancelReplacement() },
+        onCancelRestore = { restoreViewModel?.cancel() }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -114,7 +125,15 @@ private fun ProfileScreenContent(
     onActivateBackup: () -> Unit = {},
     onConfirmBackupAdoption: () -> Unit = {},
     onCancelBackupAdoption: () -> Unit = {},
-    onBackupNow: () -> Unit = {}
+    onBackupNow: () -> Unit = {},
+    /** Restore de backup (T16.5). `null` quando não há Spark Backend configurado neste build. */
+    restoreState: com.example.presentation.account.RestoreUiState? = null,
+    onLoadBackups: () -> Unit = {},
+    onSelectBackup: (String) -> Unit = {},
+    onRequestRestore: () -> Unit = {},
+    onConfirmReplacement: () -> Unit = {},
+    onCancelReplacement: () -> Unit = {},
+    onCancelRestore: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
 
@@ -220,6 +239,20 @@ private fun ProfileScreenContent(
                     onConfirmAdoption = onConfirmBackupAdoption,
                     onCancelAdoption = onCancelBackupAdoption,
                     onBackupNow = onBackupNow
+                )
+            }
+
+            // O restore vem depois do backup, na ordem em que as decisões acontecem: primeiro
+            // proteger os dados, depois trazer uma cópia de volta.
+            if (restoreState != null) {
+                com.example.presentation.account.RestoreSection(
+                    uiState = restoreState,
+                    onLoadBackups = onLoadBackups,
+                    onSelectBackup = onSelectBackup,
+                    onRequestRestore = onRequestRestore,
+                    onConfirmReplacement = onConfirmReplacement,
+                    onCancelReplacement = onCancelReplacement,
+                    onCancel = onCancelRestore
                 )
             }
 

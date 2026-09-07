@@ -86,7 +86,8 @@ fun MainScreen() {
         explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
         authGateway = app.authGateway,
         sparkBackendClient = app.sparkBackendClient,
-        backupRepository = app.backupRepository
+        backupRepository = app.backupRepository,
+        restoreRepository = app.restoreRepository
     )
 
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -312,10 +313,16 @@ fun MainScreen() {
                 // que mostrar. Ele não envia nada: só um toque explícito produz backup.
                 val backupViewModel: com.example.presentation.account.BackupViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // Idem para o restore: criar o ViewModel **lê** o estado (há tentativa
+                // interrompida? já houve restauração aqui?). Ele não lista, não baixa e não
+                // restaura — cada uma dessas coisas exige um toque.
+                val restoreViewModel: com.example.presentation.account.RestoreViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
                     accountViewModel = accountViewModel,
                     backupViewModel = backupViewModel,
+                    restoreViewModel = restoreViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },

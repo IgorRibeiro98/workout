@@ -1,0 +1,20 @@
+-- T16.5 — restore seguro: o snapshot precisa ser devolvível **byte a byte**.
+--
+-- A T16.4 guardou os itens do snapshot (`backup_items`) e a metadata, mas não o documento que o
+-- Android enviou. Isso bastava para o backup, e não basta para o restore: o `payload_hash` é o
+-- SHA-256 da forma canônica **daquele texto**, e o Android precisa recalcular o mesmo hash sobre o
+-- que recebeu de volta. Remontar o documento a partir das colunas seria uma segunda
+-- canonicalização — um segundo lugar capaz de divergir do primeiro, justamente no ponto em que a
+-- divergência aparece como "backup corrompido" no aparelho de um usuário.
+--
+-- Então o servidor guarda o texto exato e o devolve verbatim. Ele continua **não interpretando**
+-- o conteúdo: o payload é opaco aqui, como já era em `backup_items.payload`.
+--
+-- A coluna é anulável porque snapshots criados pela T16.4 existem e não têm o texto. Eles
+-- continuam válidos como backup (a metadata está lá) e são recusados no download com
+-- `BACKUP_CONTENT_UNAVAILABLE` — dizer a verdade sobre o que não dá para restaurar é melhor do que
+-- devolver uma reconstrução que talvez não feche o hash.
+--
+-- O que esta migration deliberadamente NÃO faz: nenhuma coluna de `revision`, `cursor` ou
+-- tombstone (sync incremental é T16.6/T16.7), e nenhuma tabela de domínio do Spark no servidor.
+ALTER TABLE backup_snapshots ADD COLUMN payload TEXT;

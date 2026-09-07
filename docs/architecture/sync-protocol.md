@@ -5,10 +5,19 @@
   - **implementado na T16.3:** a **Outbox transacional** no Android (`sync_outbox`), `syncId`,
     `clientMutationId`, `deviceId` e os DTOs de agregado;
   - **implementado na T16.4:** o **backup completo**, que não é sync — `POST /v1/backups` sobe um
-    snapshot autocontido e `GET /v1/backups/latest` devolve metadata. Nada desce;
+    snapshot autocontido e `GET /v1/backups/latest` devolve metadata;
+  - **implementado na T16.5:** o **restore**, que também não é sync — `GET /v1/backups`,
+    `GET /v1/backups/{id}` e `GET /v1/backups/{id}/content` deixam o usuário **escolher** um
+    snapshot e substituir o dataset local por ele. Um snapshot completo, por ação explícita, sem
+    delta, sem cursor e sem merge;
   - **não implementado:** o protocolo de sync. Não existe push incremental, pull, worker, ack,
     `revision`, `cursor`, tombstone remoto nem tabela de mudanças no servidor. O teste
     automatizado do backend continua garantindo que `/v1/sync/push` e `/v1/sync/pull` respondem 404.
+
+> **Backup/restore ≠ sync.** Os dois movem um snapshot **inteiro**, em uma direção, quando o
+> usuário manda. O protocolo abaixo move **mudanças**, nos dois sentidos, sozinho — e é por isso
+> que ele precisa de versão por entidade, sequência do servidor e política de conflito, que
+> backup e restore não precisam ter.
 
 Este documento existe para que as decisões difíceis do sync estejam tomadas antes de a primeira
 linha de sync ser escrita.

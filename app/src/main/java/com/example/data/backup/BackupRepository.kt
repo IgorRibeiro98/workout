@@ -1,13 +1,13 @@
 package com.example.data.backup
 
 import com.example.data.datastore.SettingsManager
+import com.example.data.sync.CloudOperationLock
 import com.example.data.sync.CloudSyncState
 import com.example.data.sync.DeviceIdProvider
 import com.example.data.sync.IdGenerator
 import com.example.data.sync.RandomUuidIdGenerator
 import com.example.data.sync.SyncOutboxDao
 import com.example.data.sync.TransactionRunner
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -53,24 +53,19 @@ class BackupRepository(
     private val deviceIdProvider: DeviceIdProvider,
     private val transactions: TransactionRunner,
     private val source: BackupSourceDto,
+    /**
+     * A trava compartilhada com o restore (T16.5).
+     *
+     * O padrão é uma trava só desta instância — que é o comportamento da T16.4. Em produção ela é
+     * a **mesma** instância que o `RestoreRepository` recebe: backup e restore disputam o mesmo
+     * banco, e um snapshot capturado no meio de uma substituição descreveria um estado que nunca
+     * existiu.
+     */
+    private val operationLock: CloudOperationLock = CloudOperationLock(),
     private val idGenerator: IdGenerator = RandomUuidIdGenerator,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val json: Json = Json { encodeDefaults = true }
 ) {
-
-    /**
-     * Uma operação lógica por vez.
-     *
-     * Dez toques em "Fazer backup agora" precisam produzir **um** backup, não dez. E a proteção é
-     * `tryLock`, não `withLock`: enfileirar os outros nove faria cada um esperar a vez e então
-     * criar o **seu** snapshot — dez backups em sequência em vez de dez simultâneos, o que resolve
-     * a concorrência e não resolve o problema. Quem chega com uma operação em andamento recebe
-     * [BackupOperation.AlreadyRunning] e não vira uma operação nova.
-     *
-     * A proteção mora aqui — e não só no ViewModel — porque é aqui que a tentativa nasce: dois
-     * snapshots concorrentes criariam dois cortes de Outbox disputando o mesmo baseline.
-     */
-    private val mutex = Mutex()
 
     val isConfigured: Boolean get() = api.isConfigured
 
@@ -105,12 +100,12 @@ class BackupRepository(
         currentUid: String?,
         confirmedAdoption: Boolean
     ): BackupOperation {
-        if (!mutex.tryLock()) return BackupOperation.AlreadyRunning
-        try {
-            return runBackup(currentUid, confirmedAdoption)
-        } finally {
-            mutex.unlock()
-        }
+        // Uma operação de nuvem por vez. Dez toques em "Fazer backup agora" precisam produzir
+        // **um** backup, não dez — e a trava recusa em vez de enfileirar, porque enfileirar criaria
+        // dez snapshots em sequência: resolveria a concorrência sem resolver o problema. Desde a
+        // T16.5 a mesma trava barra um backup durante um restore, e vice-versa.
+        return operationLock.tryRun { runBackup(currentUid, confirmedAdoption) }
+            ?: BackupOperation.AlreadyRunning
     }
 
     private suspend fun runBackup(

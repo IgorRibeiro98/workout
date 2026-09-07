@@ -46,7 +46,9 @@ class MainViewModelFactory(
     /** Cliente do Spark Backend (T16.1). `null` quando não há endereço configurado neste build. */
     private val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? = null,
     /** Backup estruturado (T16.4). `null` remove a seção de backup do Perfil, e nada mais muda. */
-    private val backupRepository: com.example.data.backup.BackupRepository? = null
+    private val backupRepository: com.example.data.backup.BackupRepository? = null,
+    /** Restore seguro (T16.5). `null` remove a seção de restore do Perfil, e nada mais muda. */
+    private val restoreRepository: com.example.data.restore.RestoreRepository? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -163,6 +165,17 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.BackupViewModel(
                 repository = backup,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.RestoreViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val restore = restoreRepository
+                ?: throw IllegalStateException("RestoreRepository not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.RestoreViewModel(
+                repository = restore,
                 authGateway = gateway
             ) as T
         }

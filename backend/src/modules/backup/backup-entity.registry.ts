@@ -29,7 +29,8 @@ const nullableInt = z.number().int().nullish();
 const nullableText = text.nullish();
 
 /** UUID em qualquer caixa. `syncId` nasce v4 minúsculo, mas comparar caixa seria fragilidade. */
-const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export function isUuid(value: string): boolean {
   return UUID_PATTERN.test(value);

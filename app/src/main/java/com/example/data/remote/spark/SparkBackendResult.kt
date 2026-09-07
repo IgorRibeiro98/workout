@@ -48,3 +48,31 @@ sealed interface SparkHttpOutcome {
     /** Sem rede ou servidor inalcançável. Recuperável — e o núcleo do Spark não muda. */
     data object NetworkFailure : SparkHttpOutcome
 }
+
+/**
+ * O desfecho de um download que escreve em arquivo (T16.5).
+ *
+ * Separado de [SparkHttpOutcome] porque um download bem-sucedido **não tem corpo em memória** para
+ * devolver: o que ele produz é um arquivo e um tamanho. Colapsar os dois tipos obrigaria o caso de
+ * sucesso a carregar uma `String` que ninguém quer.
+ */
+sealed interface SparkDownloadOutcome {
+
+    /** O corpo inteiro foi escrito no arquivo. [bytes] é o que foi realmente gravado. */
+    data class Downloaded(val bytes: Long) : SparkDownloadOutcome
+
+    /** Não há endereço de backend neste build. Nenhuma requisição foi feita. */
+    data object NotConfigured : SparkDownloadOutcome
+
+    /** Não havia conta conectada: a requisição autenticada não chegou a sair. */
+    data object SignedOut : SparkDownloadOutcome
+
+    /** Sem rede ou conexão interrompida. O arquivo parcial foi apagado. */
+    data object NetworkFailure : SparkDownloadOutcome
+
+    /** O corpo passou do teto do cliente e a escrita foi abortada no meio. */
+    data object TooLarge : SparkDownloadOutcome
+
+    /** O servidor respondeu erro. [body] é o envelope pequeno, de onde sai o `code`. */
+    data class Rejected(val code: Int, val body: String) : SparkDownloadOutcome
+}
