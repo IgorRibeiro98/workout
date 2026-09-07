@@ -209,6 +209,18 @@ export const SYNC_ERROR_CODES = {
    * de dado alheio a quem perguntou.
    */
   SYNC_ENTITY_NOT_FOUND: 'SYNC_ENTITY_NOT_FOUND',
+  /**
+   * A escrita remota está pausada neste servidor (T16.8 §121).
+   *
+   * `503`, e não `4xx`: a mutação não tem defeito nenhum, o servidor é que não está aceitando
+   * escrita agora. A distinção importa porque o aparelho trata 5xx como "não confirmado" — a
+   * Outbox **permanece pendente** e nada é apagado —, enquanto um 4xx o levaria a tratar a
+   * tentativa como recusada. Pausar o push é uma pausa, nunca uma perda.
+   *
+   * `GET /v1/sync/pull` continua funcionando: leitura não corrompe nada, e cortá-la só deixaria os
+   * aparelhos mais desatualizados sem proteger coisa alguma.
+   */
+  SYNC_WRITE_DISABLED: 'SYNC_WRITE_DISABLED',
 } as const;
 
 export type SyncErrorCode = (typeof SYNC_ERROR_CODES)[keyof typeof SYNC_ERROR_CODES];

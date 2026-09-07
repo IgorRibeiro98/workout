@@ -72,6 +72,18 @@ export class AiCoachService {
     requestId: string,
     body: unknown,
   ): Promise<AiCoachHttpResponse> {
+    // Interruptor de custo (T16.8 §120): antes do parse, antes da concorrência, antes da quota e
+    // muito antes do provider. Desligar o Coach num servidor no ar não pode custar nada — e não
+    // toca backup nem sync, que são o que protege dado do usuário.
+    //
+    // O código é o mesmo `AI_PROVIDER_UNAVAILABLE` de sempre, de propósito: o Android já o trata
+    // como `AiCoachErrorKind.UNAVAILABLE` desde a T16.2, então desligar o Coach no servidor não
+    // exige publicar um APK novo para o app entender a resposta.
+    if (!this.config.aiEnabled) {
+      this.logger.warn('ai.disabled', { requestId });
+      throw AiCoachErrors.providerUnavailable();
+    }
+
     const startedAt = Date.now();
     const request = this.parseRequest(body);
     const { clientRequestId, requestType } = request;

@@ -13,6 +13,46 @@ ksp {
 }
 
 
+/**
+ * O endereço do Spark Backend que este build pode usar (T16.8 §6/§7).
+ *
+ * O portão existe em duas camadas de propósito, e elas respondem a perguntas diferentes:
+ *
+ * - **aqui**, em tempo de build, para que um APK de release com endereço inseguro simplesmente não
+ *   seja produzido — o erro aparece para quem construiu, e não para quem instalou;
+ * - em `SparkBackendEndpoint`, em runtime, para que a regra continue valendo se algum caminho
+ *   futuro montar o endereço por outro meio.
+ *
+ * Vazio continua sendo válido e é o padrão: significa "backend não configurado". Sem endereço
+ * nenhuma requisição sai, e treino, execução, histórico, templates e gamificação continuam
+ * completos — o Spark é local-first, e essa propriedade não depende da nuvem.
+ */
+fun releaseBackendBaseUrl(providers: ProviderFactory): String {
+  val raw = providers.gradleProperty("sparkBackendBaseUrl").getOrElse("").trim()
+  if (raw.isEmpty()) return ""
+
+  val host = raw.substringAfter("://", "").substringBefore('/').substringBefore(':').lowercase()
+  val developmentHosts = setOf("10.0.2.2", "localhost", "127.0.0.1")
+  val isPrivate = host in developmentHosts ||
+    Regex("""^(10|127)\.""").containsMatchIn(host) ||
+    Regex("""^192\.168\.""").containsMatchIn(host) ||
+    Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(host)
+
+  if (!raw.startsWith("https://")) {
+    throw GradleException(
+      "sparkBackendBaseUrl precisa ser HTTPS em release (recebido com esquema inválido). " +
+        "Produção fica atrás de Caddy + TLS; para desenvolvimento use -PsparkBackendBaseUrlDebug."
+    )
+  }
+  if (isPrivate) {
+    throw GradleException(
+      "sparkBackendBaseUrl aponta para um host de desenvolvimento/rede privada ('$host'). " +
+        "Um APK de release com esse endereço fala com outra máquina na rede de quem o instalar."
+    )
+  }
+  return raw
+}
+
 android {
     testOptions {
         unitTests {
@@ -66,7 +106,7 @@ android {
       buildConfigField(
         "String",
         "SPARK_BACKEND_BASE_URL",
-        "\"${providers.gradleProperty("sparkBackendBaseUrl").getOrElse("")}\""
+        "\"${releaseBackendBaseUrl(providers)}\""
       )
     }
     debug {
@@ -113,6 +153,9 @@ dependencies {
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.datastore.preferences)
+  // Ver o comentário em `gradle/libs.versions.toml`: declarada para que o `lintVitalRelease` leia
+  // a versão que o Gradle já resolvia, destravando `assembleRelease` sem baseline.
+  implementation(libs.androidx.fragment)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)

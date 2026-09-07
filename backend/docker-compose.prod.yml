@@ -1,0 +1,112 @@
+# Spark Backend — composição de PRODUÇÃO (T16.8).
+#
+#   Internet ──443/tcp──▶ Caddy (TLS automático) ──rede interna──▶ backend:8080 ──▶ SQLite
+#
+# A diferença que importa em relação a `docker-compose.yml` (que é a composição **local**): aqui o
+# backend **não publica porta nenhuma**. Ele existe apenas na rede interna do Compose, e a única
+# coisa alcançável da internet é o Caddy, nas portas 80 e 443. Não há caminho para
+# `http://IP:8080` — nem por engano, nem por regra de firewall esquecida.
+#
+# Subir:
+#   cd /opt/spark/repo/backend
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Passo a passo completo: ../docs/operations/PRODUCTION_DEPLOYMENT.md
+
+services:
+  caddy:
+    # Versão fixada: um proxy que se atualiza sozinho é um proxy que muda de comportamento sem
+    # deploy. Subir a versão é uma alteração neste arquivo, revisada como qualquer outra.
+    image: caddy:2.10-alpine
+    container_name: spark-caddy
+    restart: unless-stopped
+    ports:
+      # As duas únicas portas da internet. 80 existe para o desafio HTTP-01 do ACME e para o
+      # redirecionamento automático a HTTPS que o Caddy já faz.
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # O domínio real é configuração operacional, nunca código (§8). O Caddy substitui `{$...}`
+      # na leitura do Caddyfile, então o mesmo arquivo versionado serve a qualquer domínio.
+      SPARK_DOMAIN: "${SPARK_DOMAIN:?defina SPARK_DOMAIN no .env, ex. api.seudominio.com}"
+      # E-mail do ACME: é para onde a Let's Encrypt avisa sobre expiração.
+      SPARK_ACME_EMAIL: "${SPARK_ACME_EMAIL:?defina SPARK_ACME_EMAIL no .env}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificados e chaves privadas de TLS. Volume nomeado de propósito: perdê-lo faz o Caddy
+      # reemitir tudo, e reemissão repetida esbarra no rate limit da Let's Encrypt.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+    logging: &json-logs
+      # Rotação obrigatória (§65/§132). Sem isto, o log é o candidato mais provável a encher o
+      # disco de uma VPS pequena — e disco cheio derruba o SQLite.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  backend:
+    # Sem `build:` de propósito: produção sobe uma imagem **já construída e etiquetada** (§23/§107).
+    # Quem constrói e etiqueta é `ops/deploy.sh`, a partir de um commit conferido. Editar código na
+    # VPS e reconstruir na mão é exatamente o que este arquivo torna desnecessário.
+    image: "spark-backend:${SPARK_IMAGE_TAG:?defina SPARK_IMAGE_TAG, use ops/deploy.sh}"
+    container_name: spark-backend
+    restart: unless-stopped
+    # NENHUMA porta publicada. Quem fala com a internet é o Caddy.
+    expose:
+      - "8080"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_PATH: /data/spark.db
+      LOG_LEVEL: ${SPARK_LOG_LEVEL:-info}
+      # UTC para tudo o que é técnico (§124/§126). O sync não depende de relógio para causalidade,
+      # mas log, certificado e nome de backup dependem de um horário que não mude duas vezes por ano.
+      TZ: UTC
+      SQLITE_BUSY_TIMEOUT_MS: 5000
+      # A escolha da T16.8: durabilidade acima de latência. Ver `src/config/env.schema.ts`.
+      SQLITE_SYNCHRONOUS: FULL
+      SHUTDOWN_TIMEOUT_MS: 10000
+      HTTP_REQUEST_TIMEOUT_MS: 120000
+      HTTP_KEEP_ALIVE_TIMEOUT_MS: 65000
+      # Em produção, subir sem conseguir verificar identidade é subir quebrado: melhor falhar de
+      # forma visível do que responder 503 em cada requisição parecendo instabilidade.
+      REQUIRE_FIREBASE_ADMIN: "true"
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-admin.json
+      # Interruptores de operação. Ver docs/operations/RUNBOOK.md para quando usar cada um.
+      AI_ENABLED: ${SPARK_AI_ENABLED:-true}
+      SYNC_WRITE_ENABLED: ${SPARK_SYNC_WRITE_ENABLED:-true}
+      MAINTENANCE_MODE: ${SPARK_MAINTENANCE_MODE:-false}
+    env_file:
+      # A credencial do Gemini e qualquer outro segredo de runtime vêm daqui — um arquivo com
+      # permissão 600, fora do Git, que existe só nesta máquina.
+      - path: ${SPARK_SECRETS_DIR:-/opt/spark/secrets}/backend.env
+        required: false
+    volumes:
+      # Bind mount, e não volume nomeado, para produção: o backup precisa enxergar `spark.db` do
+      # host, e "onde está meu banco?" precisa ter resposta com um `ls`. Derrubar e recriar o
+      # container não toca neste diretório.
+      - ${SPARK_DATA_DIR:-/opt/spark/data}:/data
+      # A service account entra por montagem somente-leitura, a partir de um arquivo que existe só
+      # nesta VPS. Ela nunca entra na imagem nem no Git (§53).
+      - ${SPARK_SECRETS_DIR:-/opt/spark/secrets}/firebase-admin.json:/run/secrets/firebase-admin.json:ro
+    stop_grace_period: 15s
+    logging: *json-logs
+    deploy:
+      resources:
+        limits:
+          # Teto generoso, não apertado (§73): o processo é um Node com SQLite embarcado e um
+          # backup de até 4 MiB em memória durante a validação. Matar o container por OOM no meio
+          # de um upload seria criar o incidente que o limite deveria evitar. O objetivo aqui é
+          # conter um vazamento, não espremer o serviço.
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+
+volumes:
+  caddy-data:
+  caddy-config:

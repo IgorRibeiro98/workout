@@ -1,6 +1,20 @@
 import { z } from 'zod';
 
 /**
+ * Uma flag booleana vinda do ambiente.
+ *
+ * `z.coerce.boolean()` **não** serve aqui: ele considera verdadeira qualquer string não vazia, e
+ * `SYNC_WRITE_ENABLED=false` viraria `true` silenciosamente — exatamente o oposto do que um
+ * interruptor de emergência precisa fazer. O vocabulário é fechado, e um valor fora dele derruba o
+ * processo no startup em vez de escolher um default por conta própria.
+ */
+const booleanFlag = (defaultValue: boolean) =>
+  z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .default(defaultValue)
+    .transform((value) => (typeof value === 'boolean' ? value : value === 'true' || value === '1'));
+
+/**
  * Contrato de configuração do Spark Backend.
  *
  * Toda configuração vem do ambiente. Não existe valor secreto embutido no código, e não existe
@@ -21,6 +35,48 @@ export const envSchema = z.object({
   DATABASE_PATH: z.string().min(1, 'DATABASE_PATH é obrigatório'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+
+  /**
+   * `PRAGMA synchronous` (T16.8 §18).
+   *
+   * **`FULL` por padrão, e a escolha é deliberada.** Em WAL, `NORMAL` deixa o commit voltar antes
+   * de o WAL estar no disco: um corte de energia na VPS pode custar as últimas transações
+   * *confirmadas*. No Spark isso não é "perder alguns segundos de escrita" — o aparelho só libera
+   * a Outbox depois da confirmação do servidor (§13.2/§13.4), então uma transação confirmada e
+   * perdida é dado que o cliente considera salvo e que ninguém vai reenviar.
+   *
+   * O custo é irrelevante na escala do projeto: as escritas são pequenas, esparsas e nunca em
+   * laço. `NORMAL` continua disponível como configuração para quem rodar em um disco com
+   * garantia de bateria/flush, mas trocar é decisão explícita, não default.
+   */
+  SQLITE_SYNCHRONOUS: z.enum(['NORMAL', 'FULL']).default('FULL'),
+
+  /**
+   * `PRAGMA wal_autocheckpoint`, em páginas (T16.8 §77).
+   *
+   * O default do SQLite (1000 páginas ≈ 4 MB) já impede o WAL de crescer indefinidamente, e é
+   * exatamente ele que preservamos. A configuração existe para que a política seja **explícita e
+   * localizável** em vez de herdada em silêncio — e para permitir baixá-la se o arquivo `-wal`
+   * incomodar em uma VPS pequena. `0` desliga o checkpoint automático e é aceito só porque o
+   * shutdown ainda faz `wal_checkpoint(TRUNCATE)`; não use isso sem motivo.
+   */
+  SQLITE_WAL_AUTOCHECKPOINT_PAGES: z.coerce.number().int().min(0).max(1_000_000).default(1_000),
+
+  /**
+   * Teto de tempo de uma requisição HTTP inteira, aplicado no servidor Node (T16.8 §88).
+   *
+   * Não é 30 s: o maior corpo aceito é um snapshot de backup de até 4 MiB, e um celular em rede
+   * móvel ruim leva mais que isso para enviá-lo. Um teto único e curto transformaria backup
+   * legítimo em falha recorrente; um servidor sem teto nenhum deixa conexão pendurada segurando
+   * recurso.
+   */
+  HTTP_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
+
+  /**
+   * `server.keepAliveTimeout`. Precisa ser **maior** que o keep-alive do proxy à frente, senão o
+   * Caddy reaproveita uma conexão que o Node acabou de fechar e o cliente vê um 502 esporádico.
+   */
+  HTTP_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(65_000),
 
   /**
    * `PRAGMA busy_timeout`. Centralizado aqui: nenhum outro ponto do código escolhe esse valor.
@@ -107,6 +163,70 @@ export const envSchema = z.object({
    * Central de propósito: nenhum outro ponto do código escolhe esse valor.
    */
   BACKUP_RETENTION_COUNT: z.coerce.number().int().min(1).max(100).default(5),
+
+  // --- Prontidão de produção (T16.8) ----------------------------------------------------
+  //
+  // Duas famílias diferentes, e confundi-las seria o erro:
+  //
+  // - `REQUIRE_*` decide o que **impede o processo de subir**. É a resposta explícita ao §57:
+  //   "startup fail" ou "feature unavailable" é escolha por funcionalidade, e não um default
+  //   escondido no código.
+  // - `*_ENABLED` são **interruptores de operação**, para desligar uma capacidade em um servidor
+  //   que está no ar sem derrubar o resto.
+
+  /**
+   * Exige credencial do Firebase Admin no startup.
+   *
+   * `false` (default) preserva o comportamento das T16.1–T16.7: o processo sobe, `/health/*`
+   * responde e rota autenticada devolve `503`. Em um deploy de produção onde backup e sync são o
+   * motivo de o servidor existir, subir sem credencial é subir quebrado — e `true` faz isso virar
+   * falha de startup, que é visível, em vez de 503 em cada requisição, que parece instabilidade.
+   */
+  REQUIRE_FIREBASE_ADMIN: booleanFlag(false),
+
+  /**
+   * Exige credencial do Gemini no startup.
+   *
+   * Default `false` de propósito, e a assimetria com o Firebase é o desenho: o Coach é uma
+   * capacidade opcional cuja ausência o Spark já sabe representar (`AI_PROVIDER_UNAVAILABLE`),
+   * enquanto identidade é pré-requisito de tudo o que é autenticado.
+   */
+  REQUIRE_GEMINI: booleanFlag(false),
+
+  /**
+   * Interruptor de custo do Coach (T16.8 §120).
+   *
+   * `AI_ENABLED=false` faz `/v1/ai/coach` responder `503 AI_PROVIDER_UNAVAILABLE` **antes** de
+   * qualquer chamada ao provider — e antes de consumir quota. Backup e sync continuam intactos:
+   * o Coach caindo nunca pode derrubar o que protege dado do usuário.
+   *
+   * O código de erro é o que já existe de propósito: o Android o trata como
+   * `AiCoachErrorKind.UNAVAILABLE` desde a T16.2, então desligar o Coach no servidor não exige
+   * publicar um APK novo para o app entender a resposta.
+   */
+  AI_ENABLED: booleanFlag(true),
+
+  /**
+   * Interruptor de escrita do sync (T16.8 §121).
+   *
+   * `SYNC_WRITE_ENABLED=false` faz `POST /v1/sync/push` responder `503 SYNC_WRITE_DISABLED`. O
+   * `GET /v1/sync/pull` continua funcionando: ele é somente leitura e não pode corromper nada.
+   *
+   * É seguro porque o cliente já trata 5xx como "não confirmado": a Outbox **permanece pendente**
+   * e nada é apagado (§13.4). Pausar o push diante de um defeito grave é, portanto, uma pausa —
+   * não uma perda.
+   */
+  SYNC_WRITE_ENABLED: booleanFlag(true),
+
+  /**
+   * Manutenção programada (T16.8 §123).
+   *
+   * Enquanto `true`, toda rota `/v1` responde `503 SERVICE_UNAVAILABLE`. `/health/live` e
+   * `/health/ready` continuam respondendo normalmente — quem faz o healthcheck do container e do
+   * proxy precisa distinguir "em manutenção" de "morto", e um readiness falso reiniciaria o
+   * container no meio da manutenção.
+   */
+  MAINTENANCE_MODE: booleanFlag(false),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

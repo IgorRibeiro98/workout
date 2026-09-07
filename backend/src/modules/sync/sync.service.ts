@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import { sha256Hex } from '../backup/canonical-json';
@@ -69,9 +70,18 @@ export class SyncService {
     private readonly repository: SyncRepository,
     private readonly rateLimiter: SyncRateLimiter,
     private readonly logger: SparkLogger,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   push(principal: AuthenticatedPrincipal, requestId: string, rawBody: string): SyncPushResponse {
+    // Interruptor de escrita (T16.8 §121), antes de tudo: diante de um defeito grave no sync, o
+    // que se quer é parar de gravar — não parar de responder. O pull continua, porque leitura não
+    // corrompe nada, e a Outbox do aparelho permanece pendente porque 5xx nunca confirma.
+    if (!this.config.syncWriteEnabled) {
+      this.logger.warn('sync.write.disabled', { requestId, uidPrefix: uidPrefix(principal.uid) });
+      throw SyncErrors.writeDisabled();
+    }
+
     this.assertWithinRateLimit(principal.uid);
 
     const startedAt = Date.now();

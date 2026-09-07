@@ -1,6 +1,8 @@
 import {
   CanActivate,
   ExecutionContext,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   ServiceUnavailableException,
@@ -8,6 +10,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { SparkLogger } from '../../common/logger';
+import { FixedWindowRateLimiter } from '../../common/rate-limiter';
 import type { RequestWithId } from '../../common/request-id.middleware';
 import type { AuthenticatedPrincipal } from './authenticated-principal';
 import {
@@ -26,6 +29,24 @@ const BEARER = /^Bearer[ \t]+(\S+)$/i;
 
 export const UNAUTHENTICATED_CODE = 'UNAUTHENTICATED';
 export const AUTH_UNAVAILABLE_CODE = 'AUTH_UNAVAILABLE';
+export const API_RATE_LIMITED_CODE = 'API_RATE_LIMITED';
+
+/**
+ * Teto geral por conta, para **qualquer** rota autenticada (T16.8 §84).
+ *
+ * Deliberadamente alto: ele não substitui os limites específicos do sync e do backup, que são bem
+ * mais apertados porque conhecem o custo de cada rota. Este aqui existe para o caso que nenhum
+ * deles cobre — uma rota nova, ou o `/v1/auth/me` — e para a única falha que importa aqui: um
+ * cliente em laço. 600 por minuto é ordens de grandeza acima de qualquer uso legítimo (um restore
+ * inteiro faz três requisições) e ordens de grandeza abaixo do que um laço produz.
+ *
+ * Um teto baixo demais aqui seria pior que não ter teto: pararia um restore legítimo, que é
+ * exatamente o momento em que o usuário mais precisa do servidor.
+ */
+export const GENERAL_API_RATE_LIMIT = {
+  windowMs: 60_000,
+  maxRequestsPerWindow: 600,
+} as const;
 
 /**
  * A porta de entrada da identidade: nada passa daqui sem um Firebase ID Token verificado.
@@ -43,6 +64,18 @@ export const AUTH_UNAVAILABLE_CODE = 'AUTH_UNAVAILABLE';
  */
 @Injectable()
 export class BearerAuthGuard implements CanActivate {
+  /**
+   * Contagem por conta, e nunca por IP (§85).
+   *
+   * Em rede móvel e atrás de NAT o IP é compartilhado por gente que não tem nada a ver com o
+   * abuso — e, com o Caddy à frente, todo mundo chegaria aqui com o mesmo endereço. A conta é a
+   * única identidade que este servidor conhece de verdade.
+   *
+   * A contagem acontece **depois** da verificação do token: um atacante sem credencial não pode
+   * gastar a janela de uma conta que não é dele.
+   */
+  private readonly limiter = new FixedWindowRateLimiter(GENERAL_API_RATE_LIMIT);
+
   constructor(
     @Inject(AUTH_TOKEN_VERIFIER) private readonly verifier: AuthTokenVerifier,
     private readonly logger: SparkLogger,
@@ -83,6 +116,14 @@ export class BearerAuthGuard implements CanActivate {
         code: AUTH_UNAVAILABLE_CODE,
         message: 'Authentication is temporarily unavailable',
       });
+    }
+
+    if (!this.limiter.tryAcquire(principal.uid)) {
+      this.logger.warn('auth.rate_limited', { requestId, uidPrefix: uidPrefix(principal.uid) });
+      throw new HttpException(
+        { code: API_RATE_LIMITED_CODE, message: 'too many requests for this account' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     request.principal = principal;

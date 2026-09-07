@@ -49,6 +49,22 @@ export class AppConfig {
     return this.env.SQLITE_BUSY_TIMEOUT_MS;
   }
 
+  get sqliteSynchronous(): SparkEnv['SQLITE_SYNCHRONOUS'] {
+    return this.env.SQLITE_SYNCHRONOUS;
+  }
+
+  get sqliteWalAutocheckpointPages(): number {
+    return this.env.SQLITE_WAL_AUTOCHECKPOINT_PAGES;
+  }
+
+  get httpRequestTimeoutMs(): number {
+    return this.env.HTTP_REQUEST_TIMEOUT_MS;
+  }
+
+  get httpKeepAliveTimeoutMs(): number {
+    return this.env.HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  }
+
   get shutdownTimeoutMs(): number {
     return this.env.SHUTDOWN_TIMEOUT_MS;
   }
@@ -108,6 +124,56 @@ export class AppConfig {
   /** Quantos snapshots guardar por conta antes de a retenção remover os mais antigos. */
   get backupRetentionCount(): number {
     return this.env.BACKUP_RETENTION_COUNT;
+  }
+
+  // --- Prontidão de produção (T16.8) ----------------------------------------------------
+
+  get requireFirebaseAdmin(): boolean {
+    return this.env.REQUIRE_FIREBASE_ADMIN;
+  }
+
+  get requireGemini(): boolean {
+    return this.env.REQUIRE_GEMINI;
+  }
+
+  /** `false` desliga o Coach neste servidor sem tocar em backup e sync. */
+  get aiEnabled(): boolean {
+    return this.env.AI_ENABLED;
+  }
+
+  /** `false` pausa `POST /v1/sync/push`; o pull, somente leitura, continua. */
+  get syncWriteEnabled(): boolean {
+    return this.env.SYNC_WRITE_ENABLED;
+  }
+
+  /** `true` faz toda rota `/v1` responder 503; `/health/*` continua respondendo. */
+  get maintenanceMode(): boolean {
+    return this.env.MAINTENANCE_MODE;
+  }
+
+  /**
+   * As exigências que o operador declarou e o ambiente não cumpre.
+   *
+   * Separado da validação do schema porque não é uma configuração malformada: cada valor é
+   * individualmente válido, e o que falta é uma **combinação** que aquele deploy declarou
+   * obrigatória. Quem chama isto é o bootstrap, antes de abrir o banco — um servidor que promete
+   * verificar identidade e não tem como fazê-lo precisa falhar de forma visível, não responder
+   * 503 em cada requisição parecendo instabilidade.
+   */
+  missingRequirements(): string[] {
+    const missing: string[] = [];
+    if (this.requireFirebaseAdmin && !this.googleApplicationCredentials) {
+      missing.push(
+        'REQUIRE_FIREBASE_ADMIN=true, mas GOOGLE_APPLICATION_CREDENTIALS não está definido',
+      );
+    }
+    if (this.requireGemini && !this.geminiApiKey) {
+      missing.push('REQUIRE_GEMINI=true, mas GEMINI_API_KEY não está definido');
+    }
+    if (this.requireGemini && !this.aiEnabled) {
+      missing.push('REQUIRE_GEMINI=true e AI_ENABLED=false são contraditórios');
+    }
+    return missing;
   }
 }
 

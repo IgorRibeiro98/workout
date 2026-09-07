@@ -5,6 +5,7 @@ import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import type { BackupListResponse, BackupMetadataResponse } from './backup.contract';
 import { BackupErrors } from './backup.errors';
+import { BackupRateLimiter } from './backup.rate-limit';
 import { BackupRepository, type StoredSnapshot } from './backup.repository';
 import { validateBackupRequest } from './backup.validator';
 
@@ -33,7 +34,26 @@ export class BackupService {
     private readonly repository: BackupRepository,
     private readonly logger: SparkLogger,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly rateLimiter: BackupRateLimiter,
   ) {}
+
+  /**
+   * Os tetos por conta (T16.8 §84).
+   *
+   * Antes de qualquer validação ou leitura: recusar cedo é o ponto de um limite. Escrita e leitura
+   * têm janelas separadas — ver `backup.limits.ts` para o porquê dos números.
+   */
+  private assertWithinWriteLimit(uid: string): void {
+    if (!this.rateLimiter.tryAcquireWrite(uid)) {
+      throw BackupErrors.rateLimited();
+    }
+  }
+
+  private assertWithinReadLimit(uid: string): void {
+    if (!this.rateLimiter.tryAcquireRead(uid)) {
+      throw BackupErrors.rateLimited();
+    }
+  }
 
   /**
    * Cria — ou reconhece — o backup daquela tentativa lógica.
@@ -46,6 +66,8 @@ export class BackupService {
     requestId: string,
     rawBody: string,
   ): { created: boolean; metadata: BackupMetadataResponse } {
+    this.assertWithinWriteLimit(principal.uid);
+
     const startedAt = Date.now();
     const snapshot = validateBackupRequest(rawBody);
 
@@ -89,6 +111,7 @@ export class BackupService {
 
   /** A metadata do backup mais recente da conta autenticada. Nunca de outra. */
   latest(principal: AuthenticatedPrincipal): BackupMetadataResponse {
+    this.assertWithinReadLimit(principal.uid);
     const latest = this.repository.findLatest(principal.uid);
     if (!latest) {
       throw BackupErrors.notFound();
@@ -104,6 +127,7 @@ export class BackupService {
    * um erro a tratar.
    */
   list(principal: AuthenticatedPrincipal): BackupListResponse {
+    this.assertWithinReadLimit(principal.uid);
     return { items: this.repository.listFor(principal.uid).map(metadataOf) };
   }
 
@@ -114,6 +138,7 @@ export class BackupService {
    * transformaria este endpoint em um oráculo de "este backup existe em alguma conta".
    */
   metadata(principal: AuthenticatedPrincipal, backupId: string): BackupMetadataResponse {
+    this.assertWithinReadLimit(principal.uid);
     const stored = this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
       throw BackupErrors.notFound();
@@ -135,6 +160,7 @@ export class BackupService {
    * caminho, no servidor ou no disco — vira recusa lá, antes de qualquer escrita local.
    */
   content(principal: AuthenticatedPrincipal, requestId: string, backupId: string): string {
+    this.assertWithinReadLimit(principal.uid);
     const stored = this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
       // Metadata de log: quem pediu e o quê. Nunca o conteúdo, nunca o `backupId` de outra conta

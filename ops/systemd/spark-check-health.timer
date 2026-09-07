@@ -1,0 +1,14 @@
+[Unit]
+Description=Spark — agendamento da verificação operacional
+
+[Timer]
+# De hora em hora: frequente o bastante para pegar disco enchendo antes de encher, barato o
+# bastante para não pesar. Não substitui um monitor externo de uptime — este roda *dentro* da VPS,
+# e uma VPS morta não avisa que morreu (docs/operations/RUNBOOK.md).
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+Unit=spark-check-health.service
+
+[Install]
+WantedBy=timers.target

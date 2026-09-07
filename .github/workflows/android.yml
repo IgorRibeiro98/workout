@@ -16,11 +16,16 @@
 # passado, e vazio significa "backend não configurado": nenhuma requisição sai. É por isso que não
 # há endereço nenhum aqui.
 #
-# ## Por que só debug
+# ## Debug e release
 #
-# `testDebugUnitTest` + `assembleDebug` são os dois portões desta tarefa. `assembleRelease` fica
-# para a T16.8: ele passa por `lintVitalRelease`, que hoje falha por um falso positivo preexistente
-# de `androidx.fragment` — e resolver isso com um baseline esconderia problemas reais.
+# `testDebugUnitTest` + `assembleDebug` eram os dois portões da T16.7.1. A T16.8 acrescentou
+# `assembleRelease`: ele passa por `lintVitalRelease`, que falhava por um falso positivo de
+# `androidx.fragment` — o lint lia a versão **declarada** (1.1.0, transitiva) e não a resolvida
+# (1.5.7). A correção foi declarar 1.5.7 explicitamente, que é a versão que o APK sempre conteve.
+# Não é baseline (que esconderia problemas reais) e não muda um byte do que é empacotado.
+#
+# Release importa aqui porque é o artefato de produção: é nele que a proibição de texto claro e a
+# exigência de HTTPS no endereço do backend precisam valer.
 
 name: android
 
@@ -151,6 +156,30 @@ jobs:
 
       - name: Build de debug
         run: ./gradlew :app:assembleDebug --stacktrace
+
+      # O artefato de produção (T16.8). Sem `-PsparkBackendBaseUrl`: o endereço nasce vazio, que
+      # significa "backend não configurado" — nenhuma requisição sai e o núcleo do Spark continua
+      # completo. O endereço real é passado por quem publica, e o próprio build o valida.
+      - name: Build de release
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      # O portão de endereço da T16.8 (§6): um endereço de release inseguro precisa **impedir** a
+      # geração do APK. Aqui ele é exercitado de verdade — se o build passar, o portão não existe.
+      - name: O build de release recusa endereço inseguro
+        run: |
+          set -euo pipefail
+          for url in "http://api.exemplo.com" "https://10.0.2.2:8080" "https://192.168.0.10:8080"; do
+            if ./gradlew :app:help -PsparkBackendBaseUrl="$url" -q > /tmp/gate.log 2>&1; then
+              echo "FALHA: o build aceitou o endereço inseguro $url"; exit 1
+            fi
+            grep -q 'sparkBackendBaseUrl' /tmp/gate.log \
+              || { echo "o build falhou por outro motivo com $url"; cat /tmp/gate.log; exit 1; }
+            echo "recusado corretamente: $url"
+          done
+          # E o endereço legítimo precisa continuar passando: um portão que recusa tudo não é um
+          # portão, é uma parede.
+          ./gradlew :app:help -PsparkBackendBaseUrl="https://api.exemplo.com" -q
+          echo "aceito corretamente: https://api.exemplo.com"
 
       # Só quando algo falha, e sem APK: um relatório de teste ajuda a diagnosticar; um artefato de
       # build assinado com configuração sintética não serve para nada e só convida ao engano.

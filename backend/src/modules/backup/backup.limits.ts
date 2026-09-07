@@ -41,3 +41,22 @@ export const BACKUP_LIMITS = {
   /** `appVersionName` e outros rótulos curtos de diagnóstico. */
   maxLabelLength: 120,
 } as const;
+
+/**
+ * Proteção por conta nas rotas de backup e de leitura para restore (T16.8 §84).
+ *
+ * Dois tetos porque os custos são diferentes, e um número só seria errado dos dois lados:
+ *
+ * - **escrita** é cara — valida um snapshot inteiro, calcula SHA-256 e escreve numa transação.
+ *   Um backup legítimo é *uma* requisição; o operador humano que insiste em tentar de novo faz
+ *   três ou quatro. Dez por minuto é folga larga sobre isso e ainda barra um app em laço.
+ * - **leitura** é barata e o restore precisa de mais de uma: listar, ler metadata, baixar o
+ *   conteúdo. Sessenta por minuto nunca alcança um restore legítimo — e é isso que importa, porque
+ *   parar um restore é parar o usuário exatamente quando ele mais precisa do servidor (§84).
+ *
+ * A chave é sempre o `uid` autenticado, nunca o IP (§85).
+ */
+export const BACKUP_RATE_LIMIT = {
+  write: { windowMs: 60_000, maxRequestsPerWindow: 10 },
+  read: { windowMs: 60_000, maxRequestsPerWindow: 60 },
+} as const;

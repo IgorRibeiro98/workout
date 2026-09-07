@@ -5,9 +5,13 @@ import { AppConfig, ConfigValidationError } from './config/app-config';
 /**
  * Ponto de entrada do processo.
  *
- * Ordem deliberada: valida configuração -> abre banco e aplica migrations -> só então escuta HTTP.
- * Um processo que não conseguiu carregar configuração ou migrar o banco morre com código 1 em vez
- * de subir e responder erro em toda requisição.
+ * Ordem deliberada: valida configuração -> confere as exigências declaradas -> abre banco e aplica
+ * migrations -> só então escuta HTTP. Um processo que não conseguiu carregar configuração ou
+ * migrar o banco morre com código 1 em vez de subir e responder erro em toda requisição.
+ *
+ * A consequência que importa em produção (T16.8 §19/§20): `/health/ready` **não existe** enquanto
+ * as migrations não terminaram, porque o servidor HTTP ainda não está escutando. Não há janela em
+ * que o readiness responda 200 sobre um schema pela metade.
  */
 async function bootstrap(): Promise<void> {
   let config: AppConfig;
@@ -22,10 +26,59 @@ async function bootstrap(): Promise<void> {
     throw error;
   }
 
+  // As exigências que este deploy declarou (`REQUIRE_*`). Cada valor é individualmente válido; o
+  // que falta é a combinação que o operador prometeu. Falhar aqui é visível; subir e responder
+  // 503 em cada requisição parece instabilidade e leva horas para ser diagnosticado.
+  const missing = config.missingRequirements();
+  if (missing.length > 0) {
+    process.stderr.write(
+      `Configuração incompleta:\n${missing.map((m) => `  - ${m}`).join('\n')}\n`,
+    );
+    process.exit(1);
+  }
+
   const { app, logger } = await createApp(config);
 
+  // Um erro que escapou de todo tratamento deixa o processo em estado desconhecido. Continuar
+  // servindo a partir daí é pior que morrer: a política de restart do Docker sobe um processo
+  // limpo em segundos, e o SQLite fica consistente porque cada transação já é atômica.
+  const fatal = (event: string) => (error: unknown) => {
+    logger.error(event, {
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : undefined,
+    });
+    process.exit(1);
+  };
+  process.on('uncaughtException', fatal('process.uncaughtException'));
+  process.on('unhandledRejection', fatal('process.unhandledRejection'));
+
   await app.listen(config.port, '0.0.0.0');
-  logger.info('server.started', { port: config.port, nodeEnv: config.nodeEnv });
+
+  // Tetos de tempo declarados, e não herdados do default do Node (T16.8 §88).
+  //
+  // `keepAliveTimeout` precisa ser **maior** que o keep-alive do proxy à frente: se o Node fecha
+  // primeiro, o Caddy reaproveita uma conexão morta e o cliente vê um 502 esporádico que não tem
+  // nada a ver com a aplicação. `headersTimeout` acompanha o `requestTimeout` porque o Node exige
+  // que ele não seja menor.
+  const server = app.getHttpServer() as {
+    requestTimeout: number;
+    headersTimeout: number;
+    keepAliveTimeout: number;
+  };
+  server.requestTimeout = config.httpRequestTimeoutMs;
+  server.headersTimeout = config.httpRequestTimeoutMs + 5_000;
+  server.keepAliveTimeout = config.httpKeepAliveTimeoutMs;
+
+  logger.info('server.started', {
+    port: config.port,
+    nodeEnv: config.nodeEnv,
+    // Metadata de operação, nunca segredo: é o que permite responder "qual versão está no ar?" e
+    // "por que o Coach está fora?" lendo o log, sem entrar na VPS.
+    maintenanceMode: config.maintenanceMode,
+    aiEnabled: config.aiEnabled,
+    syncWriteEnabled: config.syncWriteEnabled,
+    requestTimeoutMs: config.httpRequestTimeoutMs,
+  });
 
   const shutdown = (signal: NodeJS.Signals): void => {
     logger.info('server.shutdown', { signal });
@@ -54,4 +107,12 @@ async function bootstrap(): Promise<void> {
   process.on('SIGINT', shutdown);
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  // Falha antes de o logger existir — abrir o banco, aplicar migration, escutar a porta. Sem
+  // logger estruturado aqui de propósito: se o bootstrap falhou, ele pode ser exatamente o que
+  // não subiu. `stderr` + código 1 é o que o Docker e o systemd sabem ler.
+  process.stderr.write(
+    `Falha no bootstrap: ${error instanceof Error ? error.message : 'erro desconhecido'}\n`,
+  );
+  process.exit(1);
+});

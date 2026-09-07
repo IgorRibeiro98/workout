@@ -19,3 +19,11 @@ debug.keystore
 
 # Configuração do Firebase: gerada no console, não versionada (ARCHITECTURE.md §15.7).
 app/google-services.json
+
+# Segredos e configuração operacional reais (T16.8). O `.example` em `ops/` é versionado; o
+# arquivo preenchido nunca é, e ele vive na VPS com permissão 600.
+ops/*.env
+!ops/*.env.example
+restic-password
+backup.env
+backend.env

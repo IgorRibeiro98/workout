@@ -1,0 +1,21 @@
+# Agendamento do backup off-site (T16.8 §36).
+#
+# Diário, e não a cada minuto: o volume de escrita do Spark é pequeno, o RPO documentado é de até
+# 24 h para o servidor (docs/operations/DISASTER_RECOVERY.md), e cada execução custa I/O e
+# armazenamento. O backup **pré-deploy** (`ops/deploy.sh`) cobre o outro momento de risco real.
+
+[Unit]
+Description=Spark — agendamento do backup off-site
+Documentation=file:///opt/spark/repo/docs/operations/BACKUP_AND_RESTORE.md
+
+[Timer]
+# 03:15 UTC. O servidor trabalha em UTC (§124): o horário não muda com horário de verão.
+OnCalendar=*-*-* 03:15:00 UTC
+# Recupera a execução perdida se a VPS estiver desligada na hora marcada.
+Persistent=true
+# Evita que várias máquinas (ou reinícios) batam no storage no mesmo segundo.
+RandomizedDelaySec=900
+Unit=spark-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1500,23 +1500,66 @@ versionado por engano.
 `assembleRelease` fica para a T16.8: ele passa por `lintVitalRelease`, que hoje falha por um falso
 positivo preexistente de `androidx.fragment`, e um baseline esconderia problemas reais.
 
-#### Pendências registradas para a T16.8
+#### Pendências registradas para a T16.8 — e o que aconteceu com elas
 
-Encontradas durante a T16.7.1 e **deliberadamente não tratadas aqui**, porque hardening é uma fase
-com escopo próprio e mexer em dependência no meio de uma correção de corretude troca um risco
-conhecido por vários desconhecidos:
+| Pendência da T16.7.1 | Estado depois da T16.8 |
+| --- | --- |
+| Vulnerabilidades npm (7 *high*, 13 *moderate*, 1 *low*, zero críticas) | **Resolvido.** `high` → 0 por upgrade deliberado do NestJS (11.2.3 / cli 11.0.24 / schematics 11.1.0), sem `npm audit fix --force`. Restam 6 *moderate* numa cadeia de `firebase-admin` que já está na última versão e **não é alcançável** — com teste que prova isso. |
+| `assembleRelease` no CI + falso positivo de `androidx.fragment` | **Resolvido** declarando `androidx.fragment:fragment:1.5.7` — a versão que o Gradle já resolvia. O lint lia a declarada (1.1.0); agora lê a verdade. Não é baseline e não muda um byte do que é empacotado. |
+| Backup off-site da VPS | **Resolvido.** `ops/backup.sh` + restic criptografado + ensaio de restauração executável. |
+| Retenção de tombstone e compactação do change log | **Continua fora, e continua sendo a decisão certa.** Elas só são seguras junto com o registro do menor cursor entre os aparelhos ativos da conta, que o servidor não guarda. Apagar cedo demais é ressurreição. |
+| Observabilidade, TLS, firewall, secrets manager | **Resolvido no que cabe a esta escala**: `check-health.sh`, Caddy + Let's Encrypt, guia de `ufw`, segredos em arquivos `600` fora do Git e fora da imagem. Sem stack de métricas, por decisão (a observabilidade não pode ser maior que o serviço observado). |
+| Revogação por aparelho | **Continua fora.** É feature de produto, não de infraestrutura. |
 
-- **Vulnerabilidades de dependências npm no backend.** `npm audit` reporta 21 avisos (7 *high*,
-  13 *moderate*, 1 *low*, **zero críticas**, verificado em 2026-09-07). As *high* são DoS/ReDoS em
-  transitivas (`path-to-regexp` e `multer`, via `@nestjs/platform-express`) e em ferramenta de
-  desenvolvimento (`@nestjs/cli`, `glob`, `picomatch`), e nenhuma é execução remota de código.
-  O tratamento é upgrade coordenado do NestJS com a suíte verde — não `npm audit fix --force`.
-- **`assembleRelease` no CI**, junto com a correção do falso positivo de `androidx.fragment` (forçar
-  a versão, nunca baseline).
-- **Backup off-site da VPS** — hoje um `docker compose down -v` destrói os backups de todo mundo.
-- **Retenção/limpeza de tombstone e compactação do change log**, que só são seguras junto com o
-  registro do menor cursor entre os aparelhos ativos da conta.
-- **Observabilidade de produção**, TLS, firewall, secrets manager e revogação por aparelho.
+### Hardening, backup do servidor e prontidão de produção (T16.8)
+
+> **Status (verificado em 2026-09-07): `CODE READY`, `LOCAL DOCKER VERIFIED`,
+> `REAL VPS NOT VERIFIED`.** Room continua em `version = 35` e o servidor em
+> `0006_sync_tombstones.sql`: a T16.8 **não** muda schema, contrato de sync, de backup ou de
+> restore. Ela transforma a arquitetura online em infraestrutura operável.
+
+O que muda no **Android** é uma coisa só, e ela é uma trava:
+
+```text
+BuildConfig.SPARK_BACKEND_BASE_URL
+        ↓
+SparkBackendEndpoint.resolve(url, isDebugBuild)
+        ↓
+release  → HTTPS em host público, ou null
+debug    → HTTPS em qualquer host; texto claro só em 10.0.2.2/localhost/127.0.0.1
+        ↓
+null = "backend não configurado" → nuvem desligada, núcleo do Spark intacto
+```
+
+O `build.gradle.kts` aplica a mesma regra em tempo de build e **falha `assembleRelease`** antes de
+o APK existir. As duas camadas respondem a perguntas diferentes: a do Gradle impede o engano de
+acontecer, a de runtime impede o engano de funcionar. Recusar um endereço **nunca** degrada o
+núcleo — ele apenas deixa a nuvem desligada, exatamente como um build sem endereço.
+
+Nada mais do app muda: nenhum ViewModel, nenhuma tela, nenhum caso de uso, nenhum DAO. Os
+interruptores do servidor (`AI_ENABLED`, `SYNC_WRITE_ENABLED`, `MAINTENANCE_MODE`) respondem `503`,
+que o `SparkBackendAiCoachGateway`, o `SparkBackupApi`, o `RestoreApi` e o `SyncApi` já traduzem
+em erro tipado e recuperável desde a T16.2 — desligar uma capacidade no servidor não exige publicar
+APK novo, e a Outbox permanece pendente porque 5xx nunca confirma.
+
+O resto da fase vive fora do app: `backend/docker-compose.prod.yml`, `backend/Caddyfile.prod`,
+`ops/` e `docs/operations/`. Ver
+[ADR-0001](docs/architecture/ADR-0001-spark-online-architecture.md) e
+[`docs/operations/`](docs/operations/).
+
+#### Invariantes da T16.8
+
+- **O núcleo não paga nada.** Com VPS, Firebase, Gemini, backup e sync todos fora, o usuário abre o
+  app, executa treino, registra série, conclui e consulta histórico. Nenhum interruptor, limite ou
+  timeout pode mudar isso.
+- **Produção é HTTPS**, e o backend não publica porta — há gate de CI.
+- **`cp spark.db` ativo é proibido**: o snapshot é `VACUUM INTO` a partir de conexão somente
+  leitura, verificado por `integrity_check` e `foreign_key_check` sobre a cópia.
+- **Backup só está validado depois de restaurado**, com o backend real subindo sobre a cópia.
+- **Migration de produção não roda sem ponto de recuperação**, e rollback de aplicação não desfaz
+  migration.
+- **Interruptor é pausa, nunca perda**: `503`, Outbox pendente, nada apagado.
+- **Tombstone, change log e ledger continuam intocados.**
 
 ### Conta opcional e identidade (T16.1)
 

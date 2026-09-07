@@ -2,7 +2,7 @@
 
 - **Status:** aceito e **em vigor**
 - **Data da decisão:** 2026-09-06 (T16.0 — Fundação do Spark Backend)
-- **Estado revisado em:** 2026-09-07 (T16.7.1 — fechamento técnico da sincronização)
+- **Estado revisado em:** 2026-09-07 (T16.8 — hardening, backup do servidor e prontidão de produção)
 - **Substitui:** nada. Complementa `ARCHITECTURE.md`, que continua sendo a autoridade sobre o app Android.
 
 > **Como ler este documento.** A **decisão** (contexto, autoridades, invariantes, política de custo)
@@ -253,9 +253,39 @@ mídia e backup automático.
 - **CI do Android no GitHub** (`.github/workflows/android.yml`): `:app:testDebugUnitTest` e
   `:app:assembleDebug` em checkout limpo, sem Firebase real, sem Gemini e sem VPS.
 
+### IMPLEMENTADO — T16.8 (hardening, backup do servidor e prontidão de produção)
+
+- **Topologia de produção**: `docker-compose.prod.yml` + `Caddyfile.prod`. O backend **não publica
+  porta nenhuma** — só o Caddy escuta 80/443, e o TLS é emitido e renovado automaticamente. Há
+  gate de CI que falha se o backend voltar a publicar porta.
+- **SQLite explícito**: `synchronous = FULL` escolhido e justificado (uma transação confirmada e
+  perdida é dado que o aparelho já considera salvo), `wal_autocheckpoint` declarado, tamanho do
+  banco e do WAL em diagnóstico. Os PRAGMAs efetivos são verificados por teste.
+- **Backup do servidor**: `VACUUM INTO` (snapshot consistente com o banco ativo, sem bloquear
+  escritores) → `integrity_check` + `foreign_key_check` → manifesto → **restic criptografado
+  off-site** → retenção 7/4/12 → estado gravado. Diário por `systemd timer` e **antes de cada
+  deploy**. `flock` impede execução concorrente.
+- **Ensaio de restauração executável** (`ops/verify-backup.sh`): restaura, verifica integridade e
+  **sobe o backend real sobre a cópia** exigindo `/health/ready` — sem tocar em produção.
+- **Deploy repetível** (`ops/deploy.sh`): backup pré-deploy obrigatório, imagem etiquetada com o
+  SHA do commit (nunca `latest`), healthcheck obrigatório e rollback automático de aplicação.
+- **Interruptores de operação**: `AI_ENABLED`, `SYNC_WRITE_ENABLED`, `MAINTENANCE_MODE`. Todos
+  respondem `503`, que o Android já trata como indisponibilidade recuperável desde a T16.2 — e
+  nenhum deles toca o núcleo local.
+- **Endereço de release blindado**: `SparkBackendEndpoint` recusa, em runtime, endereço que não
+  seja HTTPS em host público; o `build.gradle.kts` **falha o build de release** antes disso.
+- **Dependências**: `critical 0`, `high 0` (eram 7), sem `npm audit fix --force`. Gate de CI em
+  `npm audit --omit=dev --audit-level=high`.
+- **Documentação operacional** em `docs/operations/`: implantação, backup/restore, recuperação de
+  desastre, segurança e runbook.
+
+O que a T16.8 **não** fez, deliberadamente: provisionar VPS, domínio, DNS, certificado ou storage
+off-site; deploy automático a partir do CI; limpeza de tombstone, compactação do change log ou
+poda do ledger de idempotência (§151–§153); e **exclusão de conta**, que continua registrada como
+`PRE-RELEASE BLOCKER` para distribuição pública (ver `docs/operations/SECURITY.md`).
+
 ### PLANEJADO — ainda **não** existe
 
-- **T16.8** — Hardening, segurança, backup do servidor e observabilidade.
 - **T17** — Amigos, convites, desafios e social.
 
 Sob `/v1` existem hoje `auth`, `ai`, `backups` e `sync`.
@@ -269,12 +299,13 @@ T16.4  protege contra perder o APARELHO
        o dado do usuário está no Spark Backend
 
 T16.8  protege contra perder a VPS
-       o SQLite do servidor está em outro lugar        ← NÃO EXISTE
+       o SQLite do servidor está em outro lugar, criptografado
 ```
 
-Hoje, um `docker compose down -v` na VPS destrói os backups de todo mundo. Isso é uma pendência
-registrada da fase de hardening, não um detalhe operacional esquecido — e a UI do app não promete
-o contrário.
+Desde a T16.8 isso existe: snapshot consistente diário, criptografado, em storage fora da VPS, com
+ensaio de restauração executável (`ops/verify-backup.sh`). Restaurar o servidor **não** restaura o
+Room de nenhum aparelho — o que volta é o estado remoto (backups enviados, `sync_entities`,
+change log, tombstones, uso da IA). Ver `docs/operations/BACKUP_AND_RESTORE.md`.
 
 ## Coach IA — migração executada na T16.2
 
@@ -334,3 +365,5 @@ O detalhamento fica nos documentos abaixo — este ADR registra a **decisão**, 
   snapshot e a forma canônica cujo SHA-256 os dois lados reproduzem.
 - [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md) §17 — o desenho de cada fase da T16 no app.
 - [`../../backend/README.md`](../../backend/README.md) — como rodar o backend.
+- [`../operations/`](../operations/) — implantação, backup/restauração, recuperação de desastre,
+  segurança e runbook (T16.8).

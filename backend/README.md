@@ -3,7 +3,8 @@
 Fronteira online do Spark. Monólito modular em NestJS sobre SQLite, pensado para rodar em **uma**
 VPS com Docker Compose.
 
-> **Estado (T16.7.1): fundação + identidade + Coach IA + backup + restore + sync + tombstones.**
+> **Estado (T16.8): fundação + identidade + Coach IA + backup + restore + sync + tombstones +
+> prontidão de produção.**
 > Existe verificação de Firebase ID Token (`GET /v1/auth/me`), a fronteira com o Gemini
 > (`POST /v1/ai/coach`), o **backup estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`), o
 > **download do conteúdo** para restore (`GET /v1/backups`, `/{id}`, `/{id}/content`), a
@@ -112,6 +113,15 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `AI_MAX_REQUESTS_GLOBAL_DAY` | não | `500` | Quota diária do servidor inteiro |
 | `AI_MAX_CONCURRENT_REQUESTS_PER_USER` | não | `1` | Chamadas simultâneas ao provider por conta |
 | `BACKUP_RETENTION_COUNT` | não | `5` | Quantos snapshots guardar por conta. Cinco porque cada backup já basta sozinho para restaurar — guardar vários é janela de arrependimento, não redundância |
+| `SQLITE_SYNCHRONOUS` | não | `FULL` | `FULL` \| `NORMAL`. `FULL` porque o aparelho só libera a Outbox com confirmação: uma transação confirmada e perdida é dado que ele considera salvo (T16.8) |
+| `SQLITE_WAL_AUTOCHECKPOINT_PAGES` | não | `1000` | Teto de crescimento do WAL, declarado em vez de herdado |
+| `HTTP_REQUEST_TIMEOUT_MS` | não | `120000` | Teto de uma requisição. Não são 30 s: um backup de 4 MiB em rede móvel ruim não cabe |
+| `HTTP_KEEP_ALIVE_TIMEOUT_MS` | não | `65000` | Precisa ser maior que o keep-alive do proxy, senão o Caddy reaproveita conexão fechada e o cliente vê 502 |
+| `REQUIRE_FIREBASE_ADMIN` | não | `false` | `true` derruba o processo no startup sem credencial — falha visível em vez de 503 em toda requisição |
+| `REQUIRE_GEMINI` | não | `false` | Idem para o Gemini. Default `false`: o Coach é opcional, identidade não é |
+| `AI_ENABLED` | não | `true` | `false` desliga o Coach sem tocar em backup e sync |
+| `SYNC_WRITE_ENABLED` | não | `true` | `false` pausa `POST /v1/sync/push`; o pull continua |
+| `MAINTENANCE_MODE` | não | `false` | `true` faz todo `/v1` responder `503`; `/health/*` continua |
 
 Nenhuma credencial é versionada. `.env`, chaves, service accounts e Caddyfile real estão no
 `.gitignore` e no `.dockerignore`, e há teste que varre a árvore procurando chave privada,
@@ -137,6 +147,11 @@ A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive for
 | `POST /v1/sync/push` | **Bearer** | Mutações deste aparelho. Resultado **por item**: `APPLIED`, `STALE`, `REMOTE_DELETED`... (T16.6/T16.7). |
 | `GET /v1/sync/pull` | **Bearer** | Mudanças da conta depois do cursor, em ordem de `serverSequence` (T16.6). |
 | `GET /v1/sync/entities/{entityType}/{entitySyncId}` | **Bearer** | O estado **atual** de um agregado. **Somente leitura**: não gasta revision, não anexa mudança ao change log, não escreve no ledger e não move cursor (T16.7.1). |
+
+Desde a T16.8, toda rota autenticada tem um teto por conta (`API_RATE_LIMITED`, 429), o backup tem
+tetos próprios de escrita e leitura (`BACKUP_RATE_LIMITED`), e as respostas de `/v1` saem com
+`Cache-Control: no-store` e `X-Content-Type-Options: nosniff`. **CORS continua fechado**: um app
+Android nativo não precisa dele, e liberar `*` por hábito é superfície de graça.
 
 **Nenhuma rota de dado pessoal tem parâmetro de usuário.** O dono sai do token verificado, e um
 `ownerUid` no corpo ou na query string não influencia a resposta. Dado de outra conta é
@@ -327,19 +342,43 @@ guardam o payload do agregado como texto — o servidor **não** desmonta treino
 consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que o Room já
 possui.
 
-## Produção (ainda não provisionada)
+## Produção (T16.8)
 
 ```text
-Internet → Caddy (TLS / Let's Encrypt) → Spark Backend → SQLite
+Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ Spark Backend ──▶ SQLite
+                                                                              │
+                                                          ops/backup.sh ──▶ restic ──▶ off-site
+                                                                             (criptografado)
 ```
 
-[`Caddyfile.example`](./Caddyfile.example) traz o exemplo. A T16.0 **não** provisiona VPS, domínio,
-DNS nem certificado, e não cria nenhum recurso pago — e isso continua verdade na T16.4.
+- [`docker-compose.prod.yml`](./docker-compose.prod.yml) — o backend **não publica porta nenhuma**;
+  quem escuta na internet é o Caddy. Bind mount para `/opt/spark/data`, rotação de log, limites de
+  recurso e credencial montada somente-leitura.
+- [`Caddyfile.prod`](./Caddyfile.prod) — o domínio vem de `{$SPARK_DOMAIN}`, porque domínio real é
+  configuração operacional e não código.
+- [`../ops/`](../ops/) — snapshot consistente, backup off-site, restauração, ensaio de restauração,
+  verificação operacional, deploy com rollback e unidades systemd.
+
+> **Nada disso foi verificado em VPS real.** Não há domínio, DNS, certificado nem storage
+> contratado: o que existe é `CODE READY`, exercitado localmente com Docker. Ver
+> [`docs/operations/PRODUCTION_DEPLOYMENT.md`](../docs/operations/PRODUCTION_DEPLOYMENT.md).
 
 > **Backup do usuário ≠ backup do servidor.** A T16.4 protege contra a perda do **aparelho**: o
-> dado do usuário passa a existir também aqui. Ela **não** protege contra a perda desta VPS — hoje
-> um `docker compose down -v` destrói os backups de todo mundo. Backup off-site do SQLite é a
-> **T16.8**, e está registrado como pendência, não esquecido.
+> dado do usuário passa a existir também aqui. A **T16.8** protege contra a perda desta VPS: o
+> SQLite do servidor passa a existir fora dela, criptografado. Restaurar o servidor **não**
+> restaura o Room de nenhum aparelho. Ver
+> [`docs/operations/BACKUP_AND_RESTORE.md`](../docs/operations/BACKUP_AND_RESTORE.md).
+
+### Interruptores de operação
+
+| Variável | Efeito | Núcleo do Spark |
+| --- | --- | --- |
+| `AI_ENABLED=false` | `/v1/ai/coach` → `503 AI_PROVIDER_UNAVAILABLE`, antes de quota e provider | intacto |
+| `SYNC_WRITE_ENABLED=false` | `POST /v1/sync/push` → `503 SYNC_WRITE_DISABLED`; o pull continua | intacto; a Outbox fica pendente |
+| `MAINTENANCE_MODE=true` | Todo `/v1` → `503`; `/health/*` continua verde | intacto |
+
+Os três respondem `503`, que o Android já trata como indisponibilidade recuperável desde a T16.2 —
+desligar uma capacidade no servidor não exige publicar APK novo.
 
 ## Documentação
 
@@ -349,3 +388,5 @@ DNS nem certificado, e não cria nenhum recurso pago — e isso continua verdade
 - [Protocolo de sincronização](../docs/architecture/sync-protocol.md)
 - [Contrato de backup v1](../contracts/backup/v1/README.md)
 - [Configuração do Firebase Auth](../docs/FIREBASE_AUTH_SETUP.md)
+- [Operações (T16.8)](../docs/operations/) — implantação, backup/restauração, recuperação de
+  desastre, segurança e runbook

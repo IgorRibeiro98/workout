@@ -1,8 +1,14 @@
-# Spark Backend — exemplo de reverse proxy para a VPS futura.
+# Spark Backend — exemplo mínimo de reverse proxy (T16.0).
 #
-# NÃO usado pela composição local da T16.0: emitir certificado exige domínio real, e a T16.0 não
-# provisiona domínio, DNS nem VPS. Copie para `Caddyfile` (ignorado pelo Git), troque o domínio e
-# só então coloque na frente do backend.
+# >>> PARA PRODUÇÃO, USE `Caddyfile.prod` <<<
+#
+# Este arquivo é o exemplo didático da T16.0 e ficou sendo isso: a configuração de produção de
+# verdade — HSTS, tetos de tempo, teto de corpo, filtro de `Authorization` no log e domínio por
+# variável de ambiente — vive em `Caddyfile.prod`, que é o que `docker-compose.prod.yml` monta.
+# Ver `docs/operations/PRODUCTION_DEPLOYMENT.md`.
+#
+# Copie para `Caddyfile` (ignorado pelo Git), troque o domínio e só então coloque na frente do
+# backend.
 #
 #   Internet -> Caddy (TLS / Let's Encrypt) -> Spark Backend -> SQLite
 #

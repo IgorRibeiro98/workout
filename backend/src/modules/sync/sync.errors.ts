@@ -17,6 +17,8 @@ import { SYNC_ERROR_CODES, type SyncErrorCode } from './sync.contract';
 function syncException(status: HttpStatus, code: SyncErrorCode, message: string): HttpException {
   const body = { code, message };
   switch (status) {
+    case HttpStatus.SERVICE_UNAVAILABLE:
+      return new HttpException(body, HttpStatus.SERVICE_UNAVAILABLE);
     case HttpStatus.PAYLOAD_TOO_LARGE:
       return new PayloadTooLargeException(body);
     case HttpStatus.TOO_MANY_REQUESTS:
@@ -78,5 +80,18 @@ export const SyncErrors = {
       HttpStatus.TOO_MANY_REQUESTS,
       SYNC_ERROR_CODES.SYNC_RATE_LIMITED,
       'muitas requisições de sync para esta conta',
+    ),
+
+  /**
+   * A escrita remota está pausada (`SYNC_WRITE_ENABLED=false`).
+   *
+   * 503 de propósito: nada há de errado com a mutação, e o aparelho precisa mantê-la pendente
+   * para reenviar depois — que é exatamente o que ele faz com 5xx.
+   */
+  writeDisabled: () =>
+    syncException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      SYNC_ERROR_CODES.SYNC_WRITE_DISABLED,
+      'a sincronização está temporariamente pausada neste servidor',
     ),
 };

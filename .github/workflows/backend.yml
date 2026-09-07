@@ -17,10 +17,14 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      # Os scripts operacionais entram no CI desde a T16.8: eles falam com o banco de produção,
+      # e um defeito neles é um backup que não acontece.
+      - 'ops/**'
       - '.github/workflows/backend.yml'
   pull_request:
     paths:
       - 'backend/**'
+      - 'ops/**'
       - '.github/workflows/backend.yml'
 
 defaults:
@@ -57,6 +61,22 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Gate de segurança de dependências (T16.8 §93/§96).
+      #
+      # `--omit=dev` de propósito: o que roda em produção é a árvore de produção. Uma
+      # vulnerabilidade no `@nestjs/cli` é um problema de máquina de desenvolvimento, tem
+      # prioridade diferente e não pode bloquear um deploy de correção.
+      #
+      # `--audit-level=high` barra **high e critical**. Moderadas não bloqueiam: hoje as que
+      # existem estão todas numa cadeia transitiva de `firebase-admin` que o backend não alcança,
+      # e `test/dependency-security.spec.ts` é quem garante que ela continue inalcançável — um
+      # import de `firebase-admin/storage` quebra aquele teste, não este gate.
+      #
+      # Se este passo falhar: trate a vulnerabilidade deliberadamente. `npm audit fix --force` é
+      # proibido (§95) — ele sobe major sem revisão para zerar o relatório.
+      - name: Auditoria de dependências (runtime)
+        run: npm audit --omit=dev --audit-level=high
+
   docker:
     name: docker build
     runs-on: ubuntu-latest
@@ -90,6 +110,28 @@ jobs:
             db.prepare('INSERT INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
               .run('ci_persistencia','sobreviveu',1);
             db.close();"
+
+          # O container roda como usuário sem privilégio (T16.8 §12). Um `USER node` removido por
+          # engano num refactor do Dockerfile não quebra nenhum teste — só passa a rodar como root.
+          uid="$(docker exec spark-ci id -u)"
+          if [ "$uid" = "0" ]; then echo "o container não pode rodar como root"; exit 1; fi
+          echo "container roda como uid $uid"
+
+          # Graceful shutdown (T16.8 §71/§72): uma requisição em voo precisa terminar, e o
+          # SQLite precisa ser fechado com checkpoint. `docker stop` manda SIGTERM e espera.
+          ( curl -sS -o /tmp/inflight.body -w '%{http_code}' --max-time 20 \
+              http://127.0.0.1:8080/v1/auth/me > /tmp/inflight.code & )
+          docker stop -t 15 spark-ci > /dev/null
+          inflight="$(cat /tmp/inflight.code 2>/dev/null || true)"
+          if [ "$inflight" != "401" ]; then
+            echo "a requisição em voo não foi drenada (código: ${inflight:-nenhum})"; exit 1
+          fi
+          if [ "$(docker inspect spark-ci --format '{{.State.ExitCode}}')" != "0" ]; then
+            echo "o processo não saiu limpo em SIGTERM"; docker logs spark-ci; exit 1
+          fi
+          docker logs spark-ci 2>&1 | grep -q 'server.shutdown.forced' && {
+            echo "o shutdown precisou ser forçado"; exit 1; }
+          echo "graceful shutdown ok"
 
           docker rm -f spark-ci
           docker run -d --name spark-ci-2 -p 127.0.0.1:8080:8080 \
@@ -161,3 +203,133 @@ jobs:
 
           docker rm -f spark-ci-2
           docker volume rm spark-ci-data
+
+  ops-scripts:
+    name: shellcheck dos scripts operacionais
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      # `ops/backup.sh` e `ops/restore.sh` mexem no banco de produção e no repositório de backup.
+      # Um `$VAR` sem aspas ali é um caminho com espaço que vira dois argumentos — e um backup que
+      # não acontece. O shellcheck já vem instalado no runner do GitHub.
+      - name: shellcheck
+        run: shellcheck ops/*.sh
+
+      - name: Sintaxe das unidades systemd
+        run: |
+          set -euo pipefail
+          # `systemd-analyze verify` exigiria as unidades instaladas e o binário do serviço
+          # presente. O que dá para verificar de forma útil aqui é o que quebra em silêncio: uma
+          # unidade sem as seções obrigatórias.
+          for unit in ops/systemd/*.service; do
+            grep -q '^\[Unit\]'    "$unit" || { echo "$unit: sem [Unit]"; exit 1; }
+            grep -q '^\[Service\]' "$unit" || { echo "$unit: sem [Service]"; exit 1; }
+            grep -q '^ExecStart='   "$unit" || { echo "$unit: sem ExecStart"; exit 1; }
+          done
+          for unit in ops/systemd/*.timer; do
+            grep -q '^\[Timer\]'      "$unit" || { echo "$unit: sem [Timer]"; exit 1; }
+            grep -q '^OnCalendar='     "$unit" || { echo "$unit: sem OnCalendar"; exit 1; }
+          done
+          echo "unidades ok"
+
+      # O Caddyfile de produção é código de infraestrutura: um erro de sintaxe nele é o proxy que
+      # não sobe depois de um deploy — descoberto na VPS, no pior momento.
+      - name: Caddyfile de produção é válido
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SPARK_DOMAIN=api.exemplo.invalid \
+            -e SPARK_ACME_EMAIL=ops@exemplo.invalid \
+            -v "$PWD/backend/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      # O compose de produção precisa continuar não publicando a porta do backend. É a diferença
+      # entre "o backend fica atrás do Caddy" e "o backend está na internet na porta 8080".
+      - name: O compose de produção não expõe o backend
+        run: |
+          set -euo pipefail
+          cd backend
+          resolved="$(SPARK_DOMAIN=api.exemplo.invalid SPARK_ACME_EMAIL=ops@exemplo.invalid \
+            SPARK_IMAGE_TAG=ci docker compose -f docker-compose.prod.yml config)"
+          # Só o Caddy publica portas. Se `8080` aparecer publicado, o teste falha.
+          if printf '%s' "$resolved" | grep -A6 'container_name: spark-backend' | grep -q 'published:'; then
+            echo "o serviço backend não pode publicar portas em produção"; exit 1
+          fi
+          printf '%s' "$resolved" | grep -q 'published: "443"' || { echo "o Caddy precisa publicar 443"; exit 1; }
+          echo "topologia de produção ok"
+
+  backup-drill:
+    name: ensaio de backup e restauração
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t spark-backend:local backend
+
+      # O ensaio que importa (T16.8 §43/§161/§163): snapshot consistente com o banco **ativo**
+      # recebendo escrita, verificação de integridade, restauração e o backend real subindo sobre
+      # a cópia restaurada.
+      #
+      # Sem credencial de storage real: o CI normal não pode depender de um provedor pago, e não
+      # deve guardar segredo para isso (§164). O que é exercitado aqui é a parte que quebra em
+      # silêncio — o snapshot e a restauração. O envio off-site é validado manualmente, e está
+      # documentado em docs/operations/BACKUP_AND_RESTORE.md.
+      - name: Snapshot com o banco ativo, restauração e health
+        run: |
+          set -euo pipefail
+          WORK="$(mktemp -d)"
+          mkdir -p "$WORK/data" "$WORK/backups" "$WORK/state"
+          chmod 777 "$WORK/data"
+
+          export SPARK_DATA_DIR="$WORK/data"
+          export SPARK_STAGING_DIR="$WORK/backups"
+          export SPARK_STATE_DIR="$WORK/state"
+          export SPARK_COMPOSE_DIR="$WORK/sem-compose"
+          export SPARK_IMAGE=spark-backend:local
+          export SPARK_BACKUP_ENV_FILE=/dev/null
+
+          docker run -d --name drill-backend -p 127.0.0.1:8080:8080 \
+            -v "$SPARK_DATA_DIR:/data" -e DATABASE_PATH=/data/spark.db -e NODE_ENV=production \
+            spark-backend:local
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/health/ready 2>/dev/null | grep -q '"status":"ok"' && break
+            [ "$i" = 30 ] && { docker logs drill-backend; exit 1; }
+            sleep 2
+          done
+
+          docker exec drill-backend node -e "
+            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
+            db.prepare('INSERT INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
+              .run('drill','presente',Date.now()); db.close();"
+
+          # Escrita concorrente durante o snapshot: em WAL, VACUUM INTO não pode bloquear o
+          # servidor, e um snapshot rasgado por escrita concorrente é exatamente o defeito que
+          # `cp spark.db` produziria.
+          ( for i in $(seq 1 20); do
+              docker exec drill-backend node -e "
+                const D=require('better-sqlite3'); const db=new D('/data/spark.db');
+                db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
+                  .run('carga_$i','x',Date.now()); db.close();" || true
+            done ) &
+          WRITER=$!
+          SNAP="$(ops/snapshot.sh)"
+          wait $WRITER || true
+          test -s "$SNAP"
+
+          # Restauração + integrity_check + backend real ready sobre a cópia.
+          SPARK_DRILL_DIR="$WORK/drill" ops/verify-backup.sh --from-file "$SNAP" --port 18082
+
+          # E o dado precisa estar lá: um backup íntegro e vazio passaria em tudo acima.
+          docker run --rm -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
+            const D=require('better-sqlite3');
+            const db=new D('/s/$(basename "$SNAP")',{readonly:true});
+            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('drill');
+            if (!row || row.value !== 'presente') { console.error('o snapshot não tem o dado'); process.exit(1); }
+            console.log('o snapshot contém o dado esperado'); db.close();"
+
+          docker rm -f drill-backend

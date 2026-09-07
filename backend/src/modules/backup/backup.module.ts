@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { BackupController } from './backup.controller';
+import { BackupRateLimiter } from './backup.rate-limit';
 import { BackupRepository } from './backup.repository';
 import { BackupService } from './backup.service';
 
@@ -16,6 +17,6 @@ import { BackupService } from './backup.service';
 @Module({
   imports: [AuthModule],
   controllers: [BackupController],
-  providers: [BackupService, BackupRepository],
+  providers: [BackupService, BackupRepository, BackupRateLimiter],
 })
 export class BackupModule {}

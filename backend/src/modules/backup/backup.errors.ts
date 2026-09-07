@@ -27,6 +27,8 @@ function backupException(
 ): HttpException {
   const body = { code, message };
   switch (status) {
+    case HttpStatus.TOO_MANY_REQUESTS:
+      return new HttpException(body, HttpStatus.TOO_MANY_REQUESTS);
     case HttpStatus.CONFLICT:
       return new ConflictException(body);
     case HttpStatus.PAYLOAD_TOO_LARGE:
@@ -94,5 +96,13 @@ export const BackupErrors = {
       HttpStatus.GONE,
       BACKUP_ERROR_CODES.BACKUP_CONTENT_UNAVAILABLE,
       'este backup foi criado por uma versão anterior do servidor e não pode ser restaurado',
+    ),
+
+  /** Requisições demais desta conta em uma janela curta. Reenviar depois é seguro e idempotente. */
+  rateLimited: () =>
+    backupException(
+      HttpStatus.TOO_MANY_REQUESTS,
+      BACKUP_ERROR_CODES.BACKUP_RATE_LIMITED,
+      'muitas requisições de backup para esta conta',
     ),
 };

@@ -70,6 +70,14 @@ export const BACKUP_ERROR_CODES = {
    * seria pior do que dizer que não dá.
    */
   BACKUP_CONTENT_UNAVAILABLE: 'BACKUP_CONTENT_UNAVAILABLE',
+  /**
+   * Requisições de backup demais para esta conta em uma janela curta (T16.8).
+   *
+   * Não é perda: a tentativa de backup do aparelho é durável e imutável, e reenviá-la mais tarde
+   * com o mesmo `clientBackupId` é idempotente por contrato. O que a recusa impede é um cliente em
+   * laço transformar um app pessoal em carga contínua sobre a VPS.
+   */
+  BACKUP_RATE_LIMITED: 'BACKUP_RATE_LIMITED',
 } as const;
 
 export type BackupErrorCode = (typeof BACKUP_ERROR_CODES)[keyof typeof BACKUP_ERROR_CODES];

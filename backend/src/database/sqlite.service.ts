@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import BetterSqlite3, { type Database } from 'better-sqlite3';
@@ -11,6 +11,20 @@ export interface PragmaSnapshot {
   readonly journalMode: string;
   readonly foreignKeys: boolean;
   readonly busyTimeoutMs: number;
+  readonly synchronous: number;
+  readonly walAutocheckpointPages: number;
+}
+
+/**
+ * O tamanho ocupado em disco pelo banco e pelos artefatos do WAL (T16.8 §74/§76).
+ *
+ * Só tamanho — nunca conteúdo. É a informação que responde "o disco vai encher?" sem que nada do
+ * dado do usuário apareça em log ou em diagnóstico.
+ */
+export interface StorageSnapshot {
+  readonly databaseBytes: number;
+  readonly walBytes: number;
+  readonly shmBytes: number;
 }
 
 /**
@@ -58,6 +72,14 @@ export class SqliteService implements OnApplicationShutdown {
     // padrão; deixar assim tornaria as futuras tabelas de sync incapazes de recusar um órfão.
     db.pragma('foreign_keys = ON');
     db.pragma(`busy_timeout = ${this.config.sqliteBusyTimeoutMs}`);
+    // `synchronous` é escolhido explicitamente (T16.8 §18), e não herdado do default do driver.
+    // O porquê de `FULL` ser o default está em `env.schema.ts`: uma transação confirmada e depois
+    // perdida é dado que o aparelho já considera salvo — a Outbox local só é liberada com a
+    // confirmação deste servidor.
+    db.pragma(`synchronous = ${this.config.sqliteSynchronous}`);
+    // Teto de crescimento do WAL. O valor é o default do SQLite; declará-lo torna a política
+    // visível em vez de implícita, e permite baixá-la numa VPS com pouco disco.
+    db.pragma(`wal_autocheckpoint = ${this.config.sqliteWalAutocheckpointPages}`);
 
     this.db = db;
     this.migrations = loadMigrations(migrationsDirectory);
@@ -69,12 +91,18 @@ export class SqliteService implements OnApplicationShutdown {
     ).run('migrations_applied_at', String(Date.now()), Date.now());
 
     const pragmas = this.pragmas();
+    const storage = this.storage();
     this.logger.info('database.ready', {
       journalMode: pragmas.journalMode,
       foreignKeys: pragmas.foreignKeys,
       busyTimeoutMs: pragmas.busyTimeoutMs,
+      synchronous: pragmas.synchronous,
+      walAutocheckpointPages: pragmas.walAutocheckpointPages,
       migrationsApplied: applied.length,
       schemaVersion: this.expectedVersions().at(-1) ?? 0,
+      // Tamanho, nunca conteúdo: é o que permite acompanhar crescimento sem registrar dado.
+      databaseBytes: storage.databaseBytes,
+      walBytes: storage.walBytes,
     });
   }
 
@@ -94,10 +122,35 @@ export class SqliteService implements OnApplicationShutdown {
     const [journal] = db.pragma('journal_mode') as Array<{ journal_mode: string }>;
     const [foreignKeys] = db.pragma('foreign_keys') as Array<{ foreign_keys: number }>;
     const [busyTimeout] = db.pragma('busy_timeout') as Array<{ timeout: number }>;
+    const [synchronous] = db.pragma('synchronous') as Array<{ synchronous: number }>;
+    const [autocheckpoint] = db.pragma('wal_autocheckpoint') as Array<{
+      wal_autocheckpoint: number;
+    }>;
     return {
       journalMode: journal.journal_mode,
       foreignKeys: foreignKeys.foreign_keys === 1,
       busyTimeoutMs: busyTimeout.timeout,
+      synchronous: synchronous.synchronous,
+      walAutocheckpointPages: autocheckpoint.wal_autocheckpoint,
+    };
+  }
+
+  /**
+   * Quanto o banco ocupa em disco, agora.
+   *
+   * Existe para o diagnóstico operacional da T16.8: disco cheio é o modo de falha mais provável
+   * de um SQLite em VPS pequena, e ele é silencioso até o momento em que deixa de ser. Devolve
+   * zeros para `:memory:` e para arquivo ainda inexistente — ausência não é erro aqui.
+   */
+  storage(): StorageSnapshot {
+    const path = this.config.databasePath;
+    if (path === ':memory:') {
+      return { databaseBytes: 0, walBytes: 0, shmBytes: 0 };
+    }
+    return {
+      databaseBytes: sizeOf(path),
+      walBytes: sizeOf(`${path}-wal`),
+      shmBytes: sizeOf(`${path}-shm`),
     };
   }
 
@@ -137,5 +190,14 @@ export class SqliteService implements OnApplicationShutdown {
 
   onApplicationShutdown(): void {
     this.close();
+  }
+}
+
+/** Tamanho de um arquivo, ou `0` quando ele ainda não existe. */
+function sizeOf(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
   }
 }

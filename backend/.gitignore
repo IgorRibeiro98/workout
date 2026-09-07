@@ -20,5 +20,5 @@ data/
 *.sqlite
 *.sqlite3
 
-# Caddyfile real (o exemplo é versionado).
+# Caddyfile real (o exemplo e o modelo de produção são versionados).
 Caddyfile

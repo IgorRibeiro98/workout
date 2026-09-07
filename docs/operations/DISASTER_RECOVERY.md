@@ -1,0 +1,211 @@
+# Spark — Recuperação de desastre
+
+> **Estado:** `IMPLEMENTED` (procedimento e scripts) · `NOT VERIFIED` em VPS real — não há VPS
+> provisionada. O ensaio equivalente (`ops/verify-backup.sh`) foi executado localmente e passou:
+> restauração do off-site → `integrity_check` → backend real subindo sobre a cópia → `/health/ready`.
+
+## O princípio
+
+Uma VPS não é backup. Um volume Docker não é backup. Um snapshot do provedor não é, sozinho, uma
+estratégia de recuperação.
+
+Este documento existe para responder a uma pergunta com um procedimento, e não com uma intenção:
+**a VPS morreu; o que eu faço agora?**
+
+## Contra o que estamos protegidos
+
+| Cenário | O que recupera | Onde está |
+| --- | --- | --- |
+| Container removido | O bind mount sobrevive | `PRODUCTION_DEPLOYMENT.md` |
+| Deploy ruim | Rollback de imagem por tag | `ops/deploy.sh --rollback <sha>` |
+| Migration ruim | Backup pré-deploy | [RUNBOOK.md](./RUNBOOK.md), "migration falhou" |
+| Disco corrompido | Backup off-site | Este documento |
+| **VPS perdida** | **Backup off-site** | **Este documento** |
+| Erro operacional / exclusão acidental | Backup off-site, snapshot anterior | `ops/restore.sh --snapshot <id>` |
+
+## RPO — quanto se pode perder
+
+```text
+Backup do servidor      diário (03:15 UTC) + pré-deploy
+RPO off-site            até 24 h
+```
+
+**O que isso significa de verdade, e é menos assustador do que parece.** O Spark é local-first: o
+Room de cada aparelho é a autoridade operacional, e ele não é afetado por nada aqui. Perder até 24 h
+do servidor significa perder até 24 h de *estado remoto* — o que já subiu de sync e de backup nesse
+intervalo. Os aparelhos ainda têm o dado, e a Outbox de cada um só é liberada com confirmação do
+servidor: o que não foi confirmado continua pendente e sobe de novo.
+
+A consequência prática de restaurar o servidor para um ponto anterior é que aparelhos com cursor à
+frente do change log restaurado recebem `CURSOR_EXPIRED` e pedem rebaseline explícito — que é
+exatamente o desenho da T16.7, e não um efeito colateral (§46).
+
+**Não prometemos RPO menor porque não existe RPO menor.** Um backup mais frequente é possível
+(`spark-backup.timer`), mas enquanto ele for diário, o número é 24 h.
+
+## RTO — quanto tempo leva
+
+```text
+provisionar VPS + instalar Docker      15–30 min
+clonar repositório e restaurar segredos 10–20 min   ← depende de você ter os segredos
+baixar e restaurar o backup             5–15 min    ← depende do tamanho e da rede
+subir e validar                          5–10 min
+DNS propagar                             minutos a horas   ← fora do seu controle
+──────────────────────────────────────────────────
+RTO realista                            1–2 h de trabalho, mais a propagação de DNS
+```
+
+Sem SLA e sem promessa de automação: é uma recuperação manual, feita por uma pessoa, em um app
+pessoal (§47). O maior risco de atraso não é técnico — é não encontrar os segredos.
+
+## Procedimento — a VPS foi perdida
+
+### 0. Antes de tudo: você tem estes três?
+
+```text
+[ ] a senha do repositório restic
+[ ] a credencial de acesso ao storage off-site
+[ ] a service account do Firebase Admin (ou acesso ao console para gerar outra)
+```
+
+**Sem a senha do restic, o backup é irrecuperável.** Nenhum procedimento neste documento contorna
+isso — é o ponto inteiro da criptografia. Ver "Onde os segredos precisam estar", abaixo.
+
+### 1. Provisionar a máquina
+
+Ubuntu LTS. Siga [PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md), passos 1 a 6: sistema,
+usuário `spark`, SSH por chave, firewall, Docker, diretórios.
+
+### 2. Restaurar os segredos
+
+Em `/opt/spark/secrets`, com permissão `600` (ver [SECURITY.md](./SECURITY.md)):
+
+```text
+firebase-admin.json     do gerenciador de segredos, ou gerada de novo no console do Firebase
+backend.env             GEMINI_API_KEY
+restic-password         do gerenciador de segredos / cópia física
+backup.env              RESTIC_REPOSITORY + credencial do storage
+```
+
+### 3. Recuperar o repositório e a imagem
+
+```bash
+sudo -u spark git clone <url-do-repo> /opt/spark/repo
+cd /opt/spark/repo/backend && cp Caddyfile.prod Caddyfile
+```
+
+### 4. Restaurar o banco
+
+```bash
+cd /opt/spark/repo
+set -a; . /opt/spark/secrets/backup.env; set +a
+
+restic snapshots --host spark --tag spark-db     # veja o que existe e escolha
+ops/restore.sh --to /tmp/dr                      # extrai e VERIFICA, sem tocar em nada
+ops/restore.sh --to /tmp/dr --install            # instala em /opt/spark/data
+```
+
+`--install` só age depois de `integrity_check` e `foreign_key_check` passarem, e preserva qualquer
+banco que já exista no destino. Ele recusa rodar com o backend de pé.
+
+### 5. Subir
+
+```bash
+cd /opt/spark/repo
+docker build -t spark-backend:recuperacao backend
+cd backend
+cat > .env <<'EOF'
+SPARK_DOMAIN=api.seudominio.com
+SPARK_ACME_EMAIL=voce@seudominio.com
+EOF
+SPARK_IMAGE_TAG=recuperacao docker compose -f docker-compose.prod.yml up -d
+```
+
+### 6. DNS
+
+Aponte `api.<dominio>` para o IP **novo**. O Caddy emite o certificado sozinho assim que o nome
+resolver e a porta 80 estiver acessível.
+
+```bash
+dig +short api.seudominio.com          # precisa devolver o IP novo
+```
+
+### 7. Validar, nesta ordem
+
+```bash
+curl -s https://api.seudominio.com/health/live      # {"status":"ok"}
+curl -s https://api.seudominio.com/health/ready     # {"status":"ok", checks: todos true}
+
+# Firebase Auth ponta a ponta: sem token, 401 (e não 404 nem 503)
+curl -s -o /dev/null -w '%{http_code}\n' https://api.seudominio.com/v1/auth/me    # 401
+# Com um ID Token real de uma conta de teste:
+curl -s -H "Authorization: Bearer <id-token>" https://api.seudominio.com/v1/auth/me   # {"uid": ...}
+```
+
+`401` sem token prova que a rota existe e nasce fechada. `503` ali significaria service account
+ausente ou inválida — volte ao passo 2.
+
+No app, com uma **conta de teste** (§111):
+
+```text
+[ ] entrar na Conta Spark
+[ ] Coach responde (ou responde indisponível, se AI_ENABLED=false)
+[ ] listar backups: os snapshots anteriores aparecem
+[ ] sync: push e pull convergem
+[ ] um conflito existente ainda pode ser lido
+```
+
+Nada destrutivo nessa validação: não apague backup, não force restore, não resolva conflito real.
+
+### 8. Retomar o backup
+
+```bash
+sudo install -m 644 /opt/spark/repo/ops/systemd/spark-*.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now spark-backup.timer spark-check-health.timer
+sudo systemctl start spark-backup.service
+ops/verify-backup.sh                    # ensaio na máquina nova
+```
+
+**A recuperação não está concluída até o backup voltar a rodar.** Uma VPS restaurada sem backup é
+a mesma situação de antes do desastre, com a diferença de que agora você sabe que ela acontece.
+
+## O que a restauração do servidor NÃO faz
+
+Ela **não** restaura o Room de nenhum aparelho (§49). O que volta é:
+
+```text
+backup_snapshots     os snapshots que os usuários enviaram (T16.4)
+sync_entities        o estado remoto por agregado, com revision e tombstones
+sync_changes         o change log
+sync_mutations       o ledger de idempotência
+ai_usage_daily       contagem de uso do Coach, sem conteúdo
+```
+
+O treino de cada pessoa continua no aparelho dela. Quem perdeu o **aparelho** usa o restore da
+T16.5, dentro do app.
+
+## Onde os segredos precisam estar
+
+Este documento **não contém segredo algum** (§114). O que ele registra é *onde eles precisam estar
+no momento da recuperação*:
+
+| Segredo | Precisa estar disponível fora da VPS | Sem ele |
+| --- | --- | --- |
+| Senha do repositório restic | **Sim, obrigatoriamente** | O backup é irrecuperável |
+| Credencial do storage off-site | Sim | Não dá para baixar o backup |
+| Service account do Firebase Admin | Não — pode ser gerada de novo no console | Rota autenticada responde 503 |
+| Chave do Gemini | Não — pode ser gerada de novo | Coach indisponível; o resto funciona |
+
+Um gerenciador de senhas resolve os quatro. A senha do restic merece também uma cópia física em
+lugar seguro: ela é a única cujo esquecimento é definitivo.
+
+## Ensaio periódico
+
+`ops/verify-backup.sh` **é** o ensaio de recuperação executável, e roda contra o backup real sem
+tocar em produção. Rode-o depois do primeiro backup e sempre que a senha, o destino ou o schema
+mudarem — e, idealmente, uma vez por trimestre por hábito.
+
+A parte que ele não ensaia é a que depende de acesso humano: provisionar máquina, restaurar
+segredos, mexer no DNS. Essa é a parte que costuma custar o tempo real de um desastre — vale ler
+este documento antes de precisar dele.

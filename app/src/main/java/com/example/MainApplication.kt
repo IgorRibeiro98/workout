@@ -245,8 +245,11 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
      * responde indisponível.
      */
     val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? by lazy {
-        BuildConfig.SPARK_BACKEND_BASE_URL
-            .takeIf { it.isNotBlank() }
+        // `SparkBackendEndpoint` é quem decide se este endereço pode ser usado (T16.8 §6/§7): em
+        // release, HTTPS e nunca um host de desenvolvimento. Um endereço recusado vira `null`, que
+        // é o mesmo estado de um build sem endereço — nuvem desligada, núcleo do Spark intacto.
+        com.example.data.remote.spark.SparkBackendEndpoint
+            .resolve(BuildConfig.SPARK_BACKEND_BASE_URL, BuildConfig.DEBUG)
             ?.let { baseUrl ->
                 com.example.data.remote.spark.SparkBackendClient(
                     baseUrl = baseUrl,

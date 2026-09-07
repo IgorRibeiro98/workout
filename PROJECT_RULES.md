@@ -544,6 +544,70 @@ dependente de rede.
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.sync.*"` e `npm test` em `backend/`.
   As duas são offline.
 
+## 13.7 Produção: hardening, backup do servidor e observabilidade (T16.8)
+
+A arquitetura online da T16 virou infraestrutura operável. As regras abaixo são o que impede o
+endurecimento de virar dependência de rede — e a operação de virar perda de dado.
+
+- **O núcleo não paga nada por isso.** Com VPS fora, Firebase fora, Gemini fora, backup falhando e
+  sync pausado, o usuário continua abrindo o app, executando treino, registrando série, concluindo
+  e consultando histórico. Nenhum interruptor, limite, timeout ou modo de manutenção pode mudar
+  isso. Se uma mudança de infraestrutura tornar o app dependente do servidor, ela está errada —
+  não o app.
+- **Produção é HTTPS, e o backend não fica exposto.** Quem escuta 80/443 é o Caddy;
+  `docker-compose.prod.yml` **não publica** a porta do backend, e há gate de CI sobre isso.
+  `http://IP:8080` como endpoint de release é proibido.
+- **O endereço de release é HTTPS em host público.** `SparkBackendEndpoint` recusa em runtime, e
+  `build.gradle.kts` falha o build de release antes de o APK existir. Vazio continua sendo válido
+  e significa "nuvem desligada" — nunca fallback para `localhost`, `10.0.2.2` ou rede privada.
+- **`cp spark.db` com o banco ativo é proibido.** Em WAL, o arquivo principal não contém o que
+  ainda está no `-wal`. O snapshot é `VACUUM INTO` a partir de uma conexão **somente leitura**,
+  seguido de `integrity_check` e `foreign_key_check` **sobre a cópia** — é ela que vai para o
+  off-site, e é ela que precisa provar que serve.
+- **Uma cópia na mesma VPS não é backup.** O destino é off-site e criptografado (restic), e a
+  senha existe fora da VPS. Backup criptografado cuja senha só existe na máquina perdida é backup
+  perdido.
+- **Backup nunca é validado por exit code.** Só está validado o que foi restaurado:
+  `ops/verify-backup.sh` restaura, verifica integridade e **sobe o backend real sobre a cópia**
+  exigindo `/health/ready`.
+- **Migration de produção não roda sem ponto de recuperação.** `ops/deploy.sh` faz backup antes, e
+  aborta se ele falhar. E **rollback de aplicação não desfaz migration**: mudança incompatível
+  segue *expand → deploy → contract em release posterior*.
+- **A imagem é identificável.** Tag por SHA do commit, nunca `latest` em produção, e nunca deploy
+  com árvore suja — a tag precisa descrever exatamente o que sobe.
+- **`synchronous = FULL` é a escolha, não o default herdado.** O aparelho só libera a Outbox com
+  confirmação do servidor: uma transação confirmada e depois perdida é dado que o cliente
+  considera salvo e que ninguém vai reenviar. `NORMAL` existe como configuração; trocar é decisão
+  explícita.
+- **Readiness é sobre servir, não sobre terceiros.** `/health/ready` verifica configuração, SQLite
+  e migrations. Ele **não** consulta Firebase nem Gemini, e não vai consultar: o Coach fora não
+  pode derrubar backup e sync. `/health/live` prova só que o processo está vivo.
+- **Interruptor é pausa, nunca perda.** `AI_ENABLED`, `SYNC_WRITE_ENABLED` e `MAINTENANCE_MODE`
+  respondem `503` — que o Android já trata como indisponibilidade recuperável desde a T16.2, sem
+  APK novo. Com o push pausado, a Outbox **permanece pendente** e nada é apagado. Um interruptor
+  que responda `4xx` faria o aparelho tratar a tentativa como recusada: isso seria perda.
+- **Limite não pode parar restore legítimo.** Os tetos são por `uid` autenticado, nunca por IP
+  (rede móvel e NAT compartilham endereço, e o Caddy à frente faria todo mundo parecer o mesmo
+  cliente). Eles existem para conter laço, e são calibrados ordens de grandeza acima do uso real.
+- **Log continua sem conteúdo.** `Authorization`, corpo, payload de backup, payload de sync,
+  prompt e resposta do modelo não vão para log — nem do backend, nem do Caddy. Rotação é
+  obrigatória: log não pode ser causa provável de disco cheio, e disco cheio derruba o SQLite.
+- **Nada é apagado para liberar espaço.** Disco cheio é incidente, e a resposta nunca é remover
+  banco, backup ou o arquivo corrompido. `integrity_check` falhando significa **preservar** o
+  arquivo e restaurar por cima de uma cópia — nunca `rm spark.db`.
+- **Tombstone, change log e ledger continuam intocados.** A T16.8 não limpa nenhum dos três
+  (§13.5 continua valendo): tombstone apagado cedo demais é ressurreição, e change log compactado
+  força rebaseline sem necessidade.
+- **Dependência se atualiza deliberadamente.** `npm audit fix --force` é proibido. O gate de CI é
+  `npm audit --omit=dev --audit-level=high`; vulnerabilidade aceita precisa de justificativa
+  **verificável** — a de hoje é um teste que prova que a cadeia não é alcançável.
+- **Documentação distingue estado.** `IMPLEMENTED`, `MANUAL SETUP REQUIRED`, `VERIFIED`,
+  `NOT VERIFIED`. Nada em `docs/operations/` pode dizer que produção está verificada enquanto não
+  houver VPS, DNS, TLS, credencial e backup off-site reais.
+- **Testes.** Toda mudança de hardening roda `npm test` em `backend/` e
+  `shellcheck ops/*.sh`. O CI normal continua sem Firebase real, sem Gemini, sem VPS e sem
+  credencial de storage.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

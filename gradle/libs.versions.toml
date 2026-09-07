@@ -1,4 +1,5 @@
 [versions]
+androidxFragment = "1.5.7"
 agp = "9.1.1"
 coreKtx = "1.13.1"
 junit = "4.13.2"
@@ -46,6 +47,17 @@ googleServices = "4.4.2"
 
 
 [libraries]
+# Declarada explicitamente, e não por transitividade (T16.8).
+#
+# `androidx.activity` puxa `fragment:1.1.0` transitivamente, e o Gradle já resolvia isso para
+# 1.5.7 em todo lugar — o APK sempre conteve 1.5.7. O `lintVitalRelease`, porém, lê a versão
+# **declarada** e reprovava `assembleRelease` com `InvalidFragmentVersionForActivityResult`
+# ("Upgrade Fragment version to at least 1.3.0"), bloqueando o build de release desde antes da
+# T16.1.
+#
+# Declarar a versão que já era a resolvida faz o lint ver a verdade. Não é baseline (que esconderia
+# problemas reais) e não muda um byte do que é empacotado.
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "androidxFragment" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
