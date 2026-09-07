@@ -332,8 +332,11 @@ jobs:
         run: |
           set -euo pipefail
           cd backend
+          # `SPARK_DATA_GID` entra aqui porque o compose de produção o declara obrigatório
+          # (`${VAR:?}`) desde a T16.8.1 — o valor não importa para conferir a topologia, mas sem
+          # ele o Compose nem interpola o arquivo.
           resolved="$(SPARK_DOMAIN=api.exemplo.invalid SPARK_ACME_EMAIL=ops@exemplo.invalid \
-            SPARK_IMAGE_TAG=ci docker compose -f docker-compose.prod.yml config)"
+            SPARK_DATA_GID=1 SPARK_IMAGE_TAG=ci docker compose -f docker-compose.prod.yml config)"
           # Só o Caddy publica portas. Se `8080` aparecer publicado, o teste falha.
           if printf '%s' "$resolved" | grep -A6 'container_name: spark-backend' | grep -q 'published:'; then
             echo "o serviço backend não pode publicar portas em produção"; exit 1
@@ -386,7 +389,11 @@ jobs:
           # aqui e jogada fora com o runner. Nenhuma credencial real entra no CI (§164). Ela existe
           # porque o compose de produção declara `REQUIRE_FIREBASE_ADMIN=true`, e desde a T16.8.1
           # §8 isso é verificado de verdade no startup — uma credencial ilegível derruba o processo.
-          docker run --rm -v "$WORK/secrets:/s" --entrypoint node spark-backend:topology -e "
+          # `--user` é o operador do host, e não o `node` da imagem: `$WORK/secrets` pertence ao
+          # runner (uid 1001) em modo 2750, e um container rodando como uid 1000 não escreve nele.
+          # Na VPS quem cria a service account também é o operador — este passo reproduz isso.
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$WORK/secrets:/s" --entrypoint node spark-backend:topology -e "
             const { generateKeyPairSync } = require('node:crypto');
             const { writeFileSync, chmodSync } = require('node:fs');
             const { privateKey } = generateKeyPairSync('rsa', {
@@ -688,7 +695,11 @@ jobs:
           echo "SPARK_SNAPSHOT=$SNAP" >> "$GITHUB_ENV"
 
           # O snapshot foi tirado com escrita em curso, e precisa estar íntegro assim mesmo.
-          docker run --rm -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
+          # `--user` de novo pelo mesmo motivo: `ops/snapshot.sh` grava o snapshot com `600` e dono
+          # do operador — deliberadamente, porque é dado pessoal do servidor esperando o envio
+          # off-site. Quem o inspeciona precisa ser o dono, não o `node` da imagem.
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
             const D=require('better-sqlite3');
             const db=new D('/s/$(basename "$SNAP")',{readonly:true});
             const integridade=db.pragma('integrity_check',{simple:true});
