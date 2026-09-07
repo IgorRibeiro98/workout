@@ -71,7 +71,19 @@ fi
 # Um arquivo que apareceu no storage não é um backup validado. Só é backup o que abre, passa no
 # `integrity_check` e tem schema aplicado.
 log "verificando o banco restaurado"
+# `--user` é quem está rodando o script, e não o `node` da imagem (T16.8.1 §3).
+#
+# O arquivo restaurado pertence ao operador e nasce com o modo do snapshot (`600`) — de propósito:
+# é dado pessoal do servidor, e a área de restauração não é compartilhada com o container. Um
+# container rodando como uid 1000 só conseguiria abri-lo em uma VPS onde o operador fosse, por
+# acaso, o uid 1000. Aqui não há grupo compartilhado a usar: o dono é quem lê, e o dono é quem
+# chamou o script.
+#
+# Este era um defeito de verdade no caminho de recuperação, e ele estava escondido: o ensaio de
+# backup do CI nunca chegou a executar (o job morria antes, por um erro de working-directory), e a
+# máquina de desenvolvimento tem uid 1000.
 VERIFICATION="$(docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$(cd "$(dirname "$RESTORED_DB")" && pwd):/restore" \
   --entrypoint node "$SPARK_IMAGE" -e "
     const Database = require('better-sqlite3');

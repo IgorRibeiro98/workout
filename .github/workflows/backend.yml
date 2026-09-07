@@ -447,10 +447,15 @@ jobs:
           if curl -fsS --max-time 3 http://127.0.0.1:8080/health/ready > /dev/null 2>&1; then
             echo "FALHA: o backend está publicado em 127.0.0.1:8080"; exit 1
           fi
-          if SPARK_IMAGE_TAG=topology $COMPOSE port backend 8080 2>/dev/null | grep -q ':'; then
-            echo "FALHA: o serviço backend publicou uma porta"; exit 1
+          # `docker inspect`, e não `docker compose port`: para uma porta não publicada o `port`
+          # imprime `invalid IP:0` em stdout e sai com 0, o que faz qualquer verificação por texto
+          # concluir o contrário do que aconteceu. `PortBindings` é o que o Docker realmente
+          # aplicou, e para um serviço só com `expose` ele é `{}`.
+          bindings="$(docker inspect spark-backend --format '{{json .HostConfig.PortBindings}}')"
+          if [ "$bindings" != "{}" ] && [ "$bindings" != "null" ]; then
+            echo "FALHA: o serviço backend publicou porta no host: $bindings"; exit 1
           fi
-          echo "ok: o backend só existe na rede interna"
+          echo "ok: o backend só existe na rede interna (PortBindings=$bindings)"
 
           # E a sobreposição do CI não pode ter tocado no backend.
           resolved="$(SPARK_IMAGE_TAG=topology $COMPOSE config)"
