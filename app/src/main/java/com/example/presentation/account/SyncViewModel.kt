@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * A sincronização multi-device, do ponto de vista da UI (T16.6).
@@ -47,12 +49,31 @@ class SyncViewModel(
     )
     val uiState: StateFlow<SyncUiState> = _uiState.asStateFlow()
 
+    /**
+     * A sessão observada pela tela.
+     *
+     * `@Volatile` porque ela é escrita na thread principal (a tela) e lida dentro de [render], que
+     * atravessa consultas ao Room e resume em outra thread. Sem isso, um `render` em andamento pode
+     * ler um valor obsoleto e montar um estado que mistura duas sessões.
+     */
+    @Volatile
     private var currentUid: String? = null
+
+    /**
+     * Um [render] por vez.
+     *
+     * `render` é *ler o banco → montar o estado → publicar*, com pontos de suspensão no meio. Dois
+     * em paralelo — o `collect` do coordenador e um `onAccountChanged`, por exemplo — intercalam
+     * essas etapas, e o último a publicar pode sobrescrever um estado novo com metade de um antigo.
+     * O sintoma é visível: "1 item precisa de atenção" com a lista de itens vazia, porque a
+     * contagem veio de uma leitura e a lista de outra.
+     */
+    private val renderMutex = Mutex()
 
     init {
         viewModelScope.launch {
             // Observar o coordenador é leitura: ele só publica o que já aconteceu.
-            coordinator.activity.collect { activity -> render(activity) }
+            coordinator.activity.collect { render() }
         }
     }
 
@@ -64,7 +85,7 @@ class SyncViewModel(
      */
     fun onAccountChanged(uid: String?) {
         currentUid = uid
-        viewModelScope.launch { render(coordinator.activity.value) }
+        viewModelScope.launch { render() }
     }
 
     /** "Sincronizar agora". Dois toques produzem um ciclo — o coordenador recusa o segundo. */
@@ -95,7 +116,7 @@ class SyncViewModel(
                 resolving = null,
                 resolutionProblem = problemOf(resolution)
             )
-            render(coordinator.activity.value)
+            render()
             if (resolution is SyncConflictResolution.Queued) coordinator.syncNow()
         }
     }
@@ -133,39 +154,67 @@ class SyncViewModel(
             SyncConflictResolution.NoLocalCopy -> SyncResolutionProblem.FAILED
         }
 
-    private suspend fun render(activity: SyncActivity) {
+    /**
+     * Relê o Room e publica o estado da tela.
+     *
+     * ## Ler o banco e o que está acontecendo **juntos**
+     *
+     * Um ciclo de sync escreve no mesmo banco que este render lê. Uma leitura iniciada antes do
+     * ciclo e terminada durante ele descreve um instante que já passou — e publicá-la com a fase
+     * de agora mistura os dois: "1 item precisa de atenção", com o item mostrando só metade das
+     * escolhas porque o lado remoto ainda não tinha chegado quando a lista foi lida.
+     *
+     * Por isso a atividade do coordenador é conferida **depois** das consultas: se ela mudou no
+     * meio, o que foi lido não vale mais e o render recomeça. São no máximo três voltas porque uma
+     * atividade percorre `Idle → Running → Finished` e para; a última publica de qualquer forma,
+     * porque uma tela desatualizada é pior do que uma tela um instante atrás.
+     */
+    private suspend fun render() = renderMutex.withLock {
         if (!repository.isConfigured) {
             _uiState.value = SyncUiState(phase = SyncPhase.NotConfigured)
-            return
+            return@withLock
         }
 
-        val snapshot = repository.snapshot()
-        val binding = snapshot.ownerUid
-
-        val base = _uiState.value.copy(
-            pending = snapshot.pending,
-            // O que "precisa de atenção" é a soma do que ficou travado na fila com o que divergiu
-            // do servidor — do ponto de vista de quem olha a tela, é uma coisa só.
-            needsAttention = maxOf(snapshot.blocked, snapshot.conflicts),
-            lastSyncedAt = snapshot.lastSyncedAt,
+        repeat(MAX_RENDER_ATTEMPTS) { attempt ->
+            val activity = coordinator.activity.value
+            // A sessão é lida **uma vez** e usada em todo este render. Relê-la depois de cada
+            // consulta ao Room produziria um estado que descreve duas sessões ao mesmo tempo: a
+            // lista de conflitos de uma e a fase da outra.
+            val uid = currentUid
+            val snapshot = repository.snapshot()
             // Leitura pura do Room: listar conflitos não sincroniza e não resolve nada.
-            conflicts = repository.conflicts(currentUid)
-        )
+            val conflicts = repository.conflicts(uid)
 
-        val phase = when {
-            binding == null -> SyncPhase.Disabled
-            activity is SyncActivity.Running -> SyncPhase.Syncing
-            currentUid == null -> SyncPhase.AuthRequired
-            currentUid != binding -> SyncPhase.AccountMismatch
-            else -> phaseFor(activity, base)
+            if (attempt < MAX_RENDER_ATTEMPTS - 1 && coordinator.activity.value != activity) {
+                return@repeat
+            }
+
+            val binding = snapshot.ownerUid
+            val base = _uiState.value.copy(
+                pending = snapshot.pending,
+                // O que "precisa de atenção" é a soma do que ficou travado na fila com o que
+                // divergiu do servidor — do ponto de vista de quem olha a tela, é uma coisa só.
+                needsAttention = maxOf(snapshot.blocked, snapshot.conflicts),
+                lastSyncedAt = snapshot.lastSyncedAt,
+                conflicts = conflicts
+            )
+
+            val phase = when {
+                binding == null -> SyncPhase.Disabled
+                activity is SyncActivity.Running -> SyncPhase.Syncing
+                uid == null -> SyncPhase.AuthRequired
+                uid != binding -> SyncPhase.AccountMismatch
+                else -> phaseFor(activity, base)
+            }
+
+            _uiState.value = base.copy(
+                phase = phase,
+                deferredDeletes = (activity as? SyncActivity.Finished)
+                    ?.let { (it.outcome as? SyncOutcome.Success)?.deferredDeletes }
+                    ?: base.deferredDeletes
+            )
+            return@withLock
         }
-
-        _uiState.value = base.copy(
-            phase = phase,
-            deferredDeletes = (activity as? SyncActivity.Finished)
-                ?.let { (it.outcome as? SyncOutcome.Success)?.deferredDeletes }
-                ?: base.deferredDeletes
-        )
     }
 
     private fun phaseFor(activity: SyncActivity, base: SyncUiState): SyncPhase {
@@ -210,5 +259,14 @@ class SyncViewModel(
         }
     }
 }
+
+/**
+ * Quantas vezes um render tenta ler um estado que não mudou embaixo dele.
+ *
+ * Três: uma atividade percorre `Idle → Running → Finished` e para, então mais voltas não teriam o
+ * que conciliar. A última publica de qualquer forma — o ciclo seguinte corrige, e a tela nunca
+ * fica em branco esperando o banco parar quieto.
+ */
+private const val MAX_RENDER_ATTEMPTS = 3
 
 private const val CURSOR_EXPIRED = "CURSOR_EXPIRED"

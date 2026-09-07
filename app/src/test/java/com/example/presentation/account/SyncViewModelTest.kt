@@ -269,6 +269,53 @@ class SyncViewModelTest {
     }
 
     @Test
+    fun `o estado publicado nunca mistura duas leituras do banco`() = runBlocking {
+        // Regressão de uma corrida real, encontrada pelo CI do Android na T16.7.1: `render` é
+        // "lê o banco → monta o estado → publica", com pontos de suspensão no meio. Dois renders
+        // em paralelo — o `collect` do coordenador e um `onAccountChanged` — intercalavam essas
+        // etapas, e o último a publicar podia sobrescrever um estado novo com metade de um antigo.
+        //
+        // O sintoma era visível para o usuário: "1 item precisa de atenção" com a lista de itens
+        // **vazia** — a contagem vinha de uma leitura e a lista, de outra.
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+        device.sync()
+
+        val outro = SyncDevice(server, ownerUid, "device-b")
+        try {
+            outro.bind()
+            outro.sync()
+            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
+            outro.sync()
+        } finally {
+            outro.close()
+        }
+
+        device.renameTemplate(templateSyncId, "Escrito aqui")
+        val model = viewModel()
+        model.syncNow()
+        awaitPhase(model) { it is SyncPhase.NeedsAttention }
+
+        // Renders concorrentes de propósito: é o que a tela faz quando a conta muda enquanto um
+        // ciclo publica resultado.
+        repeat(30) {
+            model.onAccountChanged(ownerUid)
+            model.onAccountChanged(ownerUid)
+            val state = model.uiState.value
+            if (state.phase is SyncPhase.NeedsAttention) {
+                assertTrue(
+                    "a tela avisou sobre itens que precisam de atenção e não tinha item nenhum",
+                    state.conflicts.isNotEmpty()
+                )
+            }
+        }
+
+        val estadoFinal = awaitPhase(model) { it is SyncPhase.NeedsAttention }
+        assertEquals(1, (estadoFinal as SyncPhase.NeedsAttention).items)
+        assertEquals(1, model.uiState.value.conflicts.size)
+    }
+
+    @Test
     fun `escolher manter a versao deste aparelho converge e limpa o aviso`() = runBlocking {
         device.bind()
         val templateSyncId = device.newTemplate("Treino A")
