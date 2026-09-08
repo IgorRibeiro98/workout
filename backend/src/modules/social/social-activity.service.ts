@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
@@ -13,6 +13,7 @@ import { SocialErrors } from './social.errors';
 import { SocialRepository } from './social.repository';
 import { localCalendarDate, DAY_MS } from './social-time';
 import type { SocialActivityItemDto, SocialActivityResponse } from './social.contract';
+import { BlockService } from './block.service';
 
 /**
  * Serviço de projeção da atividade recente dos amigos (T17.4).
@@ -37,6 +38,7 @@ export class SocialActivityService {
     private readonly accessPolicy: SocialAccessPolicy,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
+    @Optional() private readonly blockService?: BlockService,
   ) {}
 
   getActivity(principal: AuthenticatedPrincipal, requestId: string): SocialActivityResponse {
@@ -55,8 +57,10 @@ export class SocialActivityService {
     };
 
     const activeFriends = this.friendshipRepo.findActiveFriends(principal.uid);
-    const eligibleFriends = activeFriends.filter((friend) =>
-      this.accessPolicy.canViewFriendActivity(friend, viewerAccessView, true),
+    const eligibleFriends = activeFriends.filter(
+      (friend) =>
+        this.accessPolicy.canViewFriendActivity(friend, viewerAccessView, true) &&
+        !this.blockService?.isBlocked(principal.uid, friend.ownerUid),
     );
 
     if (eligibleFriends.length === 0) {

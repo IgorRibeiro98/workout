@@ -376,3 +376,44 @@ e Solicitações no Android). O desenho completo dela vive em
 - a exigência de teto próprio de rate limit na rota de lookup;
 - a regra de que match é exato, sem *fuzzy matching*, e que malformado e inexistente têm a mesma
   resposta.
+
+---
+
+## 11. T17.6 — Hardening Social, Bloqueio, Abuso, Exclusão de Conta e Fechamento da T17
+
+### 11.1 Bloqueio Bilateral (`/v1/social/blocks`)
+- **Server-Authoritative**: O bloqueio é registrado na tabela `social_blocks` com chave primária composta `(blocker_uid, blocked_uid)`.
+- **Efeitos Imediatos em Transação Atômica**:
+  1. Desfaz amizade ativa imediatamente (`friendships`);
+  2. Cancela todas as solicitações de amizade pendentes em ambas as direções (`friend_requests`);
+  3. Desinscreve o bloqueado ou o bloqueador de desafios ativos compartilhados (`challenge_participants`);
+  4. Cancela e limpa mensagens pendentes na outbox de notificações transacionais entre os dois usuários;
+  5. Pesquisas de `friendCode` respondem `NOT_FOUND` de forma indistinguível de código inexistente;
+  6. Em rankings e histórico de desafios passados, o usuário bloqueado é projetado de forma segura ("Participante indisponível") sem expor nome ou dados sociais.
+- **Desbloqueio**: Remove o bloqueio, mas **nunca restaura amizades** ou solicitações passadas.
+- **Silencioso**: Nenhum push ou notificação é enviado informando sobre o bloqueio.
+
+### 11.2 Denúncia de Abuso (`/v1/social/reports`)
+- **Minimalista e sem texto livre**: Motivos restritos ao enum canônico (`SPAM`, `HARASSMENT`, `INAPPROPRIATE_BEHAVIOR`, `OTHER`).
+- **Contexto Social Legítimo**: O servidor só aceita denúncia se houver interação social prévia comprovada (amizade ativa, solicitação de amizade pendente ou participação em desafio comum).
+- **Proteção contra Abuso e Spam**:
+  - Rate limit de 5 denúncias por dia por usuário denunciante;
+  - Supressão de denúncias duplicadas contra o mesmo alvo no mesmo dia;
+  - Sem auto-ban automático (auditoria humana / moderação interna);
+  - Sem notificação ou alerta emitido ao usuário denunciado.
+
+### 11.3 Exclusão de Conta Server-Authoritative (`DELETE /v1/account`)
+- **Expurgo Cascata Completo**:
+  Remove registros em todas as tabelas vinculadas ao `uid` do usuário: `social_profiles`, `social_privacy_settings`, `friendships`, `friend_requests`, `challenge_participants`, `challenges` (órfãos), `social_activity_events`, `social_blocks`, `social_reports`, `device_installations`, `notification_outbox`, `backup_snapshots`, `sync_changes`.
+- **Tombstones Criptográficos (HMAC-SHA256)**:
+  Gera um hash HMAC com salt e segredo do servidor (`account_deletion_tombstones`) para impedir ressurreição ou reutilização da identidade, interceptando qualquer chamada subsequente no `BearerAuthGuard` com HTTP 403 `ACCOUNT_DELETED`.
+- **Fila Assíncrona de Exclusão no Firebase Auth (`account_deletion_jobs`)**:
+  Se a chamada ao Firebase Admin Auth (`deleteUser(uid)`) falhar por indisponibilidade transitória do serviço, um job de retentativa com backoff exponencial garante a exclusão final no provider.
+- **Disaster Recovery Append-Only Log (`deletion_tombstones.tsv`)**:
+  Cada exclusão registra um evento no arquivo de tombstones para recuperação de desastres, auditável e com ferramenta de reconciliação de integridade (`reconcileTombstones`).
+
+### 11.4 Preservação Local-First (Android)
+- **Princípio Inviolável**: O banco de dados local do Room (sessões de treino, templates, histórico de exercícios, medidas corporais, recordes pessoais) **pertence ao dispositivo e nunca é apagado** durante a exclusão de conta na nuvem.
+- **Desvinculação Local**: `cloudDataBindingDao.deleteBinding()` remove o vínculo do dataset local com a conta excluída, desregistra o token de push e efetua o logout no FirebaseAuth.
+- **Confirmação Explícita de Alto Risco**: A UI exige confirmação em modal de dois passos com digitação explícita da palavra "EXCLUIR", deixando claro que os treinos no aparelho serão mantidos.
+

@@ -244,6 +244,18 @@ export const envSchema = z.object({
 
   /** Tamanho máximo do lote de eventos a processar em cada ciclo do despachante. */
   PUSH_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(50),
+
+  // --- Hardening social e exclusão de conta (T17.6) -------------------------------------
+
+  /**
+   * Chave secreta HMAC para cálculo irreversível dos tombstones de exclusão de conta.
+   * Em produção, precisa ser configurada com chave segura.
+   * Em dev/test, fallback seguro para testes locais.
+   */
+  ACCOUNT_DELETION_HMAC_KEY: z.string().min(16).default('spark-test-deletion-hmac-key-32chars!'),
+
+  /** Caminho do arquivo append-only de tombstones de deleção para DR (anti-ressurreição). */
+  DELETION_TOMBSTONES_FILE_PATH: z.string().min(1).default('/data/deletion_tombstones.tsv'),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

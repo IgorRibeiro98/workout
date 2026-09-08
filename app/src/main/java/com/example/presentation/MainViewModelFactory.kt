@@ -78,7 +78,12 @@ class MainViewModelFactory(
     private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null,
     private val challengeGateway: com.example.domain.social.ChallengeGateway? = null,
     private val socialActivityGateway: com.example.domain.social.SocialActivityGateway? = null,
-    private val socialNotificationGateway: com.example.domain.social.SocialNotificationGateway? = null
+    private val socialNotificationGateway: com.example.domain.social.SocialNotificationGateway? = null,
+    private val pushRegistrationCoordinator: com.example.service.PushRegistrationCoordinator? = null,
+    private val pushAccountScope: com.example.service.PushAccountScope? = null,
+    private val blockGateway: com.example.domain.social.BlockGateway? = null,
+    private val reportGateway: com.example.domain.social.ReportGateway? = null,
+    private val accountDeletionGateway: com.example.domain.account.AccountDeletionGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -184,7 +189,8 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.AccountViewModel(
                 authGateway = gateway,
-                backendClient = sparkBackendClient
+                backendClient = sparkBackendClient,
+                accountDeletionGateway = accountDeletionGateway
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.account.BackupViewModel::class.java)) {
@@ -217,7 +223,9 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.SocialViewModel(
                 gateway = social,
-                authGateway = gateway
+                authGateway = gateway,
+                onSocialDisabled = { pushAccountScope?.clearRegisteredAccount() },
+                onSocialActivated = { pushRegistrationCoordinator?.reconcile("social_activated") }
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.account.FriendsViewModel::class.java)) {
@@ -239,6 +247,19 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.SocialProfileViewModel(
                 gateway = profile,
+                authGateway = gateway,
+                blockGateway = blockGateway,
+                reportGateway = reportGateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.BlockedUsersViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val block = blockGateway
+                ?: throw IllegalStateException("BlockGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.BlockedUsersViewModel(
+                blockGateway = block,
                 authGateway = gateway
             ) as T
         }
@@ -277,7 +298,8 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("SocialNotificationGateway not provided")
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.friends.NotificationPreferencesViewModel(
-                gateway = gateway
+                gateway = gateway,
+                onPushEnabled = { pushRegistrationCoordinator?.reconcile("push_enabled") }
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.account.SyncViewModel::class.java)) {

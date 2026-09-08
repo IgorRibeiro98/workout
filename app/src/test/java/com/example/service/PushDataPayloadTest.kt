@@ -72,18 +72,56 @@ class PushDataPayloadTest {
     }
 
     @Test
-    fun `fromMap gera eventId sintetico seguro quando ausente`() {
-        val data = mapOf(
+    fun `fromMap rejeita payload quando eventId esta ausente ou vazio (T17_5_1 Problema 7)`() {
+        val withoutEventId = mapOf(
             "v" to "1",
             "type" to "CHALLENGE_INVITATION_RECEIVED",
             "recipientSocialId" to "soc-user-2",
             "entityId" to "chal-42"
         )
+        assertNull(PushDataPayload.fromMap(withoutEventId))
 
-        val payload = PushDataPayload.fromMap(data)
+        val withBlankEventId = mapOf(
+            "v" to "1",
+            "eventId" to "   ",
+            "type" to "CHALLENGE_INVITATION_RECEIVED",
+            "recipientSocialId" to "soc-user-2",
+            "entityId" to "chal-42"
+        )
+        assertNull(PushDataPayload.fromMap(withBlankEventId))
+    }
 
-        assertNotNull(payload)
-        assertEquals("CHALLENGE_INVITATION_RECEIVED:chal-42", payload?.eventId)
+    @Test
+    fun `fromMap rejeita payload com tipo desconhecido (T17_5_1 Problema 7)`() {
+        val unknownType = mapOf(
+            "v" to "1",
+            "eventId" to "evt-unknown",
+            "type" to "UNKNOWN_SOCIAL_ACTION",
+            "recipientSocialId" to "soc-user-2",
+            "entityId" to "ent-42"
+        )
+        assertNull(PushDataPayload.fromMap(unknownType))
+    }
+
+    @Test
+    fun `fromMap rejeita payload com campos em branco (T17_5_1 Problema 7)`() {
+        val blankRecipient = mapOf(
+            "v" to "1",
+            "eventId" to "evt-1",
+            "type" to "FRIEND_REQUEST_RECEIVED",
+            "recipientSocialId" to "",
+            "entityId" to "req-1"
+        )
+        assertNull(PushDataPayload.fromMap(blankRecipient))
+
+        val blankEntityId = mapOf(
+            "v" to "1",
+            "eventId" to "evt-1",
+            "type" to "FRIEND_REQUEST_RECEIVED",
+            "recipientSocialId" to "soc-1",
+            "entityId" to "  "
+        )
+        assertNull(PushDataPayload.fromMap(blankEntityId))
     }
 
     @Test

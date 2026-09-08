@@ -169,6 +169,16 @@ export class AppConfig {
     return this.env.PUSH_BATCH_SIZE;
   }
 
+  // --- Hardening social e exclusão de conta (T17.6) -------------------------------------
+
+  get accountDeletionHmacKey(): string {
+    return this.env.ACCOUNT_DELETION_HMAC_KEY;
+  }
+
+  get deletionTombstonesFilePath(): string {
+    return this.env.DELETION_TOMBSTONES_FILE_PATH;
+  }
+
   /**
    * As exigências que o operador declarou e o ambiente não cumpre.
    *

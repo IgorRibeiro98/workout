@@ -68,7 +68,9 @@ fun ProfileScreen(
     /** T17.4 — Atividade e ranking de amigos */
     onNavigateToActivity: () -> Unit = {},
     /** T17.5 — Notificações sociais */
-    onNavigateToNotificationPreferences: () -> Unit = {}
+    onNavigateToNotificationPreferences: () -> Unit = {},
+    /** T17.6 — Usuários bloqueados */
+    onNavigateToBlockedUsers: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -161,7 +163,9 @@ fun ProfileScreen(
         onOpenProgressSharing = onNavigateToProgressSharing,
         onOpenChallenges = onNavigateToChallenges,
         onOpenActivity = onNavigateToActivity,
-        onOpenNotificationPreferences = onNavigateToNotificationPreferences
+        onOpenNotificationPreferences = onNavigateToNotificationPreferences,
+        onOpenBlockedUsers = onNavigateToBlockedUsers,
+        onDeleteAccount = { accountViewModel?.deleteAccount() }
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -188,6 +192,7 @@ private fun ProfileScreenContent(
     accountState: com.example.presentation.account.AccountUiState? = null,
     onAccountSignIn: (android.content.Context) -> Unit = {},
     onAccountSignOut: () -> Unit = {},
+    onDeleteAccount: () -> Unit = {},
     canVerifyWithBackend: Boolean = false,
     onVerifyWithBackend: () -> Unit = {},
     /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
@@ -234,7 +239,8 @@ private fun ProfileScreenContent(
     onOpenProgressSharing: () -> Unit = {},
     onOpenChallenges: () -> Unit = {},
     onOpenActivity: () -> Unit = {},
-    onOpenNotificationPreferences: () -> Unit = {}
+    onOpenNotificationPreferences: () -> Unit = {},
+    onOpenBlockedUsers: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -330,7 +336,8 @@ private fun ProfileScreenContent(
                     onSignIn = onAccountSignIn,
                     onSignOut = onAccountSignOut,
                     canVerifyWithBackend = canVerifyWithBackend,
-                    onVerifyWithBackend = onVerifyWithBackend
+                    onVerifyWithBackend = onVerifyWithBackend,
+                    onDeleteAccount = onDeleteAccount
                 )
             }
 
@@ -382,6 +389,7 @@ private fun ProfileScreenContent(
                     onOpenChallenges = onOpenChallenges,
                     onOpenActivity = onOpenActivity,
                     onOpenNotificationPreferences = onOpenNotificationPreferences,
+                    onOpenBlockedUsers = onOpenBlockedUsers,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,

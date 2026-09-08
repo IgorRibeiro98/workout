@@ -15,11 +15,15 @@ data class AccountUiState(
     /** `false` quando falta configuração de Firebase/Google neste build. */
     val isSignInAvailable: Boolean = false,
     /** Verificação de ponta a ponta contra o Spark Backend. Diagnóstico, não feature. */
-    val backendCheck: BackendIdentityCheck = BackendIdentityCheck.Idle
+    val backendCheck: BackendIdentityCheck = BackendIdentityCheck.Idle,
+    /** Exclusão de conta em andamento (T17.6). */
+    val isDeletingAccount: Boolean = false,
+    /** Erro da exclusão de conta, se houver. */
+    val deletionError: String? = null
 ) {
     /** Há uma operação de conta em andamento: os botões ficam bloqueados. */
     val isBusy: Boolean
-        get() = authState is AuthState.SigningIn || authState is AuthState.SigningOut
+        get() = authState is AuthState.SigningIn || authState is AuthState.SigningOut || isDeletingAccount
 
     val account: SparkAccount?
         get() = (authState as? AuthState.SignedIn)?.account

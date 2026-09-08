@@ -31,21 +31,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val requestNotificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { _ ->
-        // Permission result handled
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleNotificationIntent(intent)
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
 
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -65,8 +53,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNotificationIntent(intent: Intent?) {
-        val destination = intent?.getStringExtra(SocialNotificationChannels.EXTRA_DESTINATION) ?: return
+        if (intent == null) return
+
+        val typeStr = intent.getStringExtra(SocialNotificationChannels.EXTRA_NOTIFICATION_TYPE)
         val entityId = intent.getStringExtra(SocialNotificationChannels.EXTRA_ENTITY_ID)
+
+        if (!typeStr.isNullOrBlank() && !entityId.isNullOrBlank()) {
+            val type = com.example.domain.social.SocialNotificationType.fromStringOrNull(typeStr)
+            if (type != null) {
+                val destination = when (com.example.service.SocialNotificationNavigationResolver.resolve(type, entityId)) {
+                    is com.example.service.NotificationNavDestination.FriendRequests -> SocialNotificationChannels.DESTINATION_FRIEND_REQUESTS
+                    is com.example.service.NotificationNavDestination.Friends -> SocialNotificationChannels.DESTINATION_FRIENDS
+                    is com.example.service.NotificationNavDestination.Challenges -> SocialNotificationChannels.DESTINATION_CHALLENGES
+                    is com.example.service.NotificationNavDestination.ChallengeDetail -> SocialNotificationChannels.DESTINATION_CHALLENGE_DETAIL
+                }
+                _notificationNavTarget.value = NotificationNavTarget(destination, entityId)
+                return
+            }
+        }
+
+        val destination = intent.getStringExtra(SocialNotificationChannels.EXTRA_DESTINATION) ?: return
         _notificationNavTarget.value = NotificationNavTarget(destination, entityId)
     }
 

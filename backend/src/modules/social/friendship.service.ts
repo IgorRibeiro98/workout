@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
@@ -29,6 +29,7 @@ import { SocialAccessPolicy } from './social.access-policy';
 import { SocialErrors } from './social.errors';
 import { generateFriendRequestId, normalizeFriendCode } from './social.identity';
 import type { SocialProfilePreviewDto } from './social.contract';
+import { BlockService } from './block.service';
 
 /**
  * O caso de uso do grafo social (T17.1).
@@ -39,9 +40,7 @@ import type { SocialProfilePreviewDto } from './social.contract';
  *
  * ## Três invariantes que este arquivo existe para sustentar
  *
- * 1. **descoberta é só por código exato.** Não há busca por nome, por e-mail, listagem global,
- *    sugestão, prefixo ou *fuzzy matching* — nem aqui, nem no repositório, nem em rota nenhuma. A
- *    única pergunta que o servidor responde sobre um perfil alheio é "quem é o dono deste código
+ * 1. **descoberta é restrita.** Ninguém lista nem busca usuários: a única entrada é "código
  *    exato", e ela tem teto próprio de requisições;
  * 2. **o Firebase UID nunca sai.** Ele é a chave de tudo aqui dentro e não aparece em nenhum DTO:
  *    [toPreview] e [toFriend] são a fronteira onde ele para de existir. O que circula é
@@ -58,6 +57,7 @@ export class FriendshipService {
     private readonly policy: FriendshipAccessPolicy,
     private readonly limiter: FriendshipRateLimiter,
     private readonly logger: SparkLogger,
+    @Optional() private readonly blockService?: BlockService,
   ) {}
 
   // --------------------------------------------------------------------------------- lookup
@@ -100,6 +100,11 @@ export class FriendshipService {
     const target = canonical ? this.repository.findProfileByFriendCode(canonical) : null;
 
     if (!target) {
+      this.log(requestId, principal.uid, 'social.friends.lookup', { result: 'NOT_FOUND' });
+      return { result: 'NOT_FOUND' };
+    }
+
+    if (this.blockService?.isBlocked(viewer.ownerUid, target.ownerUid)) {
       this.log(requestId, principal.uid, 'social.friends.lookup', { result: 'NOT_FOUND' });
       return { result: 'NOT_FOUND' };
     }
@@ -159,7 +164,11 @@ export class FriendshipService {
 
     const target = this.repository.findProfileBySocialId(socialId);
     // Inexistente e desativado dão a mesma resposta, como no lookup.
-    if (!target || target.status !== 'ACTIVE') {
+    if (
+      !target ||
+      target.status !== 'ACTIVE' ||
+      this.blockService?.isBlocked(requester.ownerUid, target.ownerUid)
+    ) {
       throw FriendshipErrors.profileNotFound();
     }
     if (target.ownerUid === requester.ownerUid) {
@@ -214,6 +223,10 @@ export class FriendshipService {
   ): AcceptFriendRequestResponseDto {
     const recipient = this.requireActiveProfile(principal);
     const { request, other } = this.requireParticipation(recipient, friendRequestId);
+
+    if (this.blockService?.isBlocked(recipient.ownerUid, other.ownerUid)) {
+      throw FriendshipErrors.requestNotFound();
+    }
 
     if (!this.policy.canRespond(request, recipient.ownerUid)) {
       // Quem enviou não aceita o próprio pedido: sem isso, "pedido" não significaria nada.

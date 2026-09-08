@@ -425,6 +425,68 @@ class SocialProfileViewModelTest {
         highlightedAchievements = SocialFieldAvailability.AVAILABLE
     )
 
+    @Test
+    fun `blockUser fecha perfil do amigo e chama onSuccess`() = runBlocking {
+        gateway.currentUid = UID_A
+        share(UID_B, level = true)
+        var blockCalled = false
+        val fakeBlock = object : com.example.domain.social.BlockGateway {
+            override val isConfigured: Boolean = true
+            override suspend fun blockUser(socialId: String): com.example.domain.social.BlockOutcome<Unit> {
+                blockCalled = true
+                return com.example.domain.social.BlockOutcome.Success(Unit)
+            }
+            override suspend fun unblockUser(socialId: String): com.example.domain.social.BlockOutcome<Unit> =
+                com.example.domain.social.BlockOutcome.Success(Unit)
+            override suspend fun listBlockedUsers(): com.example.domain.social.BlockOutcome<List<com.example.domain.social.BlockedUser>> =
+                com.example.domain.social.BlockOutcome.Success(emptyList())
+        }
+        val viewModel = SocialProfileViewModel(
+            gateway = gateway,
+            authGateway = FakeAuthGateway(initialAccount = accountA),
+            deviceTimeZoneId = { "America/Sao_Paulo" },
+            blockGateway = fakeBlock
+        ).also { viewModels.put("social-profile-${viewModelKeys++}", it) }
+
+        viewModel.openFriendProfile(SOCIAL_B)
+        awaitFriendPhase(viewModel) { it is FriendProfilePhase.Ready }
+
+        var success = false
+        viewModel.blockUser(SOCIAL_B, onSuccess = { success = true })
+
+        assertTrue("blockUser deve ter sido chamado no gateway", blockCalled)
+        assertTrue("onSuccess deve ser invocado", success)
+        assertEquals(FriendProfilePhase.Idle, viewModel.uiState.value.friendPhase)
+    }
+
+    @Test
+    fun `reportUser submete denuncia com motivo e chama onSuccess`() = runBlocking {
+        gateway.currentUid = UID_A
+        var reportedReason: com.example.domain.social.ReportReason? = null
+        val fakeReport = object : com.example.domain.social.ReportGateway {
+            override val isConfigured: Boolean = true
+            override suspend fun reportUser(
+                socialId: String,
+                reason: com.example.domain.social.ReportReason
+            ): com.example.domain.social.ReportOutcome {
+                reportedReason = reason
+                return com.example.domain.social.ReportOutcome.Success
+            }
+        }
+        val viewModel = SocialProfileViewModel(
+            gateway = gateway,
+            authGateway = FakeAuthGateway(initialAccount = accountA),
+            deviceTimeZoneId = { "America/Sao_Paulo" },
+            reportGateway = fakeReport
+        ).also { viewModels.put("social-profile-${viewModelKeys++}", it) }
+
+        var success = false
+        viewModel.reportUser(SOCIAL_B, com.example.domain.social.ReportReason.SPAM, onSuccess = { success = true })
+
+        assertEquals(com.example.domain.social.ReportReason.SPAM, reportedReason)
+        assertTrue(success)
+    }
+
     /** Sai da conta atual e entra em outra — o caminho real de troca de conta. */
     private suspend fun switchTo(auth: FakeAuthGateway, account: SparkAccount) {
         gateway.currentUid = account.uid

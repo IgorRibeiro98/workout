@@ -168,6 +168,39 @@ class NotificationPreferencesViewModelTest {
         assertEquals("Erro ao salvar", loaded.errorMessage)
     }
 
+    @Test
+    fun `onPermissionDenied define mensagem de erro no estado Loaded sem alterar preferencias`() {
+        val initialPrefs = SocialNotificationPreferences(pushEnabled = false)
+        fakeGateway.preferences = initialPrefs
+
+        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        viewModel.onPermissionDenied("Permissão negada pelo usuário")
+
+        val state = viewModel.uiState.value
+        assertTrue(state is NotificationPreferencesUiState.Loaded)
+        val loaded = state as NotificationPreferencesUiState.Loaded
+        assertFalse(loaded.preferences.pushEnabled)
+        assertEquals("Permissão negada pelo usuário", loaded.errorMessage)
+    }
+
+    @Test
+    fun `togglePushEnabled para true invoca callback onPushEnabled`() {
+        val initialPrefs = SocialNotificationPreferences(pushEnabled = false)
+        fakeGateway.preferences = initialPrefs
+
+        var callbackCalled = false
+        val viewModel = NotificationPreferencesViewModel(
+            gateway = fakeGateway,
+            onPushEnabled = { callbackCalled = true }
+        )
+
+        viewModel.togglePushEnabled(true)
+
+        val state = viewModel.uiState.value as NotificationPreferencesUiState.Loaded
+        assertTrue(state.preferences.pushEnabled)
+        assertTrue(callbackCalled)
+    }
+
     private class FakeSocialNotificationGateway : SocialNotificationGateway {
         var preferences = SocialNotificationPreferences(pushEnabled = true)
         var getPreferencesError: Throwable? = null

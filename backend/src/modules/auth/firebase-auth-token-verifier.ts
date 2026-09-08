@@ -93,6 +93,29 @@ export class FirebaseAuthTokenVerifier implements AuthTokenVerifier {
     };
   }
 
+  /**
+   * Exclui o usuário do Firebase Auth pelo Firebase Admin SDK (T17.6).
+   * Trata auth/user-not-found como sucesso convergente.
+   */
+  async deleteUser(uid: string): Promise<void> {
+    const app = this.adminApp();
+    try {
+      await getAuth(app).deleteUser(uid);
+      this.logger.info('auth.user.deleted', { uidPrefix: uid.slice(0, 6) });
+    } catch (error: unknown) {
+      const authError = error as { code?: string };
+      if (authError?.code === 'auth/user-not-found') {
+        this.logger.info('auth.user.already_deleted', { uidPrefix: uid.slice(0, 6) });
+        return;
+      }
+      this.logger.error('auth.user.delete.failed', {
+        uidPrefix: uid.slice(0, 6),
+        errorCode: authError?.code,
+      });
+      throw error;
+    }
+  }
+
   /** Fecha o app Admin no shutdown do processo. Chamado pelo módulo, via `onModuleDestroy`. */
   async dispose(): Promise<void> {
     const app = this.app;

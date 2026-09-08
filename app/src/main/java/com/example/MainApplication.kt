@@ -219,7 +219,15 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
      * acontece — sem seletor de contas, que só aparece por toque explícito.
      */
     val authGateway: com.example.domain.auth.AuthGateway by lazy {
-        firebaseAuthGateway
+        firebaseAuthGateway.also { gateway ->
+            CoroutineScope(Dispatchers.Default).launch {
+                gateway.state.collect { state ->
+                    if (state is com.example.domain.auth.AuthState.SignedIn) {
+                        pushRegistrationCoordinator.reconcile("session_restored")
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -341,6 +349,41 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
 
     val socialNotificationGateway: com.example.domain.social.SocialNotificationGateway by lazy {
         com.example.data.social.SparkSocialNotificationGateway(sparkBackendClient)
+    }
+
+    val fcmTokenProvider: com.example.service.FcmTokenProvider by lazy {
+        com.example.service.DefaultFcmTokenProvider()
+    }
+
+    val pushRegistrationCoordinator: com.example.service.PushRegistrationCoordinator by lazy {
+        com.example.service.PushRegistrationCoordinator(this)
+    }
+
+    /**
+     * Bloqueio social (T17.6).
+     */
+    val blockGateway: com.example.domain.social.BlockGateway by lazy {
+        com.example.data.social.SparkBlockGateway(sparkBackendClient)
+    }
+
+    /**
+     * Denúncias sociais (T17.6).
+     */
+    val reportGateway: com.example.domain.social.ReportGateway by lazy {
+        com.example.data.social.SparkReportGateway(sparkBackendClient)
+    }
+
+    /**
+     * Exclusão de conta Spark (T17.6).
+     */
+    val accountDeletionGateway: com.example.domain.account.AccountDeletionGateway by lazy {
+        com.example.data.account.SparkAccountDeletionGateway(
+            client = sparkBackendClient,
+            cloudDataBindingDao = database.cloudDataBindingDao(),
+            authGateway = authGateway,
+            pushAccountScope = pushAccountScope,
+            deviceIdProvider = deviceIdProvider
+        )
     }
 
     /**

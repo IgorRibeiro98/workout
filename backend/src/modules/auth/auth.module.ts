@@ -1,4 +1,5 @@
 import { Module, OnApplicationShutdown } from '@nestjs/common';
+import { DatabaseModule } from '../../database/database.module';
 import { AUTH_TOKEN_VERIFIER } from './auth-token-verifier';
 import { AuthController } from './auth.controller';
 import { BearerAuthGuard } from './bearer-auth.guard';
@@ -16,13 +17,14 @@ import { FirebaseAuthTokenVerifier } from './firebase-auth-token-verifier';
  * cada rota declara sua própria proteção.
  */
 @Module({
+  imports: [DatabaseModule],
   controllers: [AuthController],
   providers: [
     FirebaseAuthTokenVerifier,
     { provide: AUTH_TOKEN_VERIFIER, useExisting: FirebaseAuthTokenVerifier },
     BearerAuthGuard,
   ],
-  exports: [AUTH_TOKEN_VERIFIER],
+  exports: [AUTH_TOKEN_VERIFIER, BearerAuthGuard],
 })
 export class AuthModule implements OnApplicationShutdown {
   constructor(private readonly firebaseVerifier: FirebaseAuthTokenVerifier) {}

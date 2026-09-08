@@ -17,6 +17,8 @@ import {
  */
 export class FakeAuthTokenVerifier implements AuthTokenVerifier {
   readonly seen: string[] = [];
+  readonly deletedUids: string[] = [];
+  deleteUserFailure?: Error;
 
   constructor(private readonly principals: Map<string, AuthenticatedPrincipal> = new Map()) {}
 
@@ -44,6 +46,14 @@ export class FakeAuthTokenVerifier implements AuthTokenVerifier {
       return Promise.reject(new InvalidTokenError('token não reconhecido'));
     }
     return Promise.resolve(principal);
+  }
+
+  deleteUser(uid: string): Promise<void> {
+    this.deletedUids.push(uid);
+    if (this.deleteUserFailure) {
+      return Promise.reject(this.deleteUserFailure);
+    }
+    return Promise.resolve();
   }
 }
 

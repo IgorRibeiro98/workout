@@ -29,7 +29,9 @@ import kotlinx.coroutines.launch
 class AccountViewModel(
     private val authGateway: AuthGateway,
     /** `null` quando não há backend configurado neste build. */
-    private val backendClient: SparkBackendClient? = null
+    private val backendClient: SparkBackendClient? = null,
+    /** Gateway de exclusão de conta (T17.6). */
+    private val accountDeletionGateway: com.example.domain.account.AccountDeletionGateway? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -110,6 +112,53 @@ class AccountViewModel(
                 is SparkBackendResult.Failure -> BackendIdentityCheck.Failed(result.status)
             }
             _uiState.value = _uiState.value.copy(backendCheck = check)
+        }
+    }
+
+    /**
+     * Exclusão de Conta Spark (T17.6).
+     *
+     * Remove todos os dados na nuvem (backups, perfil social, amigos, desafios).
+     * Preserva dados locais de treinos no Room (local-first).
+     */
+    fun deleteAccount(
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val gateway = accountDeletionGateway ?: run {
+            val err = "Exclusão de conta não disponível neste build."
+            _uiState.value = _uiState.value.copy(deletionError = err)
+            onError(err)
+            return
+        }
+        if (_uiState.value.isBusy) return
+
+        _uiState.value = _uiState.value.copy(isDeletingAccount = true, deletionError = null)
+        viewModelScope.launch {
+            when (val outcome = gateway.deleteAccount()) {
+                is com.example.domain.account.AccountDeletionOutcome.Success -> {
+                    _uiState.value = _uiState.value.copy(isDeletingAccount = false, deletionError = null)
+                    onSuccess()
+                }
+                is com.example.domain.account.AccountDeletionOutcome.Failure -> {
+                    val err = when (outcome.error) {
+                        com.example.domain.account.AccountDeletionError.NOT_CONFIGURED ->
+                            "Servidor não configurado."
+                        com.example.domain.account.AccountDeletionError.AUTH_REQUIRED ->
+                            "Sessão expirada. Entre novamente para excluir."
+                        com.example.domain.account.AccountDeletionError.RATE_LIMITED ->
+                            "Muitas tentativas. Tente mais tarde."
+                        com.example.domain.account.AccountDeletionError.NETWORK ->
+                            "Sem conexão com a internet."
+                        com.example.domain.account.AccountDeletionError.UNAVAILABLE ->
+                            "Servidor indisponível no momento."
+                        com.example.domain.account.AccountDeletionError.REJECTED ->
+                            "Não foi possível excluir a conta agora."
+                    }
+                    _uiState.value = _uiState.value.copy(isDeletingAccount = false, deletionError = err)
+                    onError(err)
+                }
+            }
         }
     }
 }

@@ -242,4 +242,38 @@ class AccountViewModelTest {
 
         assertEquals(BackendIdentityCheck.Idle, viewModel.uiState.value.backendCheck)
     }
+
+    // ------------------------------------------------------------- exclusão de conta (T17.6)
+
+    @Test
+    fun `sem gateway de exclusao deleteAccount reporta erro`() = runTest {
+        val viewModel = accountViewModel(FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT))
+        var errorReported: String? = null
+
+        viewModel.deleteAccount(onError = { errorReported = it })
+
+        assertTrue(errorReported != null)
+        assertEquals("Exclusão de conta não disponível neste build.", viewModel.uiState.value.deletionError)
+    }
+
+    @Test
+    fun `deleteAccount bem-sucedido invoca callback onSuccess`() = runTest {
+        val fakeDeletion = object : com.example.domain.account.AccountDeletionGateway {
+            override val isConfigured: Boolean = true
+            override suspend fun deleteAccount(): com.example.domain.account.AccountDeletionOutcome =
+                com.example.domain.account.AccountDeletionOutcome.Success
+        }
+        val gateway = FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT)
+        val viewModel = AccountViewModel(
+            authGateway = gateway,
+            accountDeletionGateway = fakeDeletion
+        ).also { viewModels.put("account-${viewModelKeys++}", it) }
+
+        var successCalled = false
+        viewModel.deleteAccount(onSuccess = { successCalled = true })
+
+        assertTrue("onSuccess deve ser chamado", successCalled)
+        assertFalse("isDeletingAccount deve voltar a falso", viewModel.uiState.value.isDeletingAccount)
+        assertEquals(null, viewModel.uiState.value.deletionError)
+    }
 }

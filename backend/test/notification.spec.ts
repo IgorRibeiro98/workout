@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { SqliteService } from '../src/database/sqlite.service';
 import { NotificationDispatcher } from '../src/modules/social/notification.dispatcher';
 import { NotificationRepository } from '../src/modules/social/notification.repository';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
@@ -673,6 +674,108 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       // push desativado e dispositivos desabilitados
       expect(repository.getPreferences(UID_A).pushEnabled).toBe(false);
       expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
+    });
+
+    it('eventos expirados são marcados como EXPIRED na varredura e não chegam ao gateway (T17.5.1 Problema 6)', async () => {
+      await activate(TOKEN_A, 'Alice');
+      await activate(TOKEN_B, 'Bob');
+
+      await patchPreferences(TOKEN_A, { pushEnabled: true });
+      await registerDevice(TOKEN_A, {
+        deviceId: 'phone-alice',
+        platform: 'ANDROID',
+        fcmToken: 'fcm-alice-exp',
+      });
+
+      // Cria um evento que expira em 1 hora
+      const now = clock.now();
+      repository.createEvent(
+        {
+          id: 'event-to-expire',
+          recipientUid: UID_A,
+          type: 'FRIEND_REQUEST_RECEIVED',
+          entityId: 'req-dummy',
+          dedupeKey: 'dedupe:exp-test',
+          deliverAfter: now,
+          expiresAt: now + 3600000,
+        },
+        now,
+      );
+
+      // O dispatcher não roda até depois de o evento expirar
+      clock.advance(3600000 + 1000);
+
+      // O ciclo do dispatcher executa
+      await dispatcher.runDispatchCycle();
+
+      // O evento deve ser transicionado para EXPIRED
+      const row = app
+        .get(SqliteService)
+        .connection.prepare(
+          'SELECT status, completed_at FROM social_notification_events WHERE id = ?',
+        )
+        .get('event-to-expire') as { status: string; completed_at: number };
+
+      expect(row.status).toBe('EXPIRED');
+      expect(row.completed_at).toBe(clock.now());
+
+      // Nenhum push deve ter sido enviado
+      expect(pushGateway.sentPushes).toHaveLength(0);
+    });
+
+    it('cross-request produz eventos canônicos e entrega pushes a ambos os amigos (T17.5.1 Problema 5)', async () => {
+      const a = await activate(TOKEN_A, 'Alice');
+      const b = await activate(TOKEN_B, 'Bob');
+
+      // Ambos ativam push e registram aparelhos
+      await patchPreferences(TOKEN_A, { pushEnabled: true });
+      await registerDevice(TOKEN_A, {
+        deviceId: 'phone-alice-cross',
+        platform: 'ANDROID',
+        fcmToken: 'token-alice-cross',
+      });
+
+      await patchPreferences(TOKEN_B, { pushEnabled: true });
+      await registerDevice(TOKEN_B, {
+        deviceId: 'phone-bob-cross',
+        platform: 'ANDROID',
+        fcmToken: 'token-bob-cross',
+      });
+
+      // Alice envia para Bob
+      const reqAtoB = await sendFriendRequest(TOKEN_A, b.body.profile.socialId);
+      expect(reqAtoB.status).toBe(200);
+      expect(reqAtoB.body.result).toBe('REQUEST_CREATED');
+
+      // Limpa qualquer push enfileirado até aqui executando o dispatcher
+      await dispatcher.runDispatchCycle();
+      pushGateway.clear();
+
+      // Bob envia para Alice (cross-request)
+      const reqBtoA = await sendFriendRequest(TOKEN_B, a.body.profile.socialId);
+      expect(reqBtoA.status).toBe(200);
+      expect(reqBtoA.body.result).toBe('FRIENDSHIP_CREATED');
+
+      // O ciclo do dispatcher deve encontrar ambos os eventos e entregar ambos os pushes
+      await dispatcher.runDispatchCycle();
+
+      expect(pushGateway.sentPushes).toHaveLength(2);
+
+      const alicePush = pushGateway.sentPushes.find(
+        (p) => p.payload.recipientSocialId === a.body.profile.socialId,
+      );
+      const bobPush = pushGateway.sentPushes.find(
+        (p) => p.payload.recipientSocialId === b.body.profile.socialId,
+      );
+
+      expect(alicePush).toBeDefined();
+      expect(bobPush).toBeDefined();
+      expect(alicePush!.payload.type).toBe('FRIEND_REQUEST_ACCEPTED');
+      expect(bobPush!.payload.type).toBe('FRIEND_REQUEST_ACCEPTED');
+
+      // Ambos os pushes apontam para o requestId canônico do pedido original
+      expect(alicePush!.payload.entityId).toBe(reqAtoB.body.request.requestId);
+      expect(bobPush!.payload.entityId).toBe(reqAtoB.body.request.requestId);
     });
   });
 });

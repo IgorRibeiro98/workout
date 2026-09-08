@@ -58,7 +58,9 @@ class SocialProfileViewModel(
      * da tela de consistência (segunda a domingo, na data local). Injetado para o teste poder
      * fixá-lo — o padrão é o fuso real do aparelho.
      */
-    private val deviceTimeZoneId: () -> String = { java.util.TimeZone.getDefault().id }
+    private val deviceTimeZoneId: () -> String = { java.util.TimeZone.getDefault().id },
+    private val blockGateway: com.example.domain.social.BlockGateway? = null,
+    private val reportGateway: com.example.domain.social.ReportGateway? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SocialProfileUiState(isConfigured = gateway.isConfigured))
@@ -324,5 +326,63 @@ class SocialProfileViewModel(
         SocialProfileError.SOCIAL_NOT_ENABLED -> ProgressSharingPhase.SocialUnavailable(disabled = false)
         SocialProfileError.SOCIAL_DISABLED -> ProgressSharingPhase.SocialUnavailable(disabled = true)
         else -> ProgressSharingPhase.Error(error)
+    }
+
+    /** Bloqueia o usuário do perfil social visualizado (T17.6). */
+    fun blockUser(
+        socialId: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val activeBlockGateway = blockGateway ?: run {
+            onError("Bloqueio não configurado neste build.")
+            return
+        }
+        viewModelScope.launch {
+            when (val outcome = activeBlockGateway.blockUser(socialId)) {
+                is com.example.domain.social.BlockOutcome.Success -> {
+                    closeFriendProfile()
+                    onSuccess()
+                }
+                is com.example.domain.social.BlockOutcome.Failure -> {
+                    val msg = when (outcome.error) {
+                        com.example.domain.social.BlockError.CANNOT_BLOCK_SELF -> "Você não pode bloquear a si mesmo."
+                        com.example.domain.social.BlockError.PROFILE_NOT_FOUND -> "Usuário não encontrado."
+                        com.example.domain.social.BlockError.RATE_LIMITED -> "Muitas requisições. Tente mais tarde."
+                        com.example.domain.social.BlockError.NETWORK -> "Sem conexão com a internet."
+                        else -> "Não foi possível bloquear este usuário."
+                    }
+                    onError(msg)
+                }
+            }
+        }
+    }
+
+    /** Denuncia o usuário por motivo específico (T17.6). */
+    fun reportUser(
+        socialId: String,
+        reason: com.example.domain.social.ReportReason,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val activeReportGateway = reportGateway ?: run {
+            onError("Denúncia não configurada neste build.")
+            return
+        }
+        viewModelScope.launch {
+            when (val outcome = activeReportGateway.reportUser(socialId, reason)) {
+                is com.example.domain.social.ReportOutcome.Success -> onSuccess()
+                is com.example.domain.social.ReportOutcome.Failure -> {
+                    val msg = when (outcome.error) {
+                        com.example.domain.social.ReportError.CANNOT_REPORT_SELF -> "Você não pode denunciar a si mesmo."
+                        com.example.domain.social.ReportError.NO_LEGITIMATE_CONTEXT -> "Não é possível denunciar sem contexto social compartilhado."
+                        com.example.domain.social.ReportError.RATE_LIMITED -> "Limite de denúncias atingido. Tente novamente mais tarde."
+                        com.example.domain.social.ReportError.NETWORK -> "Sem conexão com a internet."
+                        else -> "Não foi possível enviar a denúncia."
+                    }
+                    onError(msg)
+                }
+            }
+        }
     }
 }

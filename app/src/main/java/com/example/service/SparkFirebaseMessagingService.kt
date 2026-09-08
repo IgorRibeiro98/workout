@@ -120,42 +120,38 @@ class SparkFirebaseMessagingService : FirebaseMessagingService() {
             return
         }
 
-        val (channelId, title, body, destination) = when (type) {
-            SocialNotificationType.FRIEND_REQUEST_RECEIVED -> NotificationDetails(
-                channelId = SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
-                title = "Nova solicitação de amizade",
-                body = "Você recebeu uma solicitação de amizade no Spark.",
-                destination = SocialNotificationChannels.DESTINATION_FRIEND_REQUESTS
+        val (channelId, title, body) = when (type) {
+            SocialNotificationType.FRIEND_REQUEST_RECEIVED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
+                getString(R.string.notification_friend_request_received_title),
+                getString(R.string.notification_friend_request_received_body)
             )
-            SocialNotificationType.FRIEND_REQUEST_ACCEPTED -> NotificationDetails(
-                channelId = SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
-                title = "Amizade aceita",
-                body = "Sua solicitação de amizade foi aceita!",
-                destination = SocialNotificationChannels.DESTINATION_FRIENDS
+            SocialNotificationType.FRIEND_REQUEST_ACCEPTED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
+                getString(R.string.notification_friend_request_accepted_title),
+                getString(R.string.notification_friend_request_accepted_body)
             )
-            SocialNotificationType.CHALLENGE_INVITATION_RECEIVED -> NotificationDetails(
-                channelId = SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
-                title = "Convite para desafio",
-                body = "Você foi convidado para um novo desafio entre amigos!",
-                destination = SocialNotificationChannels.DESTINATION_CHALLENGES
+            SocialNotificationType.CHALLENGE_INVITATION_RECEIVED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
+                getString(R.string.notification_challenge_invitation_received_title),
+                getString(R.string.notification_challenge_invitation_received_body)
             )
-            SocialNotificationType.CHALLENGE_STARTING_SOON -> NotificationDetails(
-                channelId = SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
-                title = "Desafio começando em breve",
-                body = "Seu desafio entre amigos começa em breve.",
-                destination = SocialNotificationChannels.DESTINATION_CHALLENGES
+            SocialNotificationType.CHALLENGE_STARTING_SOON -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
+                getString(R.string.notification_challenge_starting_soon_title),
+                getString(R.string.notification_challenge_starting_soon_body)
             )
-            SocialNotificationType.CHALLENGE_ENDED -> NotificationDetails(
-                channelId = SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
-                title = "Desafio encerrado",
-                body = "O desafio foi finalizado. Confira o placar final!",
-                destination = SocialNotificationChannels.DESTINATION_CHALLENGES
+            SocialNotificationType.CHALLENGE_ENDED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_CHALLENGES,
+                getString(R.string.notification_challenge_ended_title),
+                getString(R.string.notification_challenge_ended_body)
             )
         }
 
         val pendingIntent = SocialNotificationChannels.buildPendingIntent(
             context = this,
-            destination = destination,
+            eventId = payload.eventId,
+            type = payload.type,
             entityId = payload.entityId
         )
 
@@ -168,7 +164,7 @@ class SparkFirebaseMessagingService : FirebaseMessagingService() {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
 
-        val notificationId = (payload.type + ":" + payload.entityId).hashCode()
+        val notificationId = payload.eventId.hashCode()
 
         runCatching {
             NotificationManagerCompat.from(this).notify(notificationId, builder.build())
@@ -176,11 +172,4 @@ class SparkFirebaseMessagingService : FirebaseMessagingService() {
             Log.w(TAG, "Falha ao emitir notificação local", e)
         }
     }
-
-    private data class NotificationDetails(
-        val channelId: String,
-        val title: String,
-        val body: String,
-        val destination: String
-    )
 }

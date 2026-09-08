@@ -37,6 +37,12 @@ import { NotificationRepository } from './notification.repository';
 import { NotificationDispatcher } from './notification.dispatcher';
 import { PUSH_GATEWAY } from './push-gateway';
 import { FirebasePushGateway } from './firebase-push-gateway';
+import { BlockController } from './block.controller';
+import { BlockService } from './block.service';
+import { BlockRepository } from './block.repository';
+import { ReportController } from './report.controller';
+import { ReportService } from './report.service';
+import { ReportRepository } from './report.repository';
 
 /**
  * Módulo do domínio social (T17.0).
@@ -103,6 +109,8 @@ import { FirebasePushGateway } from './firebase-push-gateway';
     ChallengeController,
     SocialActivityController,
     NotificationController,
+    BlockController,
+    ReportController,
   ],
   providers: [
     SocialService,
@@ -136,7 +144,18 @@ import { FirebasePushGateway } from './firebase-push-gateway';
     NotificationService,
     NotificationDispatcher,
     { provide: PUSH_GATEWAY, useClass: FirebasePushGateway },
+    // T17.6 — Hardening social: bloqueio e denúncia de abuso.
+    BlockRepository,
+    BlockService,
+    ReportRepository,
+    ReportService,
   ],
-  exports: [SocialAccessPolicy, NotificationService, NotificationRepository],
+  exports: [
+    SocialAccessPolicy,
+    NotificationService,
+    NotificationRepository,
+    BlockService,
+    BlockRepository,
+  ],
 })
 export class SocialModule {}

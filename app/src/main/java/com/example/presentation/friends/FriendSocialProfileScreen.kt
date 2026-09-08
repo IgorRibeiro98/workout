@@ -12,18 +12,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -32,11 +41,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.social.FriendSocialProfile
+import com.example.domain.social.ReportReason
 import com.example.presentation.account.FriendProfilePhase
 import com.example.presentation.account.SocialProfileUiState
 import com.example.presentation.account.SocialProfileViewModel
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
+import com.example.ui.theme.Lime400
+import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -84,10 +96,16 @@ fun FriendSocialProfileScreen(
     onNavigateBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var showMenu by remember { mutableStateOf(false) }
+    var showBlockDialog by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
+    var feedbackNotice by remember { mutableStateOf<String?>(null) }
 
     // Abrir a tela é o ato explícito que autoriza a leitura — e é só aqui que ela acontece. A lista
     // de amigos continua não pedindo perfil nenhum (§64/§65).
     LaunchedEffect(socialId) { viewModel.openFriendProfile(socialId) }
+
+    val currentDisplayName = (uiState.friendPhase.profileOrNull()?.displayName ?: displayNameHint) ?: "Perfil"
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -97,8 +115,7 @@ fun FriendSocialProfileScreen(
                     Text(
                         // O nome que a lista já mostrava serve de título enquanto a leitura corre;
                         // o servidor confirma (ou não) logo em seguida.
-                        text = (uiState.friendPhase.profileOrNull()?.displayName ?: displayNameHint)
-                            ?: "Perfil",
+                        text = currentDisplayName,
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 20.sp
@@ -118,6 +135,34 @@ fun FriendSocialProfileScreen(
                         )
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Mais opções",
+                            tint = TextPrimary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Denunciar") },
+                            onClick = {
+                                showMenu = false
+                                showReportDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Bloquear", color = Red400) },
+                            onClick = {
+                                showMenu = false
+                                showBlockDialog = true
+                            }
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
@@ -131,12 +176,136 @@ fun FriendSocialProfileScreen(
                 .semantics { contentDescription = FRIEND_PROFILE_DESCRIPTION },
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            feedbackNotice?.let { Message(title = "Aviso", body = it) }
+
             FriendSocialProfileBody(
                 uiState = uiState,
                 onRetry = viewModel::refreshFriendProfile
             )
         }
     }
+
+    if (showBlockDialog) {
+        BlockUserDialog(
+            displayName = currentDisplayName,
+            onConfirm = {
+                showBlockDialog = false
+                viewModel.blockUser(
+                    socialId = socialId,
+                    onSuccess = { onNavigateBack() },
+                    onError = { err -> feedbackNotice = err }
+                )
+            },
+            onDismiss = { showBlockDialog = false }
+        )
+    }
+
+    if (showReportDialog) {
+        ReportUserDialog(
+            displayName = currentDisplayName,
+            onConfirm = { reason ->
+                showReportDialog = false
+                viewModel.reportUser(
+                    socialId = socialId,
+                    reason = reason,
+                    onSuccess = {
+                        feedbackNotice = "Denúncia recebida. Obrigado por colaborar com a comunidade."
+                    },
+                    onError = { err -> feedbackNotice = err }
+                )
+            },
+            onDismiss = { showReportDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun BlockUserDialog(
+    displayName: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceDark,
+        title = { Text("Bloquear $displayName?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Text(
+                text = "Ao bloquear, vocês não poderão interagir, desafios em comum serão encerrados e a amizade será removida. O usuário não é notificado.",
+                color = TextSecondary,
+                fontSize = 13.sp
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Bloquear", color = Red400)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar", color = TextSecondary)
+            }
+        }
+    )
+}
+
+@Composable
+private fun ReportUserDialog(
+    displayName: String,
+    onConfirm: (ReportReason) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedReason by remember { mutableStateOf(ReportReason.INAPPROPRIATE_BEHAVIOR) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceDark,
+        title = { Text("Denunciar $displayName", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Escolha o motivo da denúncia. O usuário não é notificado.",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+
+                val options = listOf(
+                    ReportReason.SPAM to "Spam ou atividade indesejada",
+                    ReportReason.HARASSMENT to "Assédio ou ofensa",
+                    ReportReason.INAPPROPRIATE_BEHAVIOR to "Comportamento inadequado",
+                    ReportReason.OTHER to "Outro motivo"
+                )
+
+                options.forEach { (reason, label) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = (selectedReason == reason),
+                            onClick = { selectedReason = reason }
+                        )
+                        Text(
+                            text = label,
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(start = 6.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selectedReason) }) {
+                Text("Enviar denúncia", color = Lime400)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar", color = TextSecondary)
+            }
+        }
+    )
 }
 
 /**

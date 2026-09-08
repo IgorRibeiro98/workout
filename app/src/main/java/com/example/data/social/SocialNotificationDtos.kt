@@ -57,17 +57,22 @@ data class PushDataPayload(
 ) {
     companion object {
         fun fromMap(data: Map<String, String>): PushDataPayload? {
-            val v = data["v"] ?: return null
+            val v = data["v"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
             if (v != "1") return null
-            val type = data["type"] ?: return null
-            val recipientSocialId = data["recipientSocialId"] ?: return null
-            val entityId = data["entityId"] ?: return null
-            val eventId = data["eventId"] ?: "$type:$entityId"
+
+            val eventId = data["eventId"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+
+            val typeStr = data["type"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val type = com.example.domain.social.SocialNotificationType.fromStringOrNull(typeStr) ?: return null
+
+            val recipientSocialId = data["recipientSocialId"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+
+            val entityId = data["entityId"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
 
             return PushDataPayload(
                 v = v,
                 eventId = eventId,
-                type = type,
+                type = type.name,
                 recipientSocialId = recipientSocialId,
                 entityId = entityId
             )

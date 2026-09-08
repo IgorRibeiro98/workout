@@ -296,6 +296,17 @@ export class NotificationRepository {
       .run(status, completedAt ?? null, id);
   }
 
+  markExpiredEvents(now: number): number {
+    const result = this.db
+      .prepare(
+        `UPDATE social_notification_events
+         SET status = 'EXPIRED', completed_at = ?
+         WHERE status = 'PENDING' AND expires_at <= ?`,
+      )
+      .run(now, now);
+    return result.changes;
+  }
+
   cancelEventsForEntity(entityId: string, types?: readonly NotificationType[]): number {
     if (types && types.length > 0) {
       const placeholders = types.map(() => '?').join(', ');

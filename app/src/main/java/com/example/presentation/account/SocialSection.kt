@@ -69,6 +69,8 @@ fun SocialSection(
     onOpenActivity: () -> Unit = {},
     /** T17.5 — Notificações sociais */
     onOpenNotificationPreferences: () -> Unit = {},
+    /** T17.6 — Usuários bloqueados */
+    onOpenBlockedUsers: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -142,6 +144,7 @@ fun SocialSection(
                         onOpenChallenges = onOpenChallenges,
                         onOpenActivity = onOpenActivity,
                         onOpenNotificationPreferences = onOpenNotificationPreferences,
+                        onOpenBlockedUsers = onOpenBlockedUsers,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -162,6 +165,7 @@ fun SocialSection(
                             onOpenChallenges = onOpenChallenges,
                             onOpenActivity = onOpenActivity,
                             onOpenNotificationPreferences = onOpenNotificationPreferences,
+                            onOpenBlockedUsers = onOpenBlockedUsers,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -271,6 +275,7 @@ private fun ActiveProfile(
     onOpenChallenges: () -> Unit,
     onOpenActivity: () -> Unit,
     onOpenNotificationPreferences: () -> Unit = {},
+    onOpenBlockedUsers: () -> Unit = {},
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -368,6 +373,7 @@ private fun ActiveProfile(
                 onOpenChallenges = onOpenChallenges,
                 onOpenActivity = onOpenActivity,
                 onOpenNotificationPreferences = onOpenNotificationPreferences,
+                onOpenBlockedUsers = onOpenBlockedUsers,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -406,6 +412,7 @@ private fun FriendsEntryPoints(
     onOpenChallenges: () -> Unit,
     onOpenActivity: () -> Unit,
     onOpenNotificationPreferences: () -> Unit,
+    onOpenBlockedUsers: () -> Unit = {},
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -458,6 +465,9 @@ private fun FriendsEntryPoints(
 
     // T17.5 — Notificações sociais via push
     Secondary(text = "Notificações", onClick = onOpenNotificationPreferences, enabled = enabled)
+
+    // T17.6 — Usuários bloqueados
+    Secondary(text = "Usuários bloqueados", onClick = onOpenBlockedUsers, enabled = enabled)
 }
 
 @Composable

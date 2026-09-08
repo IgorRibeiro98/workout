@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
@@ -13,6 +13,7 @@ import { SocialErrors } from './social.errors';
 import { SocialRepository } from './social.repository';
 import { DAY_MS } from './social-time';
 import type { FriendRankingEntryDto, FriendRankingResponse } from './social.contract';
+import { BlockService } from './block.service';
 
 interface CandidateParticipant {
   readonly ownerUid: string;
@@ -44,6 +45,7 @@ export class FriendRankingService {
     private readonly accessPolicy: SocialAccessPolicy,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
+    @Optional() private readonly blockService?: BlockService,
   ) {}
 
   getRanking(principal: AuthenticatedPrincipal, requestId: string): FriendRankingResponse {
@@ -67,7 +69,10 @@ export class FriendRankingService {
 
     const activeFriends = this.friendshipRepo.findActiveFriends(principal.uid);
     for (const friend of activeFriends) {
-      if (this.accessPolicy.canParticipateInRanking(friend)) {
+      if (
+        this.accessPolicy.canParticipateInRanking(friend) &&
+        !this.blockService?.isBlocked(principal.uid, friend.ownerUid)
+      ) {
         participants.push({
           ownerUid: friend.ownerUid,
           socialId: friend.socialId,

@@ -13,6 +13,7 @@ import { BackupModule } from './modules/backup/backup.module';
 import { HealthModule } from './modules/health/health.module';
 import { SocialModule } from './modules/social/social.module';
 import { SyncModule } from './modules/sync/sync.module';
+import { AccountDeletionModule } from './modules/account-deletion/account-deletion.module';
 
 /**
  * Spark Backend — monólito modular.
@@ -35,6 +36,7 @@ import { SyncModule } from './modules/sync/sync.module';
     BackupModule,
     SyncModule,
     SocialModule,
+    AccountDeletionModule,
   ],
 })
 export class AppModule implements NestModule {
@@ -51,6 +53,7 @@ export class AppModule implements NestModule {
         BackupModule,
         SyncModule,
         SocialModule,
+        AccountDeletionModule,
       ],
     };
   }

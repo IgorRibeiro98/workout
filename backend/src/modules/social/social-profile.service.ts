@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
@@ -19,6 +19,7 @@ import { FriendshipErrors } from './friendship.errors';
 import { FriendshipRepository, type FriendProfileRow } from './friendship.repository';
 import { SocialAccessPolicy } from './social.access-policy';
 import { SocialErrors } from './social.errors';
+import { BlockService } from './block.service';
 
 /**
  * O caso de uso do perfil social enriquecido (T17.2).
@@ -67,6 +68,7 @@ export class SocialProfileService {
     private readonly privacy: SocialProgressPrivacyFilter,
     private readonly policy: SocialAccessPolicy,
     private readonly logger: SparkLogger,
+    @Optional() private readonly blockService?: BlockService,
   ) {}
 
   /**
@@ -87,6 +89,10 @@ export class SocialProfileService {
 
     // Alvo inexistente e alvo desativado: a mesma resposta, e a mesma de "não somos amigos".
     if (!target) {
+      throw SocialProfileErrors.friendProfileNotFound();
+    }
+
+    if (this.blockService?.isBlocked(viewer.ownerUid, target.ownerUid)) {
       throw SocialProfileErrors.friendProfileNotFound();
     }
 

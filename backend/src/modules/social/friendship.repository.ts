@@ -239,14 +239,15 @@ export class FriendshipRepository {
         ).run(input.now, inverse.requestId);
         this.insertFriendship(input.requesterUid, input.recipientUid, input.now);
 
-        // Notifica ambos que o pedido foi aceito/amizade criada (T17.5 §45/§46)
+        // Notifica ambos que o pedido foi aceito/amizade criada (T17.5 §45/§46, T17.5.1 Problema 5)
+        // Ambos referenciam o inverse.requestId canônico persistido em friend_requests
         this.notificationService?.enqueueFriendRequestAccepted(db, {
           requestId: inverse.requestId,
           requesterUid: input.recipientUid,
           now: input.now,
         });
         this.notificationService?.enqueueFriendRequestAccepted(db, {
-          requestId: input.requestId,
+          requestId: inverse.requestId,
           requesterUid: input.requesterUid,
           now: input.now,
         });

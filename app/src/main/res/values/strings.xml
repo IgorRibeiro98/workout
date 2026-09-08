@@ -114,4 +114,17 @@
     <string name="my_evolution_question">Como estou mudando?</string>
     <string name="my_evolution_empty_title">Comece sua jornada</string>
     <string name="my_evolution_empty_desc">Complete seu primeiro treino e registre seus dados para acompanhar sua evolução.</string>
+
+    <!-- T17.5.1 Social Notification Strings -->
+    <string name="notification_friend_request_received_title">Nova solicitação de amizade</string>
+    <string name="notification_friend_request_received_body">Você recebeu uma solicitação de amizade no Spark.</string>
+    <string name="notification_friend_request_accepted_title">Amizade aceita</string>
+    <string name="notification_friend_request_accepted_body">Sua solicitação de amizade foi aceita!</string>
+    <string name="notification_challenge_invitation_received_title">Convite para desafio</string>
+    <string name="notification_challenge_invitation_received_body">Você foi convidado para um novo desafio entre amigos!</string>
+    <string name="notification_challenge_starting_soon_title">Desafio começando em breve</string>
+    <string name="notification_challenge_starting_soon_body">Seu desafio entre amigos começa em breve.</string>
+    <string name="notification_challenge_ended_title">Desafio encerrado</string>
+    <string name="notification_challenge_ended_body">O desafio foi finalizado. Confira o placar final!</string>
+    <string name="notification_permission_denied_message">Permissão de notificações não concedida nas configurações do aparelho.</string>
 </resources>

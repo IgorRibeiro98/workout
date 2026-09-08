@@ -19,6 +19,12 @@ export interface AuthTokenVerifier {
    * falha de rede ao buscar as chaves públicas). Não é o mesmo que credencial inválida.
    */
   verify(idToken: string): Promise<AuthenticatedPrincipal>;
+
+  /**
+   * Exclui o usuário do provedor de autenticação (Firebase Auth).
+   * Se o usuário já não existir (user-not-found), deve convergir com sucesso.
+   */
+  deleteUser?(uid: string): Promise<void>;
 }
 
 /** O token foi avaliado e recusado. Vira 401. */

@@ -71,7 +71,8 @@ fun AccountSection(
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
     canVerifyWithBackend: Boolean = false,
-    onVerifyWithBackend: () -> Unit = {}
+    onVerifyWithBackend: () -> Unit = {},
+    onDeleteAccount: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -98,7 +99,10 @@ fun AccountSection(
                     SignedInContent(
                         account = account,
                         isBusy = uiState.isBusy,
-                        onSignOut = onSignOut
+                        isDeleting = uiState.isDeletingAccount,
+                        deletionError = uiState.deletionError,
+                        onSignOut = onSignOut,
+                        onDeleteAccount = onDeleteAccount
                     )
                 } else {
                     SignedOutContent(
@@ -204,8 +208,13 @@ private fun SignedOutContent(
 private fun SignedInContent(
     account: SparkAccount,
     isBusy: Boolean,
-    onSignOut: () -> Unit
+    isDeleting: Boolean = false,
+    deletionError: String? = null,
+    onSignOut: () -> Unit,
+    onDeleteAccount: () -> Unit = {}
 ) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -254,7 +263,7 @@ private fun SignedInContent(
             .fillMaxWidth()
             .height(46.dp)
     ) {
-        if (isBusy) {
+        if (isBusy && !isDeleting) {
             CircularProgressIndicator(
                 color = TextSecondary,
                 strokeWidth = 2.dp,
@@ -266,6 +275,118 @@ private fun SignedInContent(
             Text(text = "Sair da conta", fontWeight = FontWeight.Bold, fontSize = 14.sp)
         }
     }
+
+    if (deletionError != null) {
+        Surface(
+            color = SurfaceHighlight,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, BorderLight),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = deletionError,
+                color = Red400,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+    }
+
+    OutlinedButton(
+        onClick = { showDeleteDialog = true },
+        enabled = !isBusy,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, Red400.copy(alpha = 0.5f)),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = Red400,
+            disabledContentColor = TextSecondary
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(46.dp)
+    ) {
+        if (isDeleting) {
+            CircularProgressIndicator(
+                color = Red400,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Text(text = "Excluindo conta...", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        } else {
+            Text(text = "Excluir conta", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        }
+    }
+
+    if (showDeleteDialog) {
+        DeleteAccountConfirmationDialog(
+            isDeleting = isDeleting,
+            onConfirm = {
+                showDeleteDialog = false
+                onDeleteAccount()
+            },
+            onDismiss = { showDeleteDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun DeleteAccountConfirmationDialog(
+    isDeleting: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var confirmText by remember { mutableStateOf("") }
+    val isConfirmed = confirmText.trim().equals("EXCLUIR", ignoreCase = false)
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!isDeleting) onDismiss() },
+        containerColor = SurfaceDark,
+        title = {
+            Text(text = "Excluir conta Spark?", color = TextPrimary, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Esta ação é irreversível na nuvem:\n\n" +
+                        "• Todos os backups, perfil social, amigos e desafios serão excluídos permanentemente dos servidores.\n" +
+                        "• Seus treinos salvos neste aparelho NÃO serão apagados (armazenamento local-first).\n\n" +
+                        "Digite EXCLUIR abaixo para confirmar:",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+                OutlinedTextField(
+                    value = confirmText,
+                    onValueChange = { confirmText = it },
+                    singleLine = true,
+                    placeholder = { Text("EXCLUIR", color = TextSecondary, fontSize = 13.sp) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = isConfirmed && !isDeleting,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Red400,
+                    contentColor = SurfaceDark,
+                    disabledContainerColor = SurfaceHighlight,
+                    disabledContentColor = TextSecondary
+                )
+            ) {
+                Text("Excluir definitivamente", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(
+                onClick = onDismiss,
+                enabled = !isDeleting
+            ) {
+                Text("Cancelar", color = TextSecondary)
+            }
+        }
+    )
 }
 
 /**

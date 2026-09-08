@@ -95,7 +95,12 @@ fun MainScreen() {
         socialProfileGateway = app.socialProfileGateway,
         challengeGateway = app.challengeGateway,
         socialActivityGateway = app.socialActivityGateway,
-        socialNotificationGateway = app.socialNotificationGateway
+        socialNotificationGateway = app.socialNotificationGateway,
+        pushRegistrationCoordinator = app.pushRegistrationCoordinator,
+        pushAccountScope = app.pushAccountScope,
+        blockGateway = app.blockGateway,
+        reportGateway = app.reportGateway,
+        accountDeletionGateway = app.accountDeletionGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -158,6 +163,7 @@ fun MainScreen() {
         Screen.Profile.route to Screen.Today.route,
         Screen.Activity.route to Screen.Today.route,
         Screen.NotificationPreferences.route to Screen.Today.route,
+        Screen.BlockedUsers.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
@@ -185,6 +191,9 @@ fun MainScreen() {
                 navController.navigate(Screen.Friends.route)
             }
             com.example.service.SocialNotificationChannels.DESTINATION_CHALLENGES -> {
+                navController.navigate(Screen.Challenges.route)
+            }
+            com.example.service.SocialNotificationChannels.DESTINATION_CHALLENGE_DETAIL -> {
                 if (!target.entityId.isNullOrBlank()) {
                     navController.navigate(Screen.ChallengeDetail.createRoute(target.entityId))
                 } else {
@@ -405,6 +414,9 @@ fun MainScreen() {
                     onNavigateToNotificationPreferences = {
                         navController.navigate(Screen.NotificationPreferences.route)
                     },
+                    onNavigateToBlockedUsers = {
+                        navController.navigate(Screen.BlockedUsers.route)
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -517,6 +529,14 @@ fun MainScreen() {
                 com.example.presentation.friends.NotificationPreferencesScreen(
                     viewModel = notificationViewModel,
                     onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.BlockedUsers.route) {
+                val blockedUsersViewModel: com.example.presentation.friends.BlockedUsersViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.BlockedUsersScreen(
+                    viewModel = blockedUsersViewModel,
+                    onNavigateBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.Missions.route) {

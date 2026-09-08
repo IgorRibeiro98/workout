@@ -96,6 +96,9 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     // Notificações sociais (T17.5).
     object NotificationPreferences : Screen("notification_preferences", R.string.nav_profile, Icons.Default.Person)
 
+    // Usuários bloqueados (T17.6).
+    object BlockedUsers : Screen("blocked_users", R.string.nav_profile, Icons.Default.Person)
+
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

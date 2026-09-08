@@ -16,12 +16,15 @@ object SocialNotificationChannels {
     const val CHANNEL_SOCIAL_REQUESTS = "social_requests"
     const val CHANNEL_SOCIAL_CHALLENGES = "social_challenges"
 
+    const val EXTRA_EVENT_ID = "social_nav_event_id"
+    const val EXTRA_NOTIFICATION_TYPE = "social_nav_type"
     const val EXTRA_DESTINATION = "social_nav_destination"
     const val EXTRA_ENTITY_ID = "social_nav_entity_id"
 
     const val DESTINATION_FRIEND_REQUESTS = "friend_requests"
     const val DESTINATION_FRIENDS = "friends"
     const val DESTINATION_CHALLENGES = "challenges"
+    const val DESTINATION_CHALLENGE_DETAIL = "challenge_detail"
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -49,6 +52,32 @@ object SocialNotificationChannels {
         }
     }
 
+    /**
+     * Constrói PendingIntent único para uma notificação social (T17.5.1 Problema 4).
+     *
+     * Para evitar colisão entre notificações distintas (mesmo que apontem para a mesma tela),
+     * a identidade do Intent é especializada com Uri opaca baseada no [eventId] e requestCode
+     * derivado do mesmo hash.
+     */
+    fun buildPendingIntent(
+        context: Context,
+        eventId: String,
+        type: String,
+        entityId: String
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            data = android.net.Uri.parse("spark://notification/$eventId")
+            putExtra(EXTRA_EVENT_ID, eventId)
+            putExtra(EXTRA_NOTIFICATION_TYPE, type)
+            putExtra(EXTRA_ENTITY_ID, entityId)
+        }
+
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getActivity(context, eventId.hashCode(), intent, flags)
+    }
+
+    /** Sobrecarga de compatibilidade para destinos diretos. */
     fun buildPendingIntent(
         context: Context,
         destination: String,

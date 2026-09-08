@@ -97,6 +97,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
   private async dispatchPendingEvents(): Promise<void> {
     const now = this.clock.now();
+    const expiredCount = this.repository.markExpiredEvents(now);
+    if (expiredCount > 0) {
+      this.logger.info('notification.events.expired_sweep', { count: expiredCount });
+    }
+
     const batchSize = this.config.pushBatchSize;
     const dueEvents = this.repository.findDueEvents(now, batchSize);
 

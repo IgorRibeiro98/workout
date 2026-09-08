@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
@@ -36,6 +36,7 @@ import {
 import { FriendshipErrors } from './friendship.errors';
 import { FriendshipRepository, type FriendProfileRow } from './friendship.repository';
 import { SocialErrors } from './social.errors';
+import { BlockService } from './block.service';
 
 /**
  * O caso de uso dos desafios entre amigos (T17.3).
@@ -86,6 +87,7 @@ export class ChallengeService {
     private readonly limiter: ChallengeRateLimiter,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
+    @Optional() private readonly blockService?: BlockService,
   ) {}
 
   // --------------------------------------------------------------------------------- criação
@@ -194,7 +196,10 @@ export class ChallengeService {
       // acabou de propor — e o banco recusaria (`CHECK (inviter_uid <> recipient_uid)`).
       throw ChallengeErrors.participantNotAvailable();
     }
-    if (!this.friendships.areFriends(creator.ownerUid, target.ownerUid)) {
+    if (
+      !this.friendships.areFriends(creator.ownerUid, target.ownerUid) ||
+      this.blockService?.isBlocked(creator.ownerUid, target.ownerUid)
+    ) {
       throw ChallengeErrors.participantNotAvailable();
     }
     return target.ownerUid;
@@ -247,6 +252,8 @@ export class ChallengeService {
         : this.scoring.leaderboard(scorableOf(challenge), active);
 
     const creator = participants.find((participant) => participant.role === 'CREATOR');
+    const isCreatorBlocked =
+      creator && this.blockService?.isBlocked(viewerProfile.ownerUid, creator.ownerUid);
 
     this.log(requestId, principal.uid, 'social.challenge.read', {
       challengeType: challenge.type,
@@ -265,23 +272,29 @@ export class ChallengeService {
         timeZoneId: challenge.timeZoneId,
         status,
         creator: {
-          socialId: creator?.socialId ?? '',
-          displayName: creator?.displayName ?? '',
+          socialId: isCreatorBlocked ? '' : (creator?.socialId ?? ''),
+          displayName: isCreatorBlocked
+            ? 'Participante indisponível'
+            : (creator?.displayName ?? ''),
         },
         participantCount: active.length,
         createdAt: challenge.createdAt,
       },
-      participants: scored.map(
-        (participant): ChallengeParticipantScoreDto => ({
-          socialId: participant.socialId,
-          displayName: participant.displayName,
+      participants: scored.map((participant): ChallengeParticipantScoreDto => {
+        const isParticipantBlocked = this.blockService?.isBlocked(
+          viewerProfile.ownerUid,
+          participant.ownerUid,
+        );
+        return {
+          socialId: isParticipantBlocked ? '' : participant.socialId,
+          displayName: isParticipantBlocked ? 'Participante indisponível' : participant.displayName,
           score: participant.score,
           goalReached: participant.goalReached,
           rank: participant.rank,
           role: participant.role,
           isViewer: participant.ownerUid === viewerProfile.ownerUid,
-        }),
-      ),
+        };
+      }),
       // Só o criador recebe o número de convites pendentes (§172). Os outros participantes não
       // precisam saber quem ainda não respondeu, e ninguém recebe os **nomes** (§173).
       ...(participation.role === 'CREATOR'
@@ -384,7 +397,11 @@ export class ChallengeService {
     const page = this.repository.listPendingInvitations(owner.ownerUid, query);
     const now = this.clock.now();
 
-    const previews = page.items.map((invitation): ChallengePreviewDto => {
+    const visibleItems = page.items.filter(
+      (invitation) => !this.blockService?.isBlocked(owner.ownerUid, invitation.inviterUid),
+    );
+
+    const previews = visibleItems.map((invitation): ChallengePreviewDto => {
       const participants = this.repository.listParticipants(invitation.challengeId);
       const creator = participants.find((participant) => participant.role === 'CREATOR');
       const active = participants.filter((participant) => participant.status === 'JOINED').length;
@@ -479,8 +496,11 @@ export class ChallengeService {
       // linha que um cron precisaria ter atualizado antes deste toque.
       throw ChallengeErrors.alreadyStarted();
     }
-    // A amizade **agora** (§57). Se acabou, o convite deixou de valer.
-    if (!this.friendships.areFriends(recipient.ownerUid, invitation.inviterUid)) {
+    // A amizade **agora** (§57). Se acabou ou há bloqueio, o convite deixou de valer.
+    if (
+      !this.friendships.areFriends(recipient.ownerUid, invitation.inviterUid) ||
+      this.blockService?.isBlocked(recipient.ownerUid, invitation.inviterUid)
+    ) {
       throw ChallengeErrors.invitationNotFound();
     }
 

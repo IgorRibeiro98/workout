@@ -55,7 +55,9 @@ import kotlinx.coroutines.launch
  */
 class SocialViewModel(
     private val gateway: SocialGateway,
-    private val authGateway: AuthGateway
+    private val authGateway: AuthGateway,
+    private val onSocialDisabled: (suspend () -> Unit)? = null,
+    private val onSocialActivated: (suspend () -> Unit)? = null
 ) : ViewModel() {
 
     /**
@@ -334,13 +336,24 @@ class SocialViewModel(
                 outcome.error == SocialError.ALREADY_DISABLED)
 
         val phase = when {
-            outcome is SocialOutcome.Success -> SocialPhase.Active(outcome.profile)
-            outcome is SocialOutcome.NotEnabled -> SocialPhase.NotEnabled
+            outcome is SocialOutcome.Success -> {
+                if (previous == null || previous.status != com.example.domain.social.SocialProfileStatus.ACTIVE) {
+                    onSocialActivated?.invoke()
+                }
+                SocialPhase.Active(outcome.profile)
+            }
+            outcome is SocialOutcome.NotEnabled -> {
+                onSocialDisabled?.invoke()
+                SocialPhase.NotEnabled
+            }
             isStaleTransition -> SocialPhase.Loading
             // O perfil sumiu do servidor (desativação por outro caminho, conta recriada): a tela
             // volta a oferecer ativação em vez de insistir num perfil que não há.
             outcome is SocialOutcome.Failure &&
-                outcome.error == SocialError.NOT_ENABLED -> SocialPhase.NotEnabled
+                outcome.error == SocialError.NOT_ENABLED -> {
+                onSocialDisabled?.invoke()
+                SocialPhase.NotEnabled
+            }
             else -> failurePhase((outcome as SocialOutcome.Failure).error, previous)
         }
 

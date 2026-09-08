@@ -20,7 +20,8 @@ sealed interface NotificationPreferencesUiState {
 }
 
 class NotificationPreferencesViewModel(
-    private val gateway: SocialNotificationGateway
+    private val gateway: SocialNotificationGateway,
+    private val onPushEnabled: (suspend () -> Unit)? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<NotificationPreferencesUiState>(NotificationPreferencesUiState.Loading)
@@ -43,6 +44,14 @@ class NotificationPreferencesViewModel(
                     )
                 }
         }
+    }
+
+    fun onPermissionDenied(message: String) {
+        val current = (_uiState.value as? NotificationPreferencesUiState.Loaded) ?: return
+        _uiState.value = current.copy(
+            errorMessage = message,
+            isUpdating = false
+        )
     }
 
     fun togglePushEnabled(enabled: Boolean) {
@@ -94,6 +103,9 @@ class NotificationPreferencesViewModel(
                     preferences = updated,
                     isUpdating = false
                 )
+                if (pushEnabled == true && updated.pushEnabled) {
+                    onPushEnabled?.invoke()
+                }
             }.onFailure { error ->
                 _uiState.value = current.copy(
                     isUpdating = false,

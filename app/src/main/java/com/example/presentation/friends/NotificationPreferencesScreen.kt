@@ -34,6 +34,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -50,6 +59,18 @@ fun NotificationPreferencesScreen(
     onBack: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val permissionDeniedMsg = stringResource(R.string.notification_permission_denied_message)
+
+    val requestPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.togglePushEnabled(true)
+        } else {
+            viewModel.onPermissionDenied(permissionDeniedMsg)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -163,7 +184,26 @@ fun NotificationPreferencesScreen(
                                 }
                                 Switch(
                                     checked = prefs.pushEnabled,
-                                    onCheckedChange = { viewModel.togglePushEnabled(it) },
+                                    onCheckedChange = { targetEnabled ->
+                                        if (targetEnabled) {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                val hasPermission = ContextCompat.checkSelfPermission(
+                                                    context,
+                                                    Manifest.permission.POST_NOTIFICATIONS
+                                                ) == PackageManager.PERMISSION_GRANTED
+
+                                                if (hasPermission) {
+                                                    viewModel.togglePushEnabled(true)
+                                                } else {
+                                                    requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                                }
+                                            } else {
+                                                viewModel.togglePushEnabled(true)
+                                            }
+                                        } else {
+                                            viewModel.togglePushEnabled(false)
+                                        }
+                                    },
                                     enabled = !state.isUpdating,
                                     colors = SwitchDefaults.colors(
                                         checkedThumbColor = Lime400,

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import {
   CanActivate,
   ExecutionContext,
@@ -5,13 +6,16 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import { SparkLogger } from '../../common/logger';
 import { FixedWindowRateLimiter } from '../../common/rate-limiter';
 import type { RequestWithId } from '../../common/request-id.middleware';
+import { SqliteService } from '../../database/sqlite.service';
 import type { AuthenticatedPrincipal } from './authenticated-principal';
 import {
   AUTH_TOKEN_VERIFIER,
@@ -78,7 +82,9 @@ export class BearerAuthGuard implements CanActivate {
 
   constructor(
     @Inject(AUTH_TOKEN_VERIFIER) private readonly verifier: AuthTokenVerifier,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly logger: SparkLogger,
+    @Optional() private readonly sqlite?: SqliteService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -118,6 +124,17 @@ export class BearerAuthGuard implements CanActivate {
       });
     }
 
+    // Se a conta já foi excluída, rejeita qualquer operação exceto rotas sob /v1/account
+    const isAccountRoute =
+      request.originalUrl?.includes('/v1/account') || request.url?.includes('/v1/account');
+    if (!isAccountRoute && this.isTombstoned(principal.uid)) {
+      this.logger.warn('auth.account_deleted', { requestId, uidPrefix: uidPrefix(principal.uid) });
+      throw new HttpException(
+        { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
     if (!this.limiter.tryAcquire(principal.uid)) {
       this.logger.warn('auth.rate_limited', { requestId, uidPrefix: uidPrefix(principal.uid) });
       throw new HttpException(
@@ -129,6 +146,21 @@ export class BearerAuthGuard implements CanActivate {
     request.principal = principal;
     this.logger.info('auth.accepted', { requestId, uidPrefix: uidPrefix(principal.uid) });
     return true;
+  }
+
+  private isTombstoned(uid: string): boolean {
+    if (!this.sqlite || !this.sqlite.isOpen) return false;
+    try {
+      const hash = createHmac('sha256', this.config.accountDeletionHmacKey)
+        .update(uid)
+        .digest('hex');
+      const row = this.sqlite.connection
+        .prepare(`SELECT 1 FROM account_deletion_tombstones WHERE uid_hash = ? LIMIT 1`)
+        .get(hash);
+      return row !== undefined;
+    } catch {
+      return false;
+    }
   }
 }
 

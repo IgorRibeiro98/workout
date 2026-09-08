@@ -50,7 +50,10 @@ class SocialBoundaryInspectionTest {
         "app/src/main/java/com/example/presentation/friends/ChallengesScreen.kt",
         "app/src/main/java/com/example/presentation/friends/ChallengeDetailScreen.kt",
         "app/src/main/java/com/example/presentation/friends/CreateChallengeScreen.kt",
-        "app/src/main/java/com/example/presentation/friends/ChallengeMessages.kt"
+        "app/src/main/java/com/example/presentation/friends/ChallengeMessages.kt",
+        // T17.6 — bloqueio e denúncia de abuso.
+        "app/src/main/java/com/example/presentation/friends/BlockedUsersViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/BlockedUsersScreen.kt"
     )
 
     private fun socialSources() =
@@ -280,8 +283,10 @@ class SocialBoundaryInspectionTest {
         assertEquals(
             "os caminhos sociais moram nos contratos, e mais nada os escreve",
             listOf(
+                "BlockContract.kt",
                 "ChallengeContract.kt",
                 "FriendshipContract.kt",
+                "ReportContract.kt",
                 "SocialContract.kt",
                 "SocialNotificationContract.kt",
                 "SocialProfileContract.kt"
