@@ -677,7 +677,8 @@ persistência do domínio        validação da resposta
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | **implementado** (produção NOT VERIFIED) |
 | T17.0 | Fundação social: identidade pública e privacidade | **implementado** |
 | T17.1 | Amigos, convites por código e QR Code | **implementado** |
-| T17.2+ | Perfil social rico, desafios, ranking e feed | planejado |
+| T17.2 | Perfil social e compartilhamento controlado de progresso | **implementado** (1 de 4 métricas projetável — ver §18) |
+| T17.3+ | Desafios entre amigos, ranking e feed | planejado |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -1672,20 +1673,27 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-07): T17.0 e T17.1 implementadas.**
+> **Status (verificado em 2026-09-08): T17.0, T17.1 e T17.2 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
 > **T17.1** — amizade bilateral, pedidos de amizade, descoberta por `friendCode` exato,
 > compartilhamento e QR Code, migration `0008_friend_graph.sql`, nove rotas sob `/v1/social`,
 > telas de Amigos e Solicitações no Android.
-> **Não existe:** bloqueio, denúncia, perfil social rico (nível, XP, sequência, conquistas),
-> atividade, feed, ranking, desafio, notificação push (FCM), busca por nome, busca por e-mail,
-> sugestão de pessoas, avatar, upload de mídia e exclusão completa de conta.
+> **T17.2** — perfil social enriquecido: projeção de progresso autorizada por amizade,
+> privacidade por campo (quatro interruptores, todos `false`), migration
+> `0009_social_progress_profile.sql`, quatro rotas sob `/v1/social`, telas de Perfil de amigo e
+> Compartilhar progresso no Android. **Uma das quatro métricas é projetável hoje** — treinos da
+> semana; nível, sequência e conquistas respondem `UNSUPPORTED` porque a gamificação é `DERIVED` e
+> não chega ao servidor.
+> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, atividade, feed, ranking,
+> desafio, notificação push (FCM), busca por nome, busca por e-mail, sugestão de pessoas, avatar,
+> upload de mídia e exclusão completa de conta.
 
-Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0)
-e [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1);
-contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
+Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
+[`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1) e
+[`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md)
+(T17.2); contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades
 
@@ -1784,6 +1792,39 @@ Invariantes bloqueantes que se somam aos de cima:
 15. **O QR carrega apenas `spark://friend/v1/<friendCode>`** — sem uid, e-mail, token, `socialId`,
     `deviceId` ou endereço de servidor —, é gerado no aparelho, e o scanner **nunca** navega, abre
     `Intent` ou carrega URL.
+
+### O perfil social enriquecido (T17.2)
+
+```text
+Friendship(A,B) ──▶ SocialAccessPolicy ──▶ SocialProgressSource ──▶ SocialProgressProjector
+                                                                            │
+                                                              SocialProgressPrivacyFilter
+                                                                            │
+                                                                  SocialFriendProfileDto
+```
+
+Invariantes bloqueantes que se somam aos de cima:
+
+16. **O Social projeta progresso; ele nunca é autoridade de progresso.** Não há curva de XP,
+    contagem de semanas consecutivas nem avaliação de conquista no domínio social — nem no servidor,
+    nem no app. Uma métrica sem autoridade **remota** responde `UNSUPPORTED`, e não um número
+    parecido calculado por uma regra paralela.
+17. **O servidor nunca aceita progresso vindo do cliente.** `level`, `streak`,
+    `weeklyWorkoutCount`, `totalXp` e listas de conquistas são recusados **por nome**, invalidando a
+    requisição inteira. Um APK modificado não consegue se declarar nível 99.
+18. **Ausência de dado não vira zero.** Quem nunca sincronizou uma sessão concluída recebe campo
+    **ausente**, e não "0 treinos". Zero só é publicado quando é fato comprovado.
+19. **A privacidade é aplicada no servidor.** Um campo desligado **não está** no JSON — ele não é
+    escondido no Compose. Escondido e indisponível produzem a mesma ausência para o amigo; só o
+    dono distingue os dois.
+20. **Amizade ativa é a única porta, verificada a cada leitura.** Pedido pendente não abre,
+    terceiro não abre, `unfriend` revoga na requisição seguinte, e desativar o Social fecha dos
+    dois lados. Não há cache de perfil — nem no servidor, nem no Room.
+21. **A semana é a canônica do Spark** (`ConsistencyCalculator.weekStart`, segunda a domingo, na
+    data local do dono), e só sessões `COMPLETED` contam. A fixture
+    `contracts/social/v1/weekly-window.json` amarra as duas implementações.
+22. **Perfil ≠ pontuação de desafio.** `SocialProgressProjection` é para exibição, e a T17.3 terá
+    de usar dados canônicos próprios, com autorização própria.
 
 ### Exclusão de conta — pendência que continua registrada
 

@@ -1,0 +1,190 @@
+{
+  "description": "A semana canônica do Spark, e a contagem de treinos concluídos dentro dela (T17.2). Fixture compartilhada: lida pelo teste do backend (social-progress.spec.ts) e pelo teste do Android (SocialWeekWindowContractTest). Ela existe porque a mesma regra passou a ter duas implementações — ConsistencyCalculator.weekStart em java.time, e canonicalWeekWindow em Intl — e uma mudança unilateral precisa quebrar o teste de quem mudou, em vez de virar 'o perfil do meu amigo mostra um número diferente do meu'.",
+  "rule": {
+    "weekStart": "segunda-feira da semana que contém a data LOCAL do dono (ConsistencyCalculator.weekStart)",
+    "window": "[meia-noite local da segunda, meia-noite local da segunda seguinte)",
+    "counts": "somente WORKOUT_SESSION com status COMPLETED, pelo campo startedAt",
+    "neverCounts": [
+      "PLANNED",
+      "IN_PROGRESS",
+      "PAUSED",
+      "CANCELLED"
+    ],
+    "note": "O fim é a meia-noite da segunda seguinte, e nao 'inicio + 7x24h': numa semana com virada de horario de verao as duas diferem em uma hora, e a diferenca apareceria como um treino de domingo a noite contado na semana errada. Ver weekDurationHours em cada caso."
+  },
+  "cases": [
+    {
+      "name": "sao-paulo-semana-comum",
+      "note": "terça-feira 15h em São Paulo; a semana vai de segunda 7 a domingo 13",
+      "timeZone": "America/Sao_Paulo",
+      "nowIso": "2026-09-08T18:00:00Z",
+      "nowMillis": 1788890400000,
+      "weekStartMillis": 1788750000000,
+      "weekEndMillis": 1789354800000,
+      "weekDurationHours": 168,
+      "completedSessions": [
+        {
+          "iso": "2026-09-06T23:00:00Z",
+          "millis": 1788735600000,
+          "note": "domingo 6, 20h local — semana ANTERIOR"
+        },
+        {
+          "iso": "2026-09-07T09:00:00Z",
+          "millis": 1788771600000,
+          "note": "segunda 7, 6h local"
+        },
+        {
+          "iso": "2026-09-08T22:00:00Z",
+          "millis": 1788904800000,
+          "note": "terça 8, 19h local"
+        },
+        {
+          "iso": "2026-09-14T01:00:00Z",
+          "millis": 1789347600000,
+          "note": "domingo 13, 22h local — em UTC já é segunda"
+        },
+        {
+          "iso": "2026-09-14T03:30:00Z",
+          "millis": 1789356600000,
+          "note": "segunda 14, 0h30 local — semana SEGUINTE"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 3
+    },
+    {
+      "name": "sao-paulo-visto-de-domingo-a-noite",
+      "note": "o mesmo instante do treino de domingo 22h: ele pertence à semana que ainda está correndo",
+      "timeZone": "America/Sao_Paulo",
+      "nowIso": "2026-09-14T01:00:00Z",
+      "nowMillis": 1789347600000,
+      "weekStartMillis": 1788750000000,
+      "weekEndMillis": 1789354800000,
+      "weekDurationHours": 168,
+      "completedSessions": [
+        {
+          "iso": "2026-09-14T01:00:00Z",
+          "millis": 1789347600000,
+          "note": "domingo 13, 22h local"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 1
+    },
+    {
+      "name": "utc-segunda-meia-noite",
+      "note": "o primeiro instante da semana pertence à semana",
+      "timeZone": "UTC",
+      "nowIso": "2026-09-07T00:00:00Z",
+      "nowMillis": 1788739200000,
+      "weekStartMillis": 1788739200000,
+      "weekEndMillis": 1789344000000,
+      "weekDurationHours": 168,
+      "completedSessions": [
+        {
+          "iso": "2026-09-07T00:00:00Z",
+          "millis": 1788739200000,
+          "note": "o próprio início da janela"
+        },
+        {
+          "iso": "2026-09-06T23:59:59Z",
+          "millis": 1788739199000,
+          "note": "um segundo antes — semana anterior"
+        },
+        {
+          "iso": "2026-09-13T23:59:59Z",
+          "millis": 1789343999000,
+          "note": "último segundo da semana"
+        },
+        {
+          "iso": "2026-09-14T00:00:00Z",
+          "millis": 1789344000000,
+          "note": "primeiro instante da semana seguinte"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 2
+    },
+    {
+      "name": "new-york-semana-com-inicio-do-horario-de-verao",
+      "note": "o DST começa no domingo 8; a semana tem 167 horas, não 168",
+      "timeZone": "America/New_York",
+      "nowIso": "2026-03-05T17:00:00Z",
+      "nowMillis": 1772730000000,
+      "weekStartMillis": 1772427600000,
+      "weekEndMillis": 1773028800000,
+      "weekDurationHours": 167,
+      "completedSessions": [
+        {
+          "iso": "2026-03-02T13:00:00Z",
+          "millis": 1772456400000,
+          "note": "segunda 2, 8h EST"
+        },
+        {
+          "iso": "2026-03-08T20:00:00Z",
+          "millis": 1773000000000,
+          "note": "domingo 8, 16h EDT — depois da virada"
+        },
+        {
+          "iso": "2026-03-09T04:00:00Z",
+          "millis": 1773028800000,
+          "note": "segunda 9, 0h EDT — semana seguinte"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 2
+    },
+    {
+      "name": "lisboa-semana-com-fim-do-horario-de-verao",
+      "note": "o DST termina no domingo 25; a semana tem 169 horas",
+      "timeZone": "Europe/Lisbon",
+      "nowIso": "2026-10-22T12:00:00Z",
+      "nowMillis": 1792670400000,
+      "weekStartMillis": 1792364400000,
+      "weekEndMillis": 1792972800000,
+      "weekDurationHours": 169,
+      "completedSessions": [
+        {
+          "iso": "2026-10-18T22:30:00Z",
+          "millis": 1792362600000,
+          "note": "domingo 18, 23h30 WEST — semana anterior"
+        },
+        {
+          "iso": "2026-10-19T07:00:00Z",
+          "millis": 1792393200000,
+          "note": "segunda 19, 8h WEST"
+        },
+        {
+          "iso": "2026-10-25T23:30:00Z",
+          "millis": 1792971000000,
+          "note": "domingo 25, 23h30 WET — depois da virada, ainda na semana"
+        },
+        {
+          "iso": "2026-10-26T00:00:00Z",
+          "millis": 1792972800000,
+          "note": "segunda 26, 0h WET — semana seguinte"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 2
+    },
+    {
+      "name": "kiritimati-utc-mais-14",
+      "note": "em UTC ainda é domingo, e no fuso do dono já é segunda",
+      "timeZone": "Pacific/Kiritimati",
+      "nowIso": "2026-09-06T11:00:00Z",
+      "nowMillis": 1788692400000,
+      "weekStartMillis": 1788688800000,
+      "weekEndMillis": 1789293600000,
+      "weekDurationHours": 168,
+      "completedSessions": [
+        {
+          "iso": "2026-09-06T11:00:00Z",
+          "millis": 1788692400000,
+          "note": "segunda 7, 1h local"
+        },
+        {
+          "iso": "2026-09-06T09:00:00Z",
+          "millis": 1788685200000,
+          "note": "domingo 6, 23h local — semana anterior"
+        }
+      ],
+      "expectedWeeklyWorkoutCount": 1
+    }
+  ]
+}

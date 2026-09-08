@@ -5,8 +5,10 @@
   módulo `backend/src/modules/social/`, gateway e seção de Perfil no Android.
 - **Contrato:** [`contracts/social/v1/README.md`](../../contracts/social/v1/README.md)
 - **Continuação:** [`friendship-contract.md`](./friendship-contract.md) — **T17.1**, o grafo social
-  (amizade bilateral, pedidos, descoberta por código e QR Code). Este documento descreve a
-  identidade e a privacidade sobre as quais ela foi construída.
+  (amizade bilateral, pedidos, descoberta por código e QR Code), e
+  [`social-profile-contract.md`](./social-profile-contract.md) — **T17.2**, o perfil enriquecido
+  (projeção de progresso, privacidade por campo e freshness). Este documento descreve a identidade
+  e a privacidade sobre as quais as duas foram construídas.
 - **Relacionados:** [`identity-contract.md`](./identity-contract.md),
   [`ADR-0001-spark-online-architecture.md`](./ADR-0001-spark-online-architecture.md),
   [`data-classification-matrix.md`](./data-classification-matrix.md)
@@ -14,7 +16,8 @@
 **Não existe** nesta fase: amizade, pedido de amizade, bloqueio, QR Code, compartilhamento de
 código, lookup por `friendCode`, busca de usuários, desafios, ranking, feed, notificações sociais,
 avatar/upload de mídia e exclusão completa de conta. **Desde a T17.1**, amizade, pedido, lookup
-por código, compartilhamento e QR Code existem — o restante continua fora.
+por código, compartilhamento e QR Code existem; **desde a T17.2**, o perfil enriquecido com
+compartilhamento controlado de progresso — o restante continua fora.
 
 ---
 
@@ -173,7 +176,14 @@ social_profiles                        social_privacy_settings
 ├── display_name                       ├── activity_sharing_enabled
 ├── status       ACTIVE | DISABLED     └── updated_at
 ├── created_at
-└── updated_at
+└── updated_at                         social_progress_settings   (T17.2)
+                                       ├── owner_uid    PK, FK → social_profiles
+                                       ├── share_level
+                                       ├── share_consistency_streak
+                                       ├── share_weekly_workout_count
+                                       ├── share_highlighted_achievements
+                                       ├── week_time_zone
+                                       └── updated_at
 ```
 
 Decisões:
@@ -196,8 +206,13 @@ Decisões:
 ### Nenhum dado de treino entra no perfil
 
 É proibido gravar XP, streak, contagem de treinos, último treino, peso corporal ou PR em
-`social_profiles` — mesmo "só para facilitar a UI". Esses valores terão projeções próprias, e a
-fronteira delas já existe: `SocialProjection`.
+`social_profiles` — mesmo "só para facilitar a UI". Esses valores têm projeção própria, e a
+fronteira já existia antes dela: `SocialProjection`.
+
+**A T17.2 manteve a regra ao criar `social_progress_settings`:** aquela tabela guarda quatro
+booleanos e um fuso — **consentimento**, e nenhum valor de progresso. O número que um amigo vê é
+derivado na leitura, por `SocialProgressProjector`, e não existe coluna nenhuma no domínio social
+com nível, sequência, contagem ou XP.
 
 ## 6. `SocialProjection` — a fronteira entre o privado e o social
 
@@ -215,22 +230,37 @@ O caminho mais curto para "mostrar que o Igor treinou hoje" é um endpoint socia
 segundo: a partir daí, um campo novo no snapshot de treino vira campo novo na superfície social
 sem que ninguém decida isso.
 
-A T17.0 implementa **a fronteira e a política**, e nenhuma projeção. As regras que qualquer
-projeção futura terá de obedecer estão declaradas em `social.projection.ts`:
+A T17.0 implementou **a fronteira e a política**, e nenhuma projeção. A **T17.2** escreveu a
+primeira — `SocialProgressProjector`, descrita em
+[`social-profile-contract.md`](./social-profile-contract.md). As regras que toda projeção obedece
+estão declaradas em `social.projection.ts`:
 
 - **`OWNER_SCOPED`** — uma projeção só pode usar dado que pertence ao **mesmo** `ownerUid` do
   `SocialProfile` que ela descreve. O cenário que isso impede já é possível hoje: o dataset local
   pode estar vinculado à conta A (`cloud_data_binding`, T16.4) enquanto a sessão do Firebase é a
   conta B; sem esta regra, o progresso de A seria publicado como sendo de B;
-- **`CONSENT_REQUIRED`** — `activitySharingEnabled` é consultado antes, e o padrão é `false`;
+- **`CONSENT_REQUIRED`** — nenhum campo é publicado sem o dono ter ligado o interruptor
+  correspondente, e todos nascem desligados;
 - **`DERIVED_NEVER_RAW`** — a projeção produz um fato pequeno e escolhido, nunca o agregado bruto.
   Peso, medidas, cargas, notas, nomes de treino e histórico não têm forma social;
-- **`NO_CROSS_DOMAIN_READ`** — a projeção não lê `sync_entities`, `backup_items` nem payloads.
+- **`NO_BACKUP_READ`** — snapshot e payload de backup nunca são fonte de projeção. Um snapshot é a
+  conta inteira em um documento;
+- **`AGGREGATE_ONLY`** — só escalar sai do adapter (`SocialProgressSource`): uma contagem, um
+  nível, uma lista de identificadores canônicos. Nunca payload, linha ou sessão;
+- **`SINGLE_AUTHORITY`** — a projeção não recalcula regra de domínio que já existe em outro lugar
+  do Spark. Ou ela lê o estado canônico, ou faz a derivação que o próprio contrato canônico define,
+  ou responde que não sabe.
+
+**As duas últimas substituíram o `NO_CROSS_DOMAIN_READ` absoluto da T17.0**, que proibia ler
+`sync_entities` quando nenhuma projeção existia. A T17.2 precisou da primeira, e o afrouxamento foi
+declarado com substituto no lugar — o motivo completo está em
+[`social-profile-contract.md` §13](./social-profile-contract.md).
 
 Isso é sustentado por construção: `SocialModule` não importa `BackupModule`, `SyncModule` nem
-`AiModule`, e há teste que varre os imports do módulo. Do lado Android, há teste estrutural que
-verifica que o pacote social não conhece Room, DAO, Outbox, `CloudDataBinding`, backup, restore,
-treino, medida nem gamificação.
+`AiModule`, e há teste que varre os imports do módulo; `social-progress.source.ts` é o único
+arquivo que menciona `sync_entities`, e há teste que verifica que ele só seleciona `COUNT(*)` e
+`1`. Do lado Android, há teste estrutural que verifica que o pacote social não conhece Room, DAO,
+Outbox, `CloudDataBinding`, backup, restore, treino, medida nem gamificação.
 
 ## 7. Privacidade
 
@@ -239,6 +269,12 @@ treino, medida nem gamificação.
 | `discoverability` | `FRIEND_CODE_ONLY` | só quem já tem o código encontra; é o único valor que existe |
 | `friendRequestsEnabled` | `true` | receber convite é o caminho pretendido; quem não quiser desliga **antes** de a T17.1 existir |
 | `activitySharingEnabled` | `false` | um default `true` publicaria, no dia em que a feature nascesse, a atividade de quem nunca escolheu publicar |
+
+Desde a T17.2, quatro preferências novas vivem em `social_progress_settings` — `shareLevel`,
+`shareConsistencyStreak`, `shareWeeklyWorkoutCount`, `shareHighlightedAchievements` —, e as quatro
+nascem `false` pela mesma razão. Elas ficam em tabela própria porque respondem a outra pergunta:
+`social_privacy_settings` diz *quem pode me alcançar*, `social_progress_settings` diz *o que
+aparece no meu perfil*.
 
 Não existe `PUBLIC_SEARCH`, `GLOBAL_PROFILE` nem `ACTIVITY_PUBLIC` — nem como default, nem como
 valor aceito. E não existe, neste servidor:
@@ -313,8 +349,8 @@ até a T17.1 — um item de navegação levaria para uma tela vazia.
 - não cria amizade, pedido, bloqueio, QR Code, compartilhamento, lookup, busca, desafio, ranking,
   feed ou notificação;
 - não implementa rotação de `friendCode` (T17.1 decide, se o convite/privacidade exigir);
-- não introduz avatar, upload ou storage de mídia (T17.2);
-- não gera projeção de treino (T17.4);
+- não introduz avatar, upload ou storage de mídia (continua fora, inclusive depois da T17.2);
+- não gera projeção de treino (a primeira nasceu na T17.2; atividade recente continua T17.4);
 - não versiona payload social (`socialSchemaVersion`): `/v1` já é a versão do protocolo, e o
   documento é pequeno e estável. Versionar por hábito envelhece errado;
 - não cria tabela genérica `social_objects(type, payload)`: o domínio social tem estrutura clara;

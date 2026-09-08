@@ -1,6 +1,7 @@
 package com.example.presentation.friends
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -81,7 +82,15 @@ const val FRIENDS_LIST_DESCRIPTION = "Lista de amigos"
 fun FriendsScreen(
     viewModel: FriendsViewModel,
     onNavigateBack: () -> Unit,
-    onNavigateToRequests: () -> Unit
+    onNavigateToRequests: () -> Unit,
+    /**
+     * T17.2 — abre o perfil social daquele amigo.
+     *
+     * O perfil é lido **neste toque**, e não ao abrir a lista: enriquecer cada linha com nível,
+     * sequência ou frequência custaria uma requisição por amigo, e a lista voltaria a ser cara por
+     * uma informação que quase sempre ninguém está olhando.
+     */
+    onOpenProfile: (Friend) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -134,6 +143,7 @@ fun FriendsScreen(
                 onAddFriend = viewModel::startAddFriend,
                 onOpenRequests = onNavigateToRequests,
                 onRemoveFriend = viewModel::startRemoveFriend,
+                onOpenProfile = onOpenProfile,
                 onRetry = viewModel::refresh
             )
         }
@@ -173,6 +183,7 @@ internal fun FriendsBody(
     onAddFriend: () -> Unit = {},
     onOpenRequests: () -> Unit = {},
     onRemoveFriend: (Friend) -> Unit = {},
+    onOpenProfile: (Friend) -> Unit = {},
     onRetry: () -> Unit = {}
 ) {
     when (val phase = uiState.phase) {
@@ -224,6 +235,7 @@ internal fun FriendsBody(
                     FriendRow(
                         friend = friend,
                         isBusy = uiState.isFriendBusy(friend.socialId),
+                        onOpen = { onOpenProfile(friend) },
                         onRemove = { onRemoveFriend(friend) }
                     )
                 }
@@ -237,7 +249,12 @@ internal fun FriendsBody(
 }
 
 @Composable
-private fun FriendRow(friend: Friend, isBusy: Boolean, onRemove: () -> Unit) {
+private fun FriendRow(
+    friend: Friend,
+    isBusy: Boolean,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit
+) {
     Surface(
         color = SurfaceDark,
         shape = RoundedCornerShape(16.dp),
@@ -249,11 +266,14 @@ private fun FriendRow(friend: Friend, isBusy: Boolean, onRemove: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            // O nome abre o perfil social daquela pessoa (T17.2). A lista continua carregando só
+            // nome — o que o perfil mostra depende do que ela escolheu compartilhar, e é lido lá.
             Text(
                 text = friend.displayName,
                 color = TextPrimary,
                 fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
+                fontSize = 16.sp,
+                modifier = Modifier.clickable(onClick = onOpen)
             )
             // Enquanto a remoção está em voo, o botão daquele amigo para de responder — e os
             // outros continuam funcionando. Um `isLoading` da tela inteira travaria a lista toda.

@@ -61,7 +61,9 @@ fun ProfileScreen(
     /** O grafo social (T17.1). `null` mantém o Perfil exatamente como a T17.0 o entregou. */
     friendsViewModel: com.example.presentation.account.FriendsViewModel? = null,
     onNavigateToFriends: () -> Unit = {},
-    onNavigateToFriendRequests: () -> Unit = {}
+    onNavigateToFriendRequests: () -> Unit = {},
+    /** T17.2 — "Compartilhar progresso", dentro da mesma área Social. */
+    onNavigateToProgressSharing: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -147,7 +149,8 @@ fun ProfileScreen(
         onSocialRetry = { socialViewModel?.refresh() },
         friendsState = friendsState,
         onOpenFriends = onNavigateToFriends,
-        onOpenFriendRequests = onNavigateToFriendRequests
+        onOpenFriendRequests = onNavigateToFriendRequests,
+        onOpenProgressSharing = onNavigateToProgressSharing
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -215,7 +218,8 @@ private fun ProfileScreenContent(
     onSocialRetry: () -> Unit = {},
     friendsState: com.example.presentation.account.FriendsUiState? = null,
     onOpenFriends: () -> Unit = {},
-    onOpenFriendRequests: () -> Unit = {}
+    onOpenFriendRequests: () -> Unit = {},
+    onOpenProgressSharing: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -359,6 +363,7 @@ private fun ProfileScreenContent(
                     friendsState = friendsState,
                     onOpenFriends = onOpenFriends,
                     onOpenRequests = onOpenFriendRequests,
+                    onOpenProgressSharing = onOpenProgressSharing,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,

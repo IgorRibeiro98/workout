@@ -61,9 +61,9 @@ export class FriendCodeCollisionError extends Error {
  *    verificação depois da leitura. A consulta que não pode devolver o perfil de outra conta é a
  *    que nunca o carrega. Não existe método que leia por `social_id` sozinho, e não existe método
  *    que liste perfis: enumeração é impossível porque a consulta não foi escrita;
- * 2. **atomicidade da criação** — perfil e privacidade entram na **mesma** transação. Um perfil
- *    sem privacidade seria um perfil cujo default ninguém escolheu, e a primeira leitura teria de
- *    inventar um;
+ * 2. **atomicidade da criação** — perfil, privacidade e compartilhamento de progresso (T17.2)
+ *    entram na **mesma** transação. Um perfil sem essas linhas seria um perfil cujos defaults
+ *    ninguém escolheu, e a primeira leitura teria de inventar um;
  * 3. **unicidade pelo banco** — `social_id` e `friend_code` são `UNIQUE` no schema. A colisão é
  *    detectada pela constraint, e nunca por um `SELECT` anterior ao `INSERT`: entre a consulta e a
  *    escrita cabe outra ativação.
@@ -90,7 +90,7 @@ export class SocialRepository {
   }
 
   /**
-   * Cria o perfil e a privacidade, em uma transação.
+   * Cria o perfil, a privacidade e o compartilhamento de progresso, em uma transação.
    *
    * Concorrência: duas ativações simultâneas da **mesma** conta chegam aqui e a segunda esbarra na
    * chave primária `owner_uid`. Em vez de propagar o erro, ela relê e devolve o que a primeira
@@ -137,6 +137,19 @@ export class SocialRepository {
         input.activitySharingEnabled ? 1 : 0,
         input.now,
       );
+
+      // T17.2 — compartilhamento de progresso, tudo desligado, na **mesma** transação.
+      //
+      // Um perfil sem esta linha seria um perfil cujo default ninguém escolheu, e a primeira
+      // leitura teria de inventar um. É a mesma razão pela qual a privacidade nasce junto com a
+      // identidade desde a T17.0 — e o motivo de os quatro nascerem `0` é o §14: ativar o Social
+      // não pode publicar progresso.
+      db.prepare(
+        `INSERT INTO social_progress_settings
+           (owner_uid, share_level, share_consistency_streak, share_weekly_workout_count,
+            share_highlighted_achievements, week_time_zone, updated_at)
+         VALUES (?, 0, 0, 0, 0, NULL, ?)`,
+      ).run(input.ownerUid, input.now);
 
       return null;
     });

@@ -49,6 +49,25 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     // compartilhável no estado de navegação sem nenhum ganho.
     object Friends : Screen("friends", R.string.nav_profile, Icons.Default.Person)
     object FriendRequests : Screen("friend_requests", R.string.nav_profile, Icons.Default.Person)
+
+    // Perfil social enriquecido (T17.2). Também alcançadas a partir do Perfil / da lista de
+    // amigos, e também sem item novo de bottom navigation.
+    //
+    // O `socialId` entra na rota porque é ele o identificador público do domínio social — o mesmo
+    // que já viaja na URL da requisição. O `friendCode` continua fora de qualquer rota. O nome vai
+    // junto, opcional, só para o cabeçalho não piscar enquanto a leitura corre: quem confirma quem
+    // é a pessoa continua sendo o servidor.
+    object FriendProfile :
+        Screen("friend_profile/{socialId}?name={name}", R.string.nav_profile, Icons.Default.Person) {
+        fun createRoute(socialId: String, displayName: String): String {
+            val id = java.net.URLEncoder.encode(socialId, "UTF-8")
+            val name = java.net.URLEncoder.encode(displayName, "UTF-8")
+            return "friend_profile/$id?name=$name"
+        }
+    }
+
+    object ProgressSharing :
+        Screen("progress_sharing", R.string.nav_profile, Icons.Default.Person)
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

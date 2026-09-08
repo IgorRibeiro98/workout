@@ -286,6 +286,22 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * O perfil social enriquecido (T17.2): o que eu compartilho, e o que vejo de um amigo.
+     *
+     * Mesmo `SparkBackendClient` das anteriores. Separado do [friendGateway] porque responde outra
+     * pergunta — o grafo diz **com quem** eu me relaciono, este diz **o que** aparece — e porque
+     * elas são lidas em momentos diferentes: a lista de amigos ao abrir a seção, um perfil só
+     * quando alguém toca em um nome.
+     *
+     * Sem Room, sem Outbox, sem `WorkManager`: progresso de terceiros não é guardado no aparelho,
+     * porque a privacidade da outra pessoa pode mudar e uma cópia local continuaria mostrando o
+     * que ela desligou.
+     */
+    val socialProfileGateway: com.example.domain.social.SocialProfileGateway by lazy {
+        com.example.data.social.SparkSocialProfileGateway(sparkBackendClient)
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

@@ -121,3 +121,13 @@ export const SOCIAL_LIST_PAGE = {
   defaultLimit: 50,
   maxLimit: 100,
 } as const;
+
+/**
+ * Teto do identificador IANA de fuso horário (T17.2).
+ *
+ * O mais longo em uso hoje tem menos de 40 caracteres (`America/Argentina/ComodRivadavia`, 32).
+ * 64 dá folga para qualquer nome futuro e recusa entrada absurda **antes** de ela virar um
+ * `Intl.DateTimeFormat` — que é onde a validação de verdade acontece, contra o próprio runtime, e
+ * não contra uma lista mantida à mão que envelheceria a cada revisão do banco de fusos.
+ */
+export const MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH = 64;

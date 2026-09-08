@@ -1,22 +1,30 @@
 # Contrato do domínio social do Spark — v1
 
 - **Tarefas:** T17.0 — identidade pública e privacidade; **T17.1** — grafo social (amizade
-  bilateral, pedidos, descoberta por `friendCode` e QR Code). **Não** inclui bloqueio, denúncia,
-  perfil social rico, atividade, feed, ranking, desafio, notificação push, busca por nome, busca
-  por e-mail nem exclusão de conta.
+  bilateral, pedidos, descoberta por `friendCode` e QR Code); **T17.2** — perfil enriquecido
+  (projeção de progresso e compartilhamento controlado). **Não** inclui bloqueio, denúncia,
+  atividade, feed, ranking, desafio, notificação push, busca por nome, busca por e-mail nem
+  exclusão de conta.
 - **Implementações:**
-  - Android — `com.example.data.social.SocialContract`, `com.example.data.social.FriendshipContract`
-    e `com.example.data.social.*`
+  - Android — `com.example.data.social.SocialContract`, `com.example.data.social.FriendshipContract`,
+    `com.example.data.social.SocialProfileContract` e `com.example.data.social.*`
   - Backend — `backend/src/modules/social/social.contract.ts`,
-    `backend/src/modules/social/friendship.contract.ts` e `backend/src/modules/social/*`
+    `backend/src/modules/social/friendship.contract.ts`,
+    `backend/src/modules/social/social-profile.contract.ts` e `backend/src/modules/social/*`
 - **Documentos de decisão:**
-  [`docs/architecture/social-domain.md`](../../../docs/architecture/social-domain.md) (T17.0) e
+  [`docs/architecture/social-domain.md`](../../../docs/architecture/social-domain.md) (T17.0),
   [`docs/architecture/friendship-contract.md`](../../../docs/architecture/friendship-contract.md)
-  (T17.1)
-- **Fixture compartilhada:**
-  [`friend-code-normalization.json`](./friend-code-normalization.json) — os casos canônicos de
-  normalização de `friendCode`, lidos pelos testes **dos dois lados**. É o que impede a cópia do
-  Android e a regra do servidor de divergirem em silêncio.
+  (T17.1) e
+  [`docs/architecture/social-profile-contract.md`](../../../docs/architecture/social-profile-contract.md)
+  (T17.2)
+- **Fixtures compartilhadas:**
+  - [`friend-code-normalization.json`](./friend-code-normalization.json) — os casos canônicos de
+    normalização de `friendCode`;
+  - [`weekly-window.json`](./weekly-window.json) — a semana canônica do Spark (segunda a domingo,
+    data local) e a contagem de treinos concluídos dentro dela.
+
+  As duas são lidas pelos testes **dos dois lados**. É o que impede a cópia do Android e a regra do
+  servidor de divergirem em silêncio.
 
 Este arquivo é a definição legível do que os dois lados precisam concordar. Ele existe pelo mesmo
 motivo que [`contracts/backup/v1/`](../../backup/v1/README.md) e
@@ -131,6 +139,22 @@ social é a autoridade do próprio nome: trocar o nome no Google não reescreve 
 Não existe `PUBLIC_SEARCH`, `GLOBAL_PROFILE` nem `ACTIVITY_PUBLIC` — nem como default, nem como
 valor. Busca pública por nome, busca por e-mail e listagem global de usuários **não existem neste
 servidor**, e declarar o valor descreveria um comportamento inexistente.
+
+### Compartilhamento de progresso (T17.2)
+
+Preferências separadas, em tabela própria (`social_progress_settings`), porque respondem a outra
+pergunta: as de cima dizem *quem pode me alcançar*; estas dizem *o que aparece no meu perfil*.
+
+| Campo | Default | Observação |
+| --- | --- | --- |
+| `shareLevel` | `false` | o campo nunca aparece nesta versão: sem autoridade remota (`UNSUPPORTED`) |
+| `shareConsistencyStreak` | `false` | idem |
+| `shareWeeklyWorkoutCount` | `false` | aparece quando há sessão sincronizada e fuso declarado |
+| `shareHighlightedAchievements` | `false` | idem `shareLevel`; a seleção de destaques não existe |
+| `weekTimeZone` | `null` | **não é privacidade**: é o fuso IANA que torna a semana canônica reproduzível no servidor |
+
+O cliente **nunca** envia `level`, `streak`, `weeklyWorkoutCount`, `totalXp` nem lista de
+conquistas: o validador recusa a requisição inteira, por nome de campo.
 
 ## 6. Endpoints
 
@@ -319,7 +343,7 @@ recusa, e **nunca** navega, abre `Intent` ou carrega URL.
 - **`SocialAccessPolicy`** (`backend/src/modules/social/social.access-policy.ts`) é onde as
   respostas de visibilidade moram — e não um `if (privacy...)` em cada controller;
 - **`SocialProjection`** (`social.projection.ts`) é o único caminho para transformar dado privado
-  em informação social, quando isso existir.
+  em informação social — e a T17.2 escreveu a primeira projeção passando por ele.
 
 E as que a T17.1 acrescentou:
 
@@ -334,3 +358,62 @@ E as que a T17.1 acrescentou:
 - **perfil desativado suspende as relações, e não as apaga**: elas ficam invisíveis e inacionáveis
   dos dois lados, e voltam inteiras ao reativar;
 - **nada disso entra na Outbox, no `sync_entities`, no backup ou no restore.**
+
+## 11. O perfil enriquecido (T17.2)
+
+```text
+GET   /v1/social/friends/{socialId}/profile   perfil de um amigo (exige amizade ativa)
+GET   /v1/social/me/profile-preview           o que um amigo veria de mim agora
+GET   /v1/social/me/progress-sharing          minhas preferências + disponibilidade por campo
+PATCH /v1/social/me/progress-sharing          altera preferências (parcial) e o fuso
+```
+
+### O que um amigo recebe
+
+```json
+{
+  "profile": {
+    "socialId": "...",
+    "displayName": "Igor",
+    "sharedProgress": { "weeklyWorkoutCount": 3 }
+  }
+}
+```
+
+`sharedProgress` está sempre presente e pode estar vazio. **Campo não compartilhado não existe no
+JSON** — não há `null`, não há flag e não há marcador. Escondido e indisponível são a mesma
+ausência para quem olha; só o dono distingue os dois, em `progress-sharing`.
+
+E **nunca**: `ownerUid`, Firebase UID, e-mail, `friendCode`, flags de privacidade, `lastSyncAt`,
+presença, sessão de treino, série, carga, exercício, nota, horário, medida corporal, PR, payload de
+sync ou de backup.
+
+### Disponibilidade — só na resposta do dono
+
+| Valor | Significa | Ação |
+| --- | --- | --- |
+| `AVAILABLE` | há dado canônico agora | — |
+| `UNAVAILABLE` | suportado, e o servidor ainda não sabe | sincronizar resolve |
+| `UNSUPPORTED` | não há autoridade remota nesta versão | sincronizar **não** resolve |
+
+### Erros da T17.2
+
+| `code` | HTTP | Quando |
+| --- | --- | --- |
+| `FRIEND_PROFILE_NOT_FOUND` | 404 | alvo inexistente, desativado, sem amizade, ou só com pedido pendente — **a mesma resposta para os quatro** |
+| `INVALID_PROGRESS_SETTINGS` | 400 | corpo fora do contrato, valor de progresso enviado, fuso inválido |
+
+### Regras que a T17.2 acrescentou
+
+- **amizade ativa é a única porta.** Pedido pendente não concede acesso, e `unfriend` revoga na
+  requisição seguinte — a amizade é verificada em cada leitura;
+- **o visitante também precisa estar `ACTIVE`.** Quem desativou o Social não consome perfil social;
+- **o servidor nunca aceita progresso do cliente**, e a recusa é da requisição inteira;
+- **ausência de dado não vira zero.** Sem sessão sincronizada, a contagem semanal é omitida — nunca
+  publicada como `0`;
+- **a semana é a canônica do Spark** (`ConsistencyCalculator.weekStart`, segunda a domingo, data
+  local), e a fixture [`weekly-window.json`](./weekly-window.json) amarra os dois lados;
+- **só sessões `COMPLETED` contam**;
+- **não há cache de perfil**, nem no servidor nem no aparelho — é isso que faz revogar funcionar;
+- **nada disso entra na Outbox, no `sync_entities`, no backup ou no restore**, e nada dá XP,
+  conquista ou missão.

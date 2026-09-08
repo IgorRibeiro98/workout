@@ -70,7 +70,12 @@ class MainViewModelFactory(
      * Separado do [socialGateway] porque são duas perguntas diferentes — "quem eu sou no social" e
      * "com quem eu me relaciono" —, e uma conta pode ter a primeira sem ter a segunda.
      */
-    private val friendGateway: com.example.domain.social.FriendGateway? = null
+    private val friendGateway: com.example.domain.social.FriendGateway? = null,
+    /**
+     * O perfil social enriquecido (T17.2). `null` remove "Compartilhar progresso" e o perfil de
+     * amigo, e nada mais muda.
+     */
+    private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -220,6 +225,17 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.FriendsViewModel(
                 gateway = friends,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.SocialProfileViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val profile = socialProfileGateway
+                ?: throw IllegalStateException("SocialProfileGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.SocialProfileViewModel(
+                gateway = profile,
                 authGateway = gateway
             ) as T
         }

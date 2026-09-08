@@ -62,6 +62,8 @@ fun SocialSection(
     friendsState: com.example.presentation.account.FriendsUiState? = null,
     onOpenFriends: () -> Unit = {},
     onOpenRequests: () -> Unit = {},
+    /** T17.2 — "Compartilhar progresso". Mesma área Social, sem bottom navigation nova. */
+    onOpenProgressSharing: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -130,6 +132,7 @@ fun SocialSection(
                         friendsState = friendsState,
                         onOpenFriends = onOpenFriends,
                         onOpenRequests = onOpenRequests,
+                        onOpenProgressSharing = onOpenProgressSharing,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -145,6 +148,7 @@ fun SocialSection(
                             friendsState = friendsState,
                             onOpenFriends = onOpenFriends,
                             onOpenRequests = onOpenRequests,
+                            onOpenProgressSharing = onOpenProgressSharing,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -165,6 +169,7 @@ fun SocialSection(
                                 friendsState = friendsState,
                                 onOpenFriends = onOpenFriends,
                                 onOpenRequests = onOpenRequests,
+                                onOpenProgressSharing = onOpenProgressSharing,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -191,6 +196,7 @@ fun SocialSection(
                                 friendsState = friendsState,
                                 onOpenFriends = onOpenFriends,
                                 onOpenRequests = onOpenRequests,
+                                onOpenProgressSharing = onOpenProgressSharing,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -239,6 +245,7 @@ private fun ActiveProfile(
     friendsState: com.example.presentation.account.FriendsUiState?,
     onOpenFriends: () -> Unit,
     onOpenRequests: () -> Unit,
+    onOpenProgressSharing: () -> Unit,
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -321,6 +328,7 @@ private fun ActiveProfile(
                 enabled = enabled,
                 onOpenFriends = onOpenFriends,
                 onOpenRequests = onOpenRequests,
+                onOpenProgressSharing = onOpenProgressSharing,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -355,6 +363,7 @@ private fun FriendsEntryPoints(
     enabled: Boolean,
     onOpenFriends: () -> Unit,
     onOpenRequests: () -> Unit,
+    onOpenProgressSharing: () -> Unit,
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -391,6 +400,11 @@ private fun FriendsEntryPoints(
         )
     }
     Secondary(text = "Meu código", onClick = onShowFriendCode, enabled = enabled)
+    // T17.2 — o que os amigos veem do meu progresso. Ela fica aqui, e não junto dos interruptores
+    // de privacidade acima, porque é uma tela com estado próprio: interruptores, disponibilidade
+    // por campo e prévia. Espremê-la nesta seção esconderia a parte que mais importa — a diferença
+    // entre "eu permiti" e "o servidor consegue mostrar".
+    Secondary(text = "Compartilhar progresso", onClick = onOpenProgressSharing, enabled = enabled)
 }
 
 @Composable

@@ -9,7 +9,9 @@
 
 **Não existe** nesta fase: bloqueio, denúncia, perfil social rico (nível, XP, sequência,
 frequência, conquistas), atividade, feed, ranking, desafio, notificação push (FCM), busca por
-nome, busca por e-mail, sugestão de pessoas, avatar e exclusão de conta.
+nome, busca por e-mail, sugestão de pessoas, avatar e exclusão de conta. **Desde a T17.2**, o
+perfil enriquecido existe — ver
+[`social-profile-contract.md`](./social-profile-contract.md); o restante continua fora.
 
 ---
 
@@ -340,13 +342,31 @@ completo, `Authorization` e corpo da requisição.
 Um log que carregasse `friendCode` transformaria qualquer cópia de log numa lista de convites
 válidos — e agora que o lookup existe, ela seria **utilizável**.
 
-## 13. O que a T17.2 herda pronto
+## 13. O que a T17.2 herdou — e o que ela construiu sobre isso
 
 ```text
-Friendship(A,B) ──▶ SocialAccessPolicy.canViewProfile ──▶ SocialProjection ──▶ perfil social rico
+Friendship(A,B) ──▶ SocialAccessPolicy.canViewFriendProfile ──▶ SocialProgressProjector
+                                                                       ↓
+                                                          SocialProgressPrivacyFilter
+                                                                       ↓
+                                                             SocialFriendProfileDto
 ```
 
-A relação existe, é bilateral, é autorizada por participante e tem uma política central
-(`FriendshipAccessPolicy` para participação, `SocialAccessPolicy` para visibilidade). A T17.2
-acrescenta **o que** um amigo vê — nível, sequência, frequência, conquistas selecionadas — passando
-por `SocialProjection` e pelas configurações de privacidade, **sem redesenhar a amizade**.
+A relação já existia, bilateral, autorizada por participante e com política central
+(`FriendshipAccessPolicy` para participação, `SocialAccessPolicy` para visibilidade). **A T17.2 não
+redesenhou a amizade**: ela acrescentou `canViewFriendProfile` à mesma política e reusou
+`FriendshipRepository.areFriends` — a consulta de amizade continua existindo em um lugar só, e
+nenhum controller a repete.
+
+O que ela acrescentou é **o que** um amigo vê, e sob que condições. Duas consequências desta
+tarefa valem como contrato do grafo:
+
+- **amizade ativa é a única porta.** Um `FriendRequest` `PENDING` não concede acesso ao perfil
+  enriquecido, e `unfriend` o revoga na requisição seguinte — porque a amizade é verificada em cada
+  leitura, contra a linha de `friendships` de agora;
+- **desativar continua suspendendo, não desfazendo.** O perfil de quem desativou responde
+  "não encontrado" (indistinguível de inexistente), e volta inteiro ao reativar — a amizade
+  continuava gravada.
+
+O detalhamento — fontes canônicas, privacidade por campo, freshness e a separação entre perfil e
+pontuação de desafio — vive em [`social-profile-contract.md`](./social-profile-contract.md).

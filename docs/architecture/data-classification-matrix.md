@@ -263,22 +263,37 @@ Amizade, convite, desafio, ranking e feed continuam sem existir.
 
 Nenhuma tabela do backend é uma tabela de domínio do Spark: o servidor guarda o snapshot como
 payload e **não** desmonta treino em colunas consultáveis. Ele não é uma segunda autoridade
-operacional — com uma exceção deliberada e delimitada: o social (T17.0/T17.1).
+operacional — com uma exceção deliberada e delimitada: o social (T17.0–T17.2).
 
 ### O social é a exceção, e ele não é dado de treino
 
-`social_profiles` e `social_privacy_settings` são as primeiras tabelas do servidor cuja autoridade
-**é** o servidor: o perfil social nasce lá, existe lá, e o aparelho só o lê. Isso não abre exceção
-para dado de treino, e a fronteira é explícita:
+`social_profiles`, `social_privacy_settings` e `social_progress_settings` são as primeiras tabelas
+do servidor cuja autoridade **é** o servidor: o perfil social nasce lá, existe lá, e o aparelho só o
+lê. Isso não abre exceção para dado de treino, e a fronteira é explícita:
 
-- **nada de treino entra em `social_profiles`.** É proibido gravar XP, streak, contagem de treinos,
-  último treino, peso corporal ou PR ali — mesmo "só para facilitar a UI";
+- **nada de treino entra nas tabelas sociais.** É proibido gravar XP, streak, contagem de treinos,
+  último treino, peso corporal ou PR ali — mesmo "só para facilitar a UI". `social_progress_settings`
+  (T17.2) guarda **quatro booleanos e um fuso**: consentimento, e nenhum valor de progresso;
 - **o e-mail também não entra.** Ele continua sendo informação da camada de Auth (Firebase);
 - **o Firebase UID entra apenas como `owner_uid`, e nunca sai em DTO.** Identidade pública é o
   `socialId`;
-- **o caminho para progresso social é a `SocialProjection`** (`OWNER_SCOPED`, `CONSENT_REQUIRED`,
-  `DERIVED_NEVER_RAW`, `NO_CROSS_DOMAIN_READ`), e não uma coluna nova aqui nem um `SELECT` em
-  `sync_entities`/`backup_items`. Ver [`social-domain.md`](./social-domain.md).
+- **o caminho para progresso social é a projeção** — `SocialProgressProjector` sobre
+  `SocialProgressSource`, obedecendo `OWNER_SCOPED`, `CONSENT_REQUIRED`, `DERIVED_NEVER_RAW`,
+  `NO_BACKUP_READ`, `AGGREGATE_ONLY` e `SINGLE_AUTHORITY` — e não uma coluna nova aqui.
+
+### O que a T17.2 provou sobre esta matriz
+
+Ao construir o perfil social enriquecido, a única métrica projetável foi **treinos da semana**, e a
+razão está nesta própria matriz: gamificação é `DERIVED` (linha "`gamification_events`,
+`xp_transactions`, `achievement_unlocks`, `personal_records`, nível/XP/streak"), e portanto nível,
+sequência e conquistas **não chegam ao servidor**. Publicá-los exigiria aceitar o valor que o
+aparelho declara — o servidor confiando no cliente sobre progresso — ou recriar os motores de
+domínio em TypeScript. Os dois foram recusados; os três campos respondem `UNSUPPORTED`.
+
+A leitura que a projeção faz de `sync_entities` é um `COUNT(*)` por um adapter estreito
+(`SocialProgressSource`), com `owner_uid` na cláusula `WHERE` e **nenhum payload materializado**.
+`backup_snapshots`/`backup_items`/`backup_payloads` continuam inalcançáveis para o social, em
+qualquer forma. Ver [`social-profile-contract.md`](./social-profile-contract.md).
 
 E o social **não** entra na classificação local: ele não tem linha no Room, não entra no backup
 (T16.4), não é tocado pelo restore (T16.5), não entra na Outbox (T16.6) e não usa tombstone

@@ -34,7 +34,14 @@ class SocialBoundaryInspectionTest {
         "app/src/main/java/com/example/presentation/friends/AddFriendDialog.kt",
         "app/src/main/java/com/example/presentation/friends/MyFriendCodeDialog.kt",
         "app/src/main/java/com/example/presentation/friends/FriendCodeQr.kt",
-        "app/src/main/java/com/example/presentation/friends/FriendsMessages.kt"
+        "app/src/main/java/com/example/presentation/friends/FriendsMessages.kt",
+        // T17.2 — o perfil enriquecido. As mesmas fronteiras valem: sem Room, sem Outbox, sem
+        // dado de treino lido no aparelho, sem log e sem HTTP na tela.
+        "app/src/main/java/com/example/presentation/account/SocialProfileViewModel.kt",
+        "app/src/main/java/com/example/presentation/account/SocialProfileUiState.kt",
+        "app/src/main/java/com/example/presentation/friends/FriendSocialProfileScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/ProgressSharingScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/SocialProfileMessages.kt"
     )
 
     private fun socialSources() =
@@ -76,7 +83,17 @@ class SocialBoundaryInspectionTest {
                     "FriendsScreen.kt",
                     "FriendRequestsScreen.kt",
                     "AddFriendDialog.kt",
-                    "MyFriendCodeDialog.kt"
+                    "MyFriendCodeDialog.kt",
+                    // T17.2
+                    "SocialProfileContract.kt",
+                    "SocialProfileDtos.kt",
+                    "SparkSocialProfileGateway.kt",
+                    "SocialProfileProgress.kt",
+                    "SocialProfileGateway.kt",
+                    "SocialProfileViewModel.kt",
+                    "SocialProfileUiState.kt",
+                    "FriendSocialProfileScreen.kt",
+                    "ProgressSharingScreen.kt"
                 )
             )
         )
@@ -191,10 +208,15 @@ class SocialBoundaryInspectionTest {
         // `FriendDtos.kt` (T17.1) entra na mesma varredura: o preview que uma pessoa vê da outra
         // é o lugar mais fácil de vazar um uid "só para relacionar" — e o mais difícil de tirar
         // depois que três telas passarem a depender dele.
+        // `SocialProfileDtos.kt` (T17.2) entra na mesma varredura pelo mesmo motivo: o perfil
+        // enriquecido é onde mais dói vazar um uid "só para relacionar" — e onde é mais difícil
+        // tirar depois que três telas passarem a depender dele.
         val dtoFiles = socialSources().filter {
-            it.name == "SocialDtos.kt" || it.name == "FriendDtos.kt"
+            it.name == "SocialDtos.kt" ||
+                it.name == "FriendDtos.kt" ||
+                it.name == "SocialProfileDtos.kt"
         }
-        assertEquals(2, dtoFiles.size)
+        assertEquals(3, dtoFiles.size)
 
         for (dtoFile in dtoFiles) {
             val code = AuthSourceInspection.code(dtoFile)
@@ -237,7 +259,7 @@ class SocialBoundaryInspectionTest {
         }
         assertEquals(
             "os caminhos sociais moram nos contratos, e mais nada os escreve",
-            listOf("FriendshipContract.kt", "SocialContract.kt"),
+            listOf("FriendshipContract.kt", "SocialContract.kt", "SocialProfileContract.kt"),
             holders.map { it.name }.sorted()
         )
     }

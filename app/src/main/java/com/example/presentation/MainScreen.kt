@@ -91,7 +91,8 @@ fun MainScreen() {
         syncRepository = app.syncRepository,
         syncCoordinator = app.syncCoordinator,
         socialGateway = app.socialGateway,
-        friendGateway = app.friendGateway
+        friendGateway = app.friendGateway,
+        socialProfileGateway = app.socialProfileGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -102,6 +103,15 @@ fun MainScreen() {
     // estado na troca de conta. A primeira leitura sai de `open()`, que uma tela do grafo chama
     // quando o usuário chega nela.
     val friendsViewModel: com.example.presentation.account.FriendsViewModel = viewModel(factory = factory)
+
+    // Um `SocialProfileViewModel` para as três telas do perfil enriquecido (perfil de amigo,
+    // Compartilhar progresso e a prévia). Compartilhado pelo mesmo motivo do `FriendsViewModel`:
+    // alterar uma configuração precisa refletir na prévia sem uma segunda leitura, e a troca de
+    // conta precisa invalidar as três de uma vez.
+    //
+    // Criá-lo aqui **não** faz requisição nenhuma: o `init` só observa a sessão para invalidar.
+    val socialProfileViewModel: com.example.presentation.account.SocialProfileViewModel =
+        viewModel(factory = factory)
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
     val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel = viewModel(factory = factory)
     val todayViewModel: com.example.presentation.today.TodayViewModel = viewModel(factory = factory)
@@ -352,6 +362,9 @@ fun MainScreen() {
                     onNavigateToFriendRequests = {
                         navController.navigate(Screen.FriendRequests.route)
                     },
+                    onNavigateToProgressSharing = {
+                        navController.navigate(Screen.ProgressSharing.route)
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -369,7 +382,39 @@ fun MainScreen() {
                 com.example.presentation.friends.FriendsScreen(
                     viewModel = friendsViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToRequests = { navController.navigate(Screen.FriendRequests.route) }
+                    onNavigateToRequests = { navController.navigate(Screen.FriendRequests.route) },
+                    // T17.2 — o perfil é lido no **toque**, e não ao abrir a lista: enriquecer
+                    // cada linha custaria uma requisição por amigo.
+                    onOpenProfile = { friend ->
+                        navController.navigate(
+                            Screen.FriendProfile.createRoute(friend.socialId, friend.displayName)
+                        )
+                    }
+                )
+            }
+            composable(
+                route = Screen.FriendProfile.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("socialId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                    androidx.navigation.navArgument("name") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = ""
+                    }
+                )
+            ) { entry ->
+                com.example.presentation.friends.FriendSocialProfileScreen(
+                    socialId = entry.arguments?.getString("socialId").orEmpty(),
+                    displayNameHint = entry.arguments?.getString("name")?.takeIf { it.isNotBlank() },
+                    viewModel = socialProfileViewModel,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.ProgressSharing.route) {
+                com.example.presentation.friends.ProgressSharingScreen(
+                    viewModel = socialProfileViewModel,
+                    onNavigateBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.FriendRequests.route) {

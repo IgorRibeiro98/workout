@@ -197,18 +197,26 @@ describe('SocialAccessPolicy', () => {
 });
 
 describe('SocialProjection', () => {
-  it('as regras que uma projeção futura terá de obedecer estão declaradas', () => {
+  it('as regras que toda projeção obedece estão declaradas', () => {
+    // A T17.2 dividiu `NO_CROSS_DOMAIN_READ` em duas regras mais precisas e acrescentou uma
+    // terceira. O afrouxamento é declarado, com substituto no lugar: `NO_BACKUP_READ` mantém o
+    // absoluto que continua absoluto, `AGGREGATE_ONLY` limita o que pode sair de uma leitura de
+    // estado sincronizado, e `SINGLE_AUTHORITY` é a regra que impede o Social de recalcular XP,
+    // sequência ou conquista. Ver `social.projection.ts`.
     expect([...SOCIAL_PROJECTION_RULES]).toEqual([
       'OWNER_SCOPED',
       'CONSENT_REQUIRED',
       'DERIVED_NEVER_RAW',
-      'NO_CROSS_DOMAIN_READ',
+      'NO_BACKUP_READ',
+      'AGGREGATE_ONLY',
+      'SINGLE_AUTHORITY',
     ]);
   });
 
-  it('nenhuma projeção de treino existe na T17.0 — só o contrato', () => {
-    // A interface é um tipo; nada a implementa. Um `SocialProjection` concreto aqui seria a T17.4
-    // antecipada sem os controles que ela vai exigir.
+  it('a fronteira de atividade continua sem implementação — ela é a T17.4', () => {
+    // `SocialProjection` descreve **atividade** (uma sequência de fatos com instante), e nada a
+    // implementa. O perfil da T17.2 tem forma própria (`SocialProgressProjection`): um perfil não
+    // é uma lista de fatos datados, e forçá-lo aqui perderia o valor de cada campo.
     const declared: SocialProjection | null = null;
     expect(declared).toBeNull();
   });

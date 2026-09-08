@@ -72,6 +72,40 @@ export class SocialAccessPolicy {
   }
 
   /**
+   * O `viewer` pode ver o **perfil enriquecido** do `target`? (T17.2 §114/§116)
+   *
+   * ```text
+   * viewer ACTIVE?  ──não──▶ false      quem desativou o Social não consome perfil social
+   * target ACTIVE?  ──não──▶ false      perfil desativado não existe para ninguém
+   * amigos agora?   ──não──▶ false      pedido pendente, recusado, cancelado e nada: todos não
+   * ```
+   *
+   * ## As três condições, e por que nenhuma delas é dispensável
+   *
+   * - **amizade ativa é a única porta** (§44/§45). Um `FriendRequest` `PENDING` não concede nada:
+   *   pedir para ver não é ser autorizado a ver, e tratá-lo como acesso faria de "mandar pedido"
+   *   um jeito de olhar o progresso de quem ainda não respondeu. Depois de um `unfriend`, a
+   *   próxima leitura falha na hora (§47) — porque a pergunta é feita **agora**, contra a linha de
+   *   `friendships`, e não contra um estado que o app guardou;
+   * - **o alvo precisa estar `ACTIVE`** (§48). Desativado, ele não tem perfil social para mostrar,
+   *   e a resposta é indistinguível de "não existe";
+   * - **o visitante precisa estar `ACTIVE`** (§49). Quem desligou os próprios recursos sociais
+   *   parou de participar do domínio social — inclusive como leitor. É a mesma regra que a T17.1
+   *   já aplica em todas as rotas do grafo, e não uma nova.
+   *
+   * Ela decide **visibilidade**, e não propriedade: `areFriends` chega como fato já apurado no
+   * servidor, a partir do `uid` do token e do `owner_uid` resolvido do `socialId`. Uma política
+   * que consultasse o banco sozinha acabaria sendo a segunda dona da regra de ownership.
+   */
+  canViewFriendProfile(
+    target: SocialProfileAccessView,
+    viewer: SocialProfileAccessView,
+    areFriends: boolean,
+  ): boolean {
+    return viewer.status === 'ACTIVE' && target.status === 'ACTIVE' && areFriends;
+  }
+
+  /**
    * Alguém pode mandar um pedido de amizade para este perfil?
    *
    * A flag existe desde a T17.0 mesmo sem pedidos de amizade, para que a T17.1 nasça

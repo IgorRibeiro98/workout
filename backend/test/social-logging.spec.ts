@@ -185,6 +185,12 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
   });
 
   it('o módulo social não menciona tabelas de sync, backup ou tombstone', () => {
+    // A exceção declarada da T17.2: `social-progress.source.ts` é o adapter estreito de §9/§11 —
+    // o único arquivo do módulo que lê estado sincronizado, e só para responder `COUNT(*)`. O
+    // teste abaixo (`AGGREGATE_ONLY`) é o que o mantém honesto: nenhum `SELECT payload`, nenhuma
+    // linha de treino materializada. Todo o resto do módulo continua sem conhecer as tabelas.
+    const PROGRESS_SOURCE = 'social-progress.source.ts';
+
     for (const file of readdirSync(SOCIAL_SRC).filter((name) => name.endsWith('.ts'))) {
       const source = readFileSync(join(SOCIAL_SRC, file), 'utf8');
       // Fora de comentário: a documentação **precisa** citar o que é proibido para explicar por
@@ -200,12 +206,33 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
         'backup_payloads',
         'ai_usage_daily',
       ]) {
-        expect({ file, table, mentioned: code.includes(table) }).toEqual({
+        const allowed = file === PROGRESS_SOURCE && table === 'sync_entities';
+        expect({ file, table, mentioned: code.includes(table) && !allowed }).toEqual({
           file,
           table,
           mentioned: false,
         });
       }
+    }
+  });
+
+  it('o adapter de progresso só produz agregado — nenhum payload de treino sai dele', () => {
+    // `AGGREGATE_ONLY` (`social.projection.ts`). A regra que substituiu o absoluto da T17.0 não
+    // pode viver só em prosa: ler `sync_entities` para contar é responder uma pergunta; ler para
+    // devolver conteúdo seria abrir a porta que a fronteira existe para fechar.
+    const source = readFileSync(join(SOCIAL_SRC, 'social-progress.source.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    // O que as consultas selecionam, literalmente. `json_extract` aparece só na cláusula `WHERE`:
+    // ele filtra dentro do SQLite, e o conteúdo da sessão nunca é materializado em JavaScript.
+    const selected = [...code.matchAll(/SELECT\s+([^\n]+)/g)].map((match) => match[1].trim());
+    expect(selected).toEqual(['COUNT(*) AS total', '1 AS present']);
+
+    for (const forbidden of ['JSON.parse', '.payload', 'entity_sync_id', 'server_revision']) {
+      expect({ forbidden, present: code.includes(forbidden) }).toEqual({
+        forbidden,
+        present: false,
+      });
     }
   });
 });

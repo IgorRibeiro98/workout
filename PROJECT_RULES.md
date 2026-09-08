@@ -646,9 +646,11 @@ carregar a privada — e o que impede o social de virar dependência do núcleo.
   pertence à conta autenticada. Reusá-lo amarraria duas coisas que precisam poder divergir.
 - **Nada de treino entra no perfil.** É proibido gravar XP, streak, contagem de treinos, último
   treino, peso ou PR em `social_profiles`, mesmo "para facilitar a UI". O caminho para progresso
-  social é a `SocialProjection`, e as regras dela (`OWNER_SCOPED`, `CONSENT_REQUIRED`,
-  `DERIVED_NEVER_RAW`, `NO_CROSS_DOMAIN_READ`) valem desde já. O módulo social **não importa**
-  backup, sync nem IA — há teste sobre os imports dos dois lados.
+  social é a projeção (`SOCIAL_PROJECTION_RULES` em `social.projection.ts`), e as regras dela
+  valem desde já: `OWNER_SCOPED`, `CONSENT_REQUIRED`, `DERIVED_NEVER_RAW`, `NO_BACKUP_READ`,
+  `AGGREGATE_ONLY` e `SINGLE_AUTHORITY` (as três últimas substituíram, na T17.2, o
+  `NO_CROSS_DOMAIN_READ` absoluto — ver §13.10). O módulo social **não importa** backup, sync nem
+  IA — há teste sobre os imports dos dois lados.
 - **Privacidade nasce restrita.** `discoverability = FRIEND_CODE_ONLY`,
   `friendRequestsEnabled = true`, `activitySharingEnabled = false`. Não existe `PUBLIC_SEARCH`,
   `GLOBAL_PROFILE` nem `ACTIVITY_PUBLIC` — nem como default, nem como valor. E não existe busca
@@ -729,6 +731,81 @@ acesso ao domínio privado — e a descoberta de virar enumeração.
   `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
   "com.example.presentation.account.Friends*" --tests "com.example.presentation.friends.*"`. As
   duas são offline e usam dublê de autenticação.
+
+## 13.10 Perfil social: projeção de progresso e compartilhamento controlado (T17.2)
+
+O Spark passou a **publicar progresso** para amigos. As regras abaixo são o que impede essa
+publicação de virar uma segunda autoridade de progresso, uma vitrine do que o cliente digita sobre
+si, ou uma porta lateral para o domínio privado.
+
+- **O núcleo não paga nada por isso.** Perfil social é opcional, como todo o social. Sem conta, sem
+  perfil, com o servidor fora: treinar, histórico, gamificação, backup, restore, sync e Coach
+  continuam exatamente como estavam — e o próprio nível, a própria sequência e os próprios treinos
+  da semana continuam sendo calculados **no aparelho**, pelas autoridades de sempre.
+- **O Social projeta; ele nunca calcula.** É **proibido** recriar `XpCalculatorService`,
+  `ConsistencyCalculator` ou `AchievementEvaluator` — em TypeScript ou em qualquer lugar do domínio
+  social — "só para o Social funcionar". Duas implementações da mesma regra divergem no primeiro
+  ajuste, e a divergência aparece como um perfil social afirmando um nível que o aparelho da própria
+  pessoa não reconhece. Uma métrica sem autoridade **remota** responde `UNSUPPORTED`.
+- **O servidor nunca confia no cliente sobre progresso.** Não existe — e não pode existir — rota que
+  aceite `level`, `streak`, `weeklyWorkoutCount`, `totalXp` ou lista de conquistas vinda do
+  aparelho. Os campos são recusados **por nome**, invalidando a requisição inteira. O que o cliente
+  envia é **preferência** (o que compartilhar) e o fuso da própria semana.
+- **Ausência de dado não vira zero.** Quem nunca sincronizou uma sessão concluída recebe campo
+  **ausente** — nunca "0 treinos", "nível 1" ou "sem conquistas". Zero só é publicado quando é fato
+  comprovado. Na tela do dono, "ligado, ainda não disponível" é um estado que precisa existir e ser
+  dito.
+- **Privacidade é aplicada no servidor.** Um campo desligado **não está** no JSON; esconder no
+  Compose não é controle de acesso, porque um cliente modificado pediria o mesmo endpoint. Escondido
+  e indisponível produzem a **mesma** ausência para o amigo — distinguir contaria a ele a
+  configuração de privacidade de outra pessoa. Só o dono distingue os dois.
+- **Defaults são privados.** `shareLevel`, `shareConsistencyStreak`, `shareWeeklyWorkoutCount` e
+  `shareHighlightedAchievements` nascem `false`, e a migration os grava assim para quem já tinha
+  perfil. Subir uma versão nova não publica nada de ninguém.
+- **Amizade ativa é a única porta, verificada a cada leitura.** Pedido `PENDING` não concede acesso;
+  terceiro não acessa; `unfriend` revoga na requisição seguinte; o alvo desativado some; e o
+  visitante desativado para de consumir perfil social. Alvo inexistente, alvo desativado, "não somos
+  amigos" e "só há pedido pendente" respondem **a mesma coisa** (`404 FRIEND_PROFILE_NOT_FOUND`).
+- **Autorizar vem antes de projetar.** Carregar o progresso de alguém para depois descobrir que quem
+  perguntou não tem direito a ele é o desenho que, no dia de um bug, responde o dado.
+- **Uma consulta de amizade, em um lugar só.** `SocialAccessPolicy.canViewFriendProfile` decide, e
+  `FriendshipRepository.areFriends` responde. Um `SELECT` de `friendships` em controller é
+  exatamente o que elas existem para impedir.
+- **O adapter é estreito, e só sai agregado.** `SocialProgressSource` devolve **um escalar por
+  método** — nunca payload, linha, sessão, série ou timestamp de treino. Ler `sync_entities` para
+  `COUNT(*)` é responder uma pergunta; `SELECT payload` seria abrir uma porta. Backup
+  (`backup_snapshots`, `backup_items`, `backup_payloads`) continua **inalcançável em qualquer
+  forma**, e `SocialModule` continua sem importar `SyncModule`, `BackupModule` e `AiModule`.
+- **A semana é a canônica do Spark.** `ConsistencyCalculator.weekStart` (segunda-feira, na data
+  **local** do dono), janela `[segunda 00:00, próxima segunda 00:00)` — e não "início + 7×24h", que
+  erra por uma hora nas semanas de horário de verão. Só sessões `COMPLETED` contam. As duas
+  implementações são presas por `contracts/social/v1/weekly-window.json`, lida pelos testes dos dois
+  lados.
+- **Sem fuso declarado, não há contagem.** `weekTimeZone` ausente responde `UNAVAILABLE`; supor UTC
+  produziria um número plausível e errado.
+- **Nada de progresso de terceiros no Room.** Não existe `FriendProgressEntity`, e não deve existir:
+  uma cópia local continuaria mostrando o que a outra pessoa desligou. O perfil lido vive em
+  memória, é descartado na troca de conta **antes** de a requisição da conta nova sair, e a resposta
+  de uma requisição da conta anterior é descartada.
+- **Offline não finge, e não há atualização otimista.** Sem servidor, alterar o compartilhamento
+  **não acontece**: não vai para a Outbox, não fica pendente, o interruptor não se move, e a tela
+  diz que nada foi alterado. Numa tela de privacidade, um "salvo" que não salvou é o pior desfecho
+  possível.
+- **O perfil carrega on demand, e nunca em lote.** Um perfil é lido no **toque** sobre um amigo. A
+  lista de amigos continua leve, e **não existe** rota que devolva o progresso de vários amigos de
+  uma vez — um endpoint de colheita é a diferença entre "meu amigo vê meu progresso" e "qualquer um
+  baixa o progresso de todo mundo".
+- **Nada disso é evento de domínio.** Ver perfil, alterar privacidade e pré-visualizar não dão XP,
+  não desbloqueiam conquista, não movem missão e não escrevem no domínio de treino.
+- **Perfil ≠ pontuação de desafio.** Os quatro interruptores desta seção **não** decidem progresso
+  de Challenge. A T17.3 terá autorização própria e dados canônicos próprios.
+- **Logs.** No servidor: `requestId`, prefixo de uid, evento, desfecho e **quantidade** de campos.
+  Nunca nível, sequência, contagem de treinos, lista de conquistas, `displayName`, `socialId`,
+  `friendCode`, e-mail ou uid completo. No Android: **nada**.
+- **Testes.** Toda mudança no perfil social roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.presentation.account.SocialProfile*" --tests
+  "com.example.presentation.friends.*"`. As duas são offline e usam dublê de autenticação.
 
 ## 14. Tests and build are part of implementation
 
