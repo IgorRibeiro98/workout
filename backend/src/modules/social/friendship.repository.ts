@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
 import type {
   FriendRelationship,
@@ -6,6 +6,7 @@ import type {
   FriendRequestStatus,
 } from './friendship.contract';
 import type { SocialProfileStatus } from './social.contract';
+import { NotificationService } from './notification.service';
 
 /**
  * O recorte de um perfil que o grafo precisa: identidade, status e as duas flags de privacidade.
@@ -104,7 +105,10 @@ export type AcceptOutcome =
  */
 @Injectable()
 export class FriendshipRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(
+    private readonly sqlite: SqliteService,
+    @Optional() private readonly notificationService?: NotificationService,
+  ) {}
 
   // ------------------------------------------------------------------------------- perfis
 
@@ -234,6 +238,19 @@ export class FriendshipRepository {
            WHERE request_id = ? AND status = 'PENDING'`,
         ).run(input.now, inverse.requestId);
         this.insertFriendship(input.requesterUid, input.recipientUid, input.now);
+
+        // Notifica ambos que o pedido foi aceito/amizade criada (T17.5 §45/§46)
+        this.notificationService?.enqueueFriendRequestAccepted(db, {
+          requestId: inverse.requestId,
+          requesterUid: input.recipientUid,
+          now: input.now,
+        });
+        this.notificationService?.enqueueFriendRequestAccepted(db, {
+          requestId: input.requestId,
+          requesterUid: input.requesterUid,
+          now: input.now,
+        });
+
         return { kind: 'FRIENDSHIP_CREATED', friendsSince: input.now };
       }
 
@@ -242,6 +259,13 @@ export class FriendshipRepository {
            (request_id, requester_uid, recipient_uid, status, created_at, updated_at)
          VALUES (?, ?, ?, 'PENDING', ?, ?)`,
       ).run(input.requestId, input.requesterUid, input.recipientUid, input.now, input.now);
+
+      // Notifica o destinatário sobre a nova solicitação recebida (T17.5 §43)
+      this.notificationService?.enqueueFriendRequestReceived(db, {
+        requestId: input.requestId,
+        recipientUid: input.recipientUid,
+        now: input.now,
+      });
 
       return {
         kind: 'CREATED',
@@ -294,6 +318,14 @@ export class FriendshipRepository {
       }
 
       this.insertFriendship(request.requesterUid, request.recipientUid, now);
+
+      // Notifica o remetente original de que o pedido foi aceito (T17.5 §46)
+      this.notificationService?.enqueueFriendRequestAccepted(db, {
+        requestId,
+        requesterUid: request.requesterUid,
+        now,
+      });
+
       const since = this.friendshipCreatedAt(request.requesterUid, request.recipientUid) ?? now;
       return { kind: 'ACCEPTED', friendsSince: since };
     })();

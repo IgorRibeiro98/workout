@@ -244,6 +244,7 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            isReturnDefaultValues = true
         }
     }
     // Fonte canônica dos schemas do Room: `app/schemas`, gerada pelo KSP e versionada no Git.
@@ -373,6 +374,9 @@ dependencies {
   // client ID vive no código: o Web Client ID vem de `google-services.json` (não versionado),
   // pelo recurso `default_web_client_id` gerado pelo plugin do Gradle.
   implementation(libs.firebase.auth)
+  // Notificações sociais (T17.5): Firebase Cloud Messaging para alertas de solicitações e desafios.
+  // Notificação é mero sinal auxiliar e descartável; a verdade canônica continua sendo o backend.
+  implementation(libs.firebase.messaging)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)

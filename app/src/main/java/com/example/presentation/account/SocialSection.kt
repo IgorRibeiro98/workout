@@ -67,6 +67,8 @@ fun SocialSection(
     onOpenChallenges: () -> Unit = {},
     /** T17.4 — "Atividade dos amigos + rankings contextuais". */
     onOpenActivity: () -> Unit = {},
+    /** T17.5 — Notificações sociais */
+    onOpenNotificationPreferences: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -139,6 +141,7 @@ fun SocialSection(
                         onOpenProgressSharing = onOpenProgressSharing,
                         onOpenChallenges = onOpenChallenges,
                         onOpenActivity = onOpenActivity,
+                        onOpenNotificationPreferences = onOpenNotificationPreferences,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -158,6 +161,7 @@ fun SocialSection(
                             onOpenProgressSharing = onOpenProgressSharing,
                             onOpenChallenges = onOpenChallenges,
                             onOpenActivity = onOpenActivity,
+                            onOpenNotificationPreferences = onOpenNotificationPreferences,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -182,6 +186,7 @@ fun SocialSection(
                                 onOpenProgressSharing = onOpenProgressSharing,
                                 onOpenChallenges = onOpenChallenges,
                                 onOpenActivity = onOpenActivity,
+                                onOpenNotificationPreferences = onOpenNotificationPreferences,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -212,6 +217,7 @@ fun SocialSection(
                                 onOpenProgressSharing = onOpenProgressSharing,
                                 onOpenChallenges = onOpenChallenges,
                                 onOpenActivity = onOpenActivity,
+                                onOpenNotificationPreferences = onOpenNotificationPreferences,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -264,6 +270,7 @@ private fun ActiveProfile(
     onOpenProgressSharing: () -> Unit,
     onOpenChallenges: () -> Unit,
     onOpenActivity: () -> Unit,
+    onOpenNotificationPreferences: () -> Unit = {},
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -360,6 +367,7 @@ private fun ActiveProfile(
                 onOpenProgressSharing = onOpenProgressSharing,
                 onOpenChallenges = onOpenChallenges,
                 onOpenActivity = onOpenActivity,
+                onOpenNotificationPreferences = onOpenNotificationPreferences,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -397,6 +405,7 @@ private fun FriendsEntryPoints(
     onOpenProgressSharing: () -> Unit,
     onOpenChallenges: () -> Unit,
     onOpenActivity: () -> Unit,
+    onOpenNotificationPreferences: () -> Unit,
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -446,6 +455,9 @@ private fun FriendsEntryPoints(
 
     // T17.4 — Atividade e ranking semanal entre amigos
     Secondary(text = "Atividade e Ranking", onClick = onOpenActivity, enabled = enabled)
+
+    // T17.5 — Notificações sociais via push
+    Secondary(text = "Notificações", onClick = onOpenNotificationPreferences, enabled = enabled)
 }
 
 @Composable

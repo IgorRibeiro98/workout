@@ -12,10 +12,11 @@ import {
   AI_PROVIDER_GATEWAY,
   type AiProviderGateway,
 } from '../../src/modules/ai/provider/ai-provider.gateway';
+import { PUSH_GATEWAY, type PushGateway } from '../../src/modules/social/push-gateway';
 
 /**
  * A aplicação real com os provedores de fronteira trocados: o verificador de token e, quando o
- * teste precisa, o provider de IA.
+ * teste precisa, o provider de IA ou push gateway.
  *
  * O resto — versionamento `/v1`, middlewares, filtro de erro, banco — vem de `configureApp`, a
  * mesma função que a produção usa. Nenhuma aproximação: se o bootstrap mudar, o teste muda junto.
@@ -31,11 +32,12 @@ export async function createTestApp(
   /**
    * Relógio (T17.3). Quando ausente, o `SystemClock` real é usado — que é o certo para todo teste
    * cujo comportamento não depende de que horas são.
-   *
-   * Os testes de ciclo de vida de desafio passam um [FakeClock]: sem ele, "aceitar depois do
-   * início" precisaria de `sleep`, e §244 proíbe.
    */
   clock?: Clock,
+  /**
+   * Gateway de Push (T17.5). Quando ausente, o `FirebasePushGateway` real é montado.
+   */
+  pushGateway?: PushGateway,
 ): Promise<INestApplication> {
   let builder = Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
     .overrideProvider(AUTH_TOKEN_VERIFIER)
@@ -47,6 +49,10 @@ export async function createTestApp(
 
   if (clock) {
     builder = builder.overrideProvider(CLOCK).useValue(clock);
+  }
+
+  if (pushGateway) {
+    builder = builder.overrideProvider(PUSH_GATEWAY).useValue(pushGateway);
   }
 
   const moduleRef = await builder.compile();

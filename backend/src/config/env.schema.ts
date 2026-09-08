@@ -227,6 +227,23 @@ export const envSchema = z.object({
    * container no meio da manutenção.
    */
   MAINTENANCE_MODE: booleanFlag(false),
+
+  // --- Notificações sociais (T17.5) ----------------------------------------------------
+
+  /**
+   * Kill switch de notificações push sociais.
+   * Default `false`: seguro por padrão até produção ser explicitamente configurada.
+   */
+  SOCIAL_PUSH_ENABLED: booleanFlag(false),
+
+  /** Intervalo em milissegundos entre varreduras do despachante de notificações pendentes. */
+  PUSH_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+
+  /** Número máximo de tentativas de entrega de um evento antes de ser marcado como falha permanente. */
+  PUSH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+
+  /** Tamanho máximo do lote de eventos a processar em cada ciclo do despachante. */
+  PUSH_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

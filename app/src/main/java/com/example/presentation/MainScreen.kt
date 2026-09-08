@@ -94,7 +94,8 @@ fun MainScreen() {
         friendGateway = app.friendGateway,
         socialProfileGateway = app.socialProfileGateway,
         challengeGateway = app.challengeGateway,
-        socialActivityGateway = app.socialActivityGateway
+        socialActivityGateway = app.socialActivityGateway,
+        socialNotificationGateway = app.socialNotificationGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -156,6 +157,7 @@ fun MainScreen() {
         Screen.Summary.route to Screen.Today.route,
         Screen.Profile.route to Screen.Today.route,
         Screen.Activity.route to Screen.Today.route,
+        Screen.NotificationPreferences.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
@@ -171,6 +173,27 @@ fun MainScreen() {
         Screen.BodyEvolution.route to Screen.MyEvolution.route,
         Screen.AddBodyMeasurement.route to Screen.MyEvolution.route
     )
+
+    val navTarget by com.example.MainActivity.notificationNavTarget.collectAsState()
+    LaunchedEffect(navTarget) {
+        val target = navTarget ?: return@LaunchedEffect
+        when (target.destination) {
+            com.example.service.SocialNotificationChannels.DESTINATION_FRIEND_REQUESTS -> {
+                navController.navigate(Screen.FriendRequests.route)
+            }
+            com.example.service.SocialNotificationChannels.DESTINATION_FRIENDS -> {
+                navController.navigate(Screen.Friends.route)
+            }
+            com.example.service.SocialNotificationChannels.DESTINATION_CHALLENGES -> {
+                if (!target.entityId.isNullOrBlank()) {
+                    navController.navigate(Screen.ChallengeDetail.createRoute(target.entityId))
+                } else {
+                    navController.navigate(Screen.Challenges.route)
+                }
+            }
+        }
+        com.example.MainActivity.clearNotificationNavTarget()
+    }
 
     val isRouteSelected = { tabRoute: String ->
         currentRoute != null && topLevelDestinationMap[currentRoute] == tabRoute
@@ -379,6 +402,9 @@ fun MainScreen() {
                     },
                     onNavigateToChallenges = { navController.navigate(Screen.Challenges.route) },
                     onNavigateToActivity = { navController.navigate(Screen.Activity.route) },
+                    onNavigateToNotificationPreferences = {
+                        navController.navigate(Screen.NotificationPreferences.route)
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -482,6 +508,14 @@ fun MainScreen() {
             composable(Screen.Activity.route) {
                 com.example.presentation.friends.ActivityScreen(
                     viewModel = socialActivityViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.NotificationPreferences.route) {
+                val notificationViewModel: com.example.presentation.friends.NotificationPreferencesViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.NotificationPreferencesScreen(
+                    viewModel = notificationViewModel,
                     onBack = { navController.popBackStack() }
                 )
             }

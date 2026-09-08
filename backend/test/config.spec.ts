@@ -58,4 +58,24 @@ describe('AppConfig (bootstrap de configuração)', () => {
   it('marca produção corretamente', () => {
     expect(AppConfig.fromEnv({ ...validEnv, NODE_ENV: 'production' }).isProduction).toBe(true);
   });
+
+  it('carrega defaults de push e respeita configuração explícita', () => {
+    const defaultConfig = AppConfig.fromEnv(validEnv);
+    expect(defaultConfig.socialPushEnabled).toBe(false);
+    expect(defaultConfig.pushDispatchIntervalMs).toBe(60000);
+    expect(defaultConfig.pushMaxAttempts).toBe(5);
+    expect(defaultConfig.pushBatchSize).toBe(50);
+
+    const customConfig = AppConfig.fromEnv({
+      ...validEnv,
+      SOCIAL_PUSH_ENABLED: 'true',
+      PUSH_DISPATCH_INTERVAL_MS: '30000',
+      PUSH_MAX_ATTEMPTS: '3',
+      PUSH_BATCH_SIZE: '25',
+    });
+    expect(customConfig.socialPushEnabled).toBe(true);
+    expect(customConfig.pushDispatchIntervalMs).toBe(30000);
+    expect(customConfig.pushMaxAttempts).toBe(3);
+    expect(customConfig.pushBatchSize).toBe(25);
+  });
 });

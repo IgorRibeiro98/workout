@@ -233,7 +233,16 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     private val firebaseAuthGateway: com.example.data.auth.FirebaseAuthGateway by lazy {
-        com.example.data.auth.FirebaseAuthGateway(this)
+        com.example.data.auth.FirebaseAuthGateway(
+            context = this,
+            onSignOut = {
+                val deviceId = runCatching { deviceIdProvider.deviceId() }.getOrNull()
+                if (!deviceId.isNullOrBlank()) {
+                    runCatching { socialNotificationGateway.unregisterDevice(deviceId) }
+                }
+                pushAccountScope.clearRegisteredAccount()
+            }
+        )
     }
 
     /**
@@ -321,6 +330,17 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
      */
     val socialActivityGateway: com.example.domain.social.SocialActivityGateway by lazy {
         com.example.data.social.SparkSocialActivityGateway(sparkBackendClient)
+    }
+
+    /**
+     * Notificações sociais via FCM (T17.5).
+     */
+    val pushAccountScope: com.example.service.PushAccountScope by lazy {
+        com.example.service.PushAccountScope(this)
+    }
+
+    val socialNotificationGateway: com.example.domain.social.SocialNotificationGateway by lazy {
+        com.example.data.social.SparkSocialNotificationGateway(sparkBackendClient)
     }
 
     /**
@@ -561,6 +581,7 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
             syncMutations = syncMutationCoordinator
         )
         notificationManager = WorkoutNotificationManager(this)
+        com.example.service.SocialNotificationChannels.createChannels(this)
 
         // Nada de Firebase, App Check ou IA acontece no startup: o Spark é local-first. O Coach
         // só fala com o Spark Backend dentro de uma chamada que o usuário pediu, e quem instala o

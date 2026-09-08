@@ -893,6 +893,27 @@ para quem treinou offline.
   "com.example.presentation.friends.Challenge*"`. As duas são offline, usam dublê de autenticação,
   e o tempo é **injetado** — nenhum teste dorme.
 
+## 13.12 Atividade dos amigos e rankings contextuais (T17.4)
+
+- **Princípio:** O Spark não é uma rede social aberta — nada de feed público, curtidas, reações ou ranking perpétuo.
+- **Projeção efêmera em tempo de leitura:** O feed de atividade (14 dias civis) e o ranking semanal (últimos 7 dias móveis) são computados dinamicamente no backend a partir das sessões de treino canônicas finalizadas (`sync_entities` com status `COMPLETED`). Nenhuma tabela secundária de placar no banco.
+- **Consentimento e Reciprocidade:**
+  - `activitySharingEnabled` controla a visibilidade dos dias de treino para amigos diretos.
+  - `friendRankingParticipationEnabled` exige reciprocidade: o usuário só vê o ranking semanal se tiver optado por participar.
+- **Isolamento de dados:** O cliente Android mantém o feed e o ranking exclusivamente em memória (`StateFlow`/ViewModel), sem salvar em Room, DataStore ou Outbox.
+
+## 13.13 Notificações sociais com Firebase Cloud Messaging (T17.5)
+
+- **Push é sinal best-effort, nunca fonte da verdade:** O push convida o usuário a abrir o app; o estado canônico é sempre consultado e sincronizado a partir das rotas do Spark Backend.
+- **Payload FCM estritamente data-only e minimalista:**
+  - Versão `v = '1'`.
+  - Campos limitados a: `v`, `eventId`, `type`, `recipientSocialId`, `entityId`.
+  - Proibido incluir dados pessoais (UID, e-mail, foto, nome) ou de treino (exercícios, séries, repetições, cargas, pontuações de desafios, XP ou histórico) no payload push.
+  - Textos de notificação são gerados localmente no Android a partir de strings de recursos (`strings.xml`).
+- **Isolamento de conta:** Se o `recipientSocialId` recebido no push for diferente do `socialId` do usuário ativo no app (ou se o app estiver deslogado), a notificação é silenciosamente descartada.
+- **Deduplicação e Desacoplamento:** O cliente deduplica eventos por `eventId` em cache LRU em memória. Falhas de FCM ou descarte de push nunca revertem nem bloqueiam transações de negócios no backend (Transactional Outbox).
+- **Preferências e Ciclo de Vida:** O usuário tem controle master (`pushEnabled`) e switches por categoria. Logout ou desativação social desregistra imediatamente os dispositivos no backend e limpa o escopo local de push.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

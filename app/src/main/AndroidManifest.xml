@@ -37,6 +37,15 @@
             android:name=".service.RestNotificationReceiver"
             android:exported="false" />
 
+        <!-- Serviço FCM de notificações sociais (T17.5) -->
+        <service
+            android:name=".service.SparkFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!--
             Inicialização sob demanda do WorkManager (T16.6).
 

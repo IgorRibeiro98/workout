@@ -84,6 +84,36 @@ class SparkBackendClient(
     suspend fun patchJson(path: String, jsonBody: String): SparkHttpOutcome =
         sendJson("PATCH", path, jsonBody)
 
+    /**
+     * `DELETE` autenticado sem corpo, devolvendo status e corpo crus.
+     *
+     * Usado para unregister de aparelhos push (T17.5) sob `/v1/social/notifications/devices/:deviceId`.
+     */
+    suspend fun delete(path: String): SparkHttpOutcome =
+        withContext(Dispatchers.IO) {
+            if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
+
+            val url = "${baseUrl.trimEnd('/')}/$path"
+            val request = Request.Builder()
+                .url(url)
+                .delete()
+                .build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    SparkHttpOutcome.Response(
+                        code = response.code,
+                        body = response.body?.string().orEmpty()
+                    )
+                }
+            } catch (e: MissingAuthTokenException) {
+                SparkHttpOutcome.SignedOut
+            } catch (e: IOException) {
+                Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+                SparkHttpOutcome.NetworkFailure
+            }
+        }
+
     private suspend fun sendJson(
         method: String,
         path: String,

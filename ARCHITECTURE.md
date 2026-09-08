@@ -679,7 +679,8 @@ persistência do domínio        validação da resposta
 | T17.1 | Amigos, convites por código e QR Code | **implementado** |
 | T17.2 | Perfil social e compartilhamento controlado de progresso | **implementado** (1 de 4 métricas projetável — ver §18) |
 | T17.3 | Desafios entre amigos: pontuação canônica e consentimento próprio | **implementado** |
-| T17.4+ | Atividade dos amigos e rankings contextuais | planejado |
+| T17.4 | Atividade dos amigos e rankings contextuais | **implementado** |
+| T17.5 | Notificações sociais com Firebase Cloud Messaging | **implementado** |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -1674,7 +1675,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-08): T17.0, T17.1, T17.2 e T17.3 implementadas.**
+> **Status (verificado em 2026-09-08): T17.0, T17.1, T17.2, T17.3, T17.4 e T17.5 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1691,17 +1692,24 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > pontuação **derivada na leitura** dos dados canônicos de treino, ciclo de vida derivado do
 > relógio do servidor, migration `0010_social_challenges.sql`, oito rotas sob `/v1/social`, e telas
 > de Desafios, Criar desafio e Detalhe/placar no Android.
-> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, atividade, feed, ranking
-> global, notificação push (FCM), busca por nome, busca por e-mail, sugestão de pessoas, avatar,
-> upload de mídia e exclusão completa de conta. Nos desafios, também não existe: desafio público,
-> ranking permanente, vencedor por ordem de chegada, placar em tempo real, comentários, prêmios,
-> XP por vencer, entrada depois do início, rejoin, convite depois da criação e edição de desafio.
+> **T17.4** — atividade dos amigos (14 dias civis) e ranking semanal contextual entre amigos com
+> opt-in, migration `0011_social_activity_timezone.sql`, duas rotas sob `/v1/social`, telas de
+> Atividade e Ranking no Android.
+> **T17.5** — notificações sociais com Firebase Cloud Messaging: 5 tipos de evento, transactional
+> outbox no servidor, payload FCM minimalista data-only, isolamento rigoroso por conta,
+> deduplicação LRU no cliente, preferências granulares com switch master, deep links seguros,
+> migration `0012_social_notifications.sql`, quatro rotas sob `/v1/social/notifications`.
+> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, ranking global perpétuo,
+> busca aberta por nome, busca por e-mail, sugestão algorítmica de pessoas, avatar, upload de
+> mídia e exclusão completa de conta.
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
-[`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1) e
-[`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md)
-(T17.2) e [`docs/architecture/challenge-domain.md`](docs/architecture/challenge-domain.md)
-(T17.3); contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
+[`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),
+[`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md) (T17.2),
+[`docs/architecture/challenge-domain.md`](docs/architecture/challenge-domain.md) (T17.3),
+[`docs/architecture/social-activity-ranking.md`](docs/architecture/social-activity-ranking.md) (T17.4) e
+[`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5);
+contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades
 

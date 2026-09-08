@@ -3,22 +3,27 @@
 - **Tarefas:** T17.0 — identidade pública e privacidade; **T17.1** — grafo social (amizade
   bilateral, pedidos, descoberta por `friendCode` e QR Code); **T17.2** — perfil enriquecido
   (projeção de progresso e compartilhamento controlado); **T17.3** — desafios entre amigos;
-  **T17.4** — atividade dos amigos + rankings contextuais. **Não** inclui bloqueio, denúncia,
-  notificação push, busca pública por nome, busca por e-mail nem exclusão de conta.
+  **T17.4** — atividade dos amigos + rankings contextuais; **T17.5** — notificações sociais com
+  Firebase Cloud Messaging. **Não** inclui bloqueio, denúncia, busca pública por nome, busca por
+  e-mail nem exclusão de conta.
 - **Implementações:**
   - Android — `com.example.data.social.*` (`SocialContract`, `FriendshipContract`,
-    `SocialProfileContract`, `SocialActivityDtos`, `SparkSocialActivityGateway`)
+    `SocialProfileContract`, `SocialActivityDtos`, `SparkSocialActivityGateway`,
+    `SocialNotificationContract`, `SocialNotificationDtos`, `SparkSocialNotificationGateway`,
+    `SparkFirebaseMessagingService`)
   - Backend — `backend/src/modules/social/` (`social.contract.ts`, `friendship.contract.ts`,
     `social-profile.contract.ts`, `canonical-training.source.ts`, `social-activity.service.ts`,
-    `friend-ranking.service.ts`)
+    `friend-ranking.service.ts`, `notification.contract.ts`, `notification.service.ts`,
+    `notification.dispatcher.ts`, `firebase-push-gateway.ts`)
 - **Documentos de decisão:**
   [`docs/architecture/social-domain.md`](../../../docs/architecture/social-domain.md) (T17.0),
   [`docs/architecture/friendship-contract.md`](../../../docs/architecture/friendship-contract.md)
   (T17.1),
   [`docs/architecture/social-profile-contract.md`](../../../docs/architecture/social-profile-contract.md)
   (T17.2),
-  [`docs/architecture/challenge-domain.md`](../../../docs/architecture/challenge-domain.md) (T17.3) e
-  [`docs/architecture/social-activity-ranking.md`](../../../docs/architecture/social-activity-ranking.md) (T17.4)
+  [`docs/architecture/challenge-domain.md`](../../../docs/architecture/challenge-domain.md) (T17.3),
+  [`docs/architecture/social-activity-ranking.md`](../../../docs/architecture/social-activity-ranking.md) (T17.4) e
+  [`docs/architecture/social-notifications.md`](../../../docs/architecture/social-notifications.md) (T17.5)
 - **Fixtures compartilhadas:**
   - [`friend-code-normalization.json`](./friend-code-normalization.json) — os casos canônicos de
     normalização de `friendCode`;
@@ -586,3 +591,79 @@ derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
 | `RANKING_NOT_ENABLED` | 403 | Consulta ao ranking sem ter habilitado `friendRankingParticipationEnabled` |
 | `INVALID_ACTIVITY_TIMEZONE` | 400 | Tentativa de atualizar privacidade com fuso IANA desconhecido ou inválido |
 | `ACTIVITY_NOT_AVAILABLE` | 503 | Fonte canônica de treino temporariamente indisponível |
+
+## 13. Notificações sociais com Firebase Cloud Messaging (T17.5)
+
+### 13.1 Rotas
+
+| Rota | Método | O quê |
+| --- | --- | --- |
+| `/v1/social/notifications/devices` | POST | Registra ou atualiza um token FCM associado ao `deviceId` do usuário |
+| `/v1/social/notifications/devices/:deviceId` | DELETE | Desregistra um dispositivo do usuário (ex.: logout) |
+| `/v1/social/notifications/preferences` | GET | Consulta preferências de notificação do usuário |
+| `/v1/social/notifications/preferences` | PATCH | Atualiza preferências parciais de notificação |
+
+### 13.2 Modelos e Schemas
+
+#### Registro de Dispositivo (`POST /v1/social/notifications/devices`):
+```json
+// Requisição:
+{
+  "deviceId": "dev-01j8xyz...",
+  "platform": "ANDROID",
+  "fcmToken": "c-xyz123..."
+}
+
+// Resposta (HTTP 201 Created):
+{
+  "id": "reg-uuid...",
+  "deviceId": "dev-01j8xyz...",
+  "platform": "ANDROID",
+  "enabled": true,
+  "createdAt": 1773060000000,
+  "updatedAt": 1773060000000,
+  "lastRegisteredAt": 1773060000000
+}
+```
+
+#### Preferências de Notificação (`GET` / `PATCH /v1/social/notifications/preferences`):
+```json
+// Resposta (HTTP 200 OK):
+{
+  "pushEnabled": false,
+  "friendRequestReceived": true,
+  "friendRequestAccepted": true,
+  "challengeInvitationReceived": true,
+  "challengeStartingSoon": true,
+  "challengeEnded": true,
+  "updatedAt": 1773060000000
+}
+```
+
+#### Payload Push FCM (Data-Only Message):
+```json
+{
+  "v": "1",
+  "eventId": "evt-uuid...",
+  "type": "FRIEND_REQUEST_RECEIVED",
+  "recipientSocialId": "soc-uuid...",
+  "entityId": "req-uuid..."
+}
+```
+
+- **Mínimo e seguro:** Nunca inclui UID, e-mail, displayName, dados de treinos ou placar.
+- **Tipos suportados:**
+  - `FRIEND_REQUEST_RECEIVED`
+  - `FRIEND_REQUEST_ACCEPTED`
+  - `CHALLENGE_INVITATION_RECEIVED`
+  - `CHALLENGE_STARTING_SOON`
+  - `CHALLENGE_ENDED`
+
+### 13.3 Erros da T17.5
+
+| `code` | HTTP | Quando |
+| --- | --- | --- |
+| `INVALID_DEVICE_REGISTRATION` | 400 | Corpo inválido ao registrar dispositivo (campos ausentes ou plataforma inválida) |
+| `INVALID_NOTIFICATION_PREFERENCES` | 400 | Corpo inválido ao atualizar preferências |
+| `DEVICE_NOT_FOUND` | 404 | Dispositivo não encontrado ao desregistrar (idempotente no cliente) |
+

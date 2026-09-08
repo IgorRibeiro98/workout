@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
 import type {
   ChallengeParticipantStatus,
@@ -6,6 +6,7 @@ import type {
   ChallengeType,
 } from './challenge.contract';
 import type { ListCursor, Page, PageRequest } from './friendship.repository';
+import { NotificationService } from './notification.service';
 
 /** Um desafio, como está gravado. `creatorUid` nunca sai em DTO. */
 export interface StoredChallenge {
@@ -112,7 +113,10 @@ export type AcceptInvitationOutcome =
  */
 @Injectable()
 export class ChallengeRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(
+    private readonly sqlite: SqliteService,
+    @Optional() private readonly notificationService?: NotificationService,
+  ) {}
 
   // ------------------------------------------------------------------------------- criação
 
@@ -195,7 +199,30 @@ export class ChallengeRepository {
           input.now,
           input.now,
         );
+
+        // Notifica convidados sobre o novo convite recebido (T17.5 §50)
+        this.notificationService?.enqueueChallengeInvitationReceived(db, {
+          invitationId: invitation.invitationId,
+          challengeId: input.challengeId,
+          recipientUid: invitation.recipientUid,
+          startsAt: input.startsAt,
+          now: input.now,
+        });
       }
+
+      // Notificações programadas do criador (T17.5 §52/§57)
+      this.notificationService?.enqueueChallengeStartingSoon(db, {
+        challengeId: input.challengeId,
+        participantUid: input.creatorUid,
+        startsAt: input.startsAt,
+        now: input.now,
+      });
+      this.notificationService?.enqueueChallengeEnded(db, {
+        challengeId: input.challengeId,
+        participantUid: input.creatorUid,
+        endsAtExclusive: input.endsAtExclusive,
+        now: input.now,
+      });
 
       db.prepare(
         `INSERT INTO challenge_creation_requests
@@ -488,6 +515,26 @@ export class ChallengeRepository {
          ON CONFLICT (challenge_id, participant_uid) DO NOTHING`,
       ).run(challengeId, recipientUid, now);
 
+      const ch = db
+        .prepare(`SELECT starts_at, ends_at_exclusive FROM challenges WHERE challenge_id = ?`)
+        .get(challengeId) as { starts_at: number; ends_at_exclusive: number } | undefined;
+
+      if (ch) {
+        // Notificações programadas do participante aceito (T17.5 §55/§57)
+        this.notificationService?.enqueueChallengeStartingSoon(db, {
+          challengeId,
+          participantUid: recipientUid,
+          startsAt: ch.starts_at,
+          now,
+        });
+        this.notificationService?.enqueueChallengeEnded(db, {
+          challengeId,
+          participantUid: recipientUid,
+          endsAtExclusive: ch.ends_at_exclusive,
+          now,
+        });
+      }
+
       return { kind: 'ACCEPTED' };
     })();
   }
@@ -522,15 +569,20 @@ export class ChallengeRepository {
    * garante isso mesmo sob duas requisições simultâneas.
    */
   leave(challengeId: string, participantUid: string, now: number): boolean {
-    return (
+    const success =
       this.sqlite.connection
         .prepare(
           `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = ?
             WHERE challenge_id = ? AND participant_uid = ? AND status = 'JOINED'
               AND role = 'MEMBER'`,
         )
-        .run(now, challengeId, participantUid).changes > 0
-    );
+        .run(now, challengeId, participantUid).changes > 0;
+
+    if (success) {
+      this.notificationService?.cancelParticipantEvents(challengeId, participantUid);
+    }
+
+    return success;
   }
 
   /**
@@ -544,14 +596,19 @@ export class ChallengeRepository {
    * participantes continuam podendo abri-lo para ver que ele foi cancelado.
    */
   cancel(challengeId: string, now: number): boolean {
-    return (
+    const success =
       this.sqlite.connection
         .prepare(
           `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = ?, updated_at = ?
             WHERE challenge_id = ? AND lifecycle = 'OPEN'`,
         )
-        .run(now, now, challengeId).changes > 0
-    );
+        .run(now, now, challengeId).changes > 0;
+
+    if (success) {
+      this.notificationService?.cancelChallengeEvents(challengeId);
+    }
+
+    return success;
   }
 
   // ------------------------------------------------------------------------------- desativação

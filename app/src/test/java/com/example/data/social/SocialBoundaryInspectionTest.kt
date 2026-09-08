@@ -283,6 +283,7 @@ class SocialBoundaryInspectionTest {
                 "ChallengeContract.kt",
                 "FriendshipContract.kt",
                 "SocialContract.kt",
+                "SocialNotificationContract.kt",
                 "SocialProfileContract.kt"
             ),
             holders.map { it.name }.sorted()

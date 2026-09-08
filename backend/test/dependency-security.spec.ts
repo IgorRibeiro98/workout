@@ -17,21 +17,27 @@ const BACKEND_ROOT = join(__dirname, '..');
  * uma suíte offline não pode depender do registro do npm.
  */
 describe('Postura de dependências', () => {
-  it('só um arquivo importa firebase-admin, e só os produtos de identidade', () => {
+  it('apenas os arquivos autorizados importam firebase-admin, e apenas produtos estritos', () => {
     // A cadeia moderada aberta hoje (@google-cloud/storage → teeny-request/retry-request → uuid)
-    // não é alcançável **porque** nada aqui importa `firebase-admin/storage`. Se isso mudar, a
-    // avaliação de risco muda junto — e precisa ser refeita, não herdada.
-    // Import de verdade, e não menção: o contrato de identidade cita o Admin SDK em comentário, e
-    // um `includes` cru transformaria documentação em falha de teste.
+    // não é alcançável **porque** nada aqui importa `firebase-admin/storage`.
+    // Na T16.1, apenas auth verifier importava firebase-admin.
+    // Na T17.5, firebase-push-gateway também importa, restrito a messaging.
     const importers = collectSources(join(BACKEND_ROOT, 'src')).filter((file) =>
       /from '(firebase-admin[^']*)'/.test(readFileSync(file, 'utf8')),
     );
 
-    expect(importers.map((file) => file.slice(BACKEND_ROOT.length))).toEqual([
-      '/src/modules/auth/firebase-auth-token-verifier.ts',
-    ]);
+    expect(importers.map((file) => file.slice(BACKEND_ROOT.length)).sort()).toEqual(
+      [
+        '/src/modules/auth/firebase-auth-token-verifier.ts',
+        '/src/modules/social/firebase-push-gateway.ts',
+      ].sort(),
+    );
 
-    const source = readFileSync(importers[0], 'utf8');
+    // Auth verifier só pode importar app e auth; nunca storage/firestore/database/messaging/functions
+    const authSource = readFileSync(
+      join(BACKEND_ROOT, 'src/modules/auth/firebase-auth-token-verifier.ts'),
+      'utf8',
+    );
     for (const forbidden of [
       'firebase-admin/storage',
       'firebase-admin/firestore',
@@ -39,17 +45,33 @@ describe('Postura de dependências', () => {
       'firebase-admin/messaging',
       'firebase-admin/functions',
     ]) {
-      expect(source).not.toContain(forbidden);
+      expect(authSource).not.toContain(forbidden);
+    }
+
+    // Push gateway só pode importar app e messaging; nunca storage/firestore/database/auth/functions
+    const pushSource = readFileSync(
+      join(BACKEND_ROOT, 'src/modules/social/firebase-push-gateway.ts'),
+      'utf8',
+    );
+    for (const forbidden of [
+      'firebase-admin/storage',
+      'firebase-admin/firestore',
+      'firebase-admin/database',
+      'firebase-admin/auth',
+      'firebase-admin/functions',
+    ]) {
+      expect(pushSource).not.toContain(forbidden);
     }
   });
 
-  it('o caminho de identidade não carrega o SDK de Storage em runtime', () => {
+  it('o caminho de identidade e de mensagens não carrega o SDK de Storage em runtime', () => {
     // A prova, e não a suposição: importar exatamente o que o backend importa e conferir que o
     // grafo de módulos resultante não contém os pacotes da cadeia vulnerável.
     const script = `
       const before = new Set(Object.keys(require.cache));
       require('firebase-admin/app');
       require('firebase-admin/auth');
+      require('firebase-admin/messaging');
       const loaded = Object.keys(require.cache).filter((k) => !before.has(k));
       const reachable = ['@google-cloud/storage', 'teeny-request', 'retry-request']
         .filter((pkg) => loaded.some((k) => k.includes(pkg)));

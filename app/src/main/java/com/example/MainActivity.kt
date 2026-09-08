@@ -12,9 +12,24 @@ import androidx.activity.SystemBarStyle
 import android.graphics.Color
 import androidx.core.content.ContextCompat
 import com.example.presentation.MainScreen
+import android.content.Intent
+import com.example.service.SocialNotificationChannels
 import com.example.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+data class NotificationNavTarget(val destination: String, val entityId: String?)
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private val _notificationNavTarget = MutableStateFlow<NotificationNavTarget?>(null)
+        val notificationNavTarget = _notificationNavTarget.asStateFlow()
+
+        fun clearNotificationNavTarget() {
+            _notificationNavTarget.value = null
+        }
+    }
 
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -24,6 +39,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleNotificationIntent(intent)
         
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -40,6 +56,18 @@ class MainActivity : ComponentActivity() {
                 MainScreen()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        val destination = intent?.getStringExtra(SocialNotificationChannels.EXTRA_DESTINATION) ?: return
+        val entityId = intent.getStringExtra(SocialNotificationChannels.EXTRA_ENTITY_ID)
+        _notificationNavTarget.value = NotificationNavTarget(destination, entityId)
     }
 
     /**

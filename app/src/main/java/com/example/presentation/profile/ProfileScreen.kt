@@ -66,7 +66,9 @@ fun ProfileScreen(
     onNavigateToProgressSharing: () -> Unit = {},
     onNavigateToChallenges: () -> Unit = {},
     /** T17.4 — Atividade e ranking de amigos */
-    onNavigateToActivity: () -> Unit = {}
+    onNavigateToActivity: () -> Unit = {},
+    /** T17.5 — Notificações sociais */
+    onNavigateToNotificationPreferences: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -158,7 +160,8 @@ fun ProfileScreen(
         onOpenFriendRequests = onNavigateToFriendRequests,
         onOpenProgressSharing = onNavigateToProgressSharing,
         onOpenChallenges = onNavigateToChallenges,
-        onOpenActivity = onNavigateToActivity
+        onOpenActivity = onNavigateToActivity,
+        onOpenNotificationPreferences = onNavigateToNotificationPreferences
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -230,7 +233,8 @@ private fun ProfileScreenContent(
     onOpenFriendRequests: () -> Unit = {},
     onOpenProgressSharing: () -> Unit = {},
     onOpenChallenges: () -> Unit = {},
-    onOpenActivity: () -> Unit = {}
+    onOpenActivity: () -> Unit = {},
+    onOpenNotificationPreferences: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -377,6 +381,7 @@ private fun ProfileScreenContent(
                     onOpenProgressSharing = onOpenProgressSharing,
                     onOpenChallenges = onOpenChallenges,
                     onOpenActivity = onOpenActivity,
+                    onOpenNotificationPreferences = onOpenNotificationPreferences,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,

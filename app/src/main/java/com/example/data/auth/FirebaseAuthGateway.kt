@@ -67,7 +67,8 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class FirebaseAuthGateway(
     context: Context,
-    private val credentialManagerFactory: (Context) -> CredentialManager = CredentialManager::create
+    private val credentialManagerFactory: (Context) -> CredentialManager = CredentialManager::create,
+    private val onSignOut: (suspend () -> Unit)? = null
 ) : AuthGateway, AuthTokenProvider {
 
     private val appContext: Context = context.applicationContext
@@ -172,6 +173,9 @@ class FirebaseAuthGateway(
     // -------------------------------------------------------------------------------- sair
 
     override suspend fun signOut() {
+        runCatching { onSignOut?.invoke() }
+            .onFailure { Log.w(TAG, "onSignOut callback falhou: ${it.javaClass.simpleName}") }
+
         val auth = firebaseAuthOrNull()
         startObservingFirebase()
         _state.value = AuthState.SigningOut

@@ -31,6 +31,12 @@ import {
   CANONICAL_TRAINING_SOURCE,
   SyncedCanonicalTrainingSource,
 } from './canonical-training.source';
+import { NotificationController } from './notification.controller';
+import { NotificationService } from './notification.service';
+import { NotificationRepository } from './notification.repository';
+import { NotificationDispatcher } from './notification.dispatcher';
+import { PUSH_GATEWAY } from './push-gateway';
+import { FirebasePushGateway } from './firebase-push-gateway';
 
 /**
  * Módulo do domínio social (T17.0).
@@ -96,6 +102,7 @@ import {
     SocialProfileController,
     ChallengeController,
     SocialActivityController,
+    NotificationController,
   ],
   providers: [
     SocialService,
@@ -124,7 +131,12 @@ import {
     SocialActivityService,
     FriendRankingService,
     { provide: CANONICAL_TRAINING_SOURCE, useClass: SyncedCanonicalTrainingSource },
+    // T17.5 — notificações sociais com Firebase Cloud Messaging.
+    NotificationRepository,
+    NotificationService,
+    NotificationDispatcher,
+    { provide: PUSH_GATEWAY, useClass: FirebasePushGateway },
   ],
-  exports: [SocialAccessPolicy],
+  exports: [SocialAccessPolicy, NotificationService, NotificationRepository],
 })
 export class SocialModule {}

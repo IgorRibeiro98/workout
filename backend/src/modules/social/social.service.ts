@@ -1,8 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { SqliteService } from '../../database/sqlite.service';
 import { ChallengeRepository } from './challenge.repository';
+import { NotificationService } from './notification.service';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import {
@@ -80,6 +81,7 @@ export class SocialService {
     private readonly sqlite: SqliteService,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
+    @Optional() private readonly notificationService?: NotificationService,
   ) {}
 
   /**
@@ -255,6 +257,7 @@ export class SocialService {
     // A amizade continua intocada (T17.1): desativar suspende, não desfaz.
     const challengeEffect = this.sqlite.connection.transaction(() => {
       this.repository.updateStatus(principal.uid, 'DISABLED', now);
+      this.notificationService?.onSocialDisable(principal.uid);
       return this.challenges.applySocialDisable(principal.uid, now);
     })();
 

@@ -77,7 +77,8 @@ class MainViewModelFactory(
      */
     private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null,
     private val challengeGateway: com.example.domain.social.ChallengeGateway? = null,
-    private val socialActivityGateway: com.example.domain.social.SocialActivityGateway? = null
+    private val socialActivityGateway: com.example.domain.social.SocialActivityGateway? = null,
+    private val socialNotificationGateway: com.example.domain.social.SocialNotificationGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -269,6 +270,14 @@ class MainViewModelFactory(
                 activityGateway = activity,
                 socialGateway = social,
                 authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.NotificationPreferencesViewModel::class.java)) {
+            val gateway = socialNotificationGateway
+                ?: throw IllegalStateException("SocialNotificationGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.NotificationPreferencesViewModel(
+                gateway = gateway
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.account.SyncViewModel::class.java)) {

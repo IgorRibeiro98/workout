@@ -151,6 +151,24 @@ export class AppConfig {
     return this.env.MAINTENANCE_MODE;
   }
 
+  // --- Notificações sociais (T17.5) ----------------------------------------------------
+
+  get socialPushEnabled(): boolean {
+    return this.env.SOCIAL_PUSH_ENABLED;
+  }
+
+  get pushDispatchIntervalMs(): number {
+    return this.env.PUSH_DISPATCH_INTERVAL_MS;
+  }
+
+  get pushMaxAttempts(): number {
+    return this.env.PUSH_MAX_ATTEMPTS;
+  }
+
+  get pushBatchSize(): number {
+    return this.env.PUSH_BATCH_SIZE;
+  }
+
   /**
    * As exigências que o operador declarou e o ambiente não cumpre.
    *
