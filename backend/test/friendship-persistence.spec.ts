@@ -81,22 +81,31 @@ describe('Persistência do grafo social', () => {
       ).run(UID_A);
 
       const beforeProfiles = db.prepare('SELECT * FROM social_profiles').all();
-      const beforePrivacy = db.prepare('SELECT * FROM social_privacy_settings').all();
+      const beforePrivacy = db
+        .prepare('SELECT * FROM social_privacy_settings')
+        .all() as Array<Record<string, unknown>>;
       const beforeBackups = db.prepare('SELECT * FROM backup_snapshots').all();
 
       const applied = runMigrations(db, all);
 
-      // A `0009` (T17.2) e a `0010` (T17.3) sobem junto e são igualmente aditivas: elas criam
-      // `social_progress_settings` e as tabelas de desafio, e não tocam em perfil, privacidade,
-      // amizade nem em nada da T16.
-      expect(applied.map((migration) => migration.version)).toEqual([8, 9, 10]);
+      // A `0009` (T17.2), `0010` (T17.3) e `0011` (T17.4) sobem junto e são igualmente aditivas:
+      // criam `social_progress_settings`, tabelas de desafio e configurações de atividade/ranking,
+      // sem tocar em perfil, amizade nem em nada da T16.
+      expect(applied.map((migration) => migration.version)).toEqual([8, 9, 10, 11]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'friend_graph',
         'social_progress_profile',
         'social_challenges',
+        'social_activity_rankings',
       ]);
       expect(db.prepare('SELECT * FROM social_profiles').all()).toEqual(beforeProfiles);
-      expect(db.prepare('SELECT * FROM social_privacy_settings').all()).toEqual(beforePrivacy);
+      expect(db.prepare('SELECT * FROM social_privacy_settings').all()).toEqual(
+        beforePrivacy.map((row) => ({
+          ...row,
+          activity_time_zone_id: null,
+          friend_ranking_participation_enabled: 0,
+        })),
+      );
       expect(db.prepare('SELECT * FROM backup_snapshots').all()).toEqual(beforeBackups);
 
       const integrity = db.pragma('integrity_check') as Array<{ integrity_check: string }>;

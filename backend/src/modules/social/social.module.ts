@@ -24,6 +24,13 @@ import { SocialAccessPolicy } from './social.access-policy';
 import { SocialController } from './social.controller';
 import { SocialRepository } from './social.repository';
 import { SocialService } from './social.service';
+import { SocialActivityController } from './social-activity.controller';
+import { SocialActivityService } from './social-activity.service';
+import { FriendRankingService } from './friend-ranking.service';
+import {
+  CANONICAL_TRAINING_SOURCE,
+  SyncedCanonicalTrainingSource,
+} from './canonical-training.source';
 
 /**
  * Módulo do domínio social (T17.0).
@@ -88,6 +95,7 @@ import { SocialService } from './social.service';
     FriendshipController,
     SocialProfileController,
     ChallengeController,
+    SocialActivityController,
   ],
   providers: [
     SocialService,
@@ -112,6 +120,10 @@ import { SocialService } from './social.service';
     ChallengeScoringService,
     ChallengeRateLimiter,
     { provide: CHALLENGE_PROGRESS_SOURCE, useClass: SyncedChallengeProgressSource },
+    // T17.4 — atividade dos amigos e rankings contextuais.
+    SocialActivityService,
+    FriendRankingService,
+    { provide: CANONICAL_TRAINING_SOURCE, useClass: SyncedCanonicalTrainingSource },
   ],
   exports: [SocialAccessPolicy],
 })

@@ -125,8 +125,11 @@ class SocialSectionTest {
         composeRule.onNodeWithText("Igor").assertIsDisplayed()
         composeRule.onNodeWithText("SPK-7K2P9D8Q").assertIsDisplayed()
         composeRule.onNodeWithText("Descoberta: somente por código de amigo").assertIsDisplayed()
-        composeRule.onNodeWithText("Editar nome").assertIsDisplayed()
-        composeRule.onNodeWithText("Desativar").assertIsDisplayed()
+        composeRule.onNodeWithText("Aceitar pedidos de amizade").assertExists()
+        composeRule.onNodeWithText("Compartilhar atividade").assertExists()
+        composeRule.onNodeWithText("Participar do ranking semanal").assertExists()
+        composeRule.onNodeWithText("Editar nome").assertExists()
+        composeRule.onNodeWithText("Desativar").assertExists()
     }
 
     /**

@@ -78,7 +78,7 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     await request(server)
       .patch('/v1/social/me/privacy')
       .set('Authorization', auth)
-      .send({ activitySharingEnabled: true });
+      .send({ activitySharingEnabled: true, activityTimeZoneId: 'America/Sao_Paulo' });
     await request(server).post('/v1/social/me/disable').set('Authorization', auth);
     await request(server).post('/v1/social/me/enable').set('Authorization', auth);
     // Erros também passam pelo log — e também não podem carregar conteúdo.
@@ -135,10 +135,14 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     await request(server)
       .patch('/v1/social/me/privacy')
       .set('Authorization', auth)
-      .send({ friendRequestsEnabled: false, activitySharingEnabled: true });
+      .send({
+        friendRequestsEnabled: false,
+        activitySharingEnabled: true,
+        activityTimeZoneId: 'America/Sao_Paulo',
+      });
 
     const output = logs();
-    expect(output).toContain('activitySharingEnabled,friendRequestsEnabled');
+    expect(output).toContain('activitySharingEnabled,activityTimeZoneId,friendRequestsEnabled');
     expect(output).not.toContain(DISPLAY_NAME);
   });
 
@@ -193,7 +197,11 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     // é o adapter estreito da pontuação de desafio, e ele é **separado** do de perfil de
     // propósito — a projeção da T17.2 não é autoridade de pontuação. Os dois estão sujeitos ao
     // mesmo teste de `AGGREGATE_ONLY` abaixo.
-    const PROGRESS_SOURCES = ['social-progress.source.ts', 'challenge-progress.source.ts'];
+    const PROGRESS_SOURCES = [
+      'social-progress.source.ts',
+      'challenge-progress.source.ts',
+      'canonical-training.source.ts',
+    ];
 
     for (const file of readdirSync(SOCIAL_SRC).filter((name) => name.endsWith('.ts'))) {
       const source = readFileSync(join(SOCIAL_SRC, file), 'utf8');

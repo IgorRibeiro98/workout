@@ -2,21 +2,23 @@
 
 - **Tarefas:** T17.0 — identidade pública e privacidade; **T17.1** — grafo social (amizade
   bilateral, pedidos, descoberta por `friendCode` e QR Code); **T17.2** — perfil enriquecido
-  (projeção de progresso e compartilhamento controlado). **Não** inclui bloqueio, denúncia,
-  atividade, feed, ranking, desafio, notificação push, busca por nome, busca por e-mail nem
-  exclusão de conta.
+  (projeção de progresso e compartilhamento controlado); **T17.3** — desafios entre amigos;
+  **T17.4** — atividade dos amigos + rankings contextuais. **Não** inclui bloqueio, denúncia,
+  notificação push, busca pública por nome, busca por e-mail nem exclusão de conta.
 - **Implementações:**
-  - Android — `com.example.data.social.SocialContract`, `com.example.data.social.FriendshipContract`,
-    `com.example.data.social.SocialProfileContract` e `com.example.data.social.*`
-  - Backend — `backend/src/modules/social/social.contract.ts`,
-    `backend/src/modules/social/friendship.contract.ts`,
-    `backend/src/modules/social/social-profile.contract.ts` e `backend/src/modules/social/*`
+  - Android — `com.example.data.social.*` (`SocialContract`, `FriendshipContract`,
+    `SocialProfileContract`, `SocialActivityDtos`, `SparkSocialActivityGateway`)
+  - Backend — `backend/src/modules/social/` (`social.contract.ts`, `friendship.contract.ts`,
+    `social-profile.contract.ts`, `canonical-training.source.ts`, `social-activity.service.ts`,
+    `friend-ranking.service.ts`)
 - **Documentos de decisão:**
   [`docs/architecture/social-domain.md`](../../../docs/architecture/social-domain.md) (T17.0),
   [`docs/architecture/friendship-contract.md`](../../../docs/architecture/friendship-contract.md)
-  (T17.1) e
+  (T17.1),
   [`docs/architecture/social-profile-contract.md`](../../../docs/architecture/social-profile-contract.md)
-  (T17.2)
+  (T17.2),
+  [`docs/architecture/challenge-domain.md`](../../../docs/architecture/challenge-domain.md) (T17.3) e
+  [`docs/architecture/social-activity-ranking.md`](../../../docs/architecture/social-activity-ranking.md) (T17.4)
 - **Fixtures compartilhadas:**
   - [`friend-code-normalization.json`](./friend-code-normalization.json) — os casos canônicos de
     normalização de `friendCode`;
@@ -514,3 +516,67 @@ derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
 - **empate permanece empate** (`1, 1, 3`), sem desempate por ordem de chegada;
 - **nada entra na Outbox, no `sync_entities`, no backup ou no restore**, e ler o placar não gera
   XP, conquista, missão nem escrita nenhuma.
+
+## 12. Atividade dos amigos e rankings contextuais (T17.4)
+
+### 12.1 Rotas
+
+| Rota | Método | O quê |
+| --- | --- | --- |
+| `/v1/social/activity` | GET | Projeção dos dias de treino (`TRAINING_DAY`) dos amigos nos últimos 14 dias civis (0..13) |
+| `/v1/social/rankings/last-7-days` | GET | Ranking contextual de sessões concluídas nos últimos 7 dias móveis entre amigos com opt-in |
+
+### 12.2 Modelos e Schemas
+
+#### Resposta de Atividade (`GET /v1/social/activity`):
+```json
+{
+  "items": [
+    {
+      "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
+      "displayName": "Carlos",
+      "daysAgo": 0
+    }
+  ]
+}
+```
+- Deduplicado: no máximo 1 item por amigo por dia civil.
+- Ordenado por `daysAgo ASC`, desempate por `displayName ASC`, depois `socialId ASC`.
+- Teto: 30 itens.
+- Requisitos: amigos mútuos ativos, `activitySharingEnabled = 1`, `activityTimeZoneId` válido.
+
+#### Resposta de Ranking (`GET /v1/social/rankings/last-7-days`):
+```json
+{
+  "metric": "WORKOUTS_COMPLETED_LAST_7_DAYS",
+  "participantCount": 2,
+  "entries": [
+    {
+      "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
+      "displayName": "Carlos",
+      "score": 5,
+      "rank": 1,
+      "isCurrentUser": false
+    },
+    {
+      "socialId": "c4b7890a-1234-4567-89ab-cdef01234567",
+      "displayName": "Você",
+      "score": 3,
+      "rank": 2,
+      "isCurrentUser": true
+    }
+  ]
+}
+```
+- Reciprocidade estrita: visualizador precisa ter `friendRankingParticipationEnabled = 1`.
+- Participantes: visualizador e amigos mútuos ativos com opt-in habilitado.
+- Posições ordinais: competition ranking (`1, 1, 3`), desempate estável por `displayName ASC`, `socialId ASC`.
+- Teto: 50 entradas.
+
+### 12.3 Erros da T17.4
+
+| `code` | HTTP | Quando |
+| --- | --- | --- |
+| `RANKING_NOT_ENABLED` | 403 | Consulta ao ranking sem ter habilitado `friendRankingParticipationEnabled` |
+| `INVALID_ACTIVITY_TIMEZONE` | 400 | Tentativa de atualizar privacidade com fuso IANA desconhecido ou inválido |
+| `ACTIVITY_NOT_AVAILABLE` | 503 | Fonte canônica de treino temporariamente indisponível |

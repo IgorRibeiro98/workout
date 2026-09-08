@@ -21,6 +21,8 @@ export interface FriendProfileRow {
   readonly discoverability: string;
   readonly friendRequestsEnabled: boolean;
   readonly activitySharingEnabled: boolean;
+  readonly activityTimeZoneId: string | null;
+  readonly friendRankingParticipationEnabled: boolean;
 }
 
 export interface StoredFriendRequest {
@@ -131,7 +133,8 @@ export class FriendshipRepository {
     const row = this.sqlite.connection
       .prepare(
         `SELECT p.owner_uid, p.social_id, p.display_name, p.status,
-                s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled
+                s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
+                s.activity_time_zone_id, s.friend_ranking_participation_enabled
          FROM social_profiles p
          JOIN social_privacy_settings s ON s.owner_uid = p.owner_uid
          WHERE ${where}`,
@@ -464,6 +467,30 @@ export class FriendshipRepository {
       (request) => ({ primary: request.createdAt, secondary: request.requestId }),
     );
   }
+
+  /**
+   * Retorna todos os amigos diretos cujo perfil está ACTIVE, acompanhados de suas preferências
+   * de privacidade (T17.4). Usado nas projeções de atividade e ranking contextual.
+   */
+  findActiveFriends(ownerUid: string): readonly FriendProfileRow[] {
+    const rows = this.sqlite.connection
+      .prepare(
+        `SELECT p.owner_uid, p.social_id, p.display_name, p.status,
+                s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
+                s.activity_time_zone_id, s.friend_ranking_participation_enabled
+         FROM friendships f
+         JOIN social_profiles p
+           ON p.owner_uid = CASE WHEN f.user_a_uid = ? THEN f.user_b_uid ELSE f.user_a_uid END
+         JOIN social_privacy_settings s
+           ON s.owner_uid = p.owner_uid
+         WHERE (f.user_a_uid = ? OR f.user_b_uid = ?)
+           AND p.status = 'ACTIVE'
+         ORDER BY p.display_name ASC, p.social_id ASC`,
+      )
+      .all(ownerUid, ownerUid, ownerUid) as ProfileRow[];
+
+    return rows.map(toProfile);
+  }
 }
 
 /**
@@ -533,6 +560,8 @@ interface ProfileRow {
   discoverability: string;
   friend_requests_enabled: number;
   activity_sharing_enabled: number;
+  activity_time_zone_id: string | null;
+  friend_ranking_participation_enabled: number;
 }
 
 interface RequestRow {
@@ -564,6 +593,8 @@ function toProfile(row: ProfileRow): FriendProfileRow {
     discoverability: row.discoverability,
     friendRequestsEnabled: row.friend_requests_enabled === 1,
     activitySharingEnabled: row.activity_sharing_enabled === 1,
+    activityTimeZoneId: row.activity_time_zone_id,
+    friendRankingParticipationEnabled: row.friend_ranking_participation_enabled === 1,
   };
 }
 

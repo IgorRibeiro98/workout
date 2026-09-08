@@ -76,7 +76,8 @@ class MainViewModelFactory(
      * amigo, e nada mais muda.
      */
     private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null,
-    private val challengeGateway: com.example.domain.social.ChallengeGateway? = null
+    private val challengeGateway: com.example.domain.social.ChallengeGateway? = null,
+    private val socialActivityGateway: com.example.domain.social.SocialActivityGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -253,6 +254,20 @@ class MainViewModelFactory(
             return com.example.presentation.account.ChallengeViewModel(
                 gateway = challenges,
                 friendGateway = friends,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.SocialActivityViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val activity = socialActivityGateway
+                ?: throw IllegalStateException("SocialActivityGateway not provided")
+            val social = socialGateway
+                ?: throw IllegalStateException("SocialGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.SocialActivityViewModel(
+                activityGateway = activity,
+                socialGateway = social,
                 authGateway = gateway
             ) as T
         }

@@ -205,7 +205,17 @@ export class SocialService {
   ): SocialProfileResponse {
     const account = this.require(principal);
 
-    this.repository.updatePrivacy(principal.uid, { ...request, now: Date.now() });
+    if (request.activitySharingEnabled === true) {
+      const effectiveTimeZone = request.activityTimeZoneId ?? account.privacy.activityTimeZoneId;
+      if (!effectiveTimeZone) {
+        throw SocialErrors.invalidActivityTimeZone(
+          'activityTimeZoneId é obrigatório ao ativar o compartilhamento de atividade',
+        );
+      }
+    }
+
+    const now = this.clock.now();
+    this.repository.updatePrivacy(principal.uid, { ...request, now });
 
     this.logger.info('social.privacy.updated', {
       requestId,
@@ -315,6 +325,8 @@ export function toOwnerProfile(account: StoredSocialAccount): SocialOwnerProfile
       discoverability: account.privacy.discoverability,
       friendRequestsEnabled: account.privacy.friendRequestsEnabled,
       activitySharingEnabled: account.privacy.activitySharingEnabled,
+      activityTimeZoneId: account.privacy.activityTimeZoneId,
+      friendRankingParticipationEnabled: account.privacy.friendRankingParticipationEnabled,
       updatedAt: account.privacy.updatedAt,
     },
     createdAt: account.profile.createdAt,

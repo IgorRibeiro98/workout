@@ -65,6 +65,8 @@ fun SocialSection(
     /** T17.2 — "Compartilhar progresso". Mesma área Social, sem bottom navigation nova. */
     onOpenProgressSharing: () -> Unit = {},
     onOpenChallenges: () -> Unit = {},
+    /** T17.4 — "Atividade dos amigos + rankings contextuais". */
+    onOpenActivity: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -75,6 +77,7 @@ fun SocialSection(
     onCancelEditName: () -> Unit,
     onFriendRequestsChange: (Boolean) -> Unit,
     onActivitySharingChange: (Boolean) -> Unit,
+    onFriendRankingParticipationChange: (Boolean) -> Unit = {},
     onDisable: () -> Unit,
     onConfirmDisable: () -> Unit,
     onCancelDisable: () -> Unit,
@@ -135,11 +138,13 @@ fun SocialSection(
                         onOpenRequests = onOpenRequests,
                         onOpenProgressSharing = onOpenProgressSharing,
                         onOpenChallenges = onOpenChallenges,
+                        onOpenActivity = onOpenActivity,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
                         onFriendRequestsChange = onFriendRequestsChange,
                         onActivitySharingChange = onActivitySharingChange,
+                        onFriendRankingParticipationChange = onFriendRankingParticipationChange,
                         onDisable = onDisable,
                         onEnable = onEnable
                     )
@@ -152,11 +157,13 @@ fun SocialSection(
                             onOpenRequests = onOpenRequests,
                             onOpenProgressSharing = onOpenProgressSharing,
                             onOpenChallenges = onOpenChallenges,
+                            onOpenActivity = onOpenActivity,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
                             onFriendRequestsChange = {},
                             onActivitySharingChange = {},
+                            onFriendRankingParticipationChange = {},
                             onDisable = {},
                             onEnable = {}
                         )
@@ -174,11 +181,13 @@ fun SocialSection(
                                 onOpenRequests = onOpenRequests,
                                 onOpenProgressSharing = onOpenProgressSharing,
                                 onOpenChallenges = onOpenChallenges,
+                                onOpenActivity = onOpenActivity,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
                                 onFriendRequestsChange = {},
                                 onActivitySharingChange = {},
+                                onFriendRankingParticipationChange = {},
                                 onDisable = {},
                                 onEnable = {}
                             )
@@ -202,11 +211,13 @@ fun SocialSection(
                                 onOpenRequests = onOpenRequests,
                                 onOpenProgressSharing = onOpenProgressSharing,
                                 onOpenChallenges = onOpenChallenges,
+                                onOpenActivity = onOpenActivity,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
                                 onFriendRequestsChange = {},
                                 onActivitySharingChange = {},
+                                onFriendRankingParticipationChange = {},
                                 onDisable = {},
                                 onEnable = {}
                             )
@@ -252,11 +263,13 @@ private fun ActiveProfile(
     onOpenRequests: () -> Unit,
     onOpenProgressSharing: () -> Unit,
     onOpenChallenges: () -> Unit,
+    onOpenActivity: () -> Unit,
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
     onFriendRequestsChange: (Boolean) -> Unit,
     onActivitySharingChange: (Boolean) -> Unit,
+    onFriendRankingParticipationChange: (Boolean) -> Unit,
     onDisable: () -> Unit,
     onEnable: () -> Unit
 ) {
@@ -320,8 +333,18 @@ private fun ActiveProfile(
             onCheckedChange = onActivitySharingChange
         )
         Text(
-            text = "Nada é compartilhado hoje: não existe feed nem ranking no Spark. Esta " +
-                "preferência vale para quando existirem.",
+            text = "Permite que seus amigos vejam os dias em que você treinou nos últimos 14 dias. Não mostra exercícios, cargas nem anotações.",
+            color = TextSecondary,
+            fontSize = 12.sp
+        )
+        Toggle(
+            label = "Participar do ranking semanal",
+            checked = profile.privacy.friendRankingParticipationEnabled,
+            enabled = enabled,
+            onCheckedChange = onFriendRankingParticipationChange
+        )
+        Text(
+            text = "Apareça no ranking dos últimos 7 dias entre amigos que também participam.",
             color = TextSecondary,
             fontSize = 12.sp
         )
@@ -336,6 +359,7 @@ private fun ActiveProfile(
                 onOpenRequests = onOpenRequests,
                 onOpenProgressSharing = onOpenProgressSharing,
                 onOpenChallenges = onOpenChallenges,
+                onOpenActivity = onOpenActivity,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -372,6 +396,7 @@ private fun FriendsEntryPoints(
     onOpenRequests: () -> Unit,
     onOpenProgressSharing: () -> Unit,
     onOpenChallenges: () -> Unit,
+    onOpenActivity: () -> Unit,
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -418,6 +443,9 @@ private fun FriendsEntryPoints(
     // navigation: a barra inferior é do núcleo do produto — treinar, histórico, evolução —, e o
     // social continua sendo uma área dentro do Perfil.
     Secondary(text = "Desafios", onClick = onOpenChallenges, enabled = enabled)
+
+    // T17.4 — Atividade e ranking semanal entre amigos
+    Secondary(text = "Atividade e Ranking", onClick = onOpenActivity, enabled = enabled)
 }
 
 @Composable
@@ -615,6 +643,12 @@ private fun messageFor(reason: SocialError): String = when (reason) {
     SocialError.NOT_ENABLED -> "Os recursos sociais não estão ativos nesta conta."
     SocialError.NETWORK -> "Sem conexão com o servidor. Nada foi alterado."
     SocialError.NOT_CONFIGURED -> "Os recursos sociais não estão disponíveis nesta versão do app."
+    SocialError.RANKING_NOT_ENABLED ->
+        "A participação no ranking não está habilitada nesta conta."
+    SocialError.INVALID_ACTIVITY_TIMEZONE ->
+        "O fuso horário configurado é inválido. Verifique as configurações do aparelho."
+    SocialError.ACTIVITY_NOT_AVAILABLE ->
+        "A atividade recente não está disponível no momento."
     SocialError.REJECTED ->
         "O servidor recusou a operação. Se continuar acontecendo, relate para o suporte."
 }

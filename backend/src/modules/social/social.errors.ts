@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   NotFoundException,
@@ -29,6 +30,8 @@ function socialException(
       return new NotFoundException(body);
     case HttpStatus.CONFLICT:
       return new ConflictException(body);
+    case HttpStatus.FORBIDDEN:
+      return new ForbiddenException(body);
     case HttpStatus.SERVICE_UNAVAILABLE:
       return new HttpException(body, HttpStatus.SERVICE_UNAVAILABLE);
     default:
@@ -97,4 +100,28 @@ export const SocialErrors = {
    */
   unavailable: (reason: string) =>
     socialException(HttpStatus.SERVICE_UNAVAILABLE, SOCIAL_ERROR_CODES.SOCIAL_UNAVAILABLE, reason),
+
+  /** Usuário não optou por participar do ranking (T17.4). */
+  rankingNotEnabled: () =>
+    socialException(
+      HttpStatus.FORBIDDEN,
+      SOCIAL_ERROR_CODES.RANKING_NOT_ENABLED,
+      'usuário não optou por participar do ranking',
+    ),
+
+  /** Fuso horário da atividade inválido ou ausente quando necessário (T17.4). */
+  invalidActivityTimeZone: (reason: string) =>
+    socialException(
+      HttpStatus.BAD_REQUEST,
+      SOCIAL_ERROR_CODES.INVALID_ACTIVITY_TIMEZONE,
+      reason,
+    ),
+
+  /** Atividade não disponível para exibição (T17.4). */
+  activityNotAvailable: (reason: string) =>
+    socialException(
+      HttpStatus.NOT_FOUND,
+      SOCIAL_ERROR_CODES.ACTIVITY_NOT_AVAILABLE,
+      reason,
+    ),
 };

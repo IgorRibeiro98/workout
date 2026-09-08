@@ -53,6 +53,8 @@ export interface SocialPrivacySettingsDto {
   readonly discoverability: SocialDiscoverability;
   readonly friendRequestsEnabled: boolean;
   readonly activitySharingEnabled: boolean;
+  readonly activityTimeZoneId: string | null;
+  readonly friendRankingParticipationEnabled: boolean;
   /** Relógio do servidor, epoch millis UTC. */
   readonly updatedAt: number;
 }
@@ -95,6 +97,40 @@ export interface SocialProfilePreviewDto {
   readonly displayName: string;
 }
 
+/** O ator de uma atividade social (T17.4). */
+export interface SocialActivityActorDto {
+  readonly socialId: string;
+  readonly displayName: string;
+}
+
+/** O item de atividade dos amigos — somente TRAINING_DAY na T17.4. */
+export interface SocialActivityItemDto {
+  readonly type: 'TRAINING_DAY';
+  readonly actor: SocialActivityActorDto;
+  readonly daysAgo: number;
+}
+
+/** A resposta do feed recente de atividade dos amigos (GET /v1/social/activity). */
+export interface SocialActivityResponse {
+  readonly items: readonly SocialActivityItemDto[];
+}
+
+/** A linha de um participante no ranking entre amigos (T17.4). */
+export interface FriendRankingEntryDto {
+  readonly socialId: string;
+  readonly displayName: string;
+  readonly score: number;
+  readonly rank: number;
+  readonly isCurrentUser: boolean;
+}
+
+/** A resposta do ranking contextual de 7 dias entre amigos (GET /v1/social/rankings/last-7-days). */
+export interface FriendRankingResponse {
+  readonly type: 'WORKOUTS_COMPLETED_LAST_7_DAYS';
+  readonly participantCount: number;
+  readonly entries: readonly FriendRankingEntryDto[];
+}
+
 /**
  * `GET /v1/social/me`.
  *
@@ -125,9 +161,17 @@ export const SOCIAL_ERROR_CODES = {
   SOCIAL_ALREADY_DISABLED: 'SOCIAL_ALREADY_DISABLED',
   /** O servidor não conseguiu concluir agora (ex.: geração de código esgotou as tentativas). */
   SOCIAL_UNAVAILABLE: 'SOCIAL_UNAVAILABLE',
+  /** Usuário não optou por participar do ranking (reciprocidade, T17.4). */
+  RANKING_NOT_ENABLED: 'RANKING_NOT_ENABLED',
+  /** Fuso horário da atividade inválido ou ausente quando necessário (T17.4). */
+  INVALID_ACTIVITY_TIMEZONE: 'INVALID_ACTIVITY_TIMEZONE',
+  /** Atividade indisponível para exibição (T17.4). */
+  ACTIVITY_NOT_AVAILABLE: 'ACTIVITY_NOT_AVAILABLE',
 } as const;
 
 export type SocialErrorCode = (typeof SOCIAL_ERROR_CODES)[keyof typeof SOCIAL_ERROR_CODES];
 
 /** Prefixo das rotas sociais. Com o versionamento por URI, o caminho real é `/v1/social/...`. */
 export const SOCIAL_ROUTE_PREFIX = 'social';
+export const SOCIAL_ACTIVITY_ROUTE = 'activity';
+export const FRIEND_RANKING_LAST_7_DAYS_ROUTE = 'rankings/last-7-days';

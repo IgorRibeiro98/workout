@@ -17,6 +17,8 @@ export interface StoredSocialPrivacy {
   readonly discoverability: SocialDiscoverability;
   readonly friendRequestsEnabled: boolean;
   readonly activitySharingEnabled: boolean;
+  readonly activityTimeZoneId: string | null;
+  readonly friendRankingParticipationEnabled: boolean;
   readonly updatedAt: number;
 }
 
@@ -34,6 +36,8 @@ export interface CreateSocialAccountInput {
   readonly discoverability: SocialDiscoverability;
   readonly friendRequestsEnabled: boolean;
   readonly activitySharingEnabled: boolean;
+  readonly activityTimeZoneId?: string | null;
+  readonly friendRankingParticipationEnabled?: boolean;
   readonly now: number;
 }
 
@@ -41,6 +45,8 @@ export interface UpdateSocialPrivacyInput {
   readonly discoverability?: SocialDiscoverability;
   readonly friendRequestsEnabled?: boolean;
   readonly activitySharingEnabled?: boolean;
+  readonly activityTimeZoneId?: string | null;
+  readonly friendRankingParticipationEnabled?: boolean;
   readonly now: number;
 }
 
@@ -79,6 +85,7 @@ export class SocialRepository {
         `SELECT p.owner_uid, p.social_id, p.friend_code, p.display_name, p.status,
                 p.created_at, p.updated_at,
                 s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
+                s.activity_time_zone_id, s.friend_ranking_participation_enabled,
                 s.updated_at AS privacy_updated_at
          FROM social_profiles p
          JOIN social_privacy_settings s ON s.owner_uid = p.owner_uid
@@ -128,13 +135,15 @@ export class SocialRepository {
       db.prepare(
         `INSERT INTO social_privacy_settings
            (owner_uid, discoverability, friend_requests_enabled, activity_sharing_enabled,
-            updated_at)
-         VALUES (?, ?, ?, ?, ?)`,
+            activity_time_zone_id, friend_ranking_participation_enabled, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         input.ownerUid,
         input.discoverability,
         input.friendRequestsEnabled ? 1 : 0,
         input.activitySharingEnabled ? 1 : 0,
+        input.activityTimeZoneId ?? null,
+        input.friendRankingParticipationEnabled ? 1 : 0,
         input.now,
       );
 
@@ -219,6 +228,14 @@ export class SocialRepository {
       assignments.push('activity_sharing_enabled = ?');
       values.push(input.activitySharingEnabled ? 1 : 0);
     }
+    if (input.activityTimeZoneId !== undefined) {
+      assignments.push('activity_time_zone_id = ?');
+      values.push(input.activityTimeZoneId);
+    }
+    if (input.friendRankingParticipationEnabled !== undefined) {
+      assignments.push('friend_ranking_participation_enabled = ?');
+      values.push(input.friendRankingParticipationEnabled ? 1 : 0);
+    }
     if (assignments.length === 0) {
       return;
     }
@@ -243,6 +260,8 @@ interface AccountRow {
   discoverability: string;
   friend_requests_enabled: number;
   activity_sharing_enabled: number;
+  activity_time_zone_id: string | null;
+  friend_ranking_participation_enabled: number;
   privacy_updated_at: number;
 }
 
@@ -261,6 +280,8 @@ function toAccount(row: AccountRow): StoredSocialAccount {
       discoverability: row.discoverability as SocialDiscoverability,
       friendRequestsEnabled: row.friend_requests_enabled === 1,
       activitySharingEnabled: row.activity_sharing_enabled === 1,
+      activityTimeZoneId: row.activity_time_zone_id ?? null,
+      friendRankingParticipationEnabled: row.friend_ranking_participation_enabled === 1,
       updatedAt: row.privacy_updated_at,
     },
   };

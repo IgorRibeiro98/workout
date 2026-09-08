@@ -35,6 +35,12 @@ object SocialContract {
     /** `POST` — reativa, com a mesma identidade. */
     const val ENABLE_PATH = "v1/social/me/enable"
 
+    /** `GET /v1/social/activity` — atividade recente dos amigos (T17.4). */
+    const val ACTIVITY_PATH = "v1/social/activity"
+
+    /** `GET /v1/social/rankings/last-7-days` — ranking contextual semanal entre amigos (T17.4). */
+    const val RANKINGS_LAST_7_DAYS_PATH = "v1/social/rankings/last-7-days"
+
     /**
      * Os limites do nome social, iguais aos do servidor.
      *
@@ -73,5 +79,8 @@ object SocialContract {
         const val SOCIAL_ALREADY_ENABLED = "SOCIAL_ALREADY_ENABLED"
         const val SOCIAL_ALREADY_DISABLED = "SOCIAL_ALREADY_DISABLED"
         const val SOCIAL_UNAVAILABLE = "SOCIAL_UNAVAILABLE"
+        const val RANKING_NOT_ENABLED = "RANKING_NOT_ENABLED"
+        const val INVALID_ACTIVITY_TIMEZONE = "INVALID_ACTIVITY_TIMEZONE"
+        const val ACTIVITY_NOT_AVAILABLE = "ACTIVITY_NOT_AVAILABLE"
     }
 }

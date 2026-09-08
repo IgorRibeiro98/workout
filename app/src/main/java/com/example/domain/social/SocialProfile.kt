@@ -72,6 +72,8 @@ data class SocialPrivacySettings(
     val discoverability: SocialDiscoverability = SocialDiscoverability.FRIEND_CODE_ONLY,
     val friendRequestsEnabled: Boolean = true,
     val activitySharingEnabled: Boolean = false,
+    val activityTimeZoneId: String? = null,
+    val friendRankingParticipationEnabled: Boolean = false,
     /** Relógio do servidor, epoch millis UTC. */
     val updatedAt: Long = 0L
 )

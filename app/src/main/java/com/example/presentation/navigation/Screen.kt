@@ -89,6 +89,10 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
             return "challenge/$id?name=$label"
         }
     }
+
+    // Atividade dos amigos e rankings contextuais (T17.4).
+    object Activity : Screen("activity", R.string.nav_profile, Icons.Default.Person)
+
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

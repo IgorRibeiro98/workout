@@ -70,15 +70,16 @@ describe('Persistência do domínio social', () => {
       // Agora a T17.0.
       const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
 
-      // A T17.0 é a `0007`, a T17.1 acrescentou a `0008`, a T17.2 a `0009` e a T17.3 a `0010`. As
-      // quatro são aditivas, e o que este teste afirma é sobre a T16: nada do que ela gravou muda
-      // quando o social sobe.
-      expect(applied.map((migration) => migration.version)).toEqual([7, 8, 9, 10]);
+      // A T17.0 é a `0007`, a T17.1 acrescentou a `0008`, a T17.2 a `0009`, a T17.3 a `0010` e a
+      // T17.4 a `0011`. As cinco são aditivas, e o que este teste afirma é sobre a T16: nada do que ela
+      // gravou muda quando o social sobe.
+      expect(applied.map((migration) => migration.version)).toEqual([7, 8, 9, 10, 11]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'social_foundation',
         'friend_graph',
         'social_progress_profile',
         'social_challenges',
+        'social_activity_rankings',
       ]);
       expect(db.prepare('SELECT * FROM backup_snapshots').all()).toEqual(beforeBackup);
       expect(db.prepare('SELECT * FROM sync_entities').all()).toEqual(beforeEntity);

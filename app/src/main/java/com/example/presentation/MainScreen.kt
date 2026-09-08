@@ -93,7 +93,8 @@ fun MainScreen() {
         socialGateway = app.socialGateway,
         friendGateway = app.friendGateway,
         socialProfileGateway = app.socialProfileGateway,
-        challengeGateway = app.challengeGateway
+        challengeGateway = app.challengeGateway,
+        socialActivityGateway = app.socialActivityGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -119,6 +120,8 @@ fun MainScreen() {
         viewModel(factory = factory)
 
     val socialProfileViewModel: com.example.presentation.account.SocialProfileViewModel =
+        viewModel(factory = factory)
+    val socialActivityViewModel: com.example.presentation.friends.SocialActivityViewModel =
         viewModel(factory = factory)
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
     val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel = viewModel(factory = factory)
@@ -152,6 +155,7 @@ fun MainScreen() {
         Screen.Today.route to Screen.Today.route,
         Screen.Summary.route to Screen.Today.route,
         Screen.Profile.route to Screen.Today.route,
+        Screen.Activity.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
@@ -374,6 +378,7 @@ fun MainScreen() {
                         navController.navigate(Screen.ProgressSharing.route)
                     },
                     onNavigateToChallenges = { navController.navigate(Screen.Challenges.route) },
+                    onNavigateToActivity = { navController.navigate(Screen.Activity.route) },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -472,6 +477,12 @@ fun MainScreen() {
                 com.example.presentation.friends.FriendRequestsScreen(
                     viewModel = friendsViewModel,
                     onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Activity.route) {
+                com.example.presentation.friends.ActivityScreen(
+                    viewModel = socialActivityViewModel,
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.Missions.route) {

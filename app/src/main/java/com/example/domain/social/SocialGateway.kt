@@ -56,7 +56,9 @@ interface SocialGateway {
     suspend fun updatePrivacy(
         discoverability: SocialDiscoverability? = null,
         friendRequestsEnabled: Boolean? = null,
-        activitySharingEnabled: Boolean? = null
+        activitySharingEnabled: Boolean? = null,
+        activityTimeZoneId: String? = null,
+        friendRankingParticipationEnabled: Boolean? = null
     ): SocialOutcome
 
     /** Desativa. Não apaga Conta Spark, treino, histórico, backup nem sincronização. */
@@ -127,5 +129,14 @@ enum class SocialError {
     RATE_LIMITED,
 
     /** Sem internet ou servidor inalcançável. **Nada foi enviado**, e nada ficou pendente. */
-    NETWORK
+    NETWORK,
+
+    /** O usuário não optou por participar do ranking (reciprocidade, T17.4). */
+    RANKING_NOT_ENABLED,
+
+    /** Fuso horário da atividade inválido ou ausente quando necessário (T17.4). */
+    INVALID_ACTIVITY_TIMEZONE,
+
+    /** Atividade indisponível para exibição (T17.4). */
+    ACTIVITY_NOT_AVAILABLE
 }

@@ -5,6 +5,7 @@ import {
 } from './social.contract';
 import { SocialErrors } from './social.errors';
 import { MAX_SOCIAL_REQUEST_BODY_BYTES, SOCIAL_DISPLAY_NAME } from './social.limits';
+import { isValidTimeZone } from './social-time';
 
 /**
  * A validação das requisições sociais (T17.0).
@@ -55,6 +56,8 @@ export interface UpdateSocialPrivacyRequest {
   readonly discoverability?: SocialDiscoverability;
   readonly friendRequestsEnabled?: boolean;
   readonly activitySharingEnabled?: boolean;
+  readonly activityTimeZoneId?: string;
+  readonly friendRankingParticipationEnabled?: boolean;
 }
 
 /** `POST /v1/social/me/activate` — só o nome social. Todo o resto é gerado pelo servidor. */
@@ -91,12 +94,16 @@ export function parseUpdatePrivacyRequest(body: unknown): UpdateSocialPrivacyReq
     'discoverability',
     'friendRequestsEnabled',
     'activitySharingEnabled',
+    'activityTimeZoneId',
+    'friendRankingParticipationEnabled',
   ]);
 
   const request: {
     discoverability?: SocialDiscoverability;
     friendRequestsEnabled?: boolean;
     activitySharingEnabled?: boolean;
+    activityTimeZoneId?: string;
+    friendRankingParticipationEnabled?: boolean;
   } = {};
 
   if ('discoverability' in object) {
@@ -119,6 +126,18 @@ export function parseUpdatePrivacyRequest(body: unknown): UpdateSocialPrivacyReq
     request.activitySharingEnabled = requireBoolean(
       object.activitySharingEnabled,
       'activitySharingEnabled',
+    );
+  }
+  if ('activityTimeZoneId' in object) {
+    if (typeof object.activityTimeZoneId !== 'string' || !isValidTimeZone(object.activityTimeZoneId)) {
+      throw SocialErrors.invalidActivityTimeZone('fuso horário da atividade inválido');
+    }
+    request.activityTimeZoneId = object.activityTimeZoneId;
+  }
+  if ('friendRankingParticipationEnabled' in object) {
+    request.friendRankingParticipationEnabled = requireBoolean(
+      object.friendRankingParticipationEnabled,
+      'friendRankingParticipationEnabled',
     );
   }
 

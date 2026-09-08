@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { StoredSocialProfile } from './social.repository';
+import { isValidTimeZone } from './social-time';
 
 /**
  * O **único** lugar que responde "quem pode o quê" no domínio social (T17.0 §81).
@@ -115,6 +116,37 @@ export class SocialAccessPolicy {
   canReceiveFriendRequest(profile: SocialProfileAccessView): boolean {
     return profile.status === 'ACTIVE' && profile.friendRequestsEnabled;
   }
+
+  /**
+   * O viewer pode ver a atividade recente de um amigo? (T17.4)
+   *
+   * Exige amizade direta ativa, friend com activitySharingEnabled = true e timezone IANA válido.
+   */
+  canViewFriendActivity(
+    friend: SocialProfileAccessView,
+    viewer: SocialProfileAccessView,
+    areFriends: boolean,
+  ): boolean {
+    if (!this.canViewFriendProfile(friend, viewer, areFriends)) {
+      return false;
+    }
+    return (
+      friend.activitySharingEnabled === true &&
+      typeof friend.activityTimeZoneId === 'string' &&
+      isValidTimeZone(friend.activityTimeZoneId)
+    );
+  }
+
+  /**
+   * O participante pode figurar no ranking contextual? (T17.4)
+   *
+   * Exige perfil ACTIVE e consentimento explícito (reciprocidade).
+   */
+  canParticipateInRanking(participant: SocialProfileAccessView): boolean {
+    return (
+      participant.status === 'ACTIVE' && participant.friendRankingParticipationEnabled === true
+    );
+  }
 }
 
 /**
@@ -129,6 +161,8 @@ export interface SocialProfileAccessView {
   readonly discoverability: string;
   readonly friendRequestsEnabled: boolean;
   readonly activitySharingEnabled: boolean;
+  readonly activityTimeZoneId?: string | null;
+  readonly friendRankingParticipationEnabled?: boolean;
 }
 
 /** Quem está olhando. Na T17.0 só existe uma pergunta: é o próprio dono? */

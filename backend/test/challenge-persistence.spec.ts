@@ -90,7 +90,9 @@ describe('Persistência dos desafios', () => {
 
       const before = {
         profiles: db.prepare('SELECT * FROM social_profiles ORDER BY owner_uid').all(),
-        privacy: db.prepare('SELECT * FROM social_privacy_settings ORDER BY owner_uid').all(),
+        privacy: db
+          .prepare('SELECT * FROM social_privacy_settings ORDER BY owner_uid')
+          .all() as Array<Record<string, unknown>>,
         progress: db.prepare('SELECT * FROM social_progress_settings ORDER BY owner_uid').all(),
         friendships: db.prepare('SELECT * FROM friendships').all(),
         entities: db.prepare('SELECT * FROM sync_entities').all(),
@@ -99,16 +101,24 @@ describe('Persistência dos desafios', () => {
 
       const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
 
-      expect(applied.map((migration) => migration.version)).toEqual([10]);
-      expect(applied.map((migration) => migration.name)).toEqual(['social_challenges']);
+      expect(applied.map((migration) => migration.version)).toEqual([10, 11]);
+      expect(applied.map((migration) => migration.name)).toEqual([
+        'social_challenges',
+        'social_activity_rankings',
+      ]);
 
       // Nada do que existia mudou (§132). `social_id`, `friend_code`, as amizades e os quatro
-      // interruptores da T17.2 saem desta migration exatamente como entraram.
+      // interruptores da T17.2 saem destas migrations exatamente como entraram (além das novas
+      // colunas aditivas com defaults).
       expect(db.prepare('SELECT * FROM social_profiles ORDER BY owner_uid').all()).toEqual(
         before.profiles,
       );
       expect(db.prepare('SELECT * FROM social_privacy_settings ORDER BY owner_uid').all()).toEqual(
-        before.privacy,
+        before.privacy.map((row) => ({
+          ...row,
+          activity_time_zone_id: null,
+          friend_ranking_participation_enabled: 0,
+        })),
       );
       expect(db.prepare('SELECT * FROM social_progress_settings ORDER BY owner_uid').all()).toEqual(
         before.progress,

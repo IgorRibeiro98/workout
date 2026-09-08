@@ -101,7 +101,9 @@ class FakeSocialGateway(
     override suspend fun updatePrivacy(
         discoverability: SocialDiscoverability?,
         friendRequestsEnabled: Boolean?,
-        activitySharingEnabled: Boolean?
+        activitySharingEnabled: Boolean?,
+        activityTimeZoneId: String?,
+        friendRankingParticipationEnabled: Boolean?
     ): SocialOutcome {
         privacyCalls += 1
         return mutate { profile ->
@@ -111,7 +113,11 @@ class FakeSocialGateway(
                     friendRequestsEnabled = friendRequestsEnabled
                         ?: profile.privacy.friendRequestsEnabled,
                     activitySharingEnabled = activitySharingEnabled
-                        ?: profile.privacy.activitySharingEnabled
+                        ?: profile.privacy.activitySharingEnabled,
+                    activityTimeZoneId = activityTimeZoneId
+                        ?: profile.privacy.activityTimeZoneId,
+                    friendRankingParticipationEnabled = friendRankingParticipationEnabled
+                        ?: profile.privacy.friendRankingParticipationEnabled
                 )
             )
         }

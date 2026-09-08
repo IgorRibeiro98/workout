@@ -245,9 +245,22 @@ class SocialViewModel(
         updatePrivacy { gateway.updatePrivacy(friendRequestsEnabled = enabled) }
     }
 
-    /** Liga/desliga o compartilhamento de atividade. Padrão desligado; nada é publicado hoje. */
+    /** Liga/desliga o compartilhamento de atividade com amigos (T17.4). Ao ativar, envia o fuso do aparelho. */
     fun setActivitySharingEnabled(enabled: Boolean) {
-        updatePrivacy { gateway.updatePrivacy(activitySharingEnabled = enabled) }
+        val timeZoneId = if (enabled) java.util.TimeZone.getDefault().id else null
+        updatePrivacy {
+            gateway.updatePrivacy(
+                activitySharingEnabled = enabled,
+                activityTimeZoneId = timeZoneId
+            )
+        }
+    }
+
+    /** Liga/desliga a participação no ranking semanal entre amigos (T17.4). */
+    fun setFriendRankingParticipationEnabled(enabled: Boolean) {
+        updatePrivacy {
+            gateway.updatePrivacy(friendRankingParticipationEnabled = enabled)
+        }
     }
 
     private fun updatePrivacy(operation: suspend () -> SocialOutcome) {

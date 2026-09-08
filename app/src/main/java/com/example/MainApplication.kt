@@ -317,6 +317,13 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Atividade dos amigos e rankings contextuais (T17.4).
+     */
+    val socialActivityGateway: com.example.domain.social.SocialActivityGateway by lazy {
+        com.example.data.social.SparkSocialActivityGateway(sparkBackendClient)
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

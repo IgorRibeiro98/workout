@@ -57,6 +57,8 @@ data class SocialPrivacyDto(
     val discoverability: String,
     val friendRequestsEnabled: Boolean,
     val activitySharingEnabled: Boolean,
+    val activityTimeZoneId: String? = null,
+    val friendRankingParticipationEnabled: Boolean = false,
     val updatedAt: Long
 )
 
@@ -83,7 +85,9 @@ data class UpdateSocialProfileRequestDto(
 data class UpdateSocialPrivacyRequestDto(
     val discoverability: String? = null,
     val friendRequestsEnabled: Boolean? = null,
-    val activitySharingEnabled: Boolean? = null
+    val activitySharingEnabled: Boolean? = null,
+    val activityTimeZoneId: String? = null,
+    val friendRankingParticipationEnabled: Boolean? = null
 )
 
 /**
@@ -110,6 +114,8 @@ fun SocialOwnerProfileDto.toDomain(): SocialProfile? {
             discoverability = parsedDiscoverability,
             friendRequestsEnabled = privacy.friendRequestsEnabled,
             activitySharingEnabled = privacy.activitySharingEnabled,
+            activityTimeZoneId = privacy.activityTimeZoneId,
+            friendRankingParticipationEnabled = privacy.friendRankingParticipationEnabled,
             updatedAt = privacy.updatedAt
         ),
         createdAt = createdAt,

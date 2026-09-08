@@ -151,6 +151,8 @@ describe('Domínio social: identidade, ativação e privacidade', () => {
         discoverability: 'FRIEND_CODE_ONLY',
         friendRequestsEnabled: true,
         activitySharingEnabled: false,
+        activityTimeZoneId: null,
+        friendRankingParticipationEnabled: false,
         updatedAt: expect.any(Number),
       });
       expect(profile.privacy.discoverability).toBe(SOCIAL_PRIVACY_DEFAULTS.discoverability);
@@ -341,9 +343,14 @@ describe('Domínio social: identidade, ativação e privacidade', () => {
     });
 
     it('activity sharing pode ser ligado explicitamente e persiste', async () => {
-      await patchPrivacy(TOKEN_A, { activitySharingEnabled: true });
+      await patchPrivacy(TOKEN_A, {
+        activitySharingEnabled: true,
+        activityTimeZoneId: 'America/Sao_Paulo',
+      });
 
-      expect((await me(TOKEN_A)).body.profile.privacy.activitySharingEnabled).toBe(true);
+      const privacy = (await me(TOKEN_A)).body.profile.privacy;
+      expect(privacy.activitySharingEnabled).toBe(true);
+      expect(privacy.activityTimeZoneId).toBe('America/Sao_Paulo');
     });
 
     it('discoverability aceita apenas FRIEND_CODE_ONLY', async () => {
@@ -549,7 +556,9 @@ describe('Domínio social: identidade, ativação e privacidade', () => {
       ]);
       expect(Object.keys(body.profile.privacy).sort()).toEqual([
         'activitySharingEnabled',
+        'activityTimeZoneId',
         'discoverability',
+        'friendRankingParticipationEnabled',
         'friendRequestsEnabled',
         'updatedAt',
       ]);

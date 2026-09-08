@@ -77,14 +77,18 @@ class SparkSocialGateway(
     override suspend fun updatePrivacy(
         discoverability: SocialDiscoverability?,
         friendRequestsEnabled: Boolean?,
-        activitySharingEnabled: Boolean?
+        activitySharingEnabled: Boolean?,
+        activityTimeZoneId: String?,
+        friendRankingParticipationEnabled: Boolean?
     ): SocialOutcome = patch(
         path = SocialContract.PRIVACY_PATH,
         body = json.encodeToString(
             UpdateSocialPrivacyRequestDto(
                 discoverability = discoverability?.name,
                 friendRequestsEnabled = friendRequestsEnabled,
-                activitySharingEnabled = activitySharingEnabled
+                activitySharingEnabled = activitySharingEnabled,
+                activityTimeZoneId = activityTimeZoneId,
+                friendRankingParticipationEnabled = friendRankingParticipationEnabled
             )
         )
     )
@@ -171,6 +175,9 @@ class SparkSocialGateway(
             SocialContract.ErrorCodes.INVALID_DISPLAY_NAME -> SocialError.INVALID_DISPLAY_NAME
             SocialContract.ErrorCodes.SOCIAL_UNAVAILABLE -> SocialError.UNAVAILABLE
             SocialContract.ErrorCodes.INVALID_SOCIAL_REQUEST -> SocialError.REJECTED
+            SocialContract.ErrorCodes.RANKING_NOT_ENABLED -> SocialError.RANKING_NOT_ENABLED
+            SocialContract.ErrorCodes.INVALID_ACTIVITY_TIMEZONE -> SocialError.INVALID_ACTIVITY_TIMEZONE
+            SocialContract.ErrorCodes.ACTIVITY_NOT_AVAILABLE -> SocialError.ACTIVITY_NOT_AVAILABLE
             else -> when {
                 outcome.code == HTTP_UNAUTHORIZED -> SocialError.AUTH_REQUIRED
                 outcome.code == HTTP_TOO_MANY_REQUESTS -> SocialError.RATE_LIMITED

@@ -64,7 +64,9 @@ fun ProfileScreen(
     onNavigateToFriendRequests: () -> Unit = {},
     /** T17.2 — "Compartilhar progresso", dentro da mesma área Social. */
     onNavigateToProgressSharing: () -> Unit = {},
-    onNavigateToChallenges: () -> Unit = {}
+    onNavigateToChallenges: () -> Unit = {},
+    /** T17.4 — Atividade e ranking de amigos */
+    onNavigateToActivity: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -143,6 +145,9 @@ fun ProfileScreen(
         onSocialActivitySharingChange = { enabled ->
             socialViewModel?.setActivitySharingEnabled(enabled)
         },
+        onSocialFriendRankingParticipationChange = { enabled ->
+            socialViewModel?.setFriendRankingParticipationEnabled(enabled)
+        },
         onSocialDisable = { socialViewModel?.startDisable() },
         onSocialConfirmDisable = { socialViewModel?.confirmDisable() },
         onSocialCancelDisable = { socialViewModel?.cancelDisable() },
@@ -152,7 +157,8 @@ fun ProfileScreen(
         onOpenFriends = onNavigateToFriends,
         onOpenFriendRequests = onNavigateToFriendRequests,
         onOpenProgressSharing = onNavigateToProgressSharing,
-        onOpenChallenges = onNavigateToChallenges
+        onOpenChallenges = onNavigateToChallenges,
+        onOpenActivity = onNavigateToActivity
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -213,6 +219,7 @@ private fun ProfileScreenContent(
     onSocialCancelEditName: () -> Unit = {},
     onSocialFriendRequestsChange: (Boolean) -> Unit = {},
     onSocialActivitySharingChange: (Boolean) -> Unit = {},
+    onSocialFriendRankingParticipationChange: (Boolean) -> Unit = {},
     onSocialDisable: () -> Unit = {},
     onSocialConfirmDisable: () -> Unit = {},
     onSocialCancelDisable: () -> Unit = {},
@@ -222,7 +229,8 @@ private fun ProfileScreenContent(
     onOpenFriends: () -> Unit = {},
     onOpenFriendRequests: () -> Unit = {},
     onOpenProgressSharing: () -> Unit = {},
-    onOpenChallenges: () -> Unit = {}
+    onOpenChallenges: () -> Unit = {},
+    onOpenActivity: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -368,6 +376,7 @@ private fun ProfileScreenContent(
                     onOpenRequests = onOpenFriendRequests,
                     onOpenProgressSharing = onOpenProgressSharing,
                     onOpenChallenges = onOpenChallenges,
+                    onOpenActivity = onOpenActivity,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,
@@ -379,6 +388,7 @@ private fun ProfileScreenContent(
                     onCancelEditName = onSocialCancelEditName,
                     onFriendRequestsChange = onSocialFriendRequestsChange,
                     onActivitySharingChange = onSocialActivitySharingChange,
+                    onFriendRankingParticipationChange = onSocialFriendRankingParticipationChange,
                     onDisable = onSocialDisable,
                     onConfirmDisable = onSocialConfirmDisable,
                     onCancelDisable = onSocialCancelDisable,
