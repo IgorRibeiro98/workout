@@ -1,5 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
+import {
+  CANONICAL_TRAINING_SOURCE,
+  type CanonicalTrainingSource,
+  SyncedCanonicalTrainingSource,
+} from './canonical-training.source';
 import {
   calendarDateAsUtc,
   DAY_MS,
@@ -131,74 +136,35 @@ export const CHALLENGE_PROGRESS_SOURCE = Symbol('CHALLENGE_PROGRESS_SOURCE');
  */
 @Injectable()
 export class SyncedChallengeProgressSource implements ChallengeProgressSource {
-  constructor(private readonly sqlite: SqliteService) {}
+  private readonly trainingSource: CanonicalTrainingSource;
+
+  constructor(
+    @Inject(CANONICAL_TRAINING_SOURCE)
+    trainingSourceOrSqlite: CanonicalTrainingSource | SqliteService,
+  ) {
+    if (
+      'countCompletedWorkouts' in trainingSourceOrSqlite &&
+      'countActiveDays' in trainingSourceOrSqlite
+    ) {
+      this.trainingSource = trainingSourceOrSqlite;
+    } else {
+      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrSqlite);
+    }
+  }
 
   /**
    * `WORKOUTS_COMPLETED`.
    *
-   * ```sql
-   * COUNT(*) WHERE owner_uid = ?          -- o dono, resolvido server-side (§198/§200)
-   *            AND entity_type = 'WORKOUT_SESSION'
-   *            AND deleted = 0            -- histórico apagado pelo usuário não conta
-   *            AND status = 'COMPLETED'   -- §4, declarada onde é aplicada
-   *            AND startedAt ∈ [início, fim)
-   * ```
-   *
-   * `deleted = 0` porque a T16.7 permite ao usuário apagar o próprio histórico, e uma sessão com
-   * tombstone deixou de existir — continuar pontuando por ela faria o placar afirmar um treino que
-   * o dono removeu.
-   *
-   * A cláusula de status está escrita mesmo sendo hoje redundante (o registry recusa qualquer
-   * outro status no push): ela é a declaração da regra no lugar onde a regra é aplicada, e é o que
-   * faz o teste falhar se algum dia o registry passar a aceitar `IN_PROGRESS`.
+   * Delega à fonte canônica de treino centralizada (T17.4.1).
    */
   countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS total
-           FROM sync_entities
-          WHERE owner_uid = ?
-            AND entity_type = 'WORKOUT_SESSION'
-            AND deleted = 0
-            AND json_extract(payload, '$.status') = 'COMPLETED'
-            AND json_extract(payload, '$.startedAt') >= ?
-            AND json_extract(payload, '$.startedAt') < ?`,
-      )
-      .get(ownerUid, startMs, endMsExclusive) as { total: number } | undefined;
-
-    return row?.total ?? 0;
+    return this.trainingSource.countCompletedWorkouts(ownerUid, startMs, endMsExclusive);
   }
 
   /**
    * `ACTIVE_DAYS`.
    *
-   * ```text
-   * dias do desafio        [08/09) [09/09) [10/09) ...   ← faixas em epoch millis, com DST
-   *                            │       │       │
-   * sessões COMPLETED       ●● │       │   ●   │         ← 2 no dia 8, 0 no dia 9, 1 no dia 10
-   *                            ▼       ▼       ▼
-   * conta                      1   +   0   +   1     =  2
-   * ```
-   *
-   * ## Uma consulta, e nenhum timestamp em JavaScript
-   *
-   * As faixas de cada dia são calculadas aqui — é a única forma de respeitar o fuso IANA, porque
-   * o SQLite só conhece UTC e deslocamentos fixos — e entram na consulta como uma tabela
-   * `VALUES`. O `EXISTS` responde "houve treino neste dia?" por dia, e o `COUNT` externo devolve
-   * **um escalar**.
-   *
-   * A alternativa óbvia — trazer os `startedAt` da janela e agrupá-los em JavaScript — foi
-   * recusada: ela materializaria horários de treino de outra pessoa no processo, que é exatamente
-   * o que `AGGREGATE_ONLY` e o quarto princípio da tarefa proíbem. O que sai daqui é um número.
-   *
-   * ## Horário de verão (§203)
-   *
-   * Cada limite é `localMidnightToInstant` da data local — nunca `início + n×24h`. Num dia de
-   * virada, a faixa tem 23 ou 25 horas, e é isso que a torna correta: com passos de 24h, um treino
-   * da noite cairia no dia seguinte e um dia ativo viraria dois (ou sumiria).
-   *
-   * O tamanho da lista é a duração do desafio, limitada a 90 dias por
-   * `CHALLENGE_DURATION_DAYS.max` — pequeno para o SQLite, e por isso o teto está lá.
+   * Delega à fonte canônica de treino centralizada (T17.4.1).
    */
   countActiveDays(
     ownerUid: string,
@@ -206,38 +172,7 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
     endDate: string,
     timeZoneId: string,
   ): number {
-    const days = challengeDayWindows(startDate, endDate, timeZoneId);
-    if (days.length === 0) {
-      // Período impossível de interpretar. Zero, e não uma consulta sem cláusula: um período que
-      // não produz dias não pode produzir dias ativos.
-      return 0;
-    }
-
-    const values = days.map(() => '(?, ?)').join(', ');
-    const parameters: number[] = [];
-    for (const day of days) {
-      parameters.push(day.startMs, day.endMs);
-    }
-
-    const row = this.sqlite.connection
-      .prepare(
-        `WITH challenge_days(day_start, day_end) AS (VALUES ${values})
-         SELECT COUNT(*) AS total
-           FROM challenge_days d
-          WHERE EXISTS (
-                SELECT 1
-                  FROM sync_entities
-                 WHERE owner_uid = ?
-                   AND entity_type = 'WORKOUT_SESSION'
-                   AND deleted = 0
-                   AND json_extract(payload, '$.status') = 'COMPLETED'
-                   AND json_extract(payload, '$.startedAt') >= d.day_start
-                   AND json_extract(payload, '$.startedAt') < d.day_end
-                )`,
-      )
-      .get(...parameters, ownerUid) as { total: number } | undefined;
-
-    return row?.total ?? 0;
+    return this.trainingSource.countActiveDays(ownerUid, startDate, endDate, timeZoneId);
   }
 }
 

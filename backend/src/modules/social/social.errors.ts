@@ -111,17 +111,9 @@ export const SocialErrors = {
 
   /** Fuso horário da atividade inválido ou ausente quando necessário (T17.4). */
   invalidActivityTimeZone: (reason: string) =>
-    socialException(
-      HttpStatus.BAD_REQUEST,
-      SOCIAL_ERROR_CODES.INVALID_ACTIVITY_TIMEZONE,
-      reason,
-    ),
+    socialException(HttpStatus.BAD_REQUEST, SOCIAL_ERROR_CODES.INVALID_ACTIVITY_TIMEZONE, reason),
 
   /** Atividade não disponível para exibição (T17.4). */
   activityNotAvailable: (reason: string) =>
-    socialException(
-      HttpStatus.NOT_FOUND,
-      SOCIAL_ERROR_CODES.ACTIVITY_NOT_AVAILABLE,
-      reason,
-    ),
+    socialException(HttpStatus.NOT_FOUND, SOCIAL_ERROR_CODES.ACTIVITY_NOT_AVAILABLE, reason),
 };

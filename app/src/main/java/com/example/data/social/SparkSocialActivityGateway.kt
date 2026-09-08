@@ -30,7 +30,7 @@ class SparkSocialActivityGateway(
     override suspend fun getRecentFriendActivity(): SocialActivityOutcome<List<FriendActivityItem>> =
         get(SocialContract.ACTIVITY_PATH) { body ->
             val response = json.decodeFromString<SocialActivityResponseDto>(body)
-            response.items.mapNotNull { it.toDomain() }
+            response.toDomain()
         }
 
     override suspend fun getFriendRankingLast7Days(): SocialActivityOutcome<FriendRankingLeaderboard> =

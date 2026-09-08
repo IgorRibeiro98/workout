@@ -12,10 +12,7 @@ import { SocialAccessPolicy } from './social.access-policy';
 import { SocialErrors } from './social.errors';
 import { SocialRepository } from './social.repository';
 import { DAY_MS } from './social-time';
-import type {
-  FriendRankingEntryDto,
-  FriendRankingResponse,
-} from './social.contract';
+import type { FriendRankingEntryDto, FriendRankingResponse } from './social.contract';
 
 interface CandidateParticipant {
   readonly ownerUid: string;
@@ -125,18 +122,23 @@ export class FriendRankingService {
     });
 
     const cappedEntries = rankedEntries.slice(0, 50);
+    const userInTop50 = cappedEntries.some((e) => e.isCurrentUser);
+    const currentUserEntry = rankedEntries.find((e) => e.isCurrentUser);
+
+    const finalEntries =
+      userInTop50 || !currentUserEntry ? cappedEntries : [...cappedEntries, currentUserEntry];
 
     this.logger.info('social.rankings.listed', {
       requestId,
       uidPrefix: uidPrefix(principal.uid),
       participantCount: scored.length,
-      entryCount: cappedEntries.length,
+      entryCount: finalEntries.length,
     });
 
     return {
       type: 'WORKOUTS_COMPLETED_LAST_7_DAYS',
       participantCount: scored.length,
-      entries: cappedEntries,
+      entries: finalEntries,
     };
   }
 }

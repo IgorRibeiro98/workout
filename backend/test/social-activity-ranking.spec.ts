@@ -1,9 +1,11 @@
 import { INestApplication } from '@nestjs/common';
+import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { pushBody, sessionPayload, uuid } from './support/sync-fixtures';
+import { canonicalPair } from '../src/modules/social/friendship.repository';
 import { DAY_MS } from '../src/modules/social/social-time';
 
 const TOKEN_A = 'token-da-conta-a';
@@ -374,7 +376,9 @@ describe('T17.4 — Atividade dos amigos e rankings contextuais', () => {
         .set('Authorization', `Bearer ${TOKEN_A}`);
 
       expect(res.status).toBe(200);
-      const bobEntry = res.body.entries.find((e: { displayName: string; score: number }) => e.displayName === 'Bob');
+      const bobEntry = res.body.entries.find(
+        (e: { displayName: string; score: number }) => e.displayName === 'Bob',
+      );
       expect(bobEntry.score).toBe(2);
     });
 
@@ -439,6 +443,82 @@ describe('T17.4 — Atividade dos amigos e rankings contextuais', () => {
       const rawJson = JSON.stringify(res.body);
       expect(rawJson).not.toContain(UID_A);
       expect(rawJson).not.toContain('a@example.com');
+    });
+
+    it('permite que o usuário visualize sua posição mesmo quando estiver além do top 50', async () => {
+      freezeClock();
+      await activate(TOKEN_A, 'Alice');
+      await patchPrivacy(TOKEN_A, { friendRankingParticipationEnabled: true });
+
+      // Inserir 54 amigos diretamente no SQLite para testar escala de 55 participantes
+      const db = new BetterSqlite3(temp.path);
+      const insertProfile = db.prepare(
+        `INSERT INTO social_profiles (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'ACTIVE', 1, 1)`,
+      );
+      const insertPrivacy = db.prepare(
+        `INSERT INTO social_privacy_settings (owner_uid, discoverability, friend_requests_enabled, activity_sharing_enabled, activity_time_zone_id, friend_ranking_participation_enabled, updated_at)
+         VALUES (?, 'FRIEND_CODE_ONLY', 1, 0, NULL, 1, 1)`,
+      );
+      const insertFriendship = db.prepare(
+        `INSERT INTO friendships (user_a_uid, user_b_uid, created_at)
+         VALUES (?, ?, 1)`,
+      );
+      const insertSync = db.prepare(
+        `INSERT INTO sync_entities (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision, last_server_sequence, payload, payload_hash, origin_device_id, deleted, created_at, updated_at)
+         VALUES (?, 'WORKOUT_SESSION', ?, 1, 1, 1, ?, 'hash', 'test-device', 0, 1, 1)`,
+      );
+
+      for (let i = 1; i <= 54; i++) {
+        const friendUid = `uid-friend-${i.toString().padStart(3, '0')}`;
+        const socialId = `social-friend-${i.toString().padStart(3, '0')}`;
+        const friendCode = `SPK-${i.toString().padStart(8, '0')}`;
+        const displayName = `Friend ${i.toString().padStart(3, '0')}`;
+
+        insertProfile.run(friendUid, socialId, friendCode, displayName);
+        insertPrivacy.run(friendUid);
+
+        const [low, high] = canonicalPair(UID_A, friendUid);
+        insertFriendship.run(low, high);
+
+        // Cada amigo concluiu 5 treinos na semana
+        for (let s = 1; s <= 5; s++) {
+          const syncId = `sess-${i}-${s}`;
+          const payload = JSON.stringify(
+            sessionPayload(syncId, { startedAt: NOW - s * 3600 * 1000 }),
+          );
+          insertSync.run(friendUid, syncId, payload);
+        }
+      }
+
+      // Alice concluiu apenas 1 treino na semana (posição 55)
+      await pushSession(TOKEN_A, NOW - 3600 * 1000);
+
+      const res = await request(server())
+        .get('/v1/social/rankings/last-7-days')
+        .set('Authorization', `Bearer ${TOKEN_A}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.type).toBe('WORKOUTS_COMPLETED_LAST_7_DAYS');
+      expect(res.body.participantCount).toBe(55);
+      // Top 50 amigos + 1 entrada para o próprio usuário (Alice)
+      expect(res.body.entries).toHaveLength(51);
+
+      // As 50 primeiras posições são dos amigos (isCurrentUser = false)
+      for (let i = 0; i < 50; i++) {
+        expect(res.body.entries[i].isCurrentUser).toBe(false);
+        expect(res.body.entries[i].rank).toBe(1); // Todos empatados com 5 treinos
+        expect(res.body.entries[i].score).toBe(5);
+      }
+
+      // A 51ª entrada é a própria Alice fora do top 50, com sua posição correta
+      const aliceEntry = res.body.entries[50];
+      expect(aliceEntry).toMatchObject({
+        displayName: 'Alice',
+        score: 1,
+        rank: 55, // Salto de competição: 54 empatados em 1º -> Alice é 55ª
+        isCurrentUser: true,
+      });
     });
   });
 });

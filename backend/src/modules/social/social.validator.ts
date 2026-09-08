@@ -129,7 +129,10 @@ export function parseUpdatePrivacyRequest(body: unknown): UpdateSocialPrivacyReq
     );
   }
   if ('activityTimeZoneId' in object) {
-    if (typeof object.activityTimeZoneId !== 'string' || !isValidTimeZone(object.activityTimeZoneId)) {
+    if (
+      typeof object.activityTimeZoneId !== 'string' ||
+      !isValidTimeZone(object.activityTimeZoneId)
+    ) {
       throw SocialErrors.invalidActivityTimeZone('fuso horário da atividade inválido');
     }
     request.activityTimeZoneId = object.activityTimeZoneId;

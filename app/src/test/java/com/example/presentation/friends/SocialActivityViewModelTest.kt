@@ -177,6 +177,68 @@ class SocialActivityViewModelTest {
     }
 
     @Test
+    fun `optInToRanking altera exclusivamente friendRankingParticipationEnabled preservando activityTimeZoneId nulo e activitySharingEnabled falso`() = runBlocking {
+        // Conta com activitySharingEnabled = false e timezone = null
+        socialGateway.seed(
+            accountA.uid,
+            SocialProfile(
+                socialId = "social-a",
+                friendCode = "SPK-A",
+                displayName = "Ana",
+                status = SocialProfileStatus.ACTIVE,
+                privacy = SocialPrivacySettings(
+                    activitySharingEnabled = false,
+                    activityTimeZoneId = null,
+                    friendRankingParticipationEnabled = false
+                ),
+                createdAt = 1000L,
+                updatedAt = 1000L
+            )
+        )
+        activityGateway.failWithRanking = SocialActivityError.RANKING_NOT_ENABLED
+        val viewModel = createViewModel()
+
+        viewModel.optInToRanking()
+
+        val updatedPrivacy = socialGateway.stored(accountA.uid)?.privacy
+        assertNotNull(updatedPrivacy)
+        assertTrue(updatedPrivacy!!.friendRankingParticipationEnabled)
+        assertFalse("activitySharingEnabled deve permanecer false", updatedPrivacy.activitySharingEnabled)
+        assertNull("activityTimeZoneId deve permanecer null e não receber fuso padrão", updatedPrivacy.activityTimeZoneId)
+    }
+
+    @Test
+    fun `optInToRanking preserva timezone customizada pre-existente sem sobrescrever`() = runBlocking {
+        val customTz = "Pacific/Auckland"
+        socialGateway.seed(
+            accountA.uid,
+            SocialProfile(
+                socialId = "social-a",
+                friendCode = "SPK-A",
+                displayName = "Ana",
+                status = SocialProfileStatus.ACTIVE,
+                privacy = SocialPrivacySettings(
+                    activitySharingEnabled = true,
+                    activityTimeZoneId = customTz,
+                    friendRankingParticipationEnabled = false
+                ),
+                createdAt = 1000L,
+                updatedAt = 1000L
+            )
+        )
+        activityGateway.failWithRanking = SocialActivityError.RANKING_NOT_ENABLED
+        val viewModel = createViewModel()
+
+        viewModel.optInToRanking()
+
+        val updatedPrivacy = socialGateway.stored(accountA.uid)?.privacy
+        assertNotNull(updatedPrivacy)
+        assertTrue(updatedPrivacy!!.friendRankingParticipationEnabled)
+        assertTrue(updatedPrivacy.activitySharingEnabled)
+        assertEquals("activityTimeZoneId não deve ser sobrescrita", customTz, updatedPrivacy.activityTimeZoneId)
+    }
+
+    @Test
     fun `feed vazio resulta em lista vazia com estado Success`() = runBlocking {
         activityGateway.seededActivity = emptyList()
         activityGateway.seededRanking = FriendRankingLeaderboard(0, emptyList())

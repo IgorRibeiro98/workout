@@ -39,6 +39,15 @@ data class FriendRankingResponseDto(
     val entries: List<FriendRankingEntryDto> = emptyList()
 )
 
+fun SocialActivityResponseDto.toDomain(): List<FriendActivityItem>? {
+    val result = ArrayList<FriendActivityItem>(items.size)
+    for (item in items) {
+        val domainItem = item.toDomain() ?: return null
+        result.add(domainItem)
+    }
+    return result
+}
+
 fun SocialActivityItemDto.toDomain(): FriendActivityItem? {
     if (type != "TRAINING_DAY") return null
     if (actor.socialId.isBlank() || actor.displayName.isBlank()) return null
@@ -50,14 +59,25 @@ fun SocialActivityItemDto.toDomain(): FriendActivityItem? {
     )
 }
 
-fun FriendRankingResponseDto.toDomain(): FriendRankingLeaderboard {
-    val domainEntries = entries.map {
-        FriendRankingEntry(
-            socialId = it.socialId,
-            displayName = it.displayName,
-            score = it.score,
-            rank = it.rank,
-            isCurrentUser = it.isCurrentUser
+fun FriendRankingResponseDto.toDomain(): FriendRankingLeaderboard? {
+    if (type != "WORKOUTS_COMPLETED_LAST_7_DAYS") return null
+    if (participantCount < 0) return null
+    if (participantCount < entries.size) return null
+
+    val domainEntries = ArrayList<FriendRankingEntry>(entries.size)
+    for (entry in entries) {
+        if (entry.socialId.isBlank() || entry.displayName.isBlank()) return null
+        if (entry.score < 0) return null
+        if (entry.rank < 1) return null
+
+        domainEntries.add(
+            FriendRankingEntry(
+                socialId = entry.socialId,
+                displayName = entry.displayName,
+                score = entry.score,
+                rank = entry.rank,
+                isCurrentUser = entry.isCurrentUser
+            )
         )
     }
     return FriendRankingLeaderboard(

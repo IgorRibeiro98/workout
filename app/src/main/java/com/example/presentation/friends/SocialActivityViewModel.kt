@@ -143,7 +143,6 @@ class SocialActivityViewModel(
 
         viewModelScope.launch {
             val outcome = socialGateway.updatePrivacy(
-                activityTimeZoneId = java.util.TimeZone.getDefault().id,
                 friendRankingParticipationEnabled = true
             )
             if (getCurrentUid() != uid) return@launch

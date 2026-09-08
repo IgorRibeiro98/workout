@@ -533,8 +533,11 @@ derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
 {
   "items": [
     {
-      "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
-      "displayName": "Carlos",
+      "type": "TRAINING_DAY",
+      "actor": {
+        "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
+        "displayName": "Carlos"
+      },
       "daysAgo": 0
     }
   ]
@@ -544,11 +547,12 @@ derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
 - Ordenado por `daysAgo ASC`, desempate por `displayName ASC`, depois `socialId ASC`.
 - Teto: 30 itens.
 - Requisitos: amigos mútuos ativos, `activitySharingEnabled = 1`, `activityTimeZoneId` válido.
+- Fonte canônica: `sync_entities` com `entity_type = 'WORKOUT_SESSION'`, `deleted = 0`, `status = 'COMPLETED'`, ancorado em `startedAt`.
 
 #### Resposta de Ranking (`GET /v1/social/rankings/last-7-days`):
 ```json
 {
-  "metric": "WORKOUTS_COMPLETED_LAST_7_DAYS",
+  "type": "WORKOUTS_COMPLETED_LAST_7_DAYS",
   "participantCount": 2,
   "entries": [
     {
@@ -571,7 +575,9 @@ derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
 - Reciprocidade estrita: visualizador precisa ter `friendRankingParticipationEnabled = 1`.
 - Participantes: visualizador e amigos mútuos ativos com opt-in habilitado.
 - Posições ordinais: competition ranking (`1, 1, 3`), desempate estável por `displayName ASC`, `socialId ASC`.
-- Teto: 50 entradas.
+- Teto: top 50 entradas na classificação geral.
+- Visibilidade garantida além do top 50: se o usuário autenticado estiver além da 50ª posição, sua linha é incluída ao final de `entries` (com `isCurrentUser: true` e seu `rank` real), permitindo que visualize sua colocação sem romper o contrato de lista.
+- Fonte canônica: `sync_entities` com `entity_type = 'WORKOUT_SESSION'`, `deleted = 0`, `status = 'COMPLETED'`, ancorado em `startedAt`, centralizado via `CanonicalTrainingSource`.
 
 ### 12.3 Erros da T17.4
 

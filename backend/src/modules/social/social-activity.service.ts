@@ -12,10 +12,7 @@ import { SocialAccessPolicy } from './social.access-policy';
 import { SocialErrors } from './social.errors';
 import { SocialRepository } from './social.repository';
 import { localCalendarDate, DAY_MS } from './social-time';
-import type {
-  SocialActivityItemDto,
-  SocialActivityResponse,
-} from './social.contract';
+import type { SocialActivityItemDto, SocialActivityResponse } from './social.contract';
 
 /**
  * Serviço de projeção da atividade recente dos amigos (T17.4).

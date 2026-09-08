@@ -49,8 +49,11 @@
 {
   "items": [
     {
-      "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
-      "displayName": "Carlos",
+      "type": "TRAINING_DAY",
+      "actor": {
+        "socialId": "8f14e45f-ceea-467a-a1c2-0f0e0a0b0c0d",
+        "displayName": "Carlos"
+      },
       "daysAgo": 0
     }
   ]
@@ -61,18 +64,18 @@
 
 - **Autenticação:** Obrigatória via Firebase ID Token (`BearerAuthGuard`).
 - **Janela:** Exatamente os últimos 7 dias móveis baseados no `Clock` do servidor (`[now - 7 * DAY_MS, now]`).
-- **Métrica:** Quantidade de sessões de treino concluídas (`WORKOUTS_COMPLETED_LAST_7_DAYS`).
+- **Métrica / Tipo:** Quantidade de sessões de treino concluídas (`WORKOUTS_COMPLETED_LAST_7_DAYS`).
 - **Participantes:**
   - O visualizador (viewer) se ativo e com participação habilitada.
   - Amigos mútuos ativos que também habilitaram `friendRankingParticipationEnabled = 1`.
 - **Regras de Posição (Competition Ranking):**
   - Empates recebem a mesma posição ordinal, com salto para o competidor seguinte (ex: 1º, 1º, 3º).
   - Critério determinístico de ordenação: `score DESC`, seguido por `displayName ASC`, e `socialId ASC`.
-  - Limite rígido de 50 participantes.
+  - Teto: Top 50 entradas na classificação geral. Se o usuário autenticado estiver classificado além da 50ª posição, sua entrada individual é anexada ao final de `entries` com `isCurrentUser = true` e seu `rank` real, permitindo que veja sua colocação em grupos grandes.
 
 ```json
 {
-  "metric": "WORKOUTS_COMPLETED_LAST_7_DAYS",
+  "type": "WORKOUTS_COMPLETED_LAST_7_DAYS",
   "participantCount": 2,
   "entries": [
     {
@@ -97,6 +100,6 @@
 
 ## 3. Segurança e Performance
 
-- **Prevenção de N+1:** Implementado `SyncedCanonicalTrainingSource` com consultas batch parametrizadas (`IN (?, ?, ...)`).
-- **Sem mutações cegas:** Leitura direta de `sync_entities` filtrada por `entity_type = 'workout_session'` e `deleted_at IS NULL`.
+- **Prevenção de N+1 e Consolidação Canônica:** Implementado `SyncedCanonicalTrainingSource` com consultas batch parametrizadas (`IN (?, ?, ...)`). As leituras de Profile, Challenge, Activity e Ranking reutilizam esta mesma autoridade canônica sem duplicar SQL nem criar tabelas derivadas.
+- **Sem mutações cegas:** Leitura direta de `sync_entities` filtrada por `entity_type = 'WORKOUT_SESSION'`, `deleted = 0` e `json_extract(payload, '$.status') = 'COMPLETED'`, com ancoragem temporal canônica em `startedAt`.
 - **Fuso Horário Canônico:** A conversão de timestamps de treino para dias civis utiliza exclusivamente o fuso do atleta dono do treino (`Intl.DateTimeFormat` com IANA timezone).

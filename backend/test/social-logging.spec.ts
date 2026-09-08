@@ -132,14 +132,11 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
       .send({ displayName: DISPLAY_NAME });
     written.length = 0;
 
-    await request(server)
-      .patch('/v1/social/me/privacy')
-      .set('Authorization', auth)
-      .send({
-        friendRequestsEnabled: false,
-        activitySharingEnabled: true,
-        activityTimeZoneId: 'America/Sao_Paulo',
-      });
+    await request(server).patch('/v1/social/me/privacy').set('Authorization', auth).send({
+      friendRequestsEnabled: false,
+      activitySharingEnabled: true,
+      activityTimeZoneId: 'America/Sao_Paulo',
+    });
 
     const output = logs();
     expect(output).toContain('activitySharingEnabled,activityTimeZoneId,friendRequestsEnabled');
@@ -228,17 +225,12 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     }
   });
 
-  it('o adapter de progresso só produz agregado — nenhum payload de treino sai dele', () => {
+  it('o adapter de progresso só produz agregado — nenhum payload de treino sai dele (T17.2/T17.4.1)', () => {
     // `AGGREGATE_ONLY` (`social.projection.ts`). A regra que substituiu o absoluto da T17.0 não
-    // pode viver só em prosa: ler `sync_entities` para contar é responder uma pergunta; ler para
-    // devolver conteúdo seria abrir a porta que a fronteira existe para fechar.
+    // pode viver só em prosa: na T17.4.1 a consulta canônica foi consolidada em CanonicalTrainingSource.
+    // O adapter de progresso delega para ela e não materializa payload em JavaScript.
     const source = readFileSync(join(SOCIAL_SRC, 'social-progress.source.ts'), 'utf8');
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-
-    // O que as consultas selecionam, literalmente. `json_extract` aparece só na cláusula `WHERE`:
-    // ele filtra dentro do SQLite, e o conteúdo da sessão nunca é materializado em JavaScript.
-    const selected = [...code.matchAll(/SELECT\s+([^\n]+)/g)].map((match) => match[1].trim());
-    expect(selected).toEqual(['COUNT(*) AS total', '1 AS present']);
 
     for (const forbidden of ['JSON.parse', '.payload', 'entity_sync_id', 'server_revision']) {
       expect({ forbidden, present: code.includes(forbidden) }).toEqual({
@@ -248,29 +240,37 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     }
   });
 
-  it('o adapter de pontuação de desafio também só produz agregado (T17.3)', () => {
-    // A mesma prova, para a fonte que a T17.3 acrescentou. Ela importa mais aqui do que na T17.2:
-    // `ACTIVE_DAYS` seria trivial de implementar trazendo os `startedAt` da janela e agrupando em
-    // JavaScript — e essa implementação materializaria horários de treino de outra pessoa no
-    // processo, que é exatamente o quarto princípio da tarefa ("participar não dá acesso aos dados
-    // usados para calcular o score").
-    //
-    // A implementação real monta as faixas de cada dia **antes** e pergunta ao SQLite quantas
-    // delas contêm alguma sessão. O que sai é um número.
+  it('o adapter de pontuação de desafio também só produz agregado (T17.3/T17.4.1)', () => {
+    // Na T17.4.1, challenge-progress.source.ts também delega para a autoridade canônica centralizada.
     const source = readFileSync(join(SOCIAL_SRC, 'challenge-progress.source.ts'), 'utf8');
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-
-    const selected = [...code.matchAll(/SELECT\s+([^\n]+)/g)].map((match) => match[1].trim());
-    // Três: as duas contagens públicas e o `SELECT 1` do `EXISTS`, que não devolve conteúdo.
-    expect(selected).toEqual(['COUNT(*) AS total', 'COUNT(*) AS total', '1']);
 
     for (const forbidden of [
       'JSON.parse',
       '.payload',
       'entity_sync_id',
       'server_revision',
-      // E o que distinguiria pontuação honesta de pontuação declarada pelo cliente: não há
-      // escrita nenhuma nesta fonte, e não há coluna de placar em lugar nenhum.
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+    ]) {
+      expect({ forbidden, present: code.includes(forbidden) }).toEqual({
+        forbidden,
+        present: false,
+      });
+    }
+  });
+
+  it('a fonte canônica centralizada (CanonicalTrainingSource) só seleciona agregados e metadados mínimos (T17.4.1)', () => {
+    const source = readFileSync(join(SOCIAL_SRC, 'canonical-training.source.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    for (const forbidden of [
+      'JSON.parse',
+      'exercises',
+      'loads',
+      'reps',
+      'notes',
       'INSERT',
       'UPDATE',
       'DELETE',

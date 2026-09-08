@@ -22,6 +22,8 @@ export interface CompletedWorkoutSummary {
  * treino (exercícios, séries, cargas, notas) nunca saiam do adapter.
  */
 export interface CanonicalTrainingSource {
+  hasAnyCompletedSession(ownerUid: string): boolean;
+
   countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): number;
 
   countActiveDays(ownerUid: string, startDate: string, endDate: string, timeZoneId: string): number;
@@ -52,6 +54,22 @@ export const CANONICAL_TRAINING_SOURCE = Symbol('CANONICAL_TRAINING_SOURCE');
 @Injectable()
 export class SyncedCanonicalTrainingSource implements CanonicalTrainingSource {
   constructor(private readonly sqlite: SqliteService) {}
+
+  hasAnyCompletedSession(ownerUid: string): boolean {
+    const row = this.sqlite.connection
+      .prepare(
+        `SELECT 1 AS present
+           FROM sync_entities
+          WHERE owner_uid = ?
+            AND entity_type = 'WORKOUT_SESSION'
+            AND deleted = 0
+            AND json_extract(payload, '$.status') = 'COMPLETED'
+          LIMIT 1`,
+      )
+      .get(ownerUid) as { present: number } | undefined;
+
+    return row !== undefined;
+  }
 
   countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): number {
     const row = this.sqlite.connection

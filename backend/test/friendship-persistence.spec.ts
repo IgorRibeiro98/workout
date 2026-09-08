@@ -81,9 +81,9 @@ describe('Persistência do grafo social', () => {
       ).run(UID_A);
 
       const beforeProfiles = db.prepare('SELECT * FROM social_profiles').all();
-      const beforePrivacy = db
-        .prepare('SELECT * FROM social_privacy_settings')
-        .all() as Array<Record<string, unknown>>;
+      const beforePrivacy = db.prepare('SELECT * FROM social_privacy_settings').all() as Array<
+        Record<string, unknown>
+      >;
       const beforeBackups = db.prepare('SELECT * FROM backup_snapshots').all();
 
       const applied = runMigrations(db, all);

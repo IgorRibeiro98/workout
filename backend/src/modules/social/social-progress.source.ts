@@ -1,5 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
+import {
+  CANONICAL_TRAINING_SOURCE,
+  type CanonicalTrainingSource,
+  SyncedCanonicalTrainingSource,
+} from './canonical-training.source';
 import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } from './social-time';
 
 /**
@@ -110,7 +115,21 @@ export const unsupported = <T>(): SocialProgressValue<T> => ({ kind: 'UNSUPPORTE
  */
 @Injectable()
 export class SyncedSocialProgressSource implements SocialProgressSource {
-  constructor(private readonly sqlite: SqliteService) {}
+  private readonly trainingSource: CanonicalTrainingSource;
+
+  constructor(
+    @Inject(CANONICAL_TRAINING_SOURCE)
+    trainingSourceOrSqlite: CanonicalTrainingSource | SqliteService,
+  ) {
+    if (
+      'countCompletedWorkouts' in trainingSourceOrSqlite &&
+      'hasAnyCompletedSession' in trainingSourceOrSqlite
+    ) {
+      this.trainingSource = trainingSourceOrSqlite;
+    } else {
+      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrSqlite);
+    }
+  }
 
   /**
    * Nível — sem autoridade remota.
@@ -141,27 +160,7 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
   /**
    * Treinos da semana — a única métrica com autoridade remota hoje.
    *
-   * ```text
-   * ConsistencyCalculator (Android)                    aqui
-   * timestamps de sessões COMPLETED          sync_entities / WORKOUT_SESSION (deleted = 0)
-   * agrupados por weekStart = segunda-feira  COUNT(*) na janela [segunda, próxima segunda)
-   * na data LOCAL do treino                  na data local do dono, pelo fuso declarado
-   * ```
-   *
-   * Isto **não** é uma regra paralela, e a diferença importa: a definição de semana é a canônica
-   * (`ConsistencyCalculator.weekStart`, segunda-feira, exposta pelo próprio domínio para que
-   * outras camadas a compartilhem em vez de recriarem), e a definição de "treino que conta" é a do
-   * schema (`workoutSessionSchema` só aceita `status: 'COMPLETED'`). O que sobra é uma contagem.
-   *
-   * Só `COMPLETED` conta (§22). `PLANNED`, `IN_PROGRESS`, `PAUSED` e `CANCELLED` sequer chegam ao
-   * servidor — o registry recusa —, e ainda assim a cláusula está escrita: ela é a declaração da
-   * regra no lugar onde ela é aplicada, e é o que faz o teste falhar se algum dia o registry
-   * passar a aceitar outro status.
-   *
-   * `UNAVAILABLE`, e nunca `0`, quando: não há fuso declarado, ou a conta nunca sincronizou uma
-   * sessão concluída. A segunda condição é a que impede "0 treinos esta semana" de ser dito sobre
-   * alguém que treina há três anos e nunca ligou a sincronização (§4/§74). Quem já tem histórico
-   * no servidor e não treinou nesta semana recebe `0` — aí o zero é verdade comprovada.
+   * Utiliza a fonte canônica unificada CanonicalTrainingSource (T17.4.1).
    */
   getWeeklyWorkoutCount(
     ownerUid: string,
@@ -175,26 +174,19 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     if (!window) {
       return unavailable();
     }
-    if (!this.hasAnyCompletedSession(ownerUid)) {
+    if (!this.trainingSource.hasAnyCompletedSession(ownerUid)) {
       // Nunca sincronizou nada concluído: o servidor não sabe se são zero treinos ou zero
       // sincronizações, e afirmar zero seria inventar o que não foi comprovado.
       return unavailable();
     }
 
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS total
-           FROM sync_entities
-          WHERE owner_uid = ?
-            AND entity_type = 'WORKOUT_SESSION'
-            AND deleted = 0
-            AND json_extract(payload, '$.status') = 'COMPLETED'
-            AND json_extract(payload, '$.startedAt') >= ?
-            AND json_extract(payload, '$.startedAt') < ?`,
-      )
-      .get(ownerUid, window.startMs, window.endMs) as { total: number } | undefined;
+    const total = this.trainingSource.countCompletedWorkouts(
+      ownerUid,
+      window.startMs,
+      window.endMs,
+    );
 
-    return available(row?.total ?? 0);
+    return available(total);
   }
 
   /**
@@ -208,27 +200,6 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
    */
   getEarnedAchievementIds(): SocialProgressValue<readonly string[]> {
     return unsupported();
-  }
-
-  /**
-   * A conta tem **alguma** sessão concluída conhecida pelo servidor?
-   *
-   * É o sinal de que "zero nesta semana" é um fato, e não a ausência de sincronização. `LIMIT 1`
-   * sobre o índice de identidade: a pergunta é de existência, não de contagem.
-   */
-  private hasAnyCompletedSession(ownerUid: string): boolean {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT 1 AS present
-           FROM sync_entities
-          WHERE owner_uid = ?
-            AND entity_type = 'WORKOUT_SESSION'
-            AND deleted = 0
-            AND json_extract(payload, '$.status') = 'COMPLETED'
-          LIMIT 1`,
-      )
-      .get(ownerUid) as { present: number } | undefined;
-    return row !== undefined;
   }
 }
 
