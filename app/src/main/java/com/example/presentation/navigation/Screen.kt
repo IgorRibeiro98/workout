@@ -68,6 +68,27 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
 
     object ProgressSharing :
         Screen("progress_sharing", R.string.nav_profile, Icons.Default.Person)
+
+    // Desafios (T17.3). Alcançados a partir da seção Social do Perfil, e também **sem item novo
+    // de bottom navigation** (§156): a barra inferior é do núcleo do produto — treinar, histórico,
+    // evolução —, e o social continua sendo uma área dentro do Perfil.
+    //
+    // O `challengeId` entra na rota porque é um UUID opaco que só os participantes conhecem, e ele
+    // não autoriza nada: a autorização vem do token, verificada a cada leitura. Nenhum `socialId`
+    // e nenhum `friendCode` entram em rota de desafio.
+    object Challenges : Screen("challenges", R.string.nav_profile, Icons.Default.Person)
+
+    object CreateChallenge :
+        Screen("create_challenge", R.string.nav_profile, Icons.Default.Person)
+
+    object ChallengeDetail :
+        Screen("challenge/{challengeId}?name={name}", R.string.nav_profile, Icons.Default.Person) {
+        fun createRoute(challengeId: String, name: String = ""): String {
+            val id = java.net.URLEncoder.encode(challengeId, "UTF-8")
+            val label = java.net.URLEncoder.encode(name, "UTF-8")
+            return "challenge/$id?name=$label"
+        }
+    }
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

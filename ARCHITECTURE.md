@@ -678,7 +678,8 @@ persistência do domínio        validação da resposta
 | T17.0 | Fundação social: identidade pública e privacidade | **implementado** |
 | T17.1 | Amigos, convites por código e QR Code | **implementado** |
 | T17.2 | Perfil social e compartilhamento controlado de progresso | **implementado** (1 de 4 métricas projetável — ver §18) |
-| T17.3+ | Desafios entre amigos, ranking e feed | planejado |
+| T17.3 | Desafios entre amigos: pontuação canônica e consentimento próprio | **implementado** |
+| T17.4+ | Atividade dos amigos e rankings contextuais | planejado |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -1673,7 +1674,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-08): T17.0, T17.1 e T17.2 implementadas.**
+> **Status (verificado em 2026-09-08): T17.0, T17.1, T17.2 e T17.3 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1686,14 +1687,21 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > Compartilhar progresso no Android. **Uma das quatro métricas é projetável hoje** — treinos da
 > semana; nível, sequência e conquistas respondem `UNSUPPORTED` porque a gamificação é `DERIVED` e
 > não chega ao servidor.
-> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, atividade, feed, ranking,
-> desafio, notificação push (FCM), busca por nome, busca por e-mail, sugestão de pessoas, avatar,
-> upload de mídia e exclusão completa de conta.
+> **T17.3** — desafios privados entre amigos: dois tipos (`WORKOUTS_COMPLETED`, `ACTIVE_DAYS`),
+> pontuação **derivada na leitura** dos dados canônicos de treino, ciclo de vida derivado do
+> relógio do servidor, migration `0010_social_challenges.sql`, oito rotas sob `/v1/social`, e telas
+> de Desafios, Criar desafio e Detalhe/placar no Android.
+> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, atividade, feed, ranking
+> global, notificação push (FCM), busca por nome, busca por e-mail, sugestão de pessoas, avatar,
+> upload de mídia e exclusão completa de conta. Nos desafios, também não existe: desafio público,
+> ranking permanente, vencedor por ordem de chegada, placar em tempo real, comentários, prêmios,
+> XP por vencer, entrada depois do início, rejoin, convite depois da criação e edição de desafio.
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1) e
 [`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md)
-(T17.2); contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
+(T17.2) e [`docs/architecture/challenge-domain.md`](docs/architecture/challenge-domain.md)
+(T17.3); contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades
 
@@ -1823,8 +1831,73 @@ Invariantes bloqueantes que se somam aos de cima:
 21. **A semana é a canônica do Spark** (`ConsistencyCalculator.weekStart`, segunda a domingo, na
     data local do dono), e só sessões `COMPLETED` contam. A fixture
     `contracts/social/v1/weekly-window.json` amarra as duas implementações.
-22. **Perfil ≠ pontuação de desafio.** `SocialProgressProjection` é para exibição, e a T17.3 terá
-    de usar dados canônicos próprios, com autorização própria.
+22. **Perfil ≠ pontuação de desafio.** `SocialProgressProjection` é para exibição. A T17.3 usa
+    dados canônicos próprios (`ChallengeProgressSource`), com janela e autorização próprias — ver
+    a seção seguinte.
+
+### Os desafios entre amigos (T17.3)
+
+```text
+Friendship ──convite──▶ ChallengeInvitation ──aceitar──▶ ChallengeParticipant
+                                                                 │
+                              dados canônicos de treino (sync_entities / WORKOUT_SESSION)
+                                                                 │
+                                                     ChallengeProgressSource
+                                                                 │
+                                                     ChallengeScoringService
+                                                                 │
+                                                    score · rank · goalReached
+```
+
+A separação que define a fase:
+
+```text
+PROIBIDO                          IMPLEMENTADO
+SocialProgressProjection          dados canônicos de treino
+         ↓                             ├── SocialProgressSource    → perfil (T17.2)
+pontuação do desafio                   └── ChallengeProgressSource → desafio (T17.3)
+```
+
+Invariantes bloqueantes que se somam aos de cima:
+
+23. **O cliente nunca envia pontuação.** `score`, `progress`, `rank`, `winner` e `goalReached` são
+    recusados **por nome**, invalidando a requisição inteira — como a T17.2 recusa `level`. O
+    `creatorUid` cai pela regra da T17.0: o dono sai do token verificado.
+24. **A pontuação é derivada na leitura**, e não existe coluna de placar em lugar nenhum do schema.
+    Um contador incremental precisaria de correção retroativa para o treino que chega depois do
+    fim, e os modos de falhar são conhecidos: *drift*, incremento duplo no reenvio, placar que não
+    converge.
+25. **Elegibilidade é o instante do treino, nunca o da chegada.** `ENDED` significa "a janela de
+    elegibilidade fechou" — **não** "o resultado é final". A resposta carrega
+    `resultMayStillChange`, e a tela diz isso. É essa regra que impede o Spark de punir quem
+    treinou offline.
+26. **`startedAt` é o instante canônico**, porque o Spark não tem `completedAt` e `finishedAt` é
+    nulável. Usar `finishedAt` criaria uma segunda regra de atribuição de treino a dia, e a T17.2 e
+    a tela de consistência discordariam do desafio sobre o mesmo treino.
+27. **O ciclo de vida é derivado do relógio do servidor**, e não agendado. O banco guarda
+    `lifecycle` (`OPEN`/`CANCELLED`); `UPCOMING`, `ACTIVE`, `ENDED` e `VOID` — e o `EXPIRED` de
+    convite — saem da leitura. Um cron que não roda é um desafio que nunca começa, em silêncio.
+28. **O fuso é do desafio, um só para todos**, validado contra o ICU e com a janela em instantes
+    **gravada na criação**: as regras aceitas não mudam se o país mudar o horário de verão no meio.
+    Um dia não é 24 horas, e a conversão é a mesma da semana canônica (`social-time.ts`).
+29. **As regras são imutáveis depois da criação.** Não existe rota de edição, e é isso que torna
+    *bait-and-switch* impossível.
+30. **Três autorizações distintas.** Amizade permite **convidar**; aceitar permite compartilhar a
+    pontuação **daquele** desafio; os interruptores da T17.2 decidem o **perfil**. Depois do
+    aceite, `unfriend` revoga o perfil e **não** remove ninguém do desafio.
+31. **Participar dá acesso ao placar, e não aos dados que o produziram.** Nenhum DTO carrega
+    `sessionId`, `syncId`, exercício, série, carga, repetição, nota, horário, medida, uid, e-mail
+    ou `friendCode`.
+32. **Empate permanece empate** (*competition ranking* `1, 1, 3`). Não há desempate por ordem de
+    chegada — puniria quem sincronizou depois — nem por `createdAt` da sessão.
+33. **Nada entra na Outbox, no `sync_entities`, no backup ou no restore.** Não existe `entityType`
+    `CHALLENGE`, e um push que tente declarar um responde `UNSUPPORTED`. Ler o placar é read-only:
+    não gera XP, conquista, missão nem escrita nenhuma.
+
+**A fronteira anti-fraude, dita honestamente:** esta fase garante que o cliente não envia pontuação
+e que ela deriva do domínio canônico. Ela **não** torna o desafio à prova de fraude — um cliente
+comprometido que fabrique `WorkoutSession` canônicas produziria pontuação correspondente, e esse é
+um problema de integridade do dado de treino que existiria sem desafio nenhum.
 
 ### Exclusão de conta — pendência que continua registrada
 

@@ -302,6 +302,21 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Os desafios entre amigos (T17.3): de que disputas eu participo, e como está o placar.
+     *
+     * Mesmo `SparkBackendClient` das anteriores. Separado das outras três porque a autorização é
+     * outra: a amizade permite **convidar**, e aceitar um convite é que permite compartilhar a
+     * pontuação daquele desafio. Os quatro interruptores de perfil da T17.2 não decidem nada aqui.
+     *
+     * Sem Room, sem Outbox, sem `WorkManager`: um desafio é um fato sobre várias contas, e nenhum
+     * aparelho pode decidi-lo sozinho. A pontuação nunca sai daqui — ela é derivada no servidor
+     * dos treinos que já chegaram por sync, e o app não tem como afirmá-la.
+     */
+    val challengeGateway: com.example.domain.social.ChallengeGateway by lazy {
+        com.example.data.social.SparkChallengeGateway(sparkBackendClient)
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

@@ -1,5 +1,15 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { ChallengeAccessPolicy } from './challenge.access-policy';
+import { ChallengeController } from './challenge.controller';
+import { ChallengeRateLimiter } from './challenge.rate-limit';
+import { ChallengeRepository } from './challenge.repository';
+import { ChallengeScoringService } from './challenge.scoring';
+import { ChallengeService } from './challenge.service';
+import {
+  CHALLENGE_PROGRESS_SOURCE,
+  SyncedChallengeProgressSource,
+} from './challenge-progress.source';
 import { FriendshipAccessPolicy } from './friendship.access-policy';
 import { FriendshipController } from './friendship.controller';
 import { FriendshipRateLimiter } from './friendship.rate-limit';
@@ -60,6 +70,9 @@ import { SocialService } from './social.service';
  * bug em laço não pode virar centenas de convites. Os dois tetos vivem em `FriendshipRateLimiter`,
  * com a política declarada em `social.limits.ts`.
  *
+ * A T17.3 acrescentou dois (`ChallengeRateLimiter`): criar dispara convites para pessoas que não
+ * pediram nada, e é a operação mais cara do módulo em consequência social.
+ *
  * A T17.2 não acrescentou teto próprio (§123). As rotas dela são leitura do próprio perfil e do
  * perfil de **um** amigo nomeado, sem enumeração possível: não há o que varrer, porque a resposta
  * exige uma amizade que o outro lado aceitou. O teto geral de 600/min do `BearerAuthGuard` basta,
@@ -70,7 +83,12 @@ import { SocialService } from './social.service';
  */
 @Module({
   imports: [AuthModule],
-  controllers: [SocialController, FriendshipController, SocialProfileController],
+  controllers: [
+    SocialController,
+    FriendshipController,
+    SocialProfileController,
+    ChallengeController,
+  ],
   providers: [
     SocialService,
     SocialRepository,
@@ -86,6 +104,14 @@ import { SocialService } from './social.service';
     SocialProgressProjector,
     SocialProgressPrivacyFilter,
     { provide: SOCIAL_PROGRESS_SOURCE, useClass: SyncedSocialProgressSource },
+    // T17.3 — os desafios. Eles reusam `FriendshipRepository` (a amizade é quem pode ser
+    // convidado) e acrescentam a própria fonte canônica de pontuação, separada da do perfil.
+    ChallengeService,
+    ChallengeRepository,
+    ChallengeAccessPolicy,
+    ChallengeScoringService,
+    ChallengeRateLimiter,
+    { provide: CHALLENGE_PROGRESS_SOURCE, useClass: SyncedChallengeProgressSource },
   ],
   exports: [SocialAccessPolicy],
 })

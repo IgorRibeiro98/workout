@@ -9,6 +9,8 @@ import {
   SocialRepository,
 } from '../src/modules/social/social.repository';
 import { SocialService } from '../src/modules/social/social.service';
+import { ChallengeRepository } from '../src/modules/social/challenge.repository';
+import { SystemClock } from '../src/common/clock';
 import * as identity from '../src/modules/social/social.identity';
 import { FRIEND_CODE_MAX_GENERATION_ATTEMPTS } from '../src/modules/social/social.limits';
 import { configFor, createTempDb, MIGRATIONS_DIR, sqliteFor, type TempDb } from './support/temp-db';
@@ -68,14 +70,15 @@ describe('Persistência do domínio social', () => {
       // Agora a T17.0.
       const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
 
-      // A T17.0 é a `0007`, a T17.1 acrescentou a `0008` e a T17.2 a `0009`. As três são
-      // aditivas, e o que este teste afirma é sobre a T16: nada do que ela gravou muda quando o
-      // social sobe.
-      expect(applied.map((migration) => migration.version)).toEqual([7, 8, 9]);
+      // A T17.0 é a `0007`, a T17.1 acrescentou a `0008`, a T17.2 a `0009` e a T17.3 a `0010`. As
+      // quatro são aditivas, e o que este teste afirma é sobre a T16: nada do que ela gravou muda
+      // quando o social sobe.
+      expect(applied.map((migration) => migration.version)).toEqual([7, 8, 9, 10]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'social_foundation',
         'friend_graph',
         'social_progress_profile',
+        'social_challenges',
       ]);
       expect(db.prepare('SELECT * FROM backup_snapshots').all()).toEqual(beforeBackup);
       expect(db.prepare('SELECT * FROM sync_entities').all()).toEqual(beforeEntity);
@@ -182,7 +185,7 @@ describe('Persistência do domínio social', () => {
         .mockReturnValueOnce('SPK-AAAAAAAA')
         .mockReturnValueOnce('SPK-BBBBBBBB');
 
-      const service = new SocialService(repository, new SparkLogger(configFor(temp.path)));
+      const service = socialServiceFor(sqlite, repository, temp.path);
       const response = service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
 
       expect(spy).toHaveBeenCalledTimes(3);
@@ -195,7 +198,7 @@ describe('Persistência do domínio social', () => {
 
       jest.spyOn(identity, 'generateFriendCode').mockReturnValue('SPK-AAAAAAAA');
 
-      const service = new SocialService(repository, new SparkLogger(configFor(temp.path)));
+      const service = socialServiceFor(sqlite, repository, temp.path);
 
       try {
         service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
@@ -293,3 +296,25 @@ describe('Persistência do domínio social', () => {
     });
   });
 });
+
+/**
+ * O `SocialService` montado à mão, com as dependências que a T17.3 acrescentou.
+ *
+ * `ChallengeRepository` e `SqliteService` entraram porque desativar o Social precisa encerrar a
+ * participação em desafios **na mesma transação** (T17.3 §119). Estes testes exercitam ativação e
+ * colisão de `friendCode`, que não tocam em desafio nenhum — as dependências existem aqui só para
+ * o serviço poder ser construído, e o relógio é o real porque nenhum destes casos depende dele.
+ */
+function socialServiceFor(
+  sqlite: SqliteService,
+  repository: SocialRepository,
+  databasePath: string,
+): SocialService {
+  return new SocialService(
+    repository,
+    new ChallengeRepository(sqlite),
+    sqlite,
+    new SystemClock(),
+    new SparkLogger(configFor(databasePath)),
+  );
+}

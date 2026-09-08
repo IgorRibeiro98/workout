@@ -189,7 +189,11 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     // o único arquivo do módulo que lê estado sincronizado, e só para responder `COUNT(*)`. O
     // teste abaixo (`AGGREGATE_ONLY`) é o que o mantém honesto: nenhum `SELECT payload`, nenhuma
     // linha de treino materializada. Todo o resto do módulo continua sem conhecer as tabelas.
-    const PROGRESS_SOURCE = 'social-progress.source.ts';
+    // A T17.3 acrescentou o segundo, e pela mesma razão declarada: `challenge-progress.source.ts`
+    // é o adapter estreito da pontuação de desafio, e ele é **separado** do de perfil de
+    // propósito — a projeção da T17.2 não é autoridade de pontuação. Os dois estão sujeitos ao
+    // mesmo teste de `AGGREGATE_ONLY` abaixo.
+    const PROGRESS_SOURCES = ['social-progress.source.ts', 'challenge-progress.source.ts'];
 
     for (const file of readdirSync(SOCIAL_SRC).filter((name) => name.endsWith('.ts'))) {
       const source = readFileSync(join(SOCIAL_SRC, file), 'utf8');
@@ -206,7 +210,7 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
         'backup_payloads',
         'ai_usage_daily',
       ]) {
-        const allowed = file === PROGRESS_SOURCE && table === 'sync_entities';
+        const allowed = PROGRESS_SOURCES.includes(file) && table === 'sync_entities';
         expect({ file, table, mentioned: code.includes(table) && !allowed }).toEqual({
           file,
           table,
@@ -230,6 +234,60 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
 
     for (const forbidden of ['JSON.parse', '.payload', 'entity_sync_id', 'server_revision']) {
       expect({ forbidden, present: code.includes(forbidden) }).toEqual({
+        forbidden,
+        present: false,
+      });
+    }
+  });
+
+  it('o adapter de pontuação de desafio também só produz agregado (T17.3)', () => {
+    // A mesma prova, para a fonte que a T17.3 acrescentou. Ela importa mais aqui do que na T17.2:
+    // `ACTIVE_DAYS` seria trivial de implementar trazendo os `startedAt` da janela e agrupando em
+    // JavaScript — e essa implementação materializaria horários de treino de outra pessoa no
+    // processo, que é exatamente o quarto princípio da tarefa ("participar não dá acesso aos dados
+    // usados para calcular o score").
+    //
+    // A implementação real monta as faixas de cada dia **antes** e pergunta ao SQLite quantas
+    // delas contêm alguma sessão. O que sai é um número.
+    const source = readFileSync(join(SOCIAL_SRC, 'challenge-progress.source.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    const selected = [...code.matchAll(/SELECT\s+([^\n]+)/g)].map((match) => match[1].trim());
+    // Três: as duas contagens públicas e o `SELECT 1` do `EXISTS`, que não devolve conteúdo.
+    expect(selected).toEqual(['COUNT(*) AS total', 'COUNT(*) AS total', '1']);
+
+    for (const forbidden of [
+      'JSON.parse',
+      '.payload',
+      'entity_sync_id',
+      'server_revision',
+      // E o que distinguiria pontuação honesta de pontuação declarada pelo cliente: não há
+      // escrita nenhuma nesta fonte, e não há coluna de placar em lugar nenhum.
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+    ]) {
+      expect({ forbidden, present: code.includes(forbidden) }).toEqual({
+        forbidden,
+        present: false,
+      });
+    }
+  });
+
+  it('a pontuação não é gravada em lugar nenhum do módulo social (T17.3 §82/§134)', () => {
+    // O bloqueante "não existe counter client-authoritative", provado estruturalmente: nenhuma
+    // tabela do social tem coluna de pontuação, e nenhum arquivo do módulo escreve uma.
+    //
+    // Comportamento não cobre isto. Um `UPDATE challenge_progress SET score = ?` funcionaria em
+    // teste e ainda assim seria a segunda verdade que a T17.3 existe para não criar — e o dia em
+    // que ela divergisse seria o dia em que um treino sincronizado tarde deixaria de contar.
+    const migration = readFileSync(
+      join(__dirname, '..', 'migrations', '0010_social_challenges.sql'),
+      'utf8',
+    ).replace(/^\s*--.*$/gm, '');
+
+    for (const forbidden of ['challenge_progress', 'score', 'current_score', 'winner', 'rank']) {
+      expect({ forbidden, present: migration.includes(forbidden) }).toEqual({
         forbidden,
         present: false,
       });

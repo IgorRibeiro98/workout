@@ -92,7 +92,8 @@ fun MainScreen() {
         syncCoordinator = app.syncCoordinator,
         socialGateway = app.socialGateway,
         friendGateway = app.friendGateway,
-        socialProfileGateway = app.socialProfileGateway
+        socialProfileGateway = app.socialProfileGateway,
+        challengeGateway = app.challengeGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -110,6 +111,13 @@ fun MainScreen() {
     // conta precisa invalidar as três de uma vez.
     //
     // Criá-lo aqui **não** faz requisição nenhuma: o `init` só observa a sessão para invalidar.
+    // Um `ChallengeViewModel` para as três telas de desafio (lista, criação, detalhe). Compartilhado
+    // pelo mesmo motivo dos anteriores: a lista, os convites e o detalhe são o mesmo estado de
+    // conta, e um por rota faria a lista ser lida de novo a cada navegação — e o contador de
+    // convites do Perfil ficar velho logo depois de responder a um.
+    val challengeViewModel: com.example.presentation.account.ChallengeViewModel =
+        viewModel(factory = factory)
+
     val socialProfileViewModel: com.example.presentation.account.SocialProfileViewModel =
         viewModel(factory = factory)
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
@@ -365,6 +373,7 @@ fun MainScreen() {
                     onNavigateToProgressSharing = {
                         navController.navigate(Screen.ProgressSharing.route)
                     },
+                    onNavigateToChallenges = { navController.navigate(Screen.Challenges.route) },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -414,6 +423,48 @@ fun MainScreen() {
             composable(Screen.ProgressSharing.route) {
                 com.example.presentation.friends.ProgressSharingScreen(
                     viewModel = socialProfileViewModel,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Challenges.route) {
+                com.example.presentation.friends.ChallengesScreen(
+                    viewModel = challengeViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenChallenge = { challengeId ->
+                        navController.navigate(Screen.ChallengeDetail.createRoute(challengeId))
+                    },
+                    onCreateChallenge = { navController.navigate(Screen.CreateChallenge.route) }
+                )
+            }
+            composable(Screen.CreateChallenge.route) {
+                com.example.presentation.friends.CreateChallengeScreen(
+                    viewModel = challengeViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    // Criado: sai da tela de criação e abre o desafio. `popUpTo` evita que o botão
+                    // "voltar" leve de volta a um formulário que já foi enviado.
+                    onCreated = { challengeId ->
+                        navController.navigate(Screen.ChallengeDetail.createRoute(challengeId)) {
+                            popUpTo(Screen.CreateChallenge.route) { inclusive = true }
+                        }
+                    }
+                )
+            }
+            composable(
+                route = Screen.ChallengeDetail.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("challengeId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                    androidx.navigation.navArgument("name") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = ""
+                    }
+                )
+            ) { entry ->
+                com.example.presentation.friends.ChallengeDetailScreen(
+                    challengeId = entry.arguments?.getString("challengeId").orEmpty(),
+                    nameHint = entry.arguments?.getString("name")?.takeIf { it.isNotBlank() },
+                    viewModel = challengeViewModel,
                     onNavigateBack = { navController.popBackStack() }
                 )
             }

@@ -807,6 +807,92 @@ si, ou uma porta lateral para o domínio privado.
   "com.example.presentation.account.SocialProfile*" --tests
   "com.example.presentation.friends.*"`. As duas são offline e usam dublê de autenticação.
 
+## 13.11 Desafios entre amigos: pontuação canônica e consentimento próprio (T17.3)
+
+O Spark passou a **comparar** duas pessoas. As regras abaixo são o que impede essa comparação de
+virar um placar que o cliente escreve, uma porta para o histórico de treino alheio, ou uma punição
+para quem treinou offline.
+
+- **O núcleo não paga nada por isso.** Desafio é opcional, como todo o social. Sem conta, sem
+  perfil, com o servidor fora: treinar, histórico, gamificação, backup, restore, sync e Coach
+  continuam exatamente como estavam — inclusive **durante** um desafio. A sessão concluída offline
+  sobe no próximo sync e passa a contar pelo instante em que aconteceu.
+- **O celular nunca informa a própria pontuação.** `score`, `progress`, `rank`, `winner`,
+  `goalReached`, `points`, `count`, `leaderboard` e `participants` são recusados **por nome** no
+  corpo, invalidando a requisição inteira. Não é filtragem silenciosa: um corpo com `progress: 8`
+  descreve um cliente que se acha autoridade de pontuação, e atender o resto dele seria concordar
+  em parte. `creatorUid` e `participantUids` caem pela mesma regra da T17.0 — o dono sai do token.
+- **A pontuação é derivada na leitura, dos dados canônicos.** `ChallengeProgressSource` responde
+  `COUNT(*)` sobre `sync_entities`; `ChallengeScoringService` ordena e classifica. **Não existe** —
+  e não pode existir — coluna de placar, contador incremental ou `challenge_progress`. O motivo é
+  concreto: um treino do período pode chegar **depois** do fim, e um contador precisaria de uma
+  correção retroativa que ninguém escreveu.
+- **O perfil da T17.2 não é autoridade de pontuação.** `SocialProgressProjection` é para exibição.
+  O desafio tem fonte própria (`ChallengeProgressSource`), janela própria e política própria — as
+  duas leem os mesmos dados canônicos por caminhos separados. Ligar uma na outra é proibido.
+- **`startedAt`, e não `finishedAt`.** O Spark **não tem** `completedAt`: o agregado canônico tem
+  `startedAt` (obrigatório) e `finishedAt` (nulável). A atribuição de um treino a um dia é a do
+  `ConsistencyCalculator`, congelada em `contracts/social/v1/weekly-window.json`. Usar `finishedAt`
+  criaria uma **segunda** regra de conclusão de treino — um treino de 23h30 cairia em dias
+  diferentes no desafio e na tela da própria pessoa — e perderia em silêncio toda sessão com ele
+  nulo.
+- **Elegibilidade é o instante do treino, nunca o da chegada.** Nenhuma consulta olha `created_at`,
+  `updated_at` ou `last_server_sequence`. `ENDED` significa "a janela fechou", e **não** "o
+  resultado é final": a resposta carrega `resultMayStillChange` e a tela diz isso. Prometer
+  irrevogabilidade que o servidor não pode verificar é mentir sobre a única coisa que o desafio
+  afirma. *Settlement* é tarefa própria.
+- **Só agregado sai.** Cada método da fonte devolve **um número**. `json_extract` só na cláusula
+  `WHERE`: carga, exercício, nota e horário nunca são materializados em JavaScript. Participar dá
+  acesso ao **placar**, e não aos dados que o produziram — e nenhum DTO carrega `sessionId`,
+  `syncId`, exercício, série, carga, repetição, nota, horário, medida, uid, e-mail ou `friendCode`.
+- **Ler o placar é read-only.** Não escreve treino, XP, conquista, missão, Outbox, `sync_entities`
+  nem coluna nenhuma. Abrir a tela de um desafio não dá XP, e atualizar não dá de novo.
+- **O ciclo de vida é derivado, não agendado.** O banco guarda `lifecycle` (`OPEN`/`CANCELLED`) — a
+  única parte que alguém escreve. `UPCOMING`, `ACTIVE`, `ENDED` e `VOID` saem do relógio do
+  servidor contra a janela, e `EXPIRED`/`CANCELLED` de convite saem do mesmo lugar. Um cron que não
+  roda é um desafio que nunca começa, em silêncio.
+- **O fuso é do desafio, e é um só.** Com um fuso por participante, "dia 8" seria um dia diferente
+  para cada um. O Android sugere `ZoneId.systemDefault().id`; o servidor valida contra o ICU.
+  Nenhum fuso hardcoded. A janela em instantes é **gravada na criação**: as regras que os
+  participantes aceitaram não mudam se o país mudar o horário de verão no meio.
+- **Um dia não é 24 horas.** Cada limite é `localMidnightToInstant`, em `social-time.ts` —
+  compartilhado com a semana canônica da T17.2. Duas implementações de "meia-noite local"
+  divergiriam, e a divergência apareceria como perfil e desafio discordando sobre o dia de um
+  treino.
+- **As regras são imutáveis depois da criação.** Não existe rota de edição, e isso é o que torna
+  *bait-and-switch* impossível: quem aceitou "5 treinos" não acorda em "30 treinos". Para mudar,
+  cancela e cria outro.
+- **Amizade permite convidar; aceitar permite compartilhar a pontuação daquele desafio.** São
+  autorizações distintas. Revalidar a amizade acontece na criação **e** no aceite; depois do aceite
+  ela deixa de decidir — `unfriend` revoga o perfil da T17.2 e **não** remove ninguém do desafio.
+  Os quatro interruptores da T17.2 não decidem nada aqui, e participar não altera nenhum deles.
+- **Desativar o Social encerra a participação ativa, em uma transação** com a mudança de status:
+  convites pendentes viram `DECLINED`, participações abertas viram `WITHDRAWN`, e desafios abertos
+  criados pela conta são **cancelados** (um desafio sem criador ativo é um desafio que ninguém pode
+  encerrar). Encerrados são intocados: o resultado é histórico de **outras** pessoas.
+- **Empate permanece empate.** *Competition ranking* (`1, 1, 3`). Desempatar por ordem de chegada
+  ao servidor puniria quem sincronizou depois; por `createdAt` da sessão inventaria um critério que
+  ninguém combinou. `score` pode ultrapassar o `target` — é a barra que limita, não o número — e
+  `goalReached` é separado de liderar.
+- **Nada disso entra na Outbox, no `sync_entities`, no backup ou no restore.** Não existe
+  `entityType` `CHALLENGE`; um push que tente declarar um responde `UNSUPPORTED`. Offline, a ação
+  **não acontece** — não fica pendente, não é reenviada, e a tela diz isso.
+- **Sem tempo real.** Sem WebSocket, sem SSE, sem FCM, sem polling. Abrir ou atualizar a tela é o
+  que busca o placar, e abrir um desafio não dispara sincronização de treino.
+- **Anti-fraude, honestamente.** Esta fase garante que o cliente não envia pontuação e que ela
+  deriva do domínio canônico. Ela **não** torna o desafio à prova de fraude: um cliente
+  comprometido que fabrique `WorkoutSession` canônicas produziria pontuação correspondente — e esse
+  é um problema de integridade do dado de treino, que existiria sem desafio nenhum. Dizer o
+  contrário na documentação seria falso.
+- **Logs.** No servidor: `requestId`, prefixo de uid, evento, desfecho, **tipo** de desafio, status
+  e contagens. Nunca nome do desafio, `displayName`, `socialId`, `friendCode`, e-mail, uid completo
+  — e nunca **pontuação individual**. No Android: nada.
+- **Testes.** Toda mudança nos desafios roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.presentation.account.Challenge*" --tests
+  "com.example.presentation.friends.Challenge*"`. As duas são offline, usam dublê de autenticação,
+  e o tempo é **injetado** — nenhum teste dorme.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

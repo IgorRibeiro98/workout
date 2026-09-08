@@ -282,6 +282,26 @@ function isUniqueViolation(error: unknown, column: string): boolean {
   if (code !== 'SQLITE_CONSTRAINT_UNIQUE' && code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
     return false;
   }
-  const message = error instanceof Error ? error.message : '';
+  // A mensagem é lida **estruturalmente**, e não por `error instanceof Error`.
+  //
+  // O `SqliteError` do `better-sqlite3` nasce no addon nativo, que é carregado uma vez por
+  // processo e guarda o construtor registrado pelo **primeiro** módulo a exigi-lo. Sob o Jest,
+  // cada arquivo de teste roda em um contexto de VM próprio, com o seu próprio `Error` global —
+  // então um erro lançado pelo addon pode ter na cadeia de protótipos o `Error` de outro contexto,
+  // e `instanceof Error` responde `false` para um `Error` de verdade.
+  //
+  // Isso não é peculiaridade de teste que se resolve no teste: era uma decisão de **fluxo** —
+  // "isto é colisão de código ou é outra coisa?" — tomada por uma verificação que pode responder
+  // errado. Quando ela respondia errado, a colisão de `friendCode` deixava de virar
+  // `FriendCodeCollisionError`, o retry limitado do serviço não acontecia, e a ativação falhava
+  // com um `SqliteError` cru em vez de tentar outro código. Em produção o gatilho seria qualquer
+  // caminho em que o addon fosse carregado por outro realm; em CI, a ordem dos arquivos de teste.
+  //
+  // `code` já era lido assim, por `in`. A mensagem passa a ser lida do mesmo jeito, e a decisão
+  // deixa de depender de qual realm criou o objeto.
+  const message =
+    'message' in error && typeof (error as { message: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : '';
   return message.includes(column);
 }

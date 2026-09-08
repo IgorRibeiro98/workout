@@ -75,7 +75,8 @@ class MainViewModelFactory(
      * O perfil social enriquecido (T17.2). `null` remove "Compartilhar progresso" e o perfil de
      * amigo, e nada mais muda.
      */
-    private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null
+    private val socialProfileGateway: com.example.domain.social.SocialProfileGateway? = null,
+    private val challengeGateway: com.example.domain.social.ChallengeGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -236,6 +237,22 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.SocialProfileViewModel(
                 gateway = profile,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.ChallengeViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val challenges = challengeGateway
+                ?: throw IllegalStateException("ChallengeGateway not provided")
+            // O `FriendGateway` entra para a **seleção** de amigos na criação, e para mais nada:
+            // quem decide se um convidado pode participar é o servidor, na criação (§32).
+            val friends = friendGateway
+                ?: throw IllegalStateException("FriendGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.ChallengeViewModel(
+                gateway = challenges,
+                friendGateway = friends,
                 authGateway = gateway
             ) as T
         }

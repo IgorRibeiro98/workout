@@ -64,6 +64,7 @@ fun SocialSection(
     onOpenRequests: () -> Unit = {},
     /** T17.2 — "Compartilhar progresso". Mesma área Social, sem bottom navigation nova. */
     onOpenProgressSharing: () -> Unit = {},
+    onOpenChallenges: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -133,6 +134,7 @@ fun SocialSection(
                         onOpenFriends = onOpenFriends,
                         onOpenRequests = onOpenRequests,
                         onOpenProgressSharing = onOpenProgressSharing,
+                        onOpenChallenges = onOpenChallenges,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -149,6 +151,7 @@ fun SocialSection(
                             onOpenFriends = onOpenFriends,
                             onOpenRequests = onOpenRequests,
                             onOpenProgressSharing = onOpenProgressSharing,
+                            onOpenChallenges = onOpenChallenges,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -170,6 +173,7 @@ fun SocialSection(
                                 onOpenFriends = onOpenFriends,
                                 onOpenRequests = onOpenRequests,
                                 onOpenProgressSharing = onOpenProgressSharing,
+                                onOpenChallenges = onOpenChallenges,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -197,6 +201,7 @@ fun SocialSection(
                                 onOpenFriends = onOpenFriends,
                                 onOpenRequests = onOpenRequests,
                                 onOpenProgressSharing = onOpenProgressSharing,
+                                onOpenChallenges = onOpenChallenges,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -246,6 +251,7 @@ private fun ActiveProfile(
     onOpenFriends: () -> Unit,
     onOpenRequests: () -> Unit,
     onOpenProgressSharing: () -> Unit,
+    onOpenChallenges: () -> Unit,
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -329,6 +335,7 @@ private fun ActiveProfile(
                 onOpenFriends = onOpenFriends,
                 onOpenRequests = onOpenRequests,
                 onOpenProgressSharing = onOpenProgressSharing,
+                onOpenChallenges = onOpenChallenges,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -364,6 +371,7 @@ private fun FriendsEntryPoints(
     onOpenFriends: () -> Unit,
     onOpenRequests: () -> Unit,
     onOpenProgressSharing: () -> Unit,
+    onOpenChallenges: () -> Unit,
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -405,6 +413,11 @@ private fun FriendsEntryPoints(
     // por campo e prévia. Espremê-la nesta seção esconderia a parte que mais importa — a diferença
     // entre "eu permiti" e "o servidor consegue mostrar".
     Secondary(text = "Compartilhar progresso", onClick = onOpenProgressSharing, enabled = enabled)
+
+    // T17.3 — os desafios, ao lado das outras entradas da área Social. Sem item novo de bottom
+    // navigation: a barra inferior é do núcleo do produto — treinar, histórico, evolução —, e o
+    // social continua sendo uma área dentro do Perfil.
+    Secondary(text = "Desafios", onClick = onOpenChallenges, enabled = enabled)
 }
 
 @Composable

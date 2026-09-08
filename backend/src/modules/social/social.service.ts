@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
+import { SqliteService } from '../../database/sqlite.service';
+import { ChallengeRepository } from './challenge.repository';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import {
@@ -65,6 +68,17 @@ export const SOCIAL_PRIVACY_DEFAULTS = {
 export class SocialService {
   constructor(
     private readonly repository: SocialRepository,
+    /**
+     * Os desafios, alcançados **só** por [disable] (T17.3 §115–§120).
+     *
+     * A dependência tem uma direção só, e é esta: o social sabe que desativar precisa encerrar a
+     * participação em desafios. O contrário não existe — nada em `ChallengeService` altera perfil,
+     * privacidade ou identidade.
+     */
+    private readonly challenges: ChallengeRepository,
+    /** A conexão, para que desativar e sair dos desafios sejam uma transação só (§119). */
+    private readonly sqlite: SqliteService,
+    @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
   ) {}
 
@@ -219,8 +233,28 @@ export class SocialService {
       throw SocialErrors.alreadyDisabled();
     }
 
-    this.repository.updateStatus(principal.uid, 'DISABLED', Date.now());
-    this.logger.info('social.disabled', { requestId, uidPrefix: uidPrefix(principal.uid) });
+    const now = this.clock.now();
+
+    // T17.3 §119 — desativar o Social e sair dos desafios acontecem **juntos**, ou não acontecem.
+    //
+    // Fora de uma transação, uma falha entre as duas escritas deixaria o pior estado possível:
+    // perfil desativado com a pontuação da pessoa ainda atualizando no placar dos amigos, ou um
+    // desafio cancelado para todos com o criador ainda ativo. As duas são visíveis para **outras**
+    // pessoas, e nenhuma delas se corrige sozinha.
+    //
+    // A amizade continua intocada (T17.1): desativar suspende, não desfaz.
+    const challengeEffect = this.sqlite.connection.transaction(() => {
+      this.repository.updateStatus(principal.uid, 'DISABLED', now);
+      return this.challenges.applySocialDisable(principal.uid, now);
+    })();
+
+    this.logger.info('social.disabled', {
+      requestId,
+      uidPrefix: uidPrefix(principal.uid),
+      // Contagens, e nunca identificadores (§128/§129). É o suficiente para investigar "sumi de um
+      // desafio" sem registrar de quais desafios a pessoa participava.
+      ...challengeEffect,
+    });
     return { profile: toOwnerProfile(this.reload(principal, account)) };
   }
 

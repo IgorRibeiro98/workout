@@ -41,7 +41,16 @@ class SocialBoundaryInspectionTest {
         "app/src/main/java/com/example/presentation/account/SocialProfileUiState.kt",
         "app/src/main/java/com/example/presentation/friends/FriendSocialProfileScreen.kt",
         "app/src/main/java/com/example/presentation/friends/ProgressSharingScreen.kt",
-        "app/src/main/java/com/example/presentation/friends/SocialProfileMessages.kt"
+        "app/src/main/java/com/example/presentation/friends/SocialProfileMessages.kt",
+        // T17.3 — os desafios. As mesmas fronteiras valem: sem Room, sem Outbox, sem dado de
+        // treino lido no aparelho, sem log e sem HTTP na tela. E uma a mais, que é o coração da
+        // fase: nada aqui **envia** pontuação.
+        "app/src/main/java/com/example/presentation/account/ChallengeViewModel.kt",
+        "app/src/main/java/com/example/presentation/account/ChallengeUiState.kt",
+        "app/src/main/java/com/example/presentation/friends/ChallengesScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/ChallengeDetailScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/CreateChallengeScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/ChallengeMessages.kt"
     )
 
     private fun socialSources() =
@@ -93,7 +102,18 @@ class SocialBoundaryInspectionTest {
                     "SocialProfileViewModel.kt",
                     "SocialProfileUiState.kt",
                     "FriendSocialProfileScreen.kt",
-                    "ProgressSharingScreen.kt"
+                    "ProgressSharingScreen.kt",
+                    // T17.3
+                    "ChallengeContract.kt",
+                    "ChallengeDtos.kt",
+                    "SparkChallengeGateway.kt",
+                    "Challenge.kt",
+                    "ChallengeGateway.kt",
+                    "ChallengeViewModel.kt",
+                    "ChallengeUiState.kt",
+                    "ChallengesScreen.kt",
+                    "ChallengeDetailScreen.kt",
+                    "CreateChallengeScreen.kt"
                 )
             )
         )
@@ -259,7 +279,12 @@ class SocialBoundaryInspectionTest {
         }
         assertEquals(
             "os caminhos sociais moram nos contratos, e mais nada os escreve",
-            listOf("FriendshipContract.kt", "SocialContract.kt", "SocialProfileContract.kt"),
+            listOf(
+                "ChallengeContract.kt",
+                "FriendshipContract.kt",
+                "SocialContract.kt",
+                "SocialProfileContract.kt"
+            ),
             holders.map { it.name }.sorted()
         )
     }

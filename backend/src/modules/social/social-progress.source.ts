@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
+import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } from './social-time';
 
 /**
  * A fronteira estreita entre o Social e o estado canônico do Spark (T17.2 §9/§11).
@@ -278,105 +279,15 @@ export function canonicalWeekWindow(nowMs: number, timeZone: string): CanonicalW
   };
 }
 
-/** O identificador é um fuso IANA que este runtime conhece? */
-export function isValidTimeZone(timeZone: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /**
- * A **data** local de um instante, escrita como `Date.UTC(ano, mês, dia)`.
+ * Revalidação do fuso, reexportada.
  *
- * O valor devolvido não é o instante da meia-noite local: é a data local carregada num inteiro que
- * a aritmética de calendário pode manipular sem fuso. A conversão de volta para instante é
- * [localMidnightToInstant].
+ * A implementação mora em `social-time.ts` desde a T17.3, porque a T17.3 precisa exatamente da
+ * mesma conversão de meia-noite local para os dias de um desafio (§203/§204). O reexport mantém o
+ * ponto de import da T17.2 — `social-profile.validator.ts` — sem transformar uma extração em
+ * mudança de contrato.
  */
-function localCalendarDate(instantMs: number, timeZone: string): number {
-  const fields = localFields(instantMs, timeZone);
-  return Date.UTC(fields.year, fields.month - 1, fields.day);
-}
-
-/**
- * A meia-noite local do dia [dateAsUtc], em epoch millis.
- *
- * Duas passagens, e não uma: o deslocamento do fuso depende do instante, e o instante é o que se
- * está procurando. A primeira passagem usa o deslocamento na data escrita como UTC; a segunda o
- * corrige com o deslocamento no instante estimado, que é o que resolve as fronteiras de horário de
- * verão. Mais de duas passagens não acrescentam nada: o deslocamento é constante dentro de cada
- * lado da transição.
- */
-function localMidnightToInstant(dateAsUtc: number, timeZone: string): number {
-  const firstGuess = dateAsUtc - zoneOffsetMs(dateAsUtc, timeZone);
-  return dateAsUtc - zoneOffsetMs(firstGuess, timeZone);
-}
-
-/**
- * Quanto o relógio de parede de [timeZone] está adiantado em relação ao UTC, naquele instante.
- *
- * Medido comparando o instante com o mesmo relógio de parede escrito como se fosse UTC. É a forma
- * portátil de obter deslocamento com horário de verão sem depender de biblioteca externa — o
- * Spark Backend não tem uma, e não precisa de uma.
- */
-function zoneOffsetMs(instantMs: number, timeZone: string): number {
-  const fields = localFields(instantMs, timeZone);
-  const wallClockAsUtc = Date.UTC(
-    fields.year,
-    fields.month - 1,
-    fields.day,
-    fields.hour,
-    fields.minute,
-    fields.second,
-  );
-  return wallClockAsUtc - instantMs;
-}
-
-interface LocalFields {
-  readonly year: number;
-  readonly month: number;
-  readonly day: number;
-  readonly hour: number;
-  readonly minute: number;
-  readonly second: number;
-}
-
-const formatterCache = new Map<string, Intl.DateTimeFormat>();
-
-function localFields(instantMs: number, timeZone: string): LocalFields {
-  let formatter = formatterCache.get(timeZone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    formatterCache.set(timeZone, formatter);
-  }
-
-  const parts = new Map(
-    formatter.formatToParts(new Date(instantMs)).map((part) => [part.type, part.value]),
-  );
-
-  return {
-    year: Number(parts.get('year')),
-    month: Number(parts.get('month')),
-    day: Number(parts.get('day')),
-    // `h23` já produz `00` à meia-noite; a normalização é a defesa contra um ICU que devolva `24`.
-    hour: Number(parts.get('hour')) % 24,
-    minute: Number(parts.get('minute')),
-    second: Number(parts.get('second')),
-  };
-}
+export { isValidTimeZone };
 
 /**
  * O token de injeção da fonte.

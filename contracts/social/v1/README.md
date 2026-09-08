@@ -417,3 +417,100 @@ sync ou de backup.
 - **não há cache de perfil**, nem no servidor nem no aparelho — é isso que faz revogar funcionar;
 - **nada disso entra na Outbox, no `sync_entities`, no backup ou no restore**, e nada dá XP,
   conquista ou missão.
+
+---
+
+## T17.3 — desafios entre amigos
+
+Espelhos: `backend/src/modules/social/challenge.contract.ts` e
+`com.example.data.social.ChallengeContract`. Descrição legível em
+[`docs/architecture/challenge-domain.md`](../../../docs/architecture/challenge-domain.md).
+
+### Rotas
+
+| Método | Caminho | Quem |
+| --- | --- | --- |
+| `POST` | `/v1/social/challenges` | criador — cria e convida, em uma transação |
+| `GET` | `/v1/social/challenges` | participante — os meus |
+| `GET` | `/v1/social/challenges/{challengeId}` | participante — regras + placar |
+| `POST` | `/v1/social/challenges/{challengeId}/cancel` | só o criador |
+| `POST` | `/v1/social/challenges/{challengeId}/leave` | só membro |
+| `GET` | `/v1/social/challenge-invitations` | destinatário — preview, **sem placar** |
+| `POST` | `/v1/social/challenge-invitations/{invitationId}/accept` | só o destinatário |
+| `POST` | `/v1/social/challenge-invitations/{invitationId}/decline` | só o destinatário |
+
+### O corpo da criação
+
+```json
+{
+  "clientRequestId": "b6f1...",
+  "name": "12 treinos",
+  "type": "WORKOUTS_COMPLETED",
+  "target": 12,
+  "startDate": "2026-09-10",
+  "endDate": "2026-10-09",
+  "timeZoneId": "America/Sao_Paulo",
+  "invitedSocialIds": ["...", "..."]
+}
+```
+
+### Campos recusados **por nome** (invalidam a requisição inteira)
+
+```text
+pontuação    score · progress · currentScore · points · count · rank · ranking
+             winner · goalReached · leaderboard · participants
+identidade   ownerUid · uid · creatorUid · firebaseUid · email · participantUids
+derivados    status · lifecycle · startsAt · endsAtExclusive · cancelledAt
+             createdAt · updatedAt
+```
+
+### Tipos, estados e limites
+
+| | Valores |
+| --- | --- |
+| `type` | `WORKOUTS_COMPLETED`, `ACTIVE_DAYS` |
+| `status` (derivado) | `UPCOMING`, `ACTIVE`, `ENDED`, `CANCELLED`, `VOID` |
+| status de convite (derivado) | `PENDING`, `ACCEPTED`, `DECLINED`, `EXPIRED`, `CANCELLED` |
+| papel · participação | `CREATOR`/`MEMBER` · `JOINED`/`WITHDRAWN` |
+| nome | 3–60 code points, Unicode, sem controle |
+| duração | 1–90 dias inclusivos, começando no dia seguinte |
+| meta | 1–200 (`WORKOUTS_COMPLETED`) · 1..duração (`ACTIVE_DAYS`) |
+| participantes | 10, incluindo o criador; mínimo 2 para competir |
+
+### Erros da T17.3
+
+| `code` | HTTP | Quando |
+| --- | --- | --- |
+| `INVALID_CHALLENGE_REQUEST` | 400 | corpo fora do contrato — inclusive campo de pontuação |
+| `INVALID_CHALLENGE_TYPE` | 400 | tipo sem fonte canônica neste servidor |
+| `INVALID_CHALLENGE_TARGET` | 400 | meta fora de faixa, ou impossível para a duração |
+| `INVALID_CHALLENGE_PERIOD` | 400 | datas fora de forma, invertidas, longas demais, ou não começando amanhã |
+| `INVALID_CHALLENGE_TIMEZONE` | 400 | fuso que o runtime não conhece |
+| `TOO_MANY_PARTICIPANTS` | 400/409 | acima do teto, ou desafio cheio no aceite |
+| `CHALLENGE_PARTICIPANT_NOT_AVAILABLE` | 409 | convidado inexistente, desativado ou não amigo — **a mesma resposta para os três** |
+| `TOO_MANY_OPEN_CHALLENGES` | 409 | teto de desafios abertos por criador |
+| `CHALLENGE_NOT_FOUND` | 404 | inexistente, de terceiros, ou só convidado — **a mesma resposta** |
+| `CHALLENGE_INVITATION_NOT_FOUND` | 404 | convite inexistente, de outra conta, ou amizade desfeita antes do aceite |
+| `CHALLENGE_INVITATION_NOT_PENDING` | 409 | convite já respondido |
+| `CHALLENGE_ALREADY_STARTED` | 409 | aceite depois do início |
+| `CHALLENGE_CANCELLED` | 409 | o criador cancelou |
+| `NOT_CHALLENGE_CREATOR` | 403 | só o criador cancela |
+| `CANNOT_LEAVE_AS_CREATOR` | 409 | o criador cancela em vez de sair |
+| `CHALLENGE_IDEMPOTENCY_CONFLICT` | 409 | mesmo `clientRequestId`, conteúdo diferente |
+| `CHALLENGE_RATE_LIMITED` | 429 | teto de criação (5/min) ou de respostas (30/min) |
+
+### Regras que a T17.3 acrescentou
+
+- **o cliente nunca envia pontuação**, e a recusa é da requisição inteira;
+- **a pontuação é derivada na leitura** dos dados canônicos — não há coluna de placar no schema;
+- **`startedAt` é o instante canônico** (o Spark não tem `completedAt`, e `finishedAt` é nulável);
+- **elegibilidade é o instante do treino, nunca o da chegada**: `ENDED` fecha a janela, e o
+  resultado ainda pode convergir — `resultMayStillChange` diz isso;
+- **o ciclo de vida é derivado do relógio do servidor**, sem cron;
+- **o fuso é do desafio**, um só para todos, com a janela gravada na criação;
+- **as regras são imutáveis depois da criação** — não há rota de edição;
+- **amizade permite convidar; aceitar permite compartilhar a pontuação daquele desafio**. Os
+  interruptores da T17.2 não decidem nada aqui, e participar não altera nenhum deles;
+- **empate permanece empate** (`1, 1, 3`), sem desempate por ordem de chegada;
+- **nada entra na Outbox, no `sync_entities`, no backup ou no restore**, e ler o placar não gera
+  XP, conquista, missão nem escrita nenhuma.

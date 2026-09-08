@@ -86,12 +86,14 @@ describe('Persistência do grafo social', () => {
 
       const applied = runMigrations(db, all);
 
-      // A `0009` (T17.2) sobe junto e é igualmente aditiva: ela cria
-      // `social_progress_settings` e não toca em perfil, privacidade nem em nada da T16.
-      expect(applied.map((migration) => migration.version)).toEqual([8, 9]);
+      // A `0009` (T17.2) e a `0010` (T17.3) sobem junto e são igualmente aditivas: elas criam
+      // `social_progress_settings` e as tabelas de desafio, e não tocam em perfil, privacidade,
+      // amizade nem em nada da T16.
+      expect(applied.map((migration) => migration.version)).toEqual([8, 9, 10]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'friend_graph',
         'social_progress_profile',
+        'social_challenges',
       ]);
       expect(db.prepare('SELECT * FROM social_profiles').all()).toEqual(beforeProfiles);
       expect(db.prepare('SELECT * FROM social_privacy_settings').all()).toEqual(beforePrivacy);
