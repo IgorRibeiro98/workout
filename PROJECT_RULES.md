@@ -608,6 +608,128 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   `shellcheck ops/*.sh`. O CI normal continua sem Firebase real, sem Gemini, sem VPS e sem
   credencial de storage.
 
+## 13.8 Domínio social: identidade pública e privacidade (T17.0)
+
+O Spark ganhou identidade **pública**. As regras abaixo são o que impede essa identidade de
+carregar a privada — e o que impede o social de virar dependência do núcleo.
+
+- **O núcleo não paga nada por isso.** Social é **opcional**. Sem conta, sem perfil social, com o
+  servidor fora do ar: treinar, histórico, criação, execução, gamificação, backup, restore, sync e
+  Coach continuam exatamente como estavam. Uma mudança que torne Social necessário para qualquer
+  uma dessas coisas está errada — não o app.
+- **O Firebase UID é identidade privada de infraestrutura, e nunca identidade pública.** É proibido
+  mostrar, compartilhar ou aceitar como identificador social: Firebase UID, e-mail, `localId`,
+  `deviceId` e `syncId`. `owner_uid` não aparece em DTO nenhum, e há teste que varre as respostas
+  reais e os DTOs do Android atrás de `uid`, `ownerUid`, `firebaseUid` e e-mail.
+- **Login não ativa Social.** `GET /v1/social/me` de quem nunca ativou responde
+  `{ enabled: false }` **sem escrever uma linha**. Não existe criação preguiçosa, `LaunchedEffect`
+  que ative, nem listener de login que crie perfil. A ativação exige toque explícito **mais**
+  confirmação.
+- **A identidade é do servidor, e é imutável.** `socialId` (UUID v4) e `friendCode` (CSPRNG,
+  `SPK-` + 8 de `ABCDEFGHJKMNPQRSTUVWXYZ23456789`) nascem no servidor e não derivam do uid, do
+  e-mail nem do nome — **nem por hash**. O cliente não propõe nenhum dos dois: um `ownerUid`,
+  `socialId`, `friendCode`, `status` ou `createdAt` no corpo **recusa a requisição inteira**.
+  `friendCode` não é customizável, e rotação está fora de escopo.
+- **Unicidade é do banco.** Colisão de `friendCode` é retry limitado sobre a `UNIQUE`, nunca um
+  `SELECT` antes do `INSERT`. Esgotar as tentativas responde `503 SOCIAL_UNAVAILABLE` — nunca um
+  `500` e nunca um perfil sem código.
+- **Desativar não apaga nada.** Nem Conta Spark, nem conta Firebase, nem backup, nem sync, nem
+  treino, nem histórico, nem medida, nem gamificação. `DISABLED` é estado persistido — é ele que
+  faz reativar devolver o **mesmo** `socialId` e o **mesmo** `friendCode`. Exclusão completa de
+  conta continua sendo outro assunto (pré-release).
+- **Social é server-authoritative; treino continua local-first.** Sem Outbox social, sem Room como
+  autoridade de perfil, sem `sync_entities`, sem tombstone, sem `syncId` social. Offline, uma
+  edição **não acontece**: ela não fica pendente e não é reenviada depois — e a tela diz isso. Um
+  cache local é permitido, desde que seja cache: em memória, e invalidado **antes** de a
+  requisição da conta nova sair.
+- **`CloudDataBinding` não é identidade social.** Ele protege o dataset de treino; o social
+  pertence à conta autenticada. Reusá-lo amarraria duas coisas que precisam poder divergir.
+- **Nada de treino entra no perfil.** É proibido gravar XP, streak, contagem de treinos, último
+  treino, peso ou PR em `social_profiles`, mesmo "para facilitar a UI". O caminho para progresso
+  social é a `SocialProjection`, e as regras dela (`OWNER_SCOPED`, `CONSENT_REQUIRED`,
+  `DERIVED_NEVER_RAW`, `NO_CROSS_DOMAIN_READ`) valem desde já. O módulo social **não importa**
+  backup, sync nem IA — há teste sobre os imports dos dois lados.
+- **Privacidade nasce restrita.** `discoverability = FRIEND_CODE_ONLY`,
+  `friendRequestsEnabled = true`, `activitySharingEnabled = false`. Não existe `PUBLIC_SEARCH`,
+  `GLOBAL_PROFILE` nem `ACTIVITY_PUBLIC` — nem como default, nem como valor. E não existe busca
+  por nome, busca por e-mail, listagem global nem lookup público.
+- **Uma política, um lugar.** `SocialAccessPolicy` responde `canDiscover`/`canViewProfile`/
+  `canViewActivity`/`canReceiveFriendRequest`. Um `if (privacy...)` espalhado por controllers é
+  exatamente o que ela existe para impedir.
+- **Ativar/desativar não é evento de domínio.** Não dá XP, não desbloqueia conquista, não move
+  missão e não altera `WorkoutTemplate`, `WorkoutSession`, `PersonalRecord` nem `BodyMeasurement`.
+- **Logs.** No servidor: `requestId`, prefixo de uid, evento, status, duração, tentativas de
+  geração de código e **quais chaves** de privacidade mudaram. No Android: **nada** — o pacote
+  social não registra log, e a ausência é testada. Nunca `Authorization`, uid completo, e-mail,
+  `displayName`, `friendCode` ou `socialId`.
+- **Testes.** Toda mudança no social roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.presentation.account.Social*"`. As duas são offline e usam dublê de autenticação.
+
+## 13.9 Grafo social: amizade, pedidos e descoberta por código (T17.1)
+
+O Spark ganhou **relações entre contas**. As regras abaixo são o que impede uma relação de virar
+acesso ao domínio privado — e a descoberta de virar enumeração.
+
+- **O núcleo não paga nada por isso.** Amigos é opcional, como todo o social. Sem conta, sem perfil,
+  com o servidor fora: treinar, histórico, criação, execução, gamificação, backup, restore, sync e
+  Coach continuam exatamente como estavam.
+- **Descoberta é `friendCode` exato, e nada mais.** Um mecanismo só:
+  `POST /v1/social/friends/lookup`, sobre a forma normalizada da T17.0, com igualdade sobre índice
+  único. É **proibido** `LIKE`, prefixo, *contains*, Levenshtein, sugestão, busca por nome, busca
+  por e-mail, listagem global e "pessoas que talvez você conheça". Código malformado, inexistente e
+  de perfil desativado respondem **a mesma coisa** — distinguir qualquer um transforma a rota num
+  oráculo de existência.
+- **Uma normalização, e uma fixture que a amarra.** A regra canônica é
+  `social.identity.ts#normalizeFriendCode`. A cópia do Android existe só para resposta imediata na
+  tela (habilitar o botão, recusar um QR), nunca para decidir um lookup, e as duas são presas por
+  `contracts/social/v1/friend-code-normalization.json`, lida pelos testes dos dois lados. Mudou o
+  formato de um lado, atualize a fixture e os dois lados no mesmo commit.
+- **Amizade é um par, e a garantia é do banco.** `min(uid), max(uid)` com chave primária e
+  `CHECK (user_a_uid < user_b_uid)`. Duplicata A-B, duplicata B-A e amizade consigo mesmo são
+  irrepresentáveis. Não "resolva" isso em código — se um caminho novo precisar de outra forma de
+  escrever o par, ele está errado.
+- **Composta é transacional.** Aceitar (marcar `ACCEPTED` + criar amizade) e o pedido cruzado
+  (aceitar o inverso + criar amizade) acontecem em **uma** transação. Nunca amizade com pedido
+  pendente, nunca pedido cancelado com amizade escondida.
+- **Idempotência é escrita condicional no banco**, e não flag em memória:
+  `UPDATE ... WHERE request_id = ? AND status = 'PENDING'`, e o `changes` decide. Enviar, aceitar,
+  recusar e cancelar de novo são **sucesso** — é o retry depois de resposta perdida e o toque duplo.
+- **Estado terminal é terminal.** `ACCEPTED`/`REJECTED`/`CANCELLED` não voltam para `PENDING`, e a
+  linha não é apagada na transição. Pedir de novo é uma operação nova, com `requestId` novo.
+- **Autorização por participante, em um lugar só.** `FriendshipAccessPolicy` (participação) e
+  `SocialAccessPolicy` (visibilidade e `friendRequestsEnabled`). Um `if (request.recipient === uid)`
+  espalhado por controller é exatamente o que elas existem para impedir. Terceiro recebe "não
+  existe", nunca "não é seu".
+- **O Firebase UID nunca sai, e o `friendCode` não circula depois da descoberta.** O preview é
+  `socialId` + `displayName`, e a lista de amigos não devolve código de convite de ninguém. Há
+  teste que varre as respostas reais e os DTOs dos dois lados.
+- **Teto próprio para lookup e envio**, por `uid` autenticado e nunca por IP. O teto geral de
+  600/min não serve: 600 tentativas de código por minuto **é** uma varredura.
+- **Desativar suspende; não apaga.** Perfil desativado some das listas dos dois lados, para de ser
+  acionável e volta inteiro ao reativar. Transformar "desativar" em "desfazer amizades" é perda de
+  dado sem conserto. `friendRequestsEnabled = false` recusa **novos** pedidos e não mexe nos
+  pendentes.
+- **Desfazer amizade remove uma linha, e só.** Não apaga treino, histórico, backup, sync, medida
+  nem gamificação; não altera perfil; **não bloqueia** (bloqueio é T17.6, pendente); e não impede
+  uma nova amizade depois.
+- **Nada disso entra na Outbox, no `sync_entities`, no backup, no restore ou na gamificação.**
+  Offline, a ação **não acontece** — não fica pendente, não é reenviada, e a tela diz que nada foi
+  enviado. Adicionar amigo não dá XP, conquista nem missão.
+- **QR carrega só `spark://friend/v1/<friendCode>`.** É proibido incluir uid, e-mail, token,
+  `socialId`, `deviceId` ou endereço de servidor. Ele é gerado no aparelho, e o scanner **nunca**
+  navega: nada de `Intent`, `startActivity`, `WebView` ou `Uri.parse` sobre o que a câmera leu. Há
+  teste estrutural. A área de transferência é só de escrita — o app nunca lê o clipboard.
+- **A tela não usa um `isLoading`.** A ocupação é por alvo (`requestId`, `socialId`): aceitar o
+  pedido de um não pode bloquear a resposta ao de outro. Troca de conta invalida o estado **antes**
+  de a requisição da conta nova sair, e a resposta de uma requisição da conta anterior é descartada.
+- **Logs.** No servidor: `requestId`, prefixo de uid, evento, desfecho, contagens. No Android:
+  **nada**. Nunca `friendCode`, `socialId`, `displayName`, e-mail, uid completo ou corpo.
+- **Testes.** Toda mudança no grafo roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.presentation.account.Friends*" --tests "com.example.presentation.friends.*"`. As
+  duas são offline e usam dublê de autenticação.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

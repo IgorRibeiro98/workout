@@ -69,13 +69,33 @@ class SparkBackendClient(
      * `Authorization: Bearer`. Nenhum caminho novo de autenticação foi criado.
      */
     suspend fun postJson(path: String, jsonBody: String): SparkHttpOutcome =
+        sendJson("POST", path, jsonBody)
+
+    /**
+     * `PATCH` autenticado com corpo JSON, devolvendo status e corpo crus.
+     *
+     * Existe desde a T17.0: o perfil social é alterado por campo (nome; privacidade parcial), e
+     * `PATCH` é o verbo que diz isso. Um `POST` no lugar sugeriria substituição do recurso inteiro
+     * — que é justamente o que o servidor **não** faz, já que identidade e timestamps são dele.
+     *
+     * Mesmo caminho de [postJson]: um cliente, um interceptor, um lugar montando
+     * `Authorization: Bearer`.
+     */
+    suspend fun patchJson(path: String, jsonBody: String): SparkHttpOutcome =
+        sendJson("PATCH", path, jsonBody)
+
+    private suspend fun sendJson(
+        method: String,
+        path: String,
+        jsonBody: String
+    ): SparkHttpOutcome =
         withContext(Dispatchers.IO) {
             if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
 
             val url = "${baseUrl.trimEnd('/')}/$path"
             val request = Request.Builder()
                 .url(url)
-                .post(jsonBody.toRequestBody(APPLICATION_JSON))
+                .method(method, jsonBody.toRequestBody(APPLICATION_JSON))
                 .build()
 
             try {

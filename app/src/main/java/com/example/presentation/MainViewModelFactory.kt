@@ -56,7 +56,21 @@ class MainViewModelFactory(
      * roda o ciclo. Um sem o outro seria uma tela que mostra sem poder agir, ou o contrário.
      */
     private val syncRepository: com.example.data.sync.SyncRepository? = null,
-    private val syncCoordinator: com.example.data.sync.SyncCoordinator? = null
+    private val syncCoordinator: com.example.data.sync.SyncCoordinator? = null,
+    /**
+     * Recursos sociais (T17.0). `null` remove a seção social do Perfil, e nada mais muda.
+     *
+     * É um **gateway**, e não um repositório: o social é server-authoritative e não tem dado local
+     * para reconciliar (ver `com.example.domain.social.SocialGateway`).
+     */
+    private val socialGateway: com.example.domain.social.SocialGateway? = null,
+    /**
+     * O grafo social (T17.1). `null` remove Amigos/Solicitações do Perfil, e nada mais muda.
+     *
+     * Separado do [socialGateway] porque são duas perguntas diferentes — "quem eu sou no social" e
+     * "com quem eu me relaciono" —, e uma conta pode ter a primeira sem ter a segunda.
+     */
+    private val friendGateway: com.example.domain.social.FriendGateway? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -184,6 +198,28 @@ class MainViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.RestoreViewModel(
                 repository = restore,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.SocialViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val social = socialGateway
+                ?: throw IllegalStateException("SocialGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.SocialViewModel(
+                gateway = social,
+                authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.account.FriendsViewModel::class.java)) {
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            val friends = friendGateway
+                ?: throw IllegalStateException("FriendGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.account.FriendsViewModel(
+                gateway = friends,
                 authGateway = gateway
             ) as T
         }

@@ -384,6 +384,17 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  // QR Code (T17.1). O código de amigo vira QR **localmente**: nada é pedido ao servidor, e o
+  // conteúdo é só `spark://friend/v1/SPK-XXXXXXXX` — sem uid, sem e-mail, sem token.
+  //
+  // `zxing:core` é Java puro (o módulo `javase`, que depende de `java.awt`, deliberadamente não
+  // entra): ele desenha a matriz, e o Compose pinta. É também o que permite ao teste de JVM
+  // provar `código → QR → parser → mesmo código` sem câmera nenhuma.
+  implementation(libs.zxing.core)
+  // A leitura usa o Google Code Scanner, que roda na UI do Play Services e **não exige permissão
+  // de câmera** — o app recebe só o texto lido. Ele fica atrás de `QrScanner`, então nenhum teste
+  // carrega classe de Play Services e o app degrada sozinho onde ele não existe.
+  implementation(libs.play.services.code.scanner)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

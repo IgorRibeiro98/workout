@@ -11,15 +11,19 @@ import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BackupModule } from './modules/backup/backup.module';
 import { HealthModule } from './modules/health/health.module';
+import { SocialModule } from './modules/social/social.module';
 import { SyncModule } from './modules/sync/sync.module';
 
 /**
  * Spark Backend — monólito modular.
  *
- * `auth` (T16.1), `ai` (T16.2), `backup` (T16.4/T16.5) e `sync` (T16.6) já estão aqui. As features
- * futuras da T16 e da T17 (`social`) entram como módulos aqui dentro, no mesmo processo e no mesmo
- * banco. Não há necessidade operacional que justifique separá-los em serviços: um grupo pequeno de
- * usuários, uma VPS, um deploy.
+ * `auth` (T16.1), `ai` (T16.2), `backup` (T16.4/T16.5), `sync` (T16.6) e `social` (T17.0) estão
+ * aqui, no mesmo processo e no mesmo banco. Não há necessidade operacional que justifique
+ * separá-los em serviços: um grupo pequeno de usuários, uma VPS, um deploy.
+ *
+ * Estar no mesmo processo **não** os torna acoplados: `SocialModule` não importa `BackupModule`
+ * nem `SyncModule`, e a fronteira entre o domínio privado e o social é a `SocialProjection`
+ * (`modules/social/social.projection.ts`), não a proximidade dos arquivos.
  */
 @Module({
   imports: [
@@ -30,6 +34,7 @@ import { SyncModule } from './modules/sync/sync.module';
     AiModule,
     BackupModule,
     SyncModule,
+    SocialModule,
   ],
 })
 export class AppModule implements NestModule {
@@ -45,6 +50,7 @@ export class AppModule implements NestModule {
         AiModule,
         BackupModule,
         SyncModule,
+        SocialModule,
       ],
     };
   }

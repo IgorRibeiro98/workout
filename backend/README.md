@@ -147,6 +147,21 @@ A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive for
 | `POST /v1/sync/push` | **Bearer** | Mutações deste aparelho. Resultado **por item**: `APPLIED`, `STALE`, `REMOTE_DELETED`... (T16.6/T16.7). |
 | `GET /v1/sync/pull` | **Bearer** | Mudanças da conta depois do cursor, em ordem de `serverSequence` (T16.6). |
 | `GET /v1/sync/entities/{entityType}/{entitySyncId}` | **Bearer** | O estado **atual** de um agregado. **Somente leitura**: não gasta revision, não anexa mudança ao change log, não escreve no ledger e não move cursor (T16.7.1). |
+| `GET /v1/social/me` | **Bearer** | O perfil social da conta. `{ "enabled": false }` — e **não** `404` — para quem nunca ativou. Ler não cria nada (T17.0). |
+| `POST /v1/social/me/activate` | **Bearer** | Cria a identidade social (`socialId`, `friendCode`, privacidade padrão). **Idempotente**: a segunda chamada devolve o mesmo perfil (T17.0). |
+| `PATCH /v1/social/me` | **Bearer** | Altera o nome social. Identidade **não** muda por aqui (T17.0). |
+| `PATCH /v1/social/me/privacy` | **Bearer** | Altera privacidade, parcialmente (T17.0). |
+| `POST /v1/social/me/disable` | **Bearer** | Desativa. Não apaga conta, backup, sync, treino nem histórico (T17.0). |
+| `POST /v1/social/me/enable` | **Bearer** | Reativa, com o **mesmo** `socialId` e o **mesmo** `friendCode` (T17.0). |
+| `POST /v1/social/friends/lookup` | **Bearer** | Resolve um `friendCode` **exato** → preview mínimo, `SELF` ou `NOT_FOUND`. Teto próprio (20/min). O código vai no corpo, nunca na URL (T17.1). |
+| `POST /v1/social/friend-requests` | **Bearer** | Envia um pedido para um `socialId`. Idempotente; pedido cruzado vira amizade na mesma transação. Teto próprio (15/min) (T17.1). |
+| `GET /v1/social/friend-requests/incoming` | **Bearer** | Pedidos recebidos, pendentes, mais recentes primeiro (T17.1). |
+| `GET /v1/social/friend-requests/outgoing` | **Bearer** | Pedidos enviados, pendentes (T17.1). |
+| `POST /v1/social/friend-requests/:id/accept` | **Bearer** | Só o destinatário. Transacional: marca `ACCEPTED` e cria a amizade juntos (T17.1). |
+| `POST /v1/social/friend-requests/:id/reject` | **Bearer** | Só o destinatário. Idempotente (T17.1). |
+| `POST /v1/social/friend-requests/:id/cancel` | **Bearer** | Só quem enviou. Idempotente (T17.1). |
+| `GET /v1/social/friends` | **Bearer** | Meus amigos: `socialId`, `displayName`, `friendsSince`. Sem `friendCode`, sem uid (T17.1). |
+| `POST /v1/social/friends/remove` | **Bearer** | Desfaz a amizade. Qualquer um do par; não bloqueia e não apaga mais nada (T17.1). |
 
 Desde a T16.8, toda rota autenticada tem um teto por conta (`API_RATE_LIMITED`, 429), o backup tem
 tetos próprios de escrita e leitura (`BACKUP_RATE_LIMITED`), e as respostas de `/v1` saem com
@@ -305,13 +320,20 @@ backend/
 │   ├── modules/health/          liveness e readiness
 │   ├── modules/auth/            verificação de Firebase ID Token, guard e principal
 │   ├── modules/ai/              Coach IA: contrato, prompts, validação, quota e provider
-│   └── modules/backup/          Backup: contrato, registry, forma canônica, validação, retenção
+│   ├── modules/backup/          Backup: contrato, registry, forma canônica, validação, retenção
+│   ├── modules/sync/            Sync incremental: contrato, política, validação, change log
+│   └── modules/social/          Social: identidade pública, privacidade, política de acesso
+│                                 e o grafo (friendship.*): pedidos e amizade bilateral
 ├── migrations/                  NNNN_nome.sql, versionadas
 └── test/
 ```
 
-O módulo futuro (`social`, T17) entra em `src/modules/`, no mesmo processo e no
-mesmo banco. Não haverá `auth-service`, `sync-service` etc.
+Todos no mesmo processo e no mesmo banco. Não há `auth-service`, `sync-service` etc.
+
+Estar no mesmo processo **não** os torna acoplados: `SocialModule` não importa `BackupModule`,
+`SyncModule` nem `AiModule`, e há teste que varre os imports do módulo. A fronteira entre o domínio
+privado e o social é a `SocialProjection` (`modules/social/social.projection.ts`), não a
+proximidade dos arquivos.
 
 O contrato de backup é compartilhado com o Android em
 [`contracts/backup/v1/`](../contracts/backup/v1/README.md): o README é a definição, e as fixtures
@@ -336,11 +358,19 @@ migration já aplicada é erro, não reaplicação silenciosa.
 precisa de ownership, versionamento, idempotência e tombstones. Cada fase da T16 cria o que precisa.
 Ver a [matriz de dados](../docs/architecture/data-classification-matrix.md).
 
-Hoje são quatro tabelas: `server_metadata` (estado técnico), `ai_usage_daily` (contagem de uso do
-Coach, sem conteúdo) e, desde a T16.4, `backup_snapshots` + `backup_items`. As duas de backup
-guardam o payload do agregado como texto — o servidor **não** desmonta treino em colunas
-consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que o Room já
-possui.
+As tabelas de hoje: `server_metadata` (estado técnico), `ai_usage_daily` (contagem de uso do Coach,
+sem conteúdo), `backup_snapshots` + `backup_items` + `backup_payloads` (T16.4/T16.5),
+`sync_entities` + `sync_changes` + `sync_mutations` (T16.6/T16.7) e, desde a T17.0,
+`social_profiles` + `social_privacy_settings` + `friend_requests` + `friendships`.
+
+As de backup e sync guardam o payload do agregado como texto — o servidor **não** desmonta treino
+em colunas consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que
+o Room já possui.
+
+As duas de social são a exceção deliberada, e ela é delimitada: o perfil social **é** do servidor
+(identidade pública não pode ser decidida por um aparelho offline), e por isso mesmo nenhum dado de
+treino entra ali — nem XP, nem streak, nem contagem, nem peso, nem PR. Ver
+[`social-domain.md`](../docs/architecture/social-domain.md).
 
 ## Produção (T16.8)
 
@@ -387,6 +417,9 @@ desligar uma capacidade no servidor não exige publicar APK novo.
 - [Contrato de identidade](../docs/architecture/identity-contract.md)
 - [Protocolo de sincronização](../docs/architecture/sync-protocol.md)
 - [Contrato de backup v1](../contracts/backup/v1/README.md)
+- [Domínio social](../docs/architecture/social-domain.md)
+- [Grafo social: amizade, pedidos e QR Code](../docs/architecture/friendship-contract.md)
+- [Contrato social v1](../contracts/social/v1/README.md)
 - [Configuração do Firebase Auth](../docs/FIREBASE_AUTH_SETUP.md)
 - [Operações (T16.8)](../docs/operations/) — implantação, backup/restauração, recuperação de
   desastre, segurança e runbook

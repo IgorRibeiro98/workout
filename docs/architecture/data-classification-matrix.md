@@ -251,16 +251,38 @@ autenticada e visão entre usuários.
 | Registro de `clientMutationId` para idempotência | server-only | T16.3 |
 | Tombstones e retenção | server-only | **implementado na T16.7** (`sync_entities.deleted`; nada os apaga) |
 | Rate limit e controle de uso da IA | server-only | T16.2 |
-| Amizades, convites, desafios | server-only | T17 |
+| Identidade social e privacidade (`social_profiles`, `social_privacy_settings`) | server-only | **implementado na T17.0** |
+| Amizades e convites (`friendships`, `friend_requests`) | server-only | **implementado na T17.1** |
+| Desafios, ranking, feed, atividade | server-only | T17.2+ |
 
 Destes, a T16.4 implementou o **vínculo `uid` ↔ dados**, na forma de snapshots pertencentes a um
-`ownerUid`: `backup_snapshots` e `backup_items`. Sequência de mudanças, cursor, registro de
-`clientMutationId`, tombstones e social continuam sem existir.
+`ownerUid`: `backup_snapshots` e `backup_items`; a T16.6/T16.7 implementaram sequência de mudanças,
+cursor, ledger de `clientMutationId` e tombstones; a T17.0 implementou a **identidade social**; e a
+T17.1, o **grafo social** — pedidos de amizade e amizade bilateral, também server-only.
+Amizade, convite, desafio, ranking e feed continuam sem existir.
 
-O schema do backend tem hoje quatro tabelas: `server_metadata` (estado técnico), `ai_usage_daily`
-(proteção de custo do Coach) e as duas de backup. Nenhuma delas é uma tabela de domínio do Spark —
-o servidor guarda o snapshot como payload, e **não** desmonta treino em colunas consultáveis. Ele
-não é uma segunda autoridade operacional.
+Nenhuma tabela do backend é uma tabela de domínio do Spark: o servidor guarda o snapshot como
+payload e **não** desmonta treino em colunas consultáveis. Ele não é uma segunda autoridade
+operacional — com uma exceção deliberada e delimitada: o social (T17.0/T17.1).
+
+### O social é a exceção, e ele não é dado de treino
+
+`social_profiles` e `social_privacy_settings` são as primeiras tabelas do servidor cuja autoridade
+**é** o servidor: o perfil social nasce lá, existe lá, e o aparelho só o lê. Isso não abre exceção
+para dado de treino, e a fronteira é explícita:
+
+- **nada de treino entra em `social_profiles`.** É proibido gravar XP, streak, contagem de treinos,
+  último treino, peso corporal ou PR ali — mesmo "só para facilitar a UI";
+- **o e-mail também não entra.** Ele continua sendo informação da camada de Auth (Firebase);
+- **o Firebase UID entra apenas como `owner_uid`, e nunca sai em DTO.** Identidade pública é o
+  `socialId`;
+- **o caminho para progresso social é a `SocialProjection`** (`OWNER_SCOPED`, `CONSENT_REQUIRED`,
+  `DERIVED_NEVER_RAW`, `NO_CROSS_DOMAIN_READ`), e não uma coluna nova aqui nem um `SELECT` em
+  `sync_entities`/`backup_items`. Ver [`social-domain.md`](./social-domain.md).
+
+E o social **não** entra na classificação local: ele não tem linha no Room, não entra no backup
+(T16.4), não é tocado pelo restore (T16.5), não entra na Outbox (T16.6) e não usa tombstone
+(T16.7).
 
 ---
 

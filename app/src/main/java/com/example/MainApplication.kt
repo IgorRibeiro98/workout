@@ -259,6 +259,33 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Recursos sociais (T17.0) — identidade pública e privacidade, no Spark Backend.
+     *
+     * `by lazy` pelo mesmo motivo do Coach e da conta: o Spark é local-first e não paga nada por
+     * uma capacidade que o usuário talvez nunca ative. Nada aqui é tocado enquanto o Perfil não
+     * for aberto — e abrir o Perfil **lê** o perfil social, nunca o cria.
+     *
+     * É um gateway HTTP e mais nada: sem Room, sem DAO, sem Outbox, sem `WorkManager`. O social é
+     * server-authoritative, e o dado dele não existe no aparelho fora da tela que o está
+     * mostrando. Sem endereço de backend, o gateway responde "não configurado" sem abrir conexão,
+     * e a seção some do Perfil — treino, execução, histórico, backup e sync continuam intactos.
+     */
+    val socialGateway: com.example.domain.social.SocialGateway by lazy {
+        com.example.data.social.SparkSocialGateway(sparkBackendClient)
+    }
+
+    /**
+     * O grafo social (T17.1): amigos, pedidos e descoberta por código.
+     *
+     * Mesmo `SparkBackendClient` da T16.1 — um cliente, um interceptor, um lugar montando
+     * `Authorization: Bearer`. Sem endereço de backend configurado, ele responde "não
+     * configurado" sem abrir conexão, e a seção social simplesmente não aparece.
+     */
+    val friendGateway: com.example.domain.social.FriendGateway by lazy {
+        com.example.data.social.SparkFriendGateway(sparkBackendClient)
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

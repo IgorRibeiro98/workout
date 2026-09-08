@@ -674,8 +674,10 @@ persistência do domínio        validação da resposta
 | T16.6 | Sync incremental multi-device | **implementado** |
 | T16.7 | Conflitos, deletes, tombstones e consistência offline | **implementado** |
 | T16.7.1 | Fechamento técnico: confirmação do estado remoto, CI do Android, documentação | **implementado** |
-| T16.8 | Hardening, segurança, backup do servidor e observabilidade | planejado |
-| T17 | Amigos, convites, desafios e social | planejado |
+| T16.8 | Hardening, segurança, backup do servidor e observabilidade | **implementado** (produção NOT VERIFIED) |
+| T17.0 | Fundação social: identidade pública e privacidade | **implementado** |
+| T17.1 | Amigos, convites por código e QR Code | **implementado** |
+| T17.2+ | Perfil social rico, desafios, ranking e feed | planejado |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -1660,5 +1662,131 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 - [`docs/architecture/data-classification-matrix.md`](docs/architecture/data-classification-matrix.md)
 - [`docs/architecture/identity-contract.md`](docs/architecture/identity-contract.md)
 - [`docs/architecture/sync-protocol.md`](docs/architecture/sync-protocol.md)
+- [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md)
+- [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md)
 - [`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md)
 - [`backend/README.md`](backend/README.md)
+- [`contracts/social/v1/README.md`](contracts/social/v1/README.md)
+
+---
+
+## 18. Domínio social (T17)
+
+> **Status (verificado em 2026-09-07): T17.0 e T17.1 implementadas.**
+> **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
+> `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
+> `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
+> **T17.1** — amizade bilateral, pedidos de amizade, descoberta por `friendCode` exato,
+> compartilhamento e QR Code, migration `0008_friend_graph.sql`, nove rotas sob `/v1/social`,
+> telas de Amigos e Solicitações no Android.
+> **Não existe:** bloqueio, denúncia, perfil social rico (nível, XP, sequência, conquistas),
+> atividade, feed, ranking, desafio, notificação push (FCM), busca por nome, busca por e-mail,
+> sugestão de pessoas, avatar, upload de mídia e exclusão completa de conta.
+
+Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0)
+e [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1);
+contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
+
+### As duas autoridades
+
+```text
+TREINO — local-first                      SOCIAL — server-authoritative
+
+UI                                        UI
+ ↓                                         ↓
+Domain                                    Spark Backend
+ ↓                                         ↓
+Room  ← autoridade operacional            resultado
+ ↓                                         ↓
+Outbox → Spark Backend                    UI / cache em memória
+```
+
+O treino é local-first porque **executar um treino não pode depender de rede**. O social é
+server-authoritative pela razão simétrica: **uma identidade pública não pode ser decidida por um
+aparelho** — dois celulares offline não podem inventar dois `friendCode` e depois "convergir",
+porque convergir aqui significaria invalidar o código que uma das pessoas já distribuiu.
+
+Isso **não** torna o Spark dependente de servidor: Social é opcional, e uma conta sem perfil social
+continua treinando, consultando histórico, sincronizando, fazendo backup, restaurando e usando o
+Coach IA.
+
+### Identidade
+
+```text
+Firebase Auth
+     │ Firebase ID Token
+     ▼
+Spark Backend
+     ├── identidade privada  →  Firebase UID (owner_uid, nunca em DTO)
+     └── identidade social   →  socialId · friendCode · displayName · privacy
+```
+
+| Identidade | Função | Pública? |
+| --- | --- | --- |
+| Firebase UID | autenticação / ownership de conta | **Não** |
+| `socialId` | identidade social | Sim |
+| `friendCode` | convite / descoberta controlada | Compartilhável |
+| `deviceId` | instalação | Não |
+| `syncId` | entidade de treino sincronizada | Não social |
+
+**O Firebase UID é identidade privada de infraestrutura e nunca identidade pública do usuário.**
+E-mail, `localId`, `deviceId` e `syncId` também não são identificadores sociais.
+
+### Invariantes bloqueantes
+
+1. **Login não ativa Social.** `GET /v1/social/me` responde `{ enabled: false }` sem escrever nada.
+2. **Social nunca é obrigatório** para treino, histórico, backup, restore, sync ou Coach.
+3. **`socialId` e `friendCode` são server-generated, únicos e imutáveis**, e não derivam do uid, do
+   e-mail nem do nome. O cliente não os propõe — um campo desses no corpo recusa a requisição.
+4. **Desativar não apaga nada**, e reativar preserva a identidade.
+5. **Social não usa Outbox, `sync_entities`, tombstone nem Room como autoridade**, e não entra no
+   backup nem no restore.
+6. **Nenhum dado de treino entra em `social_profiles`.** O caminho futuro é a `SocialProjection`,
+   com `OWNER_SCOPED` e `CONSENT_REQUIRED`.
+7. **Não existe enumeração**: sem busca por nome, sem busca por e-mail, sem listagem global e sem
+   rota pública. A **única** descoberta é o lookup por `friendCode` exato (T17.1), autenticado, com
+   teto próprio de requisições, e cuja resposta para código malformado, inexistente e de perfil
+   desativado é a mesma.
+
+### O grafo social (T17.1)
+
+```text
+SocialProfile A ──friendCode──▶ lookup exato ──▶ preview mínimo
+                                                      │
+                                          FriendRequest (PENDING)
+                                                      │
+                        ┌─────────────────────────────┼──────────────────────────┐
+                    ACCEPTED                      REJECTED                   CANCELLED
+                  (só o destinatário)          (só o destinatário)         (só quem enviou)
+                        │
+                        ▼
+                 Friendship(A,B)   ← uma linha, par canônico min(uid) < max(uid)
+```
+
+Invariantes bloqueantes que se somam aos de cima:
+
+8. **Amizade é um par, não duas relações.** `PRIMARY KEY (user_a_uid, user_b_uid)` mais
+   `CHECK (user_a_uid < user_b_uid)` tornam **irrepresentáveis** a duplicata A-B, a duplicata B-A e
+   a amizade consigo mesmo. A garantia é do banco, não da disciplina do serviço.
+9. **Aceitar é transacional.** Marcar o pedido `ACCEPTED` e criar a amizade acontecem juntos ou não
+   acontecem. Nunca "amizade criada com o pedido ainda pendente", e nunca "pedido cancelado com
+   amizade criada escondida".
+10. **Pedido cruzado auto-aceita**, deterministicamente e na mesma transação: quando A pede B e B
+    pede A, o consentimento bilateral já foi expresso pelos dois.
+11. **Estado terminal não volta para `PENDING`**, e enviar/aceitar/recusar/cancelar são
+    idempotentes por escrita condicional no banco — não por flag em memória.
+12. **Só participante age, e só o participante certo.** Uma conta C não aceita, não recusa, não
+    cancela e não desfaz nada entre A e B — e recebe "não existe", não "não é seu".
+13. **Desfazer amizade não bloqueia e não apaga nada além da relação.** Bloqueio é outra
+    capacidade (T17.6, pendente).
+14. **Perfil desativado suspende as relações; não as apaga.** Elas somem das listas dos dois lados,
+    param de ser acionáveis, e voltam inteiras ao reativar.
+15. **O QR carrega apenas `spark://friend/v1/<friendCode>`** — sem uid, e-mail, token, `socialId`,
+    `deviceId` ou endereço de servidor —, é gerado no aparelho, e o scanner **nunca** navega, abre
+    `Intent` ou carrega URL.
+
+### Exclusão de conta — pendência que continua registrada
+
+Desativar Social **não** é excluir a conta. A exclusão completa continua fora de escopo e continua
+sendo **requisito pré-release para público externo**: ela precisa coordenar Firebase, Spark
+Backend, backup, mídia e social de uma vez.

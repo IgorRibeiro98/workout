@@ -39,6 +39,16 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
         fun createRoute(templateId: Long) = "adapt_workout/$templateId"
     }
     object Settings : Screen("settings", R.string.nav_settings, Icons.Default.Settings)
+
+    // Grafo social (T17.1). São telas alcançadas **a partir do Perfil** — e não itens novos de
+    // bottom navigation: o social é uma capacidade opcional, e uma aba permanente para ela
+    // apareceria vazia para quem nunca ativou.
+    //
+    // O `friendCode` **não** entra em rota nenhuma. "Meu código" é uma folha dentro do Perfil,
+    // onde o código já está carregado; uma rota `my_code/{friendCode}` colocaria um identificador
+    // compartilhável no estado de navegação sem nenhum ganho.
+    object Friends : Screen("friends", R.string.nav_profile, Icons.Default.Person)
+    object FriendRequests : Screen("friend_requests", R.string.nav_profile, Icons.Default.Person)
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

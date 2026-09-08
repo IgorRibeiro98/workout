@@ -180,9 +180,35 @@ Sem construir arcabouço jurídico (§148). O que é tecnicamente verdade:
 
 **Que dado sai do aparelho.** Só com conta e só por ação explícita: o snapshot de backup (treinos,
 sessões concluídas, séries, medidas corporais, check-ins, programas, exercícios pessoais) e as
-mutações de sync dos mesmos agregados. Contexto do Coach quando o usuário pede uma análise. **Não
-saem:** mídia local, preferências de aparelho, catálogo, dado derivado (XP, conquistas, PRs,
-streak) e credenciais.
+mutações de sync dos mesmos agregados. Contexto do Coach quando o usuário pede uma análise. Desde a
+**T17.0**, e só se o usuário ativar os recursos sociais, o **nome social** que ele mesmo escolheu.
+**Não saem:** mídia local, preferências de aparelho, catálogo, dado derivado (XP, conquistas, PRs,
+streak), e-mail e credenciais.
+
+**O que o social publica.** A T17.0 criou identidade (`socialId`, `friendCode`, nome social) e
+privacidade; a **T17.1** acrescentou o grafo — amizade bilateral, pedidos e descoberta por código.
+O que uma pessoa consegue ver de outra continua sendo **o mínimo**: `socialId` e `displayName`, e
+nada mais. Não existe atividade, feed, ranking, nível, sequência, último treino nem medida — e ser
+amigo **não** concede acesso a treino, backup, sync, histórico, e-mail ou Firebase UID.
+
+O estado permanece: social opt-in (desligado até o usuário ativar), `activitySharingEnabled =
+false`, sem busca pública por nome, sem busca por e-mail, sem listagem global, sem sugestão de
+pessoas e sem e-mail no perfil social. A **única** descoberta é o lookup por `friendCode` exato,
+autenticado, com teto próprio de requisições (20/min por conta) e cuja resposta para código
+malformado, inexistente e de perfil desativado é a mesma — o que impede a rota de virar oráculo de
+existência. O envio de pedidos tem teto próprio (15/min) para que um bug em laço não vire centenas
+de convites.
+
+Nenhum dado de treino entra em `social_profiles`, `friend_requests` ou `friendships`, e o único
+caminho futuro para progresso social é uma projeção explícita (`SocialProjection`) — ver
+[`docs/architecture/social-domain.md`](../architecture/social-domain.md) e
+[`docs/architecture/friendship-contract.md`](../architecture/friendship-contract.md).
+
+**QR Code (T17.1).** O convite carrega `spark://friend/v1/<friendCode>` e mais nada: sem Firebase
+UID, sem e-mail, sem token, sem `socialId`, sem `deviceId` e sem endereço de servidor. Ele é gerado
+no aparelho, e o leitor **não executa** o que a câmera capturou — nada de `Intent`, navegação ou
+`WebView`. Ler QR também **não custa permissão de câmera**: o Google Code Scanner abre a câmera na
+UI do Play Services, e `android.permission.CAMERA` não existe no manifesto do Spark (há teste).
 
 **Onde fica.** No SQLite da VPS, como texto opaco por agregado — o servidor não desmonta treino em
 colunas consultáveis. E, criptografado, no storage de backup off-site.
@@ -199,7 +225,8 @@ de permissão "some" com `chmod 777` —, e o custo é o dado pessoal de todo mu
 ficar legível por qualquer processo da máquina.
 
 **O que nunca é registrado em log.** `Authorization`, token, corpo de requisição, payload de backup,
-payload de sync, prompt, resposta do modelo, nome de treino, nota, medida. Só metadata técnica —
+payload de sync, prompt, resposta do modelo, nome de treino, nota, medida e — desde a T17.0 —
+nome social, `friendCode` e `socialId`. Só metadata técnica —
 `requestId`, prefixo de uid, contagens, duração, status. Verificado por testes que enviam marcas
 reconhecíveis e varrem a saída real do logger.
 
@@ -209,6 +236,27 @@ reconhecíveis e varrem a saída real do logger.
 ### Exclusão de conta — pendência registrada
 
 **Não existe hoje** um caminho para o usuário apagar a conta e todo o dado dela do servidor.
+
+Desativar os recursos sociais (T17.0) **não** é isso, e a distinção precisa ficar registrada:
+
+```text
+social disabled  ≠  conta Firebase apagada
+social disabled  ≠  Conta Spark apagada
+```
+
+Desativar preserva o perfil (`status = DISABLED`) justamente para que reativar devolva o mesmo
+`socialId` e o mesmo `friendCode` — e, desde a T17.1, para que as **relações** voltem inteiras:
+amizades e pedidos pendentes ficam suspensos, não apagados.
+
+A T17.0 e a T17.1 **aumentaram** o escopo do que uma exclusão completa precisará cobrir: além de
+Firebase, backups, snapshots de sync e tombstones, ela terá de remover `social_profiles`,
+`social_privacy_settings`, `friend_requests` e `friendships`.
+
+E a T17.1 **muda a natureza da pendência**: até aqui, todo dado do servidor pertencia a uma conta
+só, e apagá-lo era uma decisão de uma pessoa. Uma amizade é um fato sobre **duas** — apagar a conta
+de A altera o que B vê. A exclusão terá de decidir explicitamente o que acontece com o outro lado
+(a amizade some da lista de B, e é isso que as `FK ... ON DELETE CASCADE` já preparam), em vez de
+descobrir isso no dia da implementação. Isso reforça, e não enfraquece, o status abaixo.
 
 ```text
 uso fechado (pessoal/família)      pendência controlada

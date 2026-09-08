@@ -89,9 +89,19 @@ fun MainScreen() {
         backupRepository = app.backupRepository,
         restoreRepository = app.restoreRepository,
         syncRepository = app.syncRepository,
-        syncCoordinator = app.syncCoordinator
+        syncCoordinator = app.syncCoordinator,
+        socialGateway = app.socialGateway,
+        friendGateway = app.friendGateway
     )
 
+    // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
+    // por rota faria a lista ser lida três vezes e o contador do Perfil ficar velho logo depois de
+    // aceitar um pedido na tela de Solicitações.
+    //
+    // Criá-lo aqui **não** faz requisição nenhuma: o `init` só observa a sessão para invalidar o
+    // estado na troca de conta. A primeira leitura sai de `open()`, que uma tela do grafo chama
+    // quando o usuário chega nela.
+    val friendsViewModel: com.example.presentation.account.FriendsViewModel = viewModel(factory = factory)
     val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
     val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel = viewModel(factory = factory)
     val todayViewModel: com.example.presentation.today.TodayViewModel = viewModel(factory = factory)
@@ -325,12 +335,23 @@ fun MainScreen() {
                 // do trabalho agendado por uma alteração local.
                 val syncViewModel: com.example.presentation.account.SyncViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // E para o social (T17.0): criar o ViewModel **lê** o perfil que já existe no
+                // servidor. Ler não cria perfil — `GET /v1/social/me` responde
+                // `{ enabled: false }` sem escrever nada. Ativar exige dois toques explícitos.
+                val socialViewModel: com.example.presentation.account.SocialViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
                     accountViewModel = accountViewModel,
                     backupViewModel = backupViewModel,
                     restoreViewModel = restoreViewModel,
                     syncViewModel = syncViewModel,
+                    socialViewModel = socialViewModel,
+                    friendsViewModel = friendsViewModel,
+                    onNavigateToFriends = { navController.navigate(Screen.Friends.route) },
+                    onNavigateToFriendRequests = {
+                        navController.navigate(Screen.FriendRequests.route)
+                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
@@ -342,6 +363,19 @@ fun MainScreen() {
                             launchSingleTop = true
                         }
                     }
+                )
+            }
+            composable(Screen.Friends.route) {
+                com.example.presentation.friends.FriendsScreen(
+                    viewModel = friendsViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToRequests = { navController.navigate(Screen.FriendRequests.route) }
+                )
+            }
+            composable(Screen.FriendRequests.route) {
+                com.example.presentation.friends.FriendRequestsScreen(
+                    viewModel = friendsViewModel,
+                    onNavigateBack = { navController.popBackStack() }
                 )
             }
             composable(Screen.Missions.route) {

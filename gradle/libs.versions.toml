@@ -43,6 +43,20 @@ credentials = "1.5.0"
 googleid = "1.1.1"
 kotlinxSerializationJson = "1.9.0"
 firebaseBom = "34.18.0"
+# QR Code (T17.1).
+#
+# `zxing:core` é Java puro, sem nada de Android e sem `java.awt` (isso é o módulo `javase`, que
+# NÃO entra aqui). Duas consequências que decidiram a escolha: o APK ganha um jar pequeno em vez
+# de um SDK, e o encode/decode roda em **teste unitário de JVM** — é assim que o CI prova o
+# round-trip do QR sem câmera, sem emulador e sem device.
+zxingCore = "3.5.4"
+# Leitura de QR (T17.1): o Google Code Scanner, do Play Services.
+#
+# Escolhido por uma razão específica: ele **não exige permissão de câmera**. A leitura acontece em
+# uma UI do próprio Play Services, e o app recebe só o texto lido — nada de `CameraX`, nada de
+# `android.permission.CAMERA` no manifesto, nada de detector próprio. Pedir permissão de câmera
+# para ler um código de amigo seria um preço alto por uma tela que se usa três vezes na vida.
+playServicesCodeScanner = "16.1.0"
 googleServices = "4.4.2"
 
 
@@ -114,6 +128,8 @@ firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.r
 firebase-appcheck-playintegrity = { group = "com.google.firebase", name = "firebase-appcheck-playintegrity" }
 firebase-appcheck-debug = { group = "com.google.firebase", name = "firebase-appcheck-debug" }
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
+play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
 
 
 [plugins]

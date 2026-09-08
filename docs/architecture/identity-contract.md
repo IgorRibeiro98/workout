@@ -25,6 +25,11 @@
   - **implementado na T16.7:** o tombstone e a identidade de uma exclusão — a exclusão é uma
     mudança versionada da mesma identidade (`sync_entities.deleted`), e recriar usa `syncId` novo.
     Room `version = 35`;
+  - **implementado na T17.0:** a identidade **pública**. `socialId` (UUID v4) e `friendCode`
+    (`SPK-` + 8 símbolos de CSPRNG) nascem no servidor, são únicos por constraint de banco e são
+    imutáveis — inclusive através de desativar/reativar. Eles não derivam do Firebase UID, do
+    e-mail nem do nome, e o cliente não os propõe: um `ownerUid`/`socialId`/`friendCode` no corpo
+    recusa a requisição inteira. Ver [`social-domain.md`](./social-domain.md);
   - **implementado na T16.7.1:** a identidade **revalidada depois da resposta**. Uma leitura de
     estado atual (`GET /v1/sync/entities/...`) devolve o `ownerUid` que o servidor autenticou
     naquela requisição, e o aparelho só grava quando ele, o dono do dataset local
@@ -38,14 +43,20 @@
 Nenhum substitui outro, e confundir dois deles é o defeito que este documento existe para evitar:
 
 ```text
-Firebase UID          → quem é o usuário          (conta online)
-deviceId              → qual instalação do app    (aparelho)
-syncId                → qual entidade             (dado pessoal, global)
+Firebase UID          → quem é o usuário          (conta online)        PRIVADO
+socialId              → quem é o usuário no social (T17.0)              PÚBLICO
+friendCode            → como convidar essa pessoa (T17.0)               COMPARTILHÁVEL
+deviceId              → qual instalação do app    (aparelho)            PRIVADO
+syncId                → qual entidade             (dado pessoal, global) PRIVADO
 clientMutationId      → qual alteração            (uma tentativa de mutação)
 clientBackupId        → qual tentativa de backup  (T16.4)
 localId               → qual linha no Room        (só dentro deste aparelho)
 canonicalExerciseId   → qual exercício de catálogo (conteúdo versionado)
 ```
+
+**O Firebase UID nunca é identidade pública.** Desde a T17.0 essa distinção tem consequência
+concreta: quando existe uma superfície pública, ela usa `socialId` — e `email`, `localId`,
+`deviceId` e `syncId` são igualmente proibidos como identificador social.
 
 ### `clientBackupId` — identidade de uma tentativa de backup (T16.4)
 
@@ -146,6 +157,31 @@ referencia:
 - o `syncId` do exercício pessoal, quando `isUserCreated = 1`.
 
 Nunca o `localId` do exercício — ele não significa nada no outro aparelho.
+
+### `socialId` e `friendCode` — identidade pública (T17.0)
+
+As **únicas** identidades do Spark que podem aparecer para outra pessoa. As duas nascem no
+servidor, e a razão é a mesma que faz o social ser server-authoritative: unicidade global é uma
+pergunta que um aparelho offline não pode responder.
+
+- **`socialId`** — UUID v4 (`crypto.randomUUID`), opaco, imutável, `UNIQUE` no banco. Não é
+  sequencial: um id sequencial vazaria de graça quando o perfil foi criado e quantos existem.
+- **`friendCode`** — `SPK-` + 8 símbolos de `ABCDEFGHJKMNPQRSTUVWXYZ23456789` (31^8 ≈ 8,5 × 10^11),
+  sorteados por `crypto.randomInt` (com rejeição de amostra — `% 31` enviesaria os primeiros
+  símbolos). Alfabeto sem `0`, `O`, `1`, `I` e `L`, porque um código é lido em voz alta e digitado
+  de uma foto. Único por `UNIQUE`; colisão é retry limitado, e esgotar é `503`, nunca um perfil sem
+  código. Normalização canônica única (`normalizeFriendCode`), **reusada** pelo lookup da T17.1 — e
+  amarrada à cópia de formato do Android pela fixture compartilhada
+  `contracts/social/v1/friend-code-normalization.json`, lida pelos testes dos dois lados.
+- **Nenhum dos dois deriva do uid, do e-mail ou do nome — nem por hash.** Derivar permitiria
+  confirmar um palpite ("o e-mail X tem o código Y?"), que é a informação que eles existem para não
+  carregar.
+- **Nenhum dos dois autentica.** Conhecer um `socialId` ou um `friendCode` não concede permissão
+  nenhuma: ownership continua saindo do Firebase ID Token verificado. O `friendCode` é um convite,
+  não uma credencial.
+- **Imutáveis, inclusive através do interruptor.** `disable` → `enable` devolve o mesmo par. Gerar
+  identidade nova a cada toque invalidaria o código que a pessoa já distribuiu.
+- **`displayName` não é identidade.** Ele não é único, e dois "Igor" podem coexistir.
 
 ### `deviceId` — identidade da instalação
 
@@ -338,3 +374,7 @@ precisar reconciliar nada.
 | Registro de dispositivos no servidor | T16.0 | não implementado — o `deviceId` é metadado, e uma tabela de dispositivos só passa a valer a pena com revogação por aparelho (T16.8) |
 | Identidade de uma exclusão (tombstone) | T16.0 | **implementado na T16.7** |
 | Revalidação de conta depois de uma resposta remota | T16.7.1 | **T16.7.1 — feito** |
+| `socialId` — identidade social pública | T17.0 | **T17.0 — feito** |
+| `friendCode` — convite/descoberta controlada | T17.0 | **T17.0 — feito** |
+| Lookup por `friendCode` (match exato, rate limited) | T17.0 (documentado) | **T17.1 — feito** |
+| `requestId` — identificador público de um pedido de amizade (UUID v4, opaco) | T17.1 | **T17.1 — feito** |

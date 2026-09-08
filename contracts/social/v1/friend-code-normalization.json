@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Casos canônicos de normalização de friendCode (T17.0 §3, consumido pela T17.1).",
+    "Lido pelos DOIS lados: backend/test/friend-code-contract.spec.ts e",
+    "app/src/test/java/com/example/data/social/FriendCodeContractTest.kt.",
+    "A regra vive no servidor (social.identity.ts#normalizeFriendCode). O Android tem uma cópia",
+    "apenas para dar resposta imediata na tela (habilitar o botão, recusar um QR malformado) e",
+    "nunca para decidir um lookup — quem decide é o servidor. Este arquivo é o que impede as duas",
+    "de divergirem em silêncio: uma delas mudando sozinha quebra o teste do seu lado.",
+    "Formato: normalized = null significa RECUSADO."
+  ],
+  "canonical": {
+    "prefix": "SPK",
+    "separator": "-",
+    "alphabet": "ABCDEFGHJKMNPQRSTUVWXYZ23456789",
+    "randomLength": 8
+  },
+  "cases": [
+    { "input": "SPK-7K2P9D8Q", "normalized": "SPK-7K2P9D8Q", "why": "já canônico" },
+    { "input": "spk-7k2p9d8q", "normalized": "SPK-7K2P9D8Q", "why": "minúsculas" },
+    { "input": "SPK7K2P9D8Q", "normalized": "SPK-7K2P9D8Q", "why": "sem separador" },
+    { "input": " SPK 7K2P 9D8Q ", "normalized": "SPK-7K2P9D8Q", "why": "espaços internos e nas pontas" },
+    { "input": "spk7k2p9d8q", "normalized": "SPK-7K2P9D8Q", "why": "minúsculas e sem separador" },
+    { "input": "S-P-K-7K2P9D8Q", "normalized": "SPK-7K2P9D8Q", "why": "hífens sobrando" },
+    { "input": "", "normalized": null, "why": "vazio" },
+    { "input": "SPK-", "normalized": null, "why": "sem parte aleatória" },
+    { "input": "SPK-7K2P9D8", "normalized": null, "why": "curto demais" },
+    { "input": "SPK-7K2P9D8QQ", "normalized": null, "why": "longo demais" },
+    { "input": "7K2P9D8Q", "normalized": null, "why": "sem prefixo" },
+    { "input": "GYM-7K2P9D8Q", "normalized": null, "why": "prefixo errado" },
+    { "input": "SPK-7K2P9D8O", "normalized": null, "why": "O não pertence ao alfabeto e NÃO vira 0" },
+    { "input": "SPK-7K2P9D80", "normalized": null, "why": "0 não pertence ao alfabeto e NÃO vira O" },
+    { "input": "SPK-7K2P9D8I", "normalized": null, "why": "I ambíguo, recusado" },
+    { "input": "SPK-7K2P9D8L", "normalized": null, "why": "L ambíguo, recusado" },
+    { "input": "SPK-7K2P9D81", "normalized": null, "why": "1 ambíguo, recusado" },
+    { "input": "SPK-7K2P9D8!", "normalized": null, "why": "símbolo fora do alfabeto" },
+    { "input": "SPK-7K2P9D8Ç", "normalized": null, "why": "não ASCII" },
+    { "input": "SPK_7K2P9D8Q", "normalized": null, "why": "underline não é separador aceito" }
+  ]
+}

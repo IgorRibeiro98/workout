@@ -55,7 +55,13 @@ fun ProfileScreen(
     /** Restore de backup (T16.5). `null` quando não há Spark Backend configurado neste build. */
     restoreViewModel: com.example.presentation.account.RestoreViewModel? = null,
     /** Sync multi-device (T16.6). `null` quando não há Spark Backend configurado neste build. */
-    syncViewModel: com.example.presentation.account.SyncViewModel? = null
+    syncViewModel: com.example.presentation.account.SyncViewModel? = null,
+    /** Recursos sociais (T17.0). `null` quando não há Spark Backend configurado neste build. */
+    socialViewModel: com.example.presentation.account.SocialViewModel? = null,
+    /** O grafo social (T17.1). `null` mantém o Perfil exatamente como a T17.0 o entregou. */
+    friendsViewModel: com.example.presentation.account.FriendsViewModel? = null,
+    onNavigateToFriends: () -> Unit = {},
+    onNavigateToFriendRequests: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -66,6 +72,20 @@ fun ProfileScreen(
     val restoreState = restoreViewModel?.uiState?.collectAsState()?.value
     // E para o sync: observar o estado não dispara ciclo nenhum.
     val syncState = syncViewModel?.uiState?.collectAsState()?.value
+    // E para o social: observar o estado é leitura. Ele não ativa recursos sociais, não cria
+    // identidade e não envia nada — a ativação exige dois toques explícitos.
+    val socialState = socialViewModel?.uiState?.collectAsState()?.value
+    // E para o grafo: observar o estado não carrega nada.
+    val friendsState = friendsViewModel?.uiState?.collectAsState()?.value
+
+    // A leitura do grafo acontece quando o Perfil abre **com o perfil social ativo** — é o que
+    // permite mostrar "3 amigos · 1 solicitação pendente" sem entrar na lista. Ela é uma leitura:
+    // não cria relação, não aceita nada e não envia nada. Sem perfil social ativo não há o que
+    // pedir, e nenhuma requisição sai.
+    val isSocialActive = socialState?.profile?.status == com.example.domain.social.SocialProfileStatus.ACTIVE
+    androidx.compose.runtime.LaunchedEffect(isSocialActive) {
+        if (isSocialActive) friendsViewModel?.open()
+    }
 
     // O ViewModel de sync precisa saber qual conta está conectada para distinguir "entre na
     // conta" de "estes dados são de outra conta". A tela já observa isso para a seção de conta;
@@ -105,7 +125,29 @@ fun ProfileScreen(
         onCancelRestore = { restoreViewModel?.cancel() },
         syncState = syncState,
         onSyncNow = { syncViewModel?.syncNow() },
-        onResolveConflict = { id, choice -> syncViewModel?.resolveConflict(id, choice) }
+        onResolveConflict = { id, choice -> syncViewModel?.resolveConflict(id, choice) },
+        socialState = socialState,
+        onSocialActivate = { socialViewModel?.startActivation() },
+        onSocialDisplayNameChange = { value -> socialViewModel?.onDisplayNameChanged(value) },
+        onSocialConfirmActivation = { socialViewModel?.confirmActivation() },
+        onSocialCancelActivation = { socialViewModel?.cancelActivation() },
+        onSocialEditName = { socialViewModel?.startEditingName() },
+        onSocialConfirmName = { socialViewModel?.confirmDisplayName() },
+        onSocialCancelEditName = { socialViewModel?.cancelEditingName() },
+        onSocialFriendRequestsChange = { enabled ->
+            socialViewModel?.setFriendRequestsEnabled(enabled)
+        },
+        onSocialActivitySharingChange = { enabled ->
+            socialViewModel?.setActivitySharingEnabled(enabled)
+        },
+        onSocialDisable = { socialViewModel?.startDisable() },
+        onSocialConfirmDisable = { socialViewModel?.confirmDisable() },
+        onSocialCancelDisable = { socialViewModel?.cancelDisable() },
+        onSocialEnable = { socialViewModel?.enable() },
+        onSocialRetry = { socialViewModel?.refresh() },
+        friendsState = friendsState,
+        onOpenFriends = onNavigateToFriends,
+        onOpenFriendRequests = onNavigateToFriendRequests
     )
 
     com.example.presentation.coach.CoachExplanationSheet(
@@ -154,9 +196,31 @@ private fun ProfileScreenContent(
     onResolveConflict: (
         com.example.data.sync.SyncConflictId,
         com.example.data.sync.SyncConflictChoice
-    ) -> Unit = { _, _ -> }
+    ) -> Unit = { _, _ -> },
+    /** Recursos sociais (T17.0). `null` esconde a seção social inteira. */
+    socialState: com.example.presentation.account.SocialUiState? = null,
+    onSocialActivate: () -> Unit = {},
+    onSocialDisplayNameChange: (String) -> Unit = {},
+    onSocialConfirmActivation: () -> Unit = {},
+    onSocialCancelActivation: () -> Unit = {},
+    onSocialEditName: () -> Unit = {},
+    onSocialConfirmName: () -> Unit = {},
+    onSocialCancelEditName: () -> Unit = {},
+    onSocialFriendRequestsChange: (Boolean) -> Unit = {},
+    onSocialActivitySharingChange: (Boolean) -> Unit = {},
+    onSocialDisable: () -> Unit = {},
+    onSocialConfirmDisable: () -> Unit = {},
+    onSocialCancelDisable: () -> Unit = {},
+    onSocialEnable: () -> Unit = {},
+    onSocialRetry: () -> Unit = {},
+    friendsState: com.example.presentation.account.FriendsUiState? = null,
+    onOpenFriends: () -> Unit = {},
+    onOpenFriendRequests: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
+    // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
+    // navegar para mostrar um dado que está na mão seria uma tela sem conteúdo próprio.
+    var isFriendCodeVisible by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -287,7 +351,43 @@ private fun ProfileScreenContent(
                 )
             }
 
+            // O social fecha o bloco da Conta Spark: ele é a única capacidade aqui que não fala
+            // sobre os dados de treino, e sim sobre identidade pública. Uma seção do Perfil, e não
+            // um item novo de navegação — não existe tela social para navegar até a T17.1.
+            if (socialState != null) {
+                com.example.presentation.account.SocialSection(
+                    friendsState = friendsState,
+                    onOpenFriends = onOpenFriends,
+                    onOpenRequests = onOpenFriendRequests,
+                    onShowFriendCode = { isFriendCodeVisible = true },
+                    uiState = socialState,
+                    onActivate = onSocialActivate,
+                    onDisplayNameChange = onSocialDisplayNameChange,
+                    onConfirmActivation = onSocialConfirmActivation,
+                    onCancelActivation = onSocialCancelActivation,
+                    onEditName = onSocialEditName,
+                    onConfirmName = onSocialConfirmName,
+                    onCancelEditName = onSocialCancelEditName,
+                    onFriendRequestsChange = onSocialFriendRequestsChange,
+                    onActivitySharingChange = onSocialActivitySharingChange,
+                    onDisable = onSocialDisable,
+                    onConfirmDisable = onSocialConfirmDisable,
+                    onCancelDisable = onSocialCancelDisable,
+                    onEnable = onSocialEnable,
+                    onRetry = onSocialRetry
+                )
+            }
+
             SettingsSection(onClick = onNavigateToSettings)
+        }
+    }
+
+    if (isFriendCodeVisible) {
+        socialState?.profile?.let { profile ->
+            com.example.presentation.friends.MyFriendCodeDialog(
+                friendCode = profile.friendCode,
+                onDismiss = { isFriendCodeVisible = false }
+            )
         }
     }
 
