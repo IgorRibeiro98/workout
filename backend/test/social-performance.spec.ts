@@ -36,11 +36,24 @@ const COMMENTS = 50_000;
 const REACTIONS = 50_000;
 const FRIENDSHIPS_PER_USER = 10;
 
-/** T17.12 §169 — o volume de Squad que a fase pede: 100 grupos de 20, com conversa dentro. */
-const GROUPS = 100;
+/**
+ * O volume de Squad da auditoria de fechamento (T17.13 §94): 500 grupos de 20, com conversa dentro.
+ *
+ * A T17.12 semeava 100 grupos e dezenas de milhares de interações — ordem de grandeza certa, mas
+ * abaixo do que §94 pede. Os números aqui são os da auditoria: 500 Squads, 20 participantes cada,
+ * e 50 mil interações de cada tipo na audiência `GROUP`.
+ *
+ * `social_group_checkin_shares` fica em `GROUPS * MEMBERS_PER_GROUP` (10 mil) porque só membro
+ * compartilha, e cada um traz um check-in próprio: semear mais arestas exigiria participantes
+ * fictícios que nenhuma consulta real leria, e o plano medido não mudaria por causa disso.
+ *
+ * `GROUPS` continua múltiplo de `MEMBERS_PER_GROUP` — a distribuição da conversa depende disso
+ * (veja o laço de comentários abaixo).
+ */
+const GROUPS = 500;
 const MEMBERS_PER_GROUP = 20;
-const GROUP_COMMENTS = 10_000;
-const GROUP_REACTIONS = 20_000;
+const GROUP_COMMENTS = 50_000;
+const GROUP_REACTIONS = 50_000;
 
 interface Seeded {
   readonly db: BetterSqlite3.Database;

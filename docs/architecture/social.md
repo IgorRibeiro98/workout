@@ -1,7 +1,7 @@
 # Spark Social — visão geral do domínio
 
-- **Tarefas:** T17.0 → T17.10 (fechamento).
-- **Status (verificado em 2026-09-09):** implementado e auditado. Migrations `0007`–`0018`,
+- **Tarefas:** T17.0 → T17.13 (fechamento do Social V2).
+- **Status (verificado em 2026-09-09):** implementado e auditado. Migrations `0007`–`0020`,
   módulo `backend/src/modules/social/`, módulo `backend/src/modules/account-deletion/`, pacotes
   `com.example.data.social`, `com.example.domain.social`, `com.example.presentation.friends` e
   `com.example.service` (push) no Android.
@@ -20,6 +20,8 @@
 | Desafios, pontuação e ciclo de vida | [`challenge-domain.md`](./challenge-domain.md) |
 | Atividade e rankings | [`social-activity-ranking.md`](./social-activity-ranking.md) |
 | Notificações push | [`social-notifications.md`](./social-notifications.md) |
+| Squads privados, posse, convites e feed de grupo | [`social-groups.md`](./social-groups.md) |
+| Audiência de interação (`FRIEND` / `GROUP`) | [`social-interaction-audience.md`](./social-interaction-audience.md) |
 | Classificação de dado por sensibilidade | [`data-classification-matrix.md`](./data-classification-matrix.md) |
 | Arquitetura online (por que existe backend) | [`ADR-0001-spark-online-architecture.md`](./ADR-0001-spark-online-architecture.md) |
 | Sync do treino (T16) | [`sync-protocol.md`](./sync-protocol.md) |
@@ -28,6 +30,22 @@ Bloqueio, denúncia, exclusão de conta (T17.6), compartilhamento de treino (T17
 Feed (T17.8) e conteúdo do check-in (T17.9) **não têm documento próprio**: as regras normativas
 deles estão em `PROJECT_RULES.md` §13.14 e §13.15 e nos comentários dos arquivos citados abaixo.
 Este documento é o índice para eles.
+
+### O que mudou no Social V2 (T17.11 / T17.12)
+
+O Social V1 (T17.0–T17.10) tinha **uma** audiência: a relação direta. O V2 acrescenta a segunda —
+o Squad — e a torna explícita nas interações:
+
+```text
+WorkoutCheckIn                    ← continua sendo UMA publicação, nunca duplicada
+   ├── FRIEND    → reações e comentários FRIEND
+   ├── GROUP(X)  → reações e comentários GROUP(X)
+   └── GROUP(Y)  → reações e comentários GROUP(Y)
+```
+
+Nenhuma interação atravessa audiências, e nenhuma audiência é concedida pelo cliente. As duas
+seções novas deste documento são a §14 (Squads) e a §15 (audiências); o detalhe normativo está nos
+dois documentos indexados acima.
 
 ---
 
@@ -92,6 +110,26 @@ autores visíveis = { viewer } ∪ { amigos diretos atuais ∧ perfil ACTIVE ∧
 Avaliada **a cada leitura**. É isso que faz `unfriend`, bloqueio e desativação serem revogações
 imediatas: não há cache para invalidar, porque não há cache.
 
+Desde a T17.11/T17.12 a mesma classe exporta os fragmentos que descrevem o caminho de **Squad**, e
+Feed de grupo, detalhe, mídia, reações, comentários e denúncia usam literalmente os mesmos — nunca
+uma cópia:
+
+| Fragmento | Responde |
+| --- | --- |
+| `VIEWER_SCOPE_CTE` | quem o viewer alcança por relação direta |
+| `interactionVisibleSql` | a interação `FRIEND` é visível para este viewer? |
+| `groupShareVisibleSql` | este check-in chegou ao viewer por um Squad (share + ambos membros + ¬bloqueio)? |
+| `viewerInActiveGroupSql` | o viewer é membro ativo **deste** Squad? |
+| `groupInteractionVisibleSql` | a interação `GROUP` é visível para este viewer? |
+
+```text
+canView = SELF ∨ FRIEND ∨ GROUP        (grant nesta ordem de precedência)
+GROUP   = Squad ACTIVE ∧ share explícito ∧ viewer membro ∧ autor membro ∧ ¬bloqueio
+```
+
+`WorkoutCheckInContextResolver` é o **único** lugar que transforma o contexto proposto pela tela na
+audiência autorizada. Um `groupId` que não confere é `404` — nunca cai para `FRIEND` (fail-closed).
+
 ### Matriz de acesso
 
 | Superfície | Próprio | Amigo | Não-amigo | Bloqueado | Social desativado |
@@ -106,6 +144,23 @@ imediatas: não há cache para invalidar, porque não há cache.
 | Mídia (`/media/{id}`) | sim | sim | 404 | 404 | 404 |
 | Reação / comentário | sim | sim | 404 | invisível ao par | 404 |
 | Denúncia | não sobre si | sobre alvo visível | 404 | 404 | 404 |
+
+### Matriz de acesso do Social V2 — por contexto
+
+Quatro papéis distintos, e a diferença entre as duas colunas do meio é a fase inteira:
+
+| Viewer | Friend Feed | Squad Feed (X) | Mídia | Comentar | Reagir | Moderar |
+| --- | --- | --- | --- | --- | --- | --- |
+| Autor | sim | sim (se compartilhou) | sim | ambas audiências | ambas audiências | própria publicação |
+| Amigo direto | sim | só se for membro | sim | `FRIEND` | `FRIEND` | não |
+| Membro de X **sem** amizade | **não** | sim | sim, via `GROUP(X)` | `GROUP(X)` | `GROUP(X)` | não |
+| Não-membro / não-amigo | não | 404 | 404 | 404 | 404 | não |
+| Bloqueado (qualquer papel) | não | conteúdo do par some | 404 | 404 | 404 | não |
+| Social desativado | não | 404 | 404 | 404 | 404 | não |
+| Dono do Squad X | como amigo | sim | sim | `GROUP(X)` | `GROUP(X)` | **só** `GROUP(X)` |
+
+O dono de X não modera comentário `FRIEND` nem comentário de `GROUP(Y)` — privilégio de grupo é
+contextual, e não atravessa audiência.
 
 "404" é sempre a **mesma** resposta que "não existe". Distinguir transformaria a rota num oráculo
 de existência.
@@ -172,9 +227,14 @@ Push é sinal **best-effort**, jamais fonte de verdade. Payload data-only e mín
 `friendCode`, `displayName`, legenda, comentário, URL de foto ou dado de treino. Os textos são
 gerados **no Android**, de `strings.xml`.
 
-Seis tipos, e só seis: `FRIEND_REQUEST_RECEIVED`, `FRIEND_REQUEST_ACCEPTED`,
+Sete tipos, e só sete: `FRIEND_REQUEST_RECEIVED`, `FRIEND_REQUEST_ACCEPTED`,
 `CHALLENGE_INVITATION_RECEIVED`, `CHALLENGE_STARTING_SOON`, `CHALLENGE_ENDED`,
-`WORKOUT_SHARE_RECEIVED`. **Feed, reações e comentários não geram push** — decisão da T17.9.
+`WORKOUT_SHARE_RECEIVED` e `GROUP_INVITATION_RECEIVED` (T17.11). **Feed, reações e comentários não
+geram push** — decisão da T17.9 —, e o Squad também não notifica entrada, saída, remoção, posse
+transferida, publicação nova nem exclusão de grupo: um Squad de 20 pessoas que avisasse cada
+movimento seria um chat com outro nome. A única categoria de Squad é o **convite**, e ela é
+suprimida se houver bloqueio, se o convite deixou de estar `PENDING`, se expirou ou se o Squad foi
+excluído — tudo revalidado no instante do despacho.
 
 Outbox transacional: o evento é persistido **dentro** da transação de negócio; o FCM fica **fora**
 dela. Uma falha de entrega nunca reverte a operação social. A relevância é revalidada no despacho,
@@ -260,9 +320,10 @@ override bidirecional, quebras de linha bounded. HTML e Markdown **não são int
 escapados**: o Android desenha com `Text` de Compose, e escapar corromperia o texto da pessoa para
 se defender de um risco que este caminho não tem.
 
-Reação: enum fechado `FIRE | MUSCLE | CLAP`, uma por pessoa por post (chave primária), otimista na
-tela com rollback. Comentário **não** é otimista: espera a resposta, e o rascunho permanece se
-falhar.
+Reação: enum fechado `FIRE | MUSCLE | CLAP`, uma por pessoa por post **por audiência** — desde a
+T17.12 a garantia não é mais a chave primária, e sim dois índices únicos **parciais** (§15).
+Otimista na tela com rollback. Comentário **não** é otimista: espera a resposta, e o rascunho
+permanece se falhar.
 
 Nada disso é evento de domínio: não dá XP, não move missão, não altera streak, ranking ou desafio,
 e não gera push.
@@ -284,7 +345,12 @@ nuvem.
 | `workout_shares` (enviados e recebidos) | apagado |
 | `social_workout_checkins` e `social_checkin_media` (linhas) | apagado |
 | arquivos de mídia no `SocialMediaStore` | apagado (chaves lidas **antes** do purge) |
-| `social_checkin_comments` / `_reactions` — próprios e **em posts alheios** | apagado |
+| `social_checkin_comments` / `_reactions` — próprios e **em posts alheios**, nas duas audiências | apagado |
+| `social_groups` de que a conta era dona (e todo o contexto deles) | apagado — o Squad vai junto |
+| `social_group_memberships` em Squads de terceiros | apagado — o Squad **permanece** |
+| `social_group_invitations` (enviados e recebidos) | apagado |
+| `social_group_checkin_shares` da conta | apagado |
+| interações `GROUP` de **terceiros** dentro dos Squads da conta | apagado (cascade de `group_id`) |
 | `sync_entities`, `sync_changes`, `sync_mutations` | apagado |
 | `backup_snapshots`, `backup_items` | apagado |
 | `ai_usage_daily` | apagado |
@@ -355,6 +421,10 @@ ausente devolve 404 (nunca derruba o processo), e arquivo sem linha é recolhido
 | Comentário | 30 / 10 min (**e** 10 por check-in / 10 min) |
 | Reação | 60 / min |
 | Compartilhar treino | 20 / dia |
+| Criar Squad | 10 / min (o teto real é de domínio: 5 Squads ativos por conta) |
+| Convidar para Squad | 30 / min |
+| Participação em Squad (aceitar, recusar, sair, remover, transferir) | 30 / min |
+| Compartilhar check-in em Squad | 20 / min (o teto real é de domínio: 5 Squads por check-in) |
 | Denúncia | 5 / dia |
 | Bloquear, registrar push, excluir conta | teto geral (operações idempotentes e terminais) |
 
@@ -374,6 +444,21 @@ Todo estado social no Android é **memória com escopo de conta**. A troca de co
 a primeira requisição da conta nova sair, e toda resposta confere o `uid` de origem antes de tocar
 no estado — uma resposta iniciada como A e concluída depois do login de B é descartada.
 
+Desde a T17.12 a conta não é a única dimensão do escopo: todo estado por publicação — comentários
+carregados, reação em voo, contagens — é indexado por `(checkInId, audiência)`, nunca pelo
+`checkInId` sozinho. `interactionKey(checkInId, context)` é essa chave. Indexar só pelo check-in é
+o defeito que faz a mesma publicação aberta em dois Squads compartilhar uma conversa só:
+
+```text
+conta  +  checkInId  +  audiência        ← a chave de qualquer cache de interação
+```
+
+O `InteractionContext` viaja como **parâmetro** — da rota para a ViewModel, e da ViewModel para o
+gateway. Um "contexto atual" em singleton faria a tela aberta a partir do Squad A herdar o contexto
+de quem abriu o Squad B um instante antes, e a interação nasceria na audiência errada sem nenhum
+sintoma visível. O app **nunca** lê a audiência de uma resposta do servidor: ele a monta a partir de
+onde o usuário estava quando tocou.
+
 O que é persistido localmente, e por quê:
 
 | O que | Onde | Por quê | Entra no backup Android? |
@@ -383,6 +468,135 @@ O que é persistido localmente, e por quê:
 
 Nada disso é autoridade social. Não existe Outbox social, não existe `FriendProgressEntity`, e
 nenhum agregado social entra em `sync_entities`.
+
+## 14. Squads privados (T17.11)
+
+Um Squad é um grupo **privado e por convite**. Não existe busca, listagem pública, diretório, link
+de convite nem QR de grupo: conhecer o UUID não concede nada, e quem não é membro recebe o mesmo
+`404` de "não existe".
+
+```text
+Squad (social_groups)
+  ├── Membership  (social_group_memberships)   quem está dentro, e com qual papel
+  ├── Invitation  (social_group_invitations)   quem foi chamado, e em que estado
+  └── CheckInShare(social_group_checkin_shares) ARESTA para um check-in que já existe
+```
+
+A quarta tabela é o desenho da fase: ela é uma **referência**, não um post. Não existe
+`social_group_posts`, não existe segundo modelo de CheckIn e não existe segundo Feed — o feed do
+Squad é a mesma publicação da T17.8/T17.9 lida por outra audiência.
+
+### Friendship ≠ Membership
+
+As duas relações são independentes, e a independência vale nos dois sentidos:
+
+| Estar no mesmo Squad **não** concede | Desfazer a amizade **não** remove |
+| --- | --- |
+| perfil de amigo, Feed de amigos | a participação no Squad |
+| Workout Share, desafio, ranking | os compartilhamentos já feitos ali |
+| progresso privado da T17.2 | o acesso `GROUP` |
+
+Convidar exige amizade **atual**; aceitar revalida amizade, bloqueio, capacidade e status do Squad
+no instante do aceite. Um convite emitido antes de um bloqueio ou de um `unfriend` não entra.
+
+### Invariantes de posse e composição
+
+- **exatamente um `OWNER`** enquanto o Squad existe — garantido por índice único parcial no banco,
+  e não por verificação no serviço: uma transferência que falhasse no meio deixaria zero ou dois
+  donos, e nenhum dos dois estados se corrige sozinho;
+- o dono **não sai** pela porta comum: ele transfere a posse ou exclui o Squad. Escolher um
+  substituto por ordenação entregaria um grupo de pessoas reais a quem não pediu;
+- tetos **todos no servidor**: 20 membros, 5 Squads criados por conta, 20 participações por conta,
+  5 Squads por check-in, 20 convites pendentes por Squad.
+
+### Ciclo de vida do conteúdo
+
+```text
+sair / ser removido do Squad X  →  os shares da pessoa em X, as interações GROUP(X) dela,
+                                   e as conversas nos posts que ela trouxe  →  removidos
+voltar depois (rejoin)          →  nada ressuscita
+desfazer o share de X           →  as interações GROUP(X) daquele check-in  →  removidas
+excluir o Squad X               →  só o contexto de X. Nunca o WorkoutCheckIn, nunca FRIEND,
+                                   nunca outro Squad, nunca treino
+```
+
+Desativar o Social resolve as participações, mas **recusa** se a conta for dona de um Squad com
+outras pessoas (`GROUP_OWNERSHIP_REQUIRES_ACTION`): transfira ou exclua antes. A exclusão de conta
+é diferente — ela nunca pode ser bloqueada, e por isso o Squad de quem sai vai junto (§11).
+
+### Identidade dentro do Squad
+
+A administração usa `membershipId` — um UUID próprio —, e não o uid nem o `socialId`. É isso que
+permite ao dono remover um participante bloqueado sem que a tela receba a identidade dele: um
+membro em bloqueio aparece como entrada opaca ("Participante indisponível"), sem `socialId`, sem
+`displayName` e sem navegação de perfil.
+
+Detalhes em [`social-groups.md`](./social-groups.md).
+
+## 15. Audiências de interação (T17.12)
+
+Até a T17.11, reagir e comentar exigiam relação **direta**, e quem alcançava o post só por um Squad
+tinha acesso somente de leitura. Isso era um contorno, não a solução: a causa era que a interação
+pertencia ao **check-in**, e não ao lugar onde a conversa acontecia. A T17.12 resolve a causa.
+
+```text
+FRIEND    → group_id IS NULL
+GROUP(X)  → group_id = X
+GROUP(Y)  → group_id = Y
+```
+
+Três garantias, e as três são bloqueantes se falharem:
+
+1. `GROUP(X)` nunca aparece em `GROUP(Y)` nem no Feed de amigos;
+2. `FRIEND` nunca aparece em Squad nenhum;
+3. contexto inválido falha **fechado** — `404`, nunca rebaixamento para `FRIEND`.
+
+### Contexto é proposta; audiência é decisão do servidor
+
+A tela envia `context: { type, groupId? }` a partir de **onde o usuário estava**. O servidor
+revalida Squad ativo, share naquele Squad, participação do viewer, participação do autor e ausência
+de bloqueio — a cada requisição, contra as tabelas. Um corpo **sem** `context` resolve para
+`FRIEND`, que é a autorização que essas rotas sempre exigiram: clientes anteriores à T17.12
+continuam funcionando sem mudança.
+
+`DELETE .../comments/{id}` não recebe contexto de propósito: a audiência é propriedade **do
+comentário**, e é o servidor que a lê — aceitar um contexto ali deixaria a tela decidir moderação.
+
+### A unicidade de reação, e a armadilha do `NULL`
+
+Uma `UNIQUE (checkin_id, reactor_uid, group_id)` **não** resolveria o problema: no SQLite cada
+`NULL` é distinto de qualquer outro numa `UNIQUE`, então duas reações `FRIEND` da mesma pessoa no
+mesmo post passariam sem conflito — a regra falharia justamente na audiência mais usada. A solução
+são dois índices únicos **parciais**, um por partição:
+
+```text
+idx_checkin_reactions_friend_unique  UNIQUE (checkin_id, reactor_uid)            WHERE audience_type = 'FRIEND'
+idx_checkin_reactions_group_unique   UNIQUE (checkin_id, reactor_uid, group_id)  WHERE audience_type = 'GROUP'
+```
+
+Um `CHECK` cruzado nas duas tabelas garante que `FRIEND` nunca carregue `group_id` e que `GROUP`
+sempre carregue.
+
+### Contagens por viewer **e** por audiência
+
+`commentCount` e as contagens de reação nunca são globais e nunca somam audiências. São duas
+filtragens independentes, cada uma por um motivo:
+
+```text
+por audiência → a conversa do Squad X não vaza para o Y nem para o Feed de amigos
+por viewer    → a participação de quem está em bloqueio não transparece nem como número
+```
+
+A exceção deliberada é o teto anti-enxurrada por publicação, que **atravessa** as audiências:
+contá-lo por audiência daria a quem quisesse floodar um multiplicador pelo número de Squads.
+
+### Moderação
+
+Três autoridades sobre um comentário, nesta ordem: o **autor do comentário**, o **autor do
+check-in** e o **dono do Squad** — este último só quando a audiência é `GROUP` daquele Squad, e
+nunca sobre um comentário que o bloqueio já esconde dele. Qualquer outra pessoa recebe `404`.
+
+Detalhes em [`social-interaction-audience.md`](./social-interaction-audience.md).
 
 ---
 
@@ -399,8 +613,11 @@ backend/src/modules/social/
   block.*, report.*            bloqueio e denúncia                      (T17.6)
   workout-share.*              compartilhamento de treino               (T17.7)
   workout-checkin.*            check-in, Feed e política de acesso      (T17.8/T17.9)
-  checkin-interaction.*        reações e comentários                    (T17.9)
+  checkin-interaction.*        reações e comentários, por audiência     (T17.9/T17.12)
   social-media.*               pipeline, armazenamento e limpeza        (T17.9)
+  social-group.*               Squads, posse, convites e feed de grupo  (T17.11)
+  checkin.projector.ts         o ÚNICO montador de card dos dois feeds  (T17.11)
+  workout-checkin-context.resolver.ts  contexto proposto → audiência autorizada  (T17.12)
   canonical-training.source.ts a ÚNICA porta para o domínio de treino
 
 backend/src/modules/account-deletion/   exclusão, tombstone e reconciliação  (T17.6)

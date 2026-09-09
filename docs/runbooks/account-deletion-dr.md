@@ -78,6 +78,46 @@ find /opt/spark/media -type f | wc -l
 O que sobrar de arquivo — por falha de I/O no momento da purga — é recolhido pela varredura de
 órfãos do `SocialMediaCleaner`, porque a metadata correspondente já não existe.
 
+### Passo 3.2: Squads e interações por audiência (T17.11 / T17.12)
+
+Desde a T17.11 uma conta pode ser **dona de um Squad**, e desde a T17.12 as reações e os
+comentários pertencem a uma audiência (`FRIEND` ou `GROUP(x)`). A reconciliação já cobre os dois
+porque ela reusa exatamente o mesmo `purgeAccountData` da exclusão normal — não existe um segundo
+caminho de limpeza que pudesse ficar para trás.
+
+O que a reconciliação remove de uma conta ressuscitada:
+
+| Recurso | Efeito |
+| --- | --- |
+| Squads de que a conta era dona | removidos, com participações, convites e arestas de compartilhamento |
+| Interações `GROUP` de **terceiros** dentro desses Squads | removidas por `ON DELETE CASCADE` de `group_id` |
+| Participações da conta em Squads de terceiros | removidas — **o Squad permanece** |
+| Compartilhamentos (`social_group_checkin_shares`) da conta | removidos |
+| Reações e comentários da conta, nas duas audiências | removidos |
+
+O cascade só funciona com `PRAGMA foreign_keys = ON`, que o `SqliteService` aplica ao abrir a
+conexão. Se um restore for feito por uma ferramenta externa, confirme antes de reconciliar:
+
+```bash
+sqlite3 /opt/spark/data/spark.db "PRAGMA foreign_keys;"   # precisa responder 1 na sessão do app
+```
+
+Validação depois da reconciliação — nenhum Squad órfão de um dono já excluído:
+
+```bash
+sqlite3 /opt/spark/data/spark.db "
+  SELECT COUNT(*) FROM social_groups g
+   WHERE NOT EXISTS (SELECT 1 FROM social_profiles p WHERE p.owner_uid = g.owner_uid);"
+# esperado: 0
+
+sqlite3 /opt/spark/data/spark.db "PRAGMA foreign_key_check;"
+# esperado: nenhuma linha
+```
+
+A enumeração de contas do reconciliador varre `social_groups` e `social_group_memberships` além do
+perfil (T17.13 §51), então um restore **parcial** — que trouxesse o Squad sem o perfil do dono —
+ainda é alcançado.
+
 ### Passo 4: Fila de Jobs Firebase Auth
 Verificar se há jobs pendentes de exclusão no Firebase Auth:
 ```bash

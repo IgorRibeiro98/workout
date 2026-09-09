@@ -250,6 +250,24 @@ export class AccountDeletionRepository {
 
   /**
    * Coleta todos os owner_uids conhecidos atualmente no banco para reconciliação anti-ressurreição.
+   *
+   * ## Por que a lista é redundante de propósito (T17.13 §51)
+   *
+   * Num snapshot **consistente** bastaria `social_profiles`: toda tabela social referencia
+   * `social_profiles(owner_uid)`, e uma conta que tem qualquer linha social tem também o perfil.
+   * As outras origens existem porque um restore não é garantidamente consistente — um snapshot
+   * copiado com o processo escrevendo, um `.dump` parcial, uma cópia de arquivo sem checkpoint do
+   * WAL — e nesse caso a conta precisa ser encontrada por **qualquer** rastro que tenha
+   * sobrevivido. É defesa em profundidade, e o custo é uma varredura a mais numa rotina que roda
+   * uma vez por restore.
+   *
+   * `social_groups` e `social_group_memberships` entram pela mesma razão que
+   * `social_workout_checkins` já entrava, e a ausência delas era uma lacuna: um Squad que
+   * sobrevivesse a um restore parcial sem o perfil do dono não seria enumerado, e a reconciliação
+   * passaria por ele sem apagá-lo — deixando de pé um grupo de pessoas reais cujo dono já não
+   * existe. Ele não seria **legível** (a política exige perfil `ACTIVE` do outro lado), mas ficaria
+   * ocupando identidade e vaga, e §51 pede explicitamente que os domínios da T17.11/T17.12 estejam
+   * no reconciliador.
    */
   listAllOwnerUidsInDatabase(): string[] {
     const db = this.sqlite.connection;
@@ -262,6 +280,10 @@ export class AccountDeletionRepository {
          SELECT DISTINCT owner_uid FROM backup_snapshots
          UNION
          SELECT DISTINCT author_uid AS owner_uid FROM social_workout_checkins
+         UNION
+         SELECT DISTINCT owner_uid FROM social_groups
+         UNION
+         SELECT DISTINCT member_uid AS owner_uid FROM social_group_memberships
          UNION
          SELECT DISTINCT uid AS owner_uid FROM ai_usage_daily`,
       )
