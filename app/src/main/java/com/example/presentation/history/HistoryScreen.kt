@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -49,7 +50,14 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(viewModel: HistoryViewModel) {
+fun HistoryScreen(
+    viewModel: HistoryViewModel,
+    /**
+     * O CTA de check-in social (T17.8 §23/§105). `null` deixa o Histórico exatamente como era —
+     * sem backend, sem conta ou sem Social, nada aqui muda.
+     */
+    checkInViewModel: com.example.presentation.friends.WorkoutCheckInViewModel? = null
+) {
     val state by viewModel.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
@@ -613,8 +621,26 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
                     destructive = true,
                     onClick = { sessionToDelete = summary.session }
                 )
-            )
+            ) + if (checkInViewModel != null) {
+                // T17.8 — o retry de §23. Ele abre o mesmo preview do Resumo; a confirmação
+                // continua sendo um toque separado, e o servidor revalida a janela de 48h.
+                listOf(
+                    ActionItemData(
+                        title = com.example.presentation.friends.SHARE_CHECKIN_CTA_LABEL,
+                        icon = Icons.Default.Share,
+                        onClick = { checkInViewModel.startShareFor(summary.session.id) }
+                    )
+                )
+            } else {
+                emptyList()
+            }
         )
+    }
+
+    // Os diálogos do check-in social vivem fora do bottom sheet: fechar o sheet ao escolher a
+    // ação não pode fechar o preview junto.
+    if (checkInViewModel != null) {
+        com.example.presentation.friends.ShareCheckInDialogs(checkInViewModel)
     }
 
     // Safety delete confirmation dialog (T9)
@@ -623,7 +649,18 @@ fun HistoryScreen(viewModel: HistoryViewModel) {
         AlertDialog(
             onDismissRequest = { sessionToDelete = null },
             title = { Text("Excluir do Histórico", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("Deseja realmente remover esta sessão do seu histórico permanentemente? Esta ação não pode ser desfeita.", color = TextSecondary) },
+            // §69: excluir a sessão **não** apaga um check-in já publicado — depois de publicado
+            // ele é um artefato social independente (§68). Prometer o contrário aqui seria a
+            // ambiguidade mais cara desta tela.
+            text = {
+                Text(
+                    "Deseja realmente remover esta sessão do seu histórico permanentemente? " +
+                        "Esta ação não pode ser desfeita.\n\n" +
+                        "Se você compartilhou um check-in deste treino, ele continua no Feed. " +
+                        "Para removê-lo, use \"Excluir publicação\" no Feed.",
+                    color = TextSecondary
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteSession(session)

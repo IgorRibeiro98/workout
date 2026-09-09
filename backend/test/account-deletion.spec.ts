@@ -97,7 +97,7 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
     const hashA = deletionService.hashUid(ACCOUNTS.A.uid);
 
     // Simula restore de snapshot onde A existia mas o DR log tinha a tombstone de A
-    const purgedCount = deletionService.reconcileTombstones(new Set([hashA]));
+    const purgedCount = await deletionService.reconcileTombstones(new Set([hashA]));
     expect(purgedCount).toBe(1);
 
     // Confirma que A agora está tombstoned

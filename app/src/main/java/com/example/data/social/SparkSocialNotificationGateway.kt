@@ -86,7 +86,8 @@ class SparkSocialNotificationGateway(
         friendRequestAccepted: Boolean?,
         challengeInvitationReceived: Boolean?,
         challengeStartingSoon: Boolean?,
-        challengeEnded: Boolean?
+        challengeEnded: Boolean?,
+        workoutShareReceived: Boolean?
     ): Result<SocialNotificationPreferences> {
         val backend = client ?: return Result.failure(IllegalStateException("Backend não configurado"))
         val requestBody = json.encodeToString(
@@ -96,7 +97,8 @@ class SparkSocialNotificationGateway(
                 friendRequestAccepted = friendRequestAccepted,
                 challengeInvitationReceived = challengeInvitationReceived,
                 challengeStartingSoon = challengeStartingSoon,
-                challengeEnded = challengeEnded
+                challengeEnded = challengeEnded,
+                workoutShareReceived = workoutShareReceived
             )
         )
 
@@ -123,6 +125,7 @@ class SparkSocialNotificationGateway(
         friendRequestAccepted = friendRequestAccepted,
         challengeInvitationReceived = challengeInvitationReceived,
         challengeStartingSoon = challengeStartingSoon,
-        challengeEnded = challengeEnded
+        challengeEnded = challengeEnded,
+        workoutShareReceived = workoutShareReceived
     )
 }

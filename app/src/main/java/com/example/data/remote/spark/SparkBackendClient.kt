@@ -85,6 +85,20 @@ class SparkBackendClient(
         sendJson("PATCH", path, jsonBody)
 
     /**
+     * `PUT` autenticado com corpo JSON, devolvendo status e corpo crus.
+     *
+     * Existe desde a T17.9, para a reação de um check-in. `PUT`, e não `POST`, porque a operação é
+     * idempotente e descreve o **estado** da reação daquela pessoa naquela publicação: mandar
+     * `FIRE` duas vezes deixa o mesmo estado, e `MUSCLE` depois de `FIRE` substitui. É a semântica
+     * do verbo, e é a mesma no servidor.
+     *
+     * Mesmo caminho de [postJson]: um cliente, um interceptor, um lugar montando
+     * `Authorization: Bearer`.
+     */
+    suspend fun putJson(path: String, jsonBody: String): SparkHttpOutcome =
+        sendJson("PUT", path, jsonBody)
+
+    /**
      * `DELETE` autenticado sem corpo, devolvendo status e corpo crus.
      *
      * Usado para unregister de aparelhos push (T17.5) sob `/v1/social/notifications/devices/:deviceId`.
@@ -111,6 +125,96 @@ class SparkBackendClient(
             } catch (e: IOException) {
                 Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
                 SparkHttpOutcome.NetworkFailure
+            }
+        }
+
+    /**
+     * `POST` autenticado com corpo **binário**, devolvendo status e corpo crus (T17.9 §33).
+     *
+     * Existe para o upload de foto do check-in, e só para ele. O corpo são os bytes da imagem, com
+     * o `Content-Type` real do que o aparelho produziu — **não** `multipart/form-data`: o corpo tem
+     * um arquivo e nenhum campo, e os dois identificadores cabem no query string. Menos parser
+     * entre a rede e a decodificação da imagem, e nenhuma dependência nova dos dois lados.
+     *
+     * O `Content-Type` aqui **não autoriza nada**: o servidor decodifica os bytes de verdade e
+     * recusa o que não for imagem, independentemente do que este cabeçalho afirme (§14).
+     */
+    suspend fun postBytes(path: String, bytes: ByteArray, mediaType: String): SparkHttpOutcome =
+        withContext(Dispatchers.IO) {
+            if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
+
+            val url = "${baseUrl.trimEnd('/')}/$path"
+            val request = Request.Builder()
+                .url(url)
+                .post(bytes.toRequestBody(mediaType.toMediaType()))
+                .build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    SparkHttpOutcome.Response(
+                        code = response.code,
+                        // Só o corpo da **resposta** — que é JSON pequeno. Os bytes enviados nunca
+                        // vão para log, e este cliente não tem interceptor de log.
+                        body = response.body?.string().orEmpty()
+                    )
+                }
+            } catch (e: MissingAuthTokenException) {
+                SparkHttpOutcome.SignedOut
+            } catch (e: IOException) {
+                Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+                SparkHttpOutcome.NetworkFailure
+            }
+        }
+
+    /**
+     * `GET` autenticado que devolve os **bytes** da resposta, com teto (T17.9 §49).
+     *
+     * Existe para a foto de um check-in. Diferente de [getToFile] (restore, T16.5) de propósito: a
+     * imagem é pequena, é desenhada e descartada, e não pode encostar no disco — §56 pede que a
+     * mídia social autenticada não tenha cache persistente compartilhado entre contas, e o jeito
+     * mais seguro de garantir isso é ela nunca ser escrita.
+     *
+     * O teto é aplicado **durante** a leitura: recusar depois de já ter alocado o buffer inteiro
+     * seria descobrir tarde demais que a resposta era absurda.
+     */
+    suspend fun getBytes(path: String, maxBytes: Int): SparkBytesOutcome =
+        withContext(Dispatchers.IO) {
+            if (!isConfigured) return@withContext SparkBytesOutcome.NotConfigured
+
+            val url = "${baseUrl.trimEnd('/')}/$path"
+            val request = Request.Builder().url(url).get().build()
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        return@withContext SparkBytesOutcome.Rejected(
+                            code = response.code,
+                            body = response.body?.string().orEmpty()
+                        )
+                    }
+
+                    val source = response.body?.byteStream()
+                        ?: return@withContext SparkBytesOutcome.Rejected(response.code, "")
+
+                    val buffer = java.io.ByteArrayOutputStream()
+                    val chunk = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                    source.use { input ->
+                        while (true) {
+                            val read = input.read(chunk)
+                            if (read <= 0) break
+                            if (buffer.size() + read > maxBytes) {
+                                return@withContext SparkBytesOutcome.TooLarge
+                            }
+                            buffer.write(chunk, 0, read)
+                        }
+                    }
+                    SparkBytesOutcome.Downloaded(buffer.toByteArray())
+                }
+            } catch (e: MissingAuthTokenException) {
+                SparkBytesOutcome.SignedOut
+            } catch (e: IOException) {
+                Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+                SparkBytesOutcome.NetworkFailure
             }
         }
 

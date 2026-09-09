@@ -15,6 +15,28 @@ export interface CompletedWorkoutSummary {
 }
 
 /**
+ * O que o domínio social pode saber de uma sessão para decidir um check-in (T17.8 §16/§17/§25).
+ *
+ * Cinco campos, e nenhum deles é conteúdo de treino: nenhum payload bruto, exercício, série,
+ * carga, repetição, nota, duração, medida corporal ou nome de template atravessa esta fronteira.
+ * `SocialModule` não recebe `sync_entities` — ele recebe **respostas** (§16).
+ *
+ * `finishedAt` aqui é o **instante canônico de fim do treino**, e não um significado novo (§25):
+ * é `finishedAt` do agregado quando ele existe — o único escritor no Android o grava no mesmo
+ * `copy()` que marca `COMPLETED` — e `startedAt` quando não existe, que é o instante canônico já
+ * usado pela semana da T17.2 e pelo dia da T17.3. Como `startedAt <= finishedAt`, o fallback só
+ * pode fazer a sessão parecer **mais velha**: ele nunca alarga a janela de elegibilidade.
+ */
+export interface CheckInSessionDetail {
+  readonly ownerUid: string;
+  readonly sessionSyncId: string;
+  /** Tombstone do sync (T16.7). Uma sessão apagada não vira check-in (§17). */
+  readonly deleted: boolean;
+  readonly status: string | null;
+  readonly finishedAt: number | null;
+}
+
+/**
  * A fonte canônica de dados de treino sincronizados para o domínio social (T17.4 §2/§88–§92).
  *
  * Centraliza o acesso seguro a sessões canônicas COMPLETED em sync_entities.
@@ -47,6 +69,20 @@ export interface CanonicalTrainingSource {
     fromMs: number,
     untilMs: number,
   ): readonly CompletedWorkoutSummary[];
+
+  /**
+   * A sessão canônica deste dono, para decidir um check-in (T17.8 §15/§16).
+   *
+   * Uma operação estreita, e não um quarto parser: quem define "o que é uma sessão de treino no
+   * estado sincronizado" continua sendo **este** adapter, o mesmo que responde perfil (T17.2),
+   * desafio (T17.3) e atividade (T17.4). Um `SELECT` de `sync_entities` dentro do serviço de
+   * check-in seria a segunda definição da mesma regra, e a divergência apareceria como um
+   * check-in publicado a partir de algo que a tela de consistência não conta como treino.
+   *
+   * `null` quando não há linha desta sessão **para este dono**. O chamador não consegue
+   * distinguir "não existe", "é de outra conta" e "ainda não sincronizou" — e não deve (§116).
+   */
+  findSessionForCheckIn(ownerUid: string, sessionSyncId: string): CheckInSessionDetail | null;
 }
 
 export const CANONICAL_TRAINING_SOURCE = Symbol('CANONICAL_TRAINING_SOURCE');
@@ -197,5 +233,62 @@ export class SyncedCanonicalTrainingSource implements CanonicalTrainingSource {
       sessionSyncId: row.entity_sync_id,
       startedAt: row.started_at,
     }));
+  }
+
+  findSessionForCheckIn(ownerUid: string, sessionSyncId: string): CheckInSessionDetail | null {
+    // `json_extract` só sobre escalares — `status` e os dois instantes. `payload` **não** é
+    // selecionado: materializá-lo em JavaScript abriria para o domínio social o exercício, a
+    // carga, a repetição, a nota e o horário do treino, que é exatamente o que este adapter
+    // existe para manter fora (§16).
+    //
+    // O filtro é `owner_uid = ?` e não um `WHERE entity_sync_id = ?` seguido de conferência em
+    // memória: uma sessão de outra conta precisa ser **indistinguível** de inexistente já na
+    // consulta, e não depois de o serviço ter tido a linha na mão (§116).
+    //
+    // O `CASE WHEN deleted = 0 AND json_valid(payload)` **não** é defensividade decorativa: o
+    // tombstone da T16.7 é uma linha com `deleted = 1` e `payload` vazio — a coluna é `NOT NULL`
+    // numa tabela `STRICT`, então "sem conteúdo" é `''`, e não `NULL`. `json_extract('')` **lança**
+    // `malformed JSON` no SQLite, o que viraria um `500` para quem tentasse publicar um check-in de
+    // uma sessão apagada. O `CASE` é o que garante que a extração só aconteça sobre uma linha viva,
+    // e `deleted` continua sendo respondido para o chamador decidir.
+    const row = this.sqlite.connection
+      .prepare(
+        `SELECT owner_uid,
+                entity_sync_id,
+                deleted,
+                CASE WHEN deleted = 0 AND json_valid(payload)
+                     THEN json_extract(payload, '$.status')
+                END AS status,
+                CASE WHEN deleted = 0 AND json_valid(payload)
+                     THEN CAST(COALESCE(json_extract(payload, '$.finishedAt'),
+                                        json_extract(payload, '$.startedAt')) AS INTEGER)
+                END AS finished_at
+           FROM sync_entities
+          WHERE owner_uid = ?
+            AND entity_sync_id = ?
+            AND entity_type = 'WORKOUT_SESSION'
+          LIMIT 1`,
+      )
+      .get(ownerUid, sessionSyncId) as
+      | {
+          owner_uid: string;
+          entity_sync_id: string;
+          deleted: number;
+          status: string | null;
+          finished_at: number | null;
+        }
+      | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      ownerUid: row.owner_uid,
+      sessionSyncId: row.entity_sync_id,
+      deleted: row.deleted === 1,
+      status: row.status,
+      finishedAt: row.finished_at,
+    };
   }
 }

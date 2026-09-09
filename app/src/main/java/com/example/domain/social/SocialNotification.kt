@@ -9,7 +9,8 @@ data class SocialNotificationPreferences(
     val friendRequestAccepted: Boolean = true,
     val challengeInvitationReceived: Boolean = true,
     val challengeStartingSoon: Boolean = true,
-    val challengeEnded: Boolean = true
+    val challengeEnded: Boolean = true,
+    val workoutShareReceived: Boolean = true
 ) {
     companion object {
         val DEFAULT = SocialNotificationPreferences(
@@ -18,7 +19,8 @@ data class SocialNotificationPreferences(
             friendRequestAccepted = true,
             challengeInvitationReceived = true,
             challengeStartingSoon = true,
-            challengeEnded = true
+            challengeEnded = true,
+            workoutShareReceived = true
         )
     }
 }
@@ -31,7 +33,8 @@ enum class SocialNotificationType {
     FRIEND_REQUEST_ACCEPTED,
     CHALLENGE_INVITATION_RECEIVED,
     CHALLENGE_STARTING_SOON,
-    CHALLENGE_ENDED;
+    CHALLENGE_ENDED,
+    WORKOUT_SHARE_RECEIVED;
 
     companion object {
         fun fromStringOrNull(value: String): SocialNotificationType? =

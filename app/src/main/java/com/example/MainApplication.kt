@@ -387,6 +387,66 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Compartilhamento seguro de treinos entre amigos (T17.7).
+     */
+    val workoutShareGateway: com.example.domain.social.WorkoutShareGateway by lazy {
+        com.example.data.social.SparkWorkoutShareGateway(sparkBackendClient)
+    }
+
+    val workoutShareImporter: com.example.data.repository.WorkoutShareImporter by lazy {
+        com.example.data.repository.WorkoutShareImporter(
+            workoutRepository = repository,
+            receiptDao = database.workoutShareReceiptDao(),
+            gateway = workoutShareGateway
+        )
+    }
+
+    /**
+     * Check-ins de treino e Feed social (T17.8).
+     */
+    val workoutCheckInGateway: com.example.domain.social.WorkoutCheckInGateway by lazy {
+        com.example.data.social.SparkWorkoutCheckInGateway(sparkBackendClient)
+    }
+
+    /**
+     * O cache de fotos do Feed (T17.9 §56/§57).
+     *
+     * Em memória, com escopo de conta, e trocado **antes** de qualquer requisição da conta nova
+     * sair. Não há cache em disco de mídia social: a foto de um amigo é conteúdo autenticado de
+     * outra pessoa, e um arquivo no disco sobrevive ao logout e à troca de conta.
+     */
+    val socialMediaCache: com.example.data.media.SocialMediaCache by lazy {
+        com.example.data.media.SocialMediaCache(workoutCheckInGateway)
+    }
+
+    /**
+     * A redução da foto escolhida, antes do envio (T17.9 §46).
+     *
+     * Economia de banda, e não proteção de privacidade: quem remove EXIF e GPS é o servidor, que
+     * decodifica de verdade e re-encoda (§15/§16).
+     */
+    val checkInPhotoSource: com.example.data.media.CheckInPhotoSource by lazy {
+        com.example.data.media.SocialPhotoOptimizer(applicationContext)
+    }
+
+    /**
+     * Quem coordena "concluí um treino, quero compartilhar".
+     *
+     * O `syncCycle` aponta para o **único** mecanismo de sincronização que existe
+     * (`SyncRepository.syncNow`, T16.6): quando o servidor ainda não conhece a sessão, o app pede
+     * um ciclo normal e tenta publicar de novo. Não há, e não pode haver, um segundo caminho de
+     * upload de sessão de treino.
+     */
+    val workoutCheckInPublisher: com.example.data.repository.WorkoutCheckInPublisher by lazy {
+        com.example.data.repository.WorkoutCheckInPublisher(
+            workoutDao = database.workoutDao(),
+            gateway = workoutCheckInGateway,
+            authGateway = authGateway,
+            syncCycle = { uid -> syncRepository.syncNow(uid) }
+        )
+    }
+
+    /**
      * Traduz um `exerciseId` do Coach de volta para o nome exibido.
      *
      * A identidade continua sendo o id: isto existe só para a leitura da recomendação.

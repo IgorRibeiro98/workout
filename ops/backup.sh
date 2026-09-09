@@ -2,8 +2,9 @@
 #
 # Backup off-site do SQLite do servidor (T16.8 §26–§42; T16.8.1 §9).
 #
-#   spark.db ──▶ snapshot consistente ──▶ integrity_check ──▶ manifesto
-#            ──▶ restic (compressão + criptografia) ──▶ storage off-site ──▶ retenção ──▶ estado
+#   spark.db ──▶ snapshot consistente ──▶ integrity_check ──▶ manifesto ──┐
+#                                                                          ├─▶ restic ──▶ off-site
+#   /opt/spark/media (fotos dos check-ins, T17.9) ───────────────────────────┘
 #
 # ## O que este backup NÃO é
 #
@@ -11,6 +12,17 @@
 # passa a existir no servidor. Este protege a **infraestrutura** contra perder a VPS: o banco do
 # servidor — que contém os backups de todo mundo, o estado de sync, o change log e os tombstones —
 # passa a existir fora dela. Confundir os dois dá uma falsa sensação de segurança nos dois sentidos.
+#
+# ## A mídia entra no mesmo snapshot (T17.9 §135/§136/§137)
+#
+# Desde a T17.9, o Feed tem fotos, e elas **não** estão no SQLite (§21): o banco guarda metadata, e
+# os bytes vivem em `$SPARK_MEDIA_DIR`. Um backup que copiasse só `spark.db` restauraria um Feed
+# que aponta para arquivos que não existem — íntegro pelo `integrity_check` e quebrado na tela.
+#
+# O diretório de mídia entra no **mesmo** `restic backup`, como um segundo caminho. Não é uma cópia
+# extra em disco (§137): o restic lê o diretório de origem direto, deduplica entre snapshots — as
+# fotos são imutáveis depois de escritas, então o segundo backup diário não reenvia nenhuma — e
+# criptografa antes de sair da VPS, como já fazia com o banco (§136).
 #
 # ## Off-site é obrigatório
 #
@@ -168,6 +180,15 @@ SCHEMA_VERSION="$(sqlite_node "
   db.close();
 " | tr -d '\r\n')"
 
+# Contagem e tamanho da mídia, para o manifesto (§34). Números, nunca nomes de arquivo (§161).
+MEDIA_FILES=0
+MEDIA_BYTES=0
+if [ -d "$SPARK_MEDIA_DIR" ]; then
+  MEDIA_FILES="$( find "$SPARK_MEDIA_DIR" -type f | wc -l | tr -d ' ' )"
+  MEDIA_BYTES="$( du -sb "$SPARK_MEDIA_DIR" 2> /dev/null | cut -f1 )"
+  MEDIA_BYTES="${MEDIA_BYTES:-0}"
+fi
+
 IMAGE_REF=""
 if compose_running; then
   IMAGE_REF="$( compose_query images -q "$SPARK_SERVICE" 2> /dev/null | head -1 )" || IMAGE_REF=""
@@ -180,12 +201,26 @@ cat > "${WORK_DIR}/manifest.json" <<JSON
   "schemaVersion": ${SCHEMA_VERSION:-0},
   "databaseBytes": ${SIZE_BYTES},
   "backendImageId": "${IMAGE_REF}",
+  "mediaDir": "${SPARK_MEDIA_DIR}",
+  "mediaFiles": ${MEDIA_FILES:-0},
+  "mediaBytes": ${MEDIA_BYTES:-0},
   "host": "$(hostname)"
 }
 JSON
 
 # --- 3. off-site criptografado ------------------------------------------------------------
 STAGE="offsite-upload"
+
+# A mídia entra como segundo caminho quando o diretório existe (T17.9 §135). Um servidor que ainda
+# não recebeu foto nenhuma não tem o diretório, e isso não é erro — é um servidor sem fotos.
+BACKUP_PATHS=("$WORK_DIR")
+if [ -d "$SPARK_MEDIA_DIR" ]; then
+  BACKUP_PATHS+=("$SPARK_MEDIA_DIR")
+  log "incluindo mídia social de ${SPARK_MEDIA_DIR}"
+else
+  log "aviso: ${SPARK_MEDIA_DIR} não existe; o snapshot leva apenas o banco"
+fi
+
 log "enviando para o repositório off-site"
 # `--host spark` deixa a política de retenção estável mesmo se a VPS for recriada com outro
 # hostname: sem isso, a nova máquina começaria uma linhagem separada de snapshots e o `forget`
@@ -197,7 +232,7 @@ log "enviando para o repositório off-site"
 # Fora de `$WORK_DIR`: um arquivo criado ali enquanto o restic lê o diretório entraria no próprio
 # snapshot, meio escrito.
 RESTIC_OUTPUT_FILE="$(mktemp)"
-if ! restic_cmd backup "$WORK_DIR" \
+if ! restic_cmd backup "${BACKUP_PATHS[@]}" \
      --host spark \
      --tag "spark-db" --tag "$TAG" \
      --json > "$RESTIC_OUTPUT_FILE" 2>&1; then
@@ -229,4 +264,4 @@ LAST_SUCCESS_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LAST_SUCCESS_EPOCH="$(date -u +%s)"
 SUCCEEDED=1
 
-log "backup concluído: snapshot=${SNAPSHOT_ID} bytes=${SIZE_BYTES} tag=${TAG}"
+log "backup concluído: snapshot=${SNAPSHOT_ID} bytes=${SIZE_BYTES} midia=${MEDIA_FILES} arquivo(s)/${MEDIA_BYTES}B tag=${TAG}"

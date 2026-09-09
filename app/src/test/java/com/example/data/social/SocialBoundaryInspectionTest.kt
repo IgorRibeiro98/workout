@@ -53,7 +53,14 @@ class SocialBoundaryInspectionTest {
         "app/src/main/java/com/example/presentation/friends/ChallengeMessages.kt",
         // T17.6 — bloqueio e denúncia de abuso.
         "app/src/main/java/com/example/presentation/friends/BlockedUsersViewModel.kt",
-        "app/src/main/java/com/example/presentation/friends/BlockedUsersScreen.kt"
+        "app/src/main/java/com/example/presentation/friends/BlockedUsersScreen.kt",
+        // T17.8 — o Feed de check-ins. As mesmas fronteiras valem: sem Room, sem Outbox, sem dado
+        // de treino lido no aparelho, sem log e sem HTTP na tela. A ViewModel do CTA
+        // (`WorkoutCheckInViewModel`) fica **fora** desta lista de propósito: ela coordena com o
+        // `WorkoutCheckInPublisher`, que é justamente o objeto autorizado a olhar os dois lados —
+        // e ele mora em `data/repository`, fora do pacote social.
+        "app/src/main/java/com/example/presentation/friends/SocialFeedViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/SocialFeedScreen.kt"
     )
 
     private fun socialSources() =
@@ -116,7 +123,15 @@ class SocialBoundaryInspectionTest {
                     "ChallengeUiState.kt",
                     "ChallengesScreen.kt",
                     "ChallengeDetailScreen.kt",
-                    "CreateChallengeScreen.kt"
+                    "CreateChallengeScreen.kt",
+                    // T17.8
+                    "WorkoutCheckInContract.kt",
+                    "WorkoutCheckInDtos.kt",
+                    "SparkWorkoutCheckInGateway.kt",
+                    "WorkoutCheckIn.kt",
+                    "WorkoutCheckInGateway.kt",
+                    "SocialFeedViewModel.kt",
+                    "SocialFeedScreen.kt"
                 )
             )
         )
@@ -289,7 +304,12 @@ class SocialBoundaryInspectionTest {
                 "ReportContract.kt",
                 "SocialContract.kt",
                 "SocialNotificationContract.kt",
-                "SocialProfileContract.kt"
+                "SocialProfileContract.kt",
+                // T17.8 — check-ins de treino e Feed. `WorkoutShareContract.kt` (T17.7) entra na
+                // lista agora porque o `v1/` faltava nele: o caminho batia em `/social/...` e
+                // nenhuma rota de compartilhamento respondia.
+                "WorkoutCheckInContract.kt",
+                "WorkoutShareContract.kt"
             ),
             holders.map { it.name }.sorted()
         )

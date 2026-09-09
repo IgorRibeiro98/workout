@@ -58,6 +58,13 @@ class TemplateDetailsViewModel(
     val allExercises = repository.activeResolvedExercises
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val rawExercises: StateFlow<List<TemplateExerciseWithDetails>> = _templateId
+        .flatMapLatest { id ->
+            if (id != -1L) repository.getTemplateExercises(id) else flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun addExerciseToTemplate(exerciseId: Long) {
         addExercisesToTemplate(listOf(exerciseId))
     }

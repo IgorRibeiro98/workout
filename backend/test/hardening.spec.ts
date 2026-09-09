@@ -82,6 +82,33 @@ describe('Configuração de produção', () => {
     expect(withCredential.missingRequirements()).toEqual([]);
   });
 
+  it('produção sem SOCIAL_MEDIA_ROOT é falha de startup, e nunca um diretório derivado (T17.9 §28)', () => {
+    // O derivado é seguro em desenvolvimento e desastroso em produção: ele acompanha
+    // `DATABASE_PATH`, e um deploy que monte o banco sem montar a mídia perderia todas as fotos na
+    // primeira recriação de container — em silêncio, porque escrever num diretório efêmero
+    // funciona perfeitamente até alguém reiniciar.
+    const production = AppConfig.fromEnv({ ...base, NODE_ENV: 'production' });
+    expect(production.socialMediaRootIsExplicit).toBe(false);
+    expect(production.missingRequirements().join()).toContain('SOCIAL_MEDIA_ROOT');
+
+    const configured = AppConfig.fromEnv({
+      ...base,
+      NODE_ENV: 'production',
+      SOCIAL_MEDIA_ROOT: '/media',
+    });
+    expect(configured.socialMediaRoot).toBe('/media');
+    expect(configured.socialMediaRootIsExplicit).toBe(true);
+    expect(configured.missingRequirements()).toEqual([]);
+  });
+
+  it('fora de produção a raiz de mídia é derivada, e o processo sobe sem configuração', () => {
+    // Teste e desenvolvimento precisam funcionar sem uma variável a mais; ali o armazenamento
+    // efêmero é exatamente o que se quer.
+    const development = AppConfig.fromEnv({ ...base, DATABASE_PATH: '/tmp/spark/spark.db' });
+    expect(development.missingRequirements()).toEqual([]);
+    expect(development.socialMediaRoot).toBe('/tmp/spark/media');
+  });
+
   it('REQUIRE_GEMINI com AI_ENABLED=false é contradição declarada, e não passa despercebida', () => {
     const config = AppConfig.fromEnv({
       ...base,

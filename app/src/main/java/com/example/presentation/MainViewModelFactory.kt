@@ -83,7 +83,19 @@ class MainViewModelFactory(
     private val pushAccountScope: com.example.service.PushAccountScope? = null,
     private val blockGateway: com.example.domain.social.BlockGateway? = null,
     private val reportGateway: com.example.domain.social.ReportGateway? = null,
-    private val accountDeletionGateway: com.example.domain.account.AccountDeletionGateway? = null
+    private val accountDeletionGateway: com.example.domain.account.AccountDeletionGateway? = null,
+    private val workoutShareGateway: com.example.domain.social.WorkoutShareGateway? = null,
+    private val workoutShareImporter: com.example.data.repository.WorkoutShareImporter? = null,
+    /**
+     * Check-ins de treino e Feed (T17.8). `null` remove o Feed e o CTA social do Resumo e do
+     * Histórico, e nada mais muda — concluir treino e consultar histórico seguem idênticos.
+     */
+    private val workoutCheckInGateway: com.example.domain.social.WorkoutCheckInGateway? = null,
+    private val workoutCheckInPublisher: com.example.data.repository.WorkoutCheckInPublisher? = null,
+    // T17.9 — foto do check-in. Os dois são opcionais pela mesma razão dos anteriores: um build
+    // sem backend configurado monta a árvore de ViewModels inteira sem eles.
+    private val socialMediaCache: com.example.data.media.SocialMediaCache? = null,
+    private val checkInPhotoSource: com.example.data.media.CheckInPhotoSource? = null
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
@@ -261,6 +273,64 @@ class MainViewModelFactory(
             return com.example.presentation.friends.BlockedUsersViewModel(
                 blockGateway = block,
                 authGateway = gateway
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.SocialFeedViewModel::class.java)) {
+            val checkIns = workoutCheckInGateway
+                ?: throw IllegalStateException("WorkoutCheckInGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.SocialFeedViewModel(
+                gateway = checkIns,
+                authGateway = auth,
+                mediaCache = socialMediaCache
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(
+                com.example.presentation.friends.CheckInDetailViewModel::class.java
+            )
+        ) {
+            val checkIns = workoutCheckInGateway
+                ?: throw IllegalStateException("WorkoutCheckInGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.CheckInDetailViewModel(
+                gateway = checkIns,
+                authGateway = auth,
+                mediaCache = socialMediaCache
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.WorkoutCheckInViewModel::class.java)) {
+            val publisher = workoutCheckInPublisher
+                ?: throw IllegalStateException("WorkoutCheckInPublisher not provided")
+            // O perfil social entra para decidir se o CTA aparece (§100): oferecer "compartilhar"
+            // a quem não ativou o Social levaria a uma recusa logo depois do toque.
+            val social = socialGateway
+                ?: throw IllegalStateException("SocialGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.WorkoutCheckInViewModel(
+                publisher = publisher,
+                socialGateway = social,
+                authGateway = auth,
+                photoSource = checkInPhotoSource
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.SharedWorkoutsViewModel::class.java)) {
+            val gateway = workoutShareGateway
+                ?: throw IllegalStateException("WorkoutShareGateway not provided")
+            val importer = workoutShareImporter
+                ?: throw IllegalStateException("WorkoutShareImporter not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.SharedWorkoutsViewModel(
+                shareGateway = gateway,
+                shareImporter = importer,
+                authGateway = auth
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.account.ChallengeViewModel::class.java)) {

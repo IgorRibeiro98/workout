@@ -7,6 +7,7 @@ import { ReportService } from './report.service';
 import type { CreateReportRequestDto, CreateReportResponseDto } from './report.contract';
 import { REPORTS_ROUTE_PREFIX } from './report.contract';
 import { assertBodyWithinLimit } from './social.validator';
+import { rejectClientResolvedReportFields } from './report.validator';
 import type { RequestWithRawBody } from '../../common/raw-body';
 
 @Controller(REPORTS_ROUTE_PREFIX)
@@ -22,6 +23,10 @@ export class ReportController {
     @Req() req: Request,
   ): CreateReportResponseDto {
     assertBodyWithinLimit((req as RequestWithRawBody).rawBody);
-    return this.reportService.createReport(principal.uid, body.reportedSocialId, body.reason);
+    // §103 — o corpo **não** pode carregar `reportedUid`. Recusar por nome, e não ignorar em
+    // silêncio: um cliente que o envia acredita que ele decide quem é denunciado, e atender o
+    // resto da requisição seria concordar em parte com essa crença.
+    rejectClientResolvedReportFields(body as unknown);
+    return this.reportService.createReport(principal.uid, body);
   }
 }

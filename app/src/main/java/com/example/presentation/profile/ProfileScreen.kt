@@ -70,7 +70,11 @@ fun ProfileScreen(
     /** T17.5 — Notificações sociais */
     onNavigateToNotificationPreferences: () -> Unit = {},
     /** T17.6 — Usuários bloqueados */
-    onNavigateToBlockedUsers: () -> Unit = {}
+    onNavigateToBlockedUsers: () -> Unit = {},
+    /** T17.7 — Treinos compartilhados */
+    onNavigateToSharedWorkouts: () -> Unit = {},
+    /** T17.8 — Feed de check-ins, dentro da área Social. */
+    onNavigateToSocialFeed: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -165,6 +169,8 @@ fun ProfileScreen(
         onOpenActivity = onNavigateToActivity,
         onOpenNotificationPreferences = onNavigateToNotificationPreferences,
         onOpenBlockedUsers = onNavigateToBlockedUsers,
+        onOpenSharedWorkouts = onNavigateToSharedWorkouts,
+        onOpenSocialFeed = onNavigateToSocialFeed,
         onDeleteAccount = { accountViewModel?.deleteAccount() }
     )
 
@@ -240,7 +246,9 @@ private fun ProfileScreenContent(
     onOpenChallenges: () -> Unit = {},
     onOpenActivity: () -> Unit = {},
     onOpenNotificationPreferences: () -> Unit = {},
-    onOpenBlockedUsers: () -> Unit = {}
+    onOpenBlockedUsers: () -> Unit = {},
+    onOpenSharedWorkouts: () -> Unit = {},
+    onOpenSocialFeed: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -390,6 +398,8 @@ private fun ProfileScreenContent(
                     onOpenActivity = onOpenActivity,
                     onOpenNotificationPreferences = onOpenNotificationPreferences,
                     onOpenBlockedUsers = onOpenBlockedUsers,
+                    onOpenSharedWorkouts = onOpenSharedWorkouts,
+                    onOpenSocialFeed = onOpenSocialFeed,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,

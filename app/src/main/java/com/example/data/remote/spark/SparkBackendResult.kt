@@ -76,3 +76,42 @@ sealed interface SparkDownloadOutcome {
     /** O servidor respondeu erro. [body] é o envelope pequeno, de onde sai o `code`. */
     data class Rejected(val code: Int, val body: String) : SparkDownloadOutcome
 }
+
+/**
+ * O desfecho de um download que devolve os **bytes em memória** (T17.9 §49).
+ *
+ * Separado de [SparkDownloadOutcome] porque a foto de um check-in não pode encostar no disco: §56
+ * pede que a mídia social autenticada não tenha cache persistente compartilhado entre contas, e o
+ * jeito mais seguro de garantir isso é ela nunca ser escrita. Ela é baixada, decodificada,
+ * desenhada e descartada — e o que sobrevive é um cache **em memória**, com escopo de conta.
+ *
+ * As imagens são pequenas por construção: o servidor as reduz para 1600 px na maior aresta e
+ * recusa acima de 1,5 MB (§18/§19), então um buffer em memória é a escolha barata e não um risco.
+ */
+sealed interface SparkBytesOutcome {
+
+    data class Downloaded(val bytes: ByteArray) : SparkBytesOutcome {
+        // `ByteArray` em `data class` compara por referência: declarar os dois explicitamente evita
+        // um `equals` que mente. Ninguém compara estes valores hoje; o dia em que alguém comparar,
+        // a resposta vai estar certa.
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is Downloaded && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /** Não há endereço de backend neste build. Nenhuma requisição foi feita. */
+    data object NotConfigured : SparkBytesOutcome
+
+    /** Não havia conta conectada: a requisição autenticada não chegou a sair. */
+    data object SignedOut : SparkBytesOutcome
+
+    /** Sem rede ou conexão interrompida. */
+    data object NetworkFailure : SparkBytesOutcome
+
+    /** O corpo passou do teto do cliente e a leitura foi abortada no meio. */
+    data object TooLarge : SparkBytesOutcome
+
+    /** O servidor respondeu erro. [body] é o envelope pequeno, de onde sai o `code`. */
+    data class Rejected(val code: Int, val body: String) : SparkBytesOutcome
+}

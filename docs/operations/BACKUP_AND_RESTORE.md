@@ -74,12 +74,34 @@ A senha do repositório:
 | Vai | Não vai |
 | --- | --- |
 | `spark.db` (snapshot consistente e verificado) | Service account do Firebase |
-| `manifest.json`: versão do schema, imagem do backend, tamanho, horário, host | Chave do Gemini |
-| | Senha do restic, chaves TLS, chave SSH |
+| `$SPARK_MEDIA_DIR` — as fotos dos check-ins (T17.9) | Chave do Gemini |
+| `manifest.json`: versão do schema, imagem do backend, tamanho, horário, host, contagem e bytes de mídia | Senha do restic, chaves TLS, chave SSH |
 
 Segredo nenhum entra no banco (§35) e, portanto, nenhum entra no backup. Eles vivem fora dele por
 construção: a credencial do Admin é um **caminho** montado somente-leitura, e a do Gemini é
 variável de runtime a partir de um arquivo `600`.
+
+### A mídia entra desde a T17.9
+
+Desde a T17.9 o Feed tem fotos, e elas **não** estão no SQLite: o banco guarda metadata
+(`social_checkin_media`) e os bytes vivem em `/opt/spark/media`. Um backup que copiasse só
+`spark.db` restauraria um Feed que aponta para arquivos que não existem — íntegro pelo
+`integrity_check`, e quebrado na tela de quem abrisse.
+
+O diretório entra como **segundo caminho do mesmo `restic backup`**:
+
+```text
+spark.db ──VACUUM INTO──▶ snapshot ──integrity_check──▶ manifesto ──┐
+                                                                     ├──▶ restic ──▶ off-site
+/opt/spark/media ───────────────────────────────────────────────────┘
+```
+
+Não há cópia extra em disco. O restic lê o diretório de origem direto e deduplica entre snapshots —
+as fotos são imutáveis depois de escritas, então o backup de amanhã não reenvia nenhuma das de hoje
+— e criptografa antes de sair da VPS, como já fazia com o banco.
+
+Um servidor que ainda não recebeu foto nenhuma não tem o diretório, e isso **não é erro**: o backup
+registra um aviso e segue com o banco.
 
 ## Agendamento e retenção
 
@@ -179,11 +201,20 @@ o que a T16.8 proíbe tornava o ensaio incapaz de detectar o problema que ele de
 ops/restore.sh --to /tmp/restauracao                    # extrai e verifica; não toca em produção
 ops/restore.sh --to /tmp/restauracao --snapshot <id>    # um snapshot específico
 docker compose -f docker-compose.prod.yml down          # o backend precisa estar parado
-ops/restore.sh --to /tmp/restauracao --install          # troca o banco
+ops/restore.sh --to /tmp/restauracao --install          # troca o banco E a mídia
 docker compose -f docker-compose.prod.yml up -d
 ops/check-health.sh                                     # health interno: não depende de DNS/TLS
 curl -s https://api.<dominio>/health/ready              # e o público, quando houver domínio
 ```
+
+**O Feed só está recuperado quando os dois voltaram.** `--install` instala o banco **e** a mídia:
+restaurar só o SQLite deixa `/health/ready` respondendo e cada card com foto sem imagem. A mídia
+anterior é preservada em `/opt/spark/media.pre-restore-<timestamp>` pelo mesmo motivo do banco — se
+a restauração for a errada, o que existia ainda está lá.
+
+E, depois de restaurar um snapshot **anterior** a uma exclusão de conta, rode a reconciliação de
+tombstones antes de considerar o servidor recuperado: ela purga o banco **e** os arquivos da conta
+excluída. Ver [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
 `--install` grava o banco com modo `660` no **grupo compartilhado** do diretório de dados, e não
 com `chown 1000:1000` — que era o que ele fazia até a T16.8.1 e que estava errado duas vezes:
@@ -197,6 +228,7 @@ O que `restore.sh` **nunca** faz (§130):
 
 - não apaga o banco atual — move para `spark.db.pre-restore-<timestamp>`. Se a restauração for a
   errada, o estado anterior ainda está lá;
+- não apaga a mídia atual — move para `media.pre-restore-<timestamp>`, pelo mesmo motivo;
 - não instala sobre um backend em execução — dois processos escrevendo no mesmo arquivo durante a
   troca é como se corrompe um SQLite de propósito;
 - não instala sem `integrity_check` passar.

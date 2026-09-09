@@ -256,6 +256,58 @@ export const envSchema = z.object({
 
   /** Caminho do arquivo append-only de tombstones de deleção para DR (anti-ressurreição). */
   DELETION_TOMBSTONES_FILE_PATH: z.string().min(1).default('/data/deletion_tombstones.tsv'),
+
+  // --- Mídia social (T17.9) -------------------------------------------------------------
+
+  /**
+   * Raiz do armazenamento de mídia social (T17.9 §22/§26/§27/§28).
+   *
+   * **Sem default, e opcional aqui de propósito.** Em produção ela é obrigatória e a ausência
+   * derruba o startup (`AppConfig.missingRequirements`), pela mesma razão de `DATABASE_PATH` não
+   * ter default: um valor silencioso apontaria para a camada efêmera do container ou para `/tmp`,
+   * e a foto de todo mundo sumiria no próximo `docker compose up` — sem erro, sem log, sem
+   * ninguém perceber até alguém abrir o Feed.
+   *
+   * Fora de produção, `AppConfig` deriva um diretório ao lado do banco: teste e desenvolvimento
+   * precisam funcionar sem configuração, e ali o efêmero é o esperado.
+   */
+  SOCIAL_MEDIA_ROOT: z.string().min(1).optional(),
+
+  /**
+   * Teto de bytes de um upload **antes** do processamento (§18).
+   *
+   * 10 MiB: acima de qualquer foto de celular já comprimida, e ordens de grandeza abaixo do que
+   * um cliente hostil tentaria. Ele é aplicado no parser de corpo **e** relido antes de decodificar
+   * — o segundo é o que protege contra um `Content-Length` mentiroso.
+   */
+  SOCIAL_MEDIA_MAX_UPLOAD_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1024)
+    .max(64 * 1024 * 1024)
+    .default(10 * 1024 * 1024),
+
+  /**
+   * Quota de disco por conta, em bytes (§29/§30).
+   *
+   * Conta a mídia **real**: `PENDING` e `ATTACHED`. Upload abandonado ocupa quota até o cleanup,
+   * porque ele ocupa disco até o cleanup — descontá-lo antes seria contabilizar uma liberação que
+   * ainda não aconteceu, e é exatamente esse buraco que alguém usaria para encher a partição.
+   */
+  SOCIAL_MEDIA_MAX_USER_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1024 * 1024)
+    .max(64 * 1024 * 1024 * 1024)
+    .default(250 * 1024 * 1024),
+
+  /** Intervalo entre varreduras da limpeza de mídia expirada/órfã (§39/§140). */
+  SOCIAL_MEDIA_CLEANUP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(6 * 60 * 60 * 1000)
+    .default(15 * 60 * 1000),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

@@ -1675,7 +1675,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-08): T17.0, T17.1, T17.2, T17.3, T17.4 e T17.5 implementadas.**
+> **Status (verificado em 2026-09-08): T17.0 a T17.9 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1699,16 +1699,35 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > outbox no servidor, payload FCM minimalista data-only, isolamento rigoroso por conta,
 > deduplicação LRU no cliente, preferências granulares com switch master, deep links seguros,
 > migration `0012_social_notifications.sql`, quatro rotas sob `/v1/social/notifications`.
-> **Não existe:** bloqueio, denúncia, seleção de conquistas em destaque, ranking global perpétuo,
-> busca aberta por nome, busca por e-mail, sugestão algorítmica de pessoas, avatar, upload de
-> mídia e exclusão completa de conta.
+> **T17.6** — hardening social: bloqueio bilateral, denúncia minimalista sem texto livre, exclusão
+> de conta server-authoritative com tombstone HMAC, migration `0013_social_hardening.sql`.
+> **T17.7** — compartilhamento de treinos entre amigos por **cópia independente** (snapshot V1, sem
+> carga, nota nem identificador local), migration `0014_workout_shares.sql`.
+> **T17.8** — check-ins de treino e Feed social: publicação **explícita por sessão**, validada
+> contra a sessão canônica sincronizada pela `CanonicalTrainingSource`, janela de 48h com o relógio
+> do servidor, Feed `FRIENDS_ONLY` bounded (30 dias, teto 50), migration
+> `0015_social_workout_checkins.sql`, três rotas sob `/v1/social`, e o Feed dentro da área Social do
+> Perfil.
+> **Não existe:** seleção de conquistas em destaque, ranking global perpétuo, busca aberta por nome,
+> busca por e-mail, sugestão algorítmica de pessoas, avatar, upload de mídia, legenda/foto/vídeo em
+> check-in, comentários, reações, curtidas, feed público e push de check-in.
+>
+> **T17.9** — check-ins ricos sobre o **mesmo** agregado: legenda opcional (0..280, texto puro), no
+> máximo uma foto (decodificada, sanitizada e re-encodada no servidor, sem EXIF/GPS, servida só por
+> endpoint autenticado), reações de enum fechado (`FIRE`/`MUSCLE`/`CLAP`) e comentários (1..300).
+> A política de visibilidade virou um objeto único, e as contagens são **por viewer**. Denúncia
+> passou a ter alvo (`USER`/`CHECKIN`/`COMMENT`), resolvido no servidor. Continuam fora: vídeo, GIF
+> animado, múltiplas fotos, feed público, mention, hashtag, link clicável, edição de publicação e
+> push de reação ou comentário.
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),
 [`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md) (T17.2),
 [`docs/architecture/challenge-domain.md`](docs/architecture/challenge-domain.md) (T17.3),
 [`docs/architecture/social-activity-ranking.md`](docs/architecture/social-activity-ranking.md) (T17.4) e
-[`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5);
+[`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5) e
+[`docs/architecture/social-domain.md` §11–§13](docs/architecture/social-domain.md) (T17.6, T17.7 e
+T17.8);
 contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades
@@ -1907,8 +1926,96 @@ e que ela deriva do domínio canônico. Ela **não** torna o desafio à prova de
 comprometido que fabrique `WorkoutSession` canônicas produziria pontuação correspondente, e esse é
 um problema de integridade do dado de treino que existiria sem desafio nenhum.
 
-### Exclusão de conta — pendência que continua registrada
+### Os check-ins de treino e o Feed (T17.8)
 
-Desativar Social **não** é excluir a conta. A exclusão completa continua fora de escopo e continua
-sendo **requisito pré-release para público externo**: ela precisa coordenar Firebase, Spark
-Backend, backup, mídia e social de uma vez.
+```text
+Room (WorkoutSession COMPLETED)   ← autoridade operacional, local-first
+        │
+        ▼  Sync T16   ← o ÚNICO caminho de upload de sessão de treino
+sync_entities
+        │
+        ▼  CanonicalTrainingSource.findSessionForCheckIn   ← a MESMA fronteira da T17.2/T17.3/T17.4
+        │
+        │  ação explícita do usuário + confirmação do preview
+        ▼
+social_workout_checkins
+        │
+        ▼  amizade atual ∧ ¬bloqueio ∧ perfil ativo, avaliado a cada leitura
+Feed dos amigos
+```
+
+Invariantes bloqueantes que se somam aos de cima:
+
+34. **Concluir um treino não publica nada.** Não existe gatilho no fim da sessão, no sync, na
+    abertura de tela ou em background — e o primeiro toque no CTA abre um preview, sem requisição.
+    Só a confirmação publica. A ordem é `commit COMPLETED → resultado salvo → opção social`.
+35. **O consentimento é por sessão, e é independente.** `activitySharingEnabled` (T17.4),
+    `friendRankingParticipationEnabled`, Challenge (T17.3) e Workout Share (T17.7) não decidem nada
+    aqui, e publicar não altera nenhum deles. Activity e CheckIn são superfícies distintas e
+    **não** se deduplicam.
+36. **O cliente não declara conclusão.** `completed`, `status`, `ownerUid`, `authorUid` e
+    `photoUrl` são recusados **por nome**. O dono sai do token, o estado da sessão sai da fonte
+    canônica, o instante sai do `Clock` do servidor. Desde a T17.9 o corpo aceita `caption` e
+    `mediaId` — os dois com validação própria; `photoUrl` continua recusado, porque a foto entra
+    por um identificador que o servidor emitiu e nunca por um endereço que o cliente escolhe.
+37. **A fonte canônica não ganha concorrente.** Uma operação estreita no adapter da T17.4.1, que
+    devolve cinco escalares e nunca `payload`. Nenhum arquivo de check-in consulta `sync_entities`.
+38. **Sessão não sincronizada é indistinguível de inexistente e de alheia** (`SESSION_NOT_FOUND`).
+    Quem conclui "falta sincronizar" é o app, que pede um ciclo do Sync T16 e tenta de novo com o
+    **mesmo** `clientRequestId`. Não existe segundo uploader de sessão, e a nuvem nunca é adotada
+    implicitamente.
+39. **Um treino, no máximo um check-in**, garantido por duas `UNIQUE` do banco. Toque duplo e retry
+    de resposta perdida convergem em uma publicação; `clientRequestId` reusado em outra sessão é
+    conflito.
+40. **O Feed é bounded e a autorização mora na consulta**: 30 dias, teto 50, ordenado por publicação
+    com desempate por `checkInId`. Sem `?users=`, sem rota pública, sem cursor histórico, sem
+    polling, sem WebSocket e sem push.
+41. **O DTO é o contrato inteiro** — `type`, `checkInId`, `author`, `publishedAt`, `caption`,
+    `media`, `reactions`, `currentUserReaction`, `commentCount`, `isCurrentUser`.
+    `publishedAt` é quando publicou, nunca quando treinou; e `sessionSyncId`, exercício, carga,
+    série, duração, horário do treino e nome do treino não cruzam a fronteira em forma nenhuma.
+42. **Excluir a publicação ≠ excluir o treino**, nos dois sentidos. Depois de publicado, o check-in
+    é um artefato social independente — e a tela de exclusão do Histórico diz isso.
+
+### O conteúdo do check-in (T17.9)
+
+43. **Um agregado, e nenhum segundo Feed.** Legenda, foto, reações e comentários expandem o
+    `WorkoutCheckIn`. Publicação da T17.8 continua válida sem backfill.
+44. **O `Content-Type` não decide nada.** O servidor decodifica de verdade (`sharp`/libvips), recusa
+    animação, valida pixels e arestas antes de alocar, aplica a orientação EXIF aos **pixels** e
+    re-encoda em WebP **sem** copiar metadata. É a ausência de `withMetadata()` que remove GPS,
+    modelo do aparelho e data original. O original nunca encosta no disco.
+45. **A imagem não entra no SQLite.** Metadata em `social_checkin_media`, bytes em
+    `SocialMediaStore` sob `SOCIAL_MEDIA_ROOT` — obrigatória em produção, sob pena de falha de
+    startup. Chave opaca gerada pelo servidor; path traversal com duas barreiras.
+46. **`mediaId` não concede acesso.** `GET /v1/social/media/{id}` exige token e passa pela mesma
+    política do Feed. Não existe URL pública, diretório estático, `ETag` ou `Cache-Control: public`.
+47. **Uma política de visibilidade, em um lugar** (`workout-checkin.access-policy.ts`), consumida
+    por Feed, detalhe, mídia, reações, comentários e denúncia. Controller que consulte `friendships`
+    ou `social_blocks` por conta própria é bloqueante arquitetural — há teste.
+48. **Bloqueio é por viewer, e as contagens também.** No post de um terceiro, A e B deixam de ver a
+    interação um do outro sem que nada seja apagado para o dono do post; e um `COUNT(*)` global
+    vazaria a participação de quem o bloqueio esconde.
+49. **Texto é texto.** Legenda e comentário são normalizados (NFC), aparados, com controle C0/C1,
+    zero-width e override bidirecional recusados — e **não** escapados: o Android desenha com
+    `Text`, e escapar corromperia o texto da pessoa. URL, `@menção` e `#hashtag` são caracteres.
+50. **A foto que falha não some em silêncio.** A publicação para, e a decisão entre "tentar de novo"
+    e "publicar sem foto" é do usuário.
+51. **Cache de mídia é memória, e é da conta.** Sem disco, trocado antes da primeira requisição da
+    conta nova. A foto de A reaparecendo para B é bloqueante.
+52. **Nada disso é evento de domínio.** Sem XP, sem conquista, sem missão, sem streak, sem ranking,
+    sem Activity e **sem push**. Nenhuma preferência de notificação foi criada.
+53. **A mídia entra no backup.** `ops/backup.sh` manda `$SPARK_MEDIA_DIR` no mesmo snapshot restic;
+    o restore instala os dois; a reconciliação de tombstones purga banco **e** arquivos.
+
+### Exclusão de conta — resolvida na T17.6
+
+`DELETE /v1/account` faz o expurgo em cascata das tabelas sociais — inclusive
+`social_workout_checkins` (T17.8) e, desde a T17.9, legendas, mídia, comentários (também os feitos
+em posts alheios) e reações — e grava um tombstone HMAC contra ressurreição. As **chaves de
+armazenamento** da mídia são lidas antes do purge e os arquivos apagados depois do commit: o
+`ON DELETE CASCADE` do SQLite não alcança o sistema de arquivos, e uma exclusão que apagasse só a
+metadata deixaria a foto da pessoa no disco de um servidor que jura tê-la apagado.
+
+O dado **local** de treino continua no aparelho: excluir a conta é desfazer a identidade online,
+não apagar o histórico de quem treinou.

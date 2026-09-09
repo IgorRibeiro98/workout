@@ -26,6 +26,7 @@ interface SocialNotificationGateway {
         friendRequestAccepted: Boolean? = null,
         challengeInvitationReceived: Boolean? = null,
         challengeStartingSoon: Boolean? = null,
-        challengeEnded: Boolean? = null
+        challengeEnded: Boolean? = null,
+        workoutShareReceived: Boolean? = null
     ): Result<SocialNotificationPreferences>
 }

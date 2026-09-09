@@ -97,10 +97,69 @@ describe('Postura de dependências', () => {
 
     expect(loose).toEqual([]);
   });
+
+  it('o multipart não é alcançável, e é por isso que o override do multer é a correção certa', () => {
+    // ## O que este teste protege (T17.9 §143/§144)
+    //
+    // `@nestjs/platform-express` depende de `multer@2.2.0`, que tem quatro avisos de negação de
+    // serviço em aberto. O backend **não usa multipart em lugar nenhum**: o upload de mídia da
+    // T17.9 recebe os bytes crus (`express.raw`, escopado só naquela rota), e os dois
+    // identificadores vão no query string.
+    //
+    // A correção foi um `overrides` para `multer@2.3.0` — uma subida de minor dentro do mesmo
+    // major que o `platform-express` declara, revisada e explícita. Não foi `npm audit fix
+    // --force`, que é proibido (§95 da T16.8) porque sobe major sem revisão.
+    //
+    // Este teste é a metade que o `npm audit` não cobre: ele garante que ninguém **passe** a usar
+    // multipart depois. No dia em que um `FileInterceptor` aparecer, a cadeia deixa de ser
+    // inalcançável e a decisão precisa ser revisada — e é isto que avisa.
+    const pkg = JSON.parse(
+      readFileSync(join(BACKEND_ROOT, 'package.json'), 'utf8'),
+    ) as PackageManifest;
+
+    expect(pkg.overrides?.multer).toBe('2.3.0');
+
+    const multipartUsers = collectSources(join(BACKEND_ROOT, 'src')).filter((file) => {
+      const source = readFileSync(file, 'utf8');
+      // Os quatro sinais de **uso**, e não a string `multipart/form-data`: ela aparece em
+      // comentário (o de `SocialModule` explica por que multipart ficou de fora), e um teste que
+      // proibisse a palavra proibiria também a explicação de por que ela não é usada.
+      return (
+        source.includes('FileInterceptor') ||
+        source.includes('FilesInterceptor') ||
+        /from 'multer'/.test(source) ||
+        /@UploadedFile/.test(source)
+      );
+    });
+
+    expect(multipartUsers.map((file) => file.slice(BACKEND_ROOT.length))).toEqual([]);
+  });
+
+  it('a biblioteca de processamento de imagem é a escolhida, e ninguém a contorna', () => {
+    // §14/§144 — decodificar de verdade é o que impede o `Content-Type` do cliente de decidir o
+    // que é armazenado. Um segundo caminho de imagem — outra biblioteca, ou um `writeFile` dos
+    // bytes recebidos — seria exatamente o bypass que §195 lista como bloqueante.
+    const sharpImporters = collectSources(join(BACKEND_ROOT, 'src')).filter((file) =>
+      /from 'sharp'/.test(readFileSync(file, 'utf8')),
+    );
+
+    expect(sharpImporters.map((file) => file.slice(BACKEND_ROOT.length))).toEqual([
+      '/src/modules/social/social-media.processor.ts',
+    ]);
+
+    // Nenhuma outra biblioteca de imagem entrou na árvore de produção junto.
+    const pkg = JSON.parse(
+      readFileSync(join(BACKEND_ROOT, 'package.json'), 'utf8'),
+    ) as PackageManifest;
+    for (const rival of ['jimp', 'gm', 'imagemagick', 'canvas', 'lwip', 'images']) {
+      expect(pkg.dependencies[rival]).toBeUndefined();
+    }
+  });
 });
 
 interface PackageManifest {
   readonly dependencies: Record<string, string>;
+  readonly overrides?: Record<string, string>;
 }
 
 function collectSources(root: string): string[] {

@@ -16,6 +16,7 @@ sealed interface NotificationNavDestination {
     data object Friends : NotificationNavDestination
     data object Challenges : NotificationNavDestination
     data class ChallengeDetail(val challengeId: String) : NotificationNavDestination
+    data object SharedWorkouts : NotificationNavDestination
 }
 
 object SocialNotificationNavigationResolver {
@@ -26,6 +27,7 @@ object SocialNotificationNavigationResolver {
             SocialNotificationType.CHALLENGE_INVITATION_RECEIVED -> NotificationNavDestination.Challenges
             SocialNotificationType.CHALLENGE_STARTING_SOON -> NotificationNavDestination.ChallengeDetail(entityId)
             SocialNotificationType.CHALLENGE_ENDED -> NotificationNavDestination.ChallengeDetail(entityId)
+            SocialNotificationType.WORKOUT_SHARE_RECEIVED -> NotificationNavDestination.SharedWorkouts
         }
     }
 }

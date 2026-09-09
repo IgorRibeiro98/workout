@@ -126,5 +126,7 @@
     <string name="notification_challenge_starting_soon_body">Seu desafio entre amigos começa em breve.</string>
     <string name="notification_challenge_ended_title">Desafio encerrado</string>
     <string name="notification_challenge_ended_body">O desafio foi finalizado. Confira o placar final!</string>
+    <string name="notification_workout_share_received_title">Novo treino compartilhado</string>
+    <string name="notification_workout_share_received_body">Um amigo compartilhou um treino com você no Spark.</string>
     <string name="notification_permission_denied_message">Permissão de notificações não concedida nas configurações do aparelho.</string>
 </resources>

@@ -43,9 +43,10 @@ import kotlinx.coroutines.launch
         com.example.data.restore.RestoreAttemptEntity::class,
         com.example.data.sync.EntitySyncMetadataEntity::class,
         com.example.data.sync.SyncCursorEntity::class,
-        com.example.data.sync.SyncConflictEntity::class
+        com.example.data.sync.SyncConflictEntity::class,
+        WorkoutShareImportReceiptEntity::class
     ],
-    version = 35,
+    version = 36,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -64,6 +65,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun entitySyncMetadataDao(): com.example.data.sync.EntitySyncMetadataDao
     abstract fun syncCursorDao(): com.example.data.sync.SyncCursorDao
     abstract fun syncConflictDao(): com.example.data.sync.SyncConflictDao
+    abstract fun workoutShareReceiptDao(): WorkoutShareReceiptDao
 
     companion object {
 
@@ -74,7 +76,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 35
+        const val SCHEMA_VERSION: Int = 36
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -167,6 +169,28 @@ abstract class AppDatabase : RoomDatabase() {
          * `DEFAULT 'PENDING'` porque toda linha existente descreve exatamente isso: um conflito
          * que ninguém resolveu ainda. A migração não muda o significado de nenhuma delas.
          */
+        /**
+         * A migração 35 → 36 (T17.7) cria a tabela de recibos de importação de treinos
+         * compartilhados entre amigos (`workout_share_import_receipts`).
+         *
+         * Idempotência local: garante que importar a mesma oferta de treino repetidamente
+         * (ou após crash) não gere templates duplicados no Room.
+         */
+        val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_share_import_receipts` (
+                        `shareId` TEXT NOT NULL,
+                        `importedTemplateLocalId` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`shareId`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         val MIGRATION_34_35 = object : Migration(34, 35) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -768,7 +792,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36
                 )
                 .addCallback(DatabaseCallback())
                 .build()

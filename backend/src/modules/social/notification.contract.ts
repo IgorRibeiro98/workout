@@ -20,6 +20,7 @@ export const NOTIFICATION_TYPES = [
   'CHALLENGE_INVITATION_RECEIVED',
   'CHALLENGE_STARTING_SOON',
   'CHALLENGE_ENDED',
+  'WORKOUT_SHARE_RECEIVED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -64,6 +65,7 @@ export interface NotificationPreferencesDto {
   readonly challengeInvitationReceived: boolean;
   readonly challengeStartingSoon: boolean;
   readonly challengeEnded: boolean;
+  readonly workoutShareReceived: boolean;
   readonly updatedAt: number;
 }
 
@@ -74,6 +76,7 @@ export interface UpdateNotificationPreferencesRequest {
   readonly challengeInvitationReceived?: boolean;
   readonly challengeStartingSoon?: boolean;
   readonly challengeEnded?: boolean;
+  readonly workoutShareReceived?: boolean;
 }
 
 export interface RegisterPushDeviceRequest {

@@ -148,7 +148,16 @@ export class BlockRepository {
            )`,
       ).run(now, blockerUid, blockerUid, blockedUid);
 
-      // 5. Cancela notificações de outbox pendentes para ambos
+      // 5. Cancela workout shares PENDING ou ACCEPTED entre o par
+      db.prepare(
+        `UPDATE workout_shares
+         SET status = 'CANCELLED', cancelled_at = ?
+         WHERE status IN ('PENDING', 'ACCEPTED')
+           AND ((sender_uid = ? AND recipient_uid = ?)
+             OR (sender_uid = ? AND recipient_uid = ?))`,
+      ).run(now, blockerUid, blockedUid, blockedUid, blockerUid);
+
+      // 6. Cancela notificações de outbox pendentes para ambos
       db.prepare(
         `UPDATE social_notification_events
          SET status = 'CANCELLED', completed_at = ?

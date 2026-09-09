@@ -71,6 +71,9 @@ fun SocialSection(
     onOpenNotificationPreferences: () -> Unit = {},
     /** T17.6 — Usuários bloqueados */
     onOpenBlockedUsers: () -> Unit = {},
+    /** T17.7 — Treinos compartilhados entre amigos */
+    onOpenSharedWorkouts: () -> Unit = {},
+    onOpenSocialFeed: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -145,6 +148,8 @@ fun SocialSection(
                         onOpenActivity = onOpenActivity,
                         onOpenNotificationPreferences = onOpenNotificationPreferences,
                         onOpenBlockedUsers = onOpenBlockedUsers,
+                        onOpenSharedWorkouts = onOpenSharedWorkouts,
+                        onOpenSocialFeed = onOpenSocialFeed,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -166,6 +171,8 @@ fun SocialSection(
                             onOpenActivity = onOpenActivity,
                             onOpenNotificationPreferences = onOpenNotificationPreferences,
                             onOpenBlockedUsers = onOpenBlockedUsers,
+                            onOpenSharedWorkouts = onOpenSharedWorkouts,
+                        onOpenSocialFeed = onOpenSocialFeed,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -191,6 +198,9 @@ fun SocialSection(
                                 onOpenChallenges = onOpenChallenges,
                                 onOpenActivity = onOpenActivity,
                                 onOpenNotificationPreferences = onOpenNotificationPreferences,
+                                onOpenBlockedUsers = onOpenBlockedUsers,
+                                onOpenSharedWorkouts = onOpenSharedWorkouts,
+                        onOpenSocialFeed = onOpenSocialFeed,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -222,6 +232,9 @@ fun SocialSection(
                                 onOpenChallenges = onOpenChallenges,
                                 onOpenActivity = onOpenActivity,
                                 onOpenNotificationPreferences = onOpenNotificationPreferences,
+                                onOpenBlockedUsers = onOpenBlockedUsers,
+                                onOpenSharedWorkouts = onOpenSharedWorkouts,
+                        onOpenSocialFeed = onOpenSocialFeed,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -276,6 +289,8 @@ private fun ActiveProfile(
     onOpenActivity: () -> Unit,
     onOpenNotificationPreferences: () -> Unit = {},
     onOpenBlockedUsers: () -> Unit = {},
+    onOpenSharedWorkouts: () -> Unit = {},
+    onOpenSocialFeed: () -> Unit = {},
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -374,6 +389,8 @@ private fun ActiveProfile(
                 onOpenActivity = onOpenActivity,
                 onOpenNotificationPreferences = onOpenNotificationPreferences,
                 onOpenBlockedUsers = onOpenBlockedUsers,
+                onOpenSharedWorkouts = onOpenSharedWorkouts,
+                onOpenSocialFeed = onOpenSocialFeed,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -413,6 +430,8 @@ private fun FriendsEntryPoints(
     onOpenActivity: () -> Unit,
     onOpenNotificationPreferences: () -> Unit,
     onOpenBlockedUsers: () -> Unit = {},
+    onOpenSharedWorkouts: () -> Unit = {},
+    onOpenSocialFeed: () -> Unit = {},
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -468,6 +487,14 @@ private fun FriendsEntryPoints(
 
     // T17.6 — Usuários bloqueados
     Secondary(text = "Usuários bloqueados", onClick = onOpenBlockedUsers, enabled = enabled)
+
+    // T17.7 — Treinos compartilhados
+    Secondary(text = "Treinos compartilhados", onClick = onOpenSharedWorkouts, enabled = enabled)
+
+    // T17.8 — o Feed de check-ins. Ele fica aqui, na área Social, e **não** vira aba nova da
+    // bottom navigation (§83): a barra inferior é do núcleo do produto, e o social continua sendo
+    // opcional. Um item permanente apareceria vazio para quem nunca ativou.
+    Secondary(text = "Feed", onClick = onOpenSocialFeed, enabled = enabled)
 }
 
 @Composable

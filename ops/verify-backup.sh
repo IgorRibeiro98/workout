@@ -3,6 +3,7 @@
 # Ensaio de restauração (T16.8 §43/§112/§161).
 #
 #   backup off-site ──▶ restauração ──▶ integrity_check ──▶ backend sobe sobre a cópia ──▶ ready
+#                                    └─▶ mídia social restaurada e legível pelo processo
 #
 # ## Por que este script existe
 #
@@ -19,6 +20,7 @@
 #   ops/verify-backup.sh                              # ensaia o snapshot mais recente do off-site
 #   ops/verify-backup.sh --snapshot <id>
 #   ops/verify-backup.sh --from-file /caminho/spark.db  # ensaio local, sem credencial de storage
+#   ops/verify-backup.sh --from-file /caminho/spark.db --media-from /caminho/media
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/lib.sh
@@ -28,14 +30,16 @@ load_env_file
 
 SNAPSHOT="latest"
 FROM_FILE=""
+FROM_MEDIA=""
 PORT="${SPARK_DRILL_PORT:-18080}"
 CONTAINER="spark-restore-drill-$$"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --snapshot)  SNAPSHOT="${2:?}"; shift 2 ;;
-    --from-file) FROM_FILE="${2:?}"; shift 2 ;;
-    --port)      PORT="${2:?}"; shift 2 ;;
+    --snapshot)   SNAPSHOT="${2:?}"; shift 2 ;;
+    --from-file)  FROM_FILE="${2:?}"; shift 2 ;;
+    --media-from) FROM_MEDIA="${2:?}"; shift 2 ;;
+    --port)       PORT="${2:?}"; shift 2 ;;
     *) fail "argumento desconhecido: $1" ;;
   esac
 done
@@ -59,11 +63,20 @@ log "=== ensaio de restauração ==="
 
 # --- 1. restaurar e verificar integridade --------------------------------------------------
 if [ -n "$FROM_FILE" ]; then
-  RESTORED="$("${SCRIPT_DIR}/restore.sh" --from-file "$FROM_FILE" --to "${DRILL_DIR}/restored" | tail -1)"
+  MEDIA_ARGS=()
+  [ -n "$FROM_MEDIA" ] && MEDIA_ARGS=(--media-from "$FROM_MEDIA")
+  RESTORED="$("${SCRIPT_DIR}/restore.sh" --from-file "$FROM_FILE" "${MEDIA_ARGS[@]}" --to "${DRILL_DIR}/restored" | tail -1)"
 else
   RESTORED="$("${SCRIPT_DIR}/restore.sh" --snapshot "$SNAPSHOT" --to "${DRILL_DIR}/restored" | tail -1)"
 fi
 [ -f "$RESTORED" ] || fail "a restauração não produziu um arquivo"
+
+# A mídia restaurada, quando o snapshot a contém (T17.9 §138/§142). Procurada pelo subdiretório
+# `checkins`, que é a estrutura que `LocalSocialMediaStore` cria — e não pelo nome do diretório,
+# que é configurável e pode ter mudado entre o backup e a restauração.
+RESTORED_MEDIA=""
+MEDIA_ROOT_MARKER="$(find "${DRILL_DIR}/restored" -type d -name checkins 2> /dev/null | head -1)"
+[ -n "$MEDIA_ROOT_MARKER" ] && RESTORED_MEDIA="$(dirname "$MEDIA_ROOT_MARKER")"
 
 # --- 2. subir o backend real sobre a cópia -------------------------------------------------
 #
@@ -87,12 +100,32 @@ chmod 2770 "$DATA_DIR"
 cp "$RESTORED" "${DATA_DIR}/${DB_FILENAME}"
 chmod 660 "${DATA_DIR}/${DB_FILENAME}"
 
+# A mídia entra no ensaio com o **mesmo** modelo de permissão (T17.9 §142). O ponto do ensaio não é
+# só "os arquivos vieram": é que o processo que roda como `node`, com uid diferente do operador,
+# consegue **abri-los** depois da restauração. Um `chmod 777` aqui provaria apenas que o container
+# existe.
+MEDIA_DIR="${DRILL_DIR}/media"
+mkdir -p "$MEDIA_DIR"
+chmod 2770 "$MEDIA_DIR"
+MEDIA_FILE_COUNT=0
+if [ -n "$RESTORED_MEDIA" ]; then
+  cp -a "${RESTORED_MEDIA}/." "$MEDIA_DIR/"
+  find "$MEDIA_DIR" -type d -exec chmod 2770 {} +
+  find "$MEDIA_DIR" -type f -exec chmod 660 {} +
+  MEDIA_FILE_COUNT="$(find "$MEDIA_DIR" -type f | wc -l | tr -d ' ')"
+  log "mídia restaurada para o ensaio: ${MEDIA_FILE_COUNT} arquivo(s)"
+else
+  log "aviso: o snapshot não trouxe mídia; o ensaio verifica apenas o banco"
+fi
+
 log "subindo o backend sobre a cópia restaurada (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
 docker run -d --name "$CONTAINER" \
   -p "127.0.0.1:${PORT}:8080" \
   --group-add "$DRILL_GID" \
   -v "${DATA_DIR}:/data" \
+  -v "${MEDIA_DIR}:/media" \
   -e DATABASE_PATH="/data/${DB_FILENAME}" \
+  -e SOCIAL_MEDIA_ROOT=/media \
   -e NODE_ENV=production \
   -e LOG_LEVEL=warn \
   "$SPARK_IMAGE" > /dev/null
@@ -118,4 +151,30 @@ for path in /v1/backups /v1/sync/pull; do
   [ "$status" = "401" ] || fail "rota ${path} respondeu ${status} no banco restaurado; esperado 401"
 done
 
-log "=== ensaio APROVADO: restauração íntegra, backend ready, rotas protegidas ==="
+# --- 3. a mídia restaurada é legível **pelo processo** (T17.9 §142) --------------------------
+#
+# O container roda como `node` (uid 1000) e o operador tem outro uid: este passo é o que prova que
+# o modelo de grupo compartilhado sobreviveu à restauração. Ler o byte a byte de um arquivo pelo
+# processo é a única evidência que vale — "o arquivo está lá" não diz que ele abre.
+if [ "$MEDIA_FILE_COUNT" -gt 0 ]; then
+  docker exec "$CONTAINER" node -e "
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : [full];
+    });
+    const files = walk('/media');
+    if (files.length === 0) { console.error('nenhum arquivo de mídia visível'); process.exit(1); }
+    let bytes = 0;
+    for (const file of files) { bytes += fs.readFileSync(file).length; }
+    // Só formato e tamanho: nenhum caminho de arquivo vai para a saída (§161).
+    const head = fs.readFileSync(files[0]).subarray(8, 12).toString('ascii');
+    if (head !== 'WEBP') { console.error('a mídia restaurada não é WebP'); process.exit(1); }
+    console.log('mídia legível pelo processo: ' + files.length + ' arquivo(s), ' + bytes + ' bytes');
+  " || fail "o backend não conseguiu ler a mídia restaurada"
+else
+  log "aviso: sem mídia no snapshot, a verificação de leitura foi pulada"
+fi
+
+log "=== ensaio APROVADO: restauração íntegra, backend ready, rotas protegidas, mídia legível ==="

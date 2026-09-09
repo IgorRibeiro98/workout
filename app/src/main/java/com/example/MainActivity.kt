@@ -66,6 +66,7 @@ class MainActivity : ComponentActivity() {
                     is com.example.service.NotificationNavDestination.Friends -> SocialNotificationChannels.DESTINATION_FRIENDS
                     is com.example.service.NotificationNavDestination.Challenges -> SocialNotificationChannels.DESTINATION_CHALLENGES
                     is com.example.service.NotificationNavDestination.ChallengeDetail -> SocialNotificationChannels.DESTINATION_CHALLENGE_DETAIL
+                    is com.example.service.NotificationNavDestination.SharedWorkouts -> SocialNotificationChannels.DESTINATION_SHARED_WORKOUTS
                 }
                 _notificationNavTarget.value = NotificationNavTarget(destination, entityId)
                 return

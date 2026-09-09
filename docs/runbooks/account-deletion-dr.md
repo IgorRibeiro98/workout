@@ -52,6 +52,32 @@ sqlite3 /var/lib/spark/data/workout.db "SELECT count(*) FROM account_deletion_to
 wc -l /var/lib/spark/data/deletion_tombstones.tsv
 ```
 
+### Passo 3.1: A mídia da conta excluída (T17.9)
+
+Desde a T17.9 uma conta tem conteúdo **fora** do banco: as fotos dos check-ins vivem em
+`/opt/spark/media`, e o `ON DELETE CASCADE` do SQLite não alcança o sistema de arquivos.
+
+`AccountDeletionService.reconcileTombstones` já cobre isso: para cada conta ressuscitada pelo
+restore cujo HMAC bate com um tombstone, ele **lê as chaves de armazenamento antes do purge** e
+apaga os arquivos depois do commit. A ordem importa — depois do purge as linhas não existem mais, e
+não haveria como saber quais arquivos remover.
+
+Purgar só o SQLite deixaria as fotos ressuscitadas no disco: invisíveis para o Feed (não há
+metadata que as sirva) e presentes para quem tivesse acesso ao volume. Validar depois da
+reconciliação:
+
+```bash
+# Nenhuma linha de mídia da conta excluída
+sqlite3 /opt/spark/data/spark.db "SELECT COUNT(*) FROM social_checkin_media;"
+
+# E nenhum arquivo órfão crescendo: a varredura do SocialMediaCleaner recolhe o que sobrar,
+# em lotes, a cada 15 minutos.
+find /opt/spark/media -type f | wc -l
+```
+
+O que sobrar de arquivo — por falha de I/O no momento da purga — é recolhido pela varredura de
+órfãos do `SocialMediaCleaner`, porque a metadata correspondente já não existe.
+
 ### Passo 4: Fila de Jobs Firebase Auth
 Verificar se há jobs pendentes de exclusão no Firebase Auth:
 ```bash

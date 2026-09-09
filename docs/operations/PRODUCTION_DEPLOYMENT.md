@@ -28,6 +28,7 @@
                             │ bind mount
                             ▼
                  /opt/spark/data/spark.db   SQLite (WAL, FULL, foreign_keys)
+                 /opt/spark/media/          fotos dos check-ins (T17.9), fora do banco
                             │
                             │ ops/backup.sh (diário + pré-deploy)
                             ▼
@@ -79,6 +80,7 @@ operação normal e o backend continua rodando sem privilégio.
 | --- | --- | --- | --- |
 | `/opt/spark/repo` | `spark:spark` | `755` | Repositório (compose, Caddyfile, `ops/`) |
 | `/opt/spark/data` | `spark:spark-data` | `2770` | **host** (backup lê e recolhe snapshot) + **container** (lê e escreve `spark.db`) |
+| `/opt/spark/media` | `spark:spark-data` | `2770` | **host** (backup lê as fotos) + **container** (escreve e serve a mídia dos check-ins, T17.9) |
 | `/opt/spark/secrets` | `spark:spark-data` | `2750` | host escreve; container lê a service account |
 | `/opt/spark/secrets/firebase-admin.json` | `spark:spark-data` | `640` | container lê (montado `:ro`) |
 | `/opt/spark/secrets/backend.env` | `spark:spark` | `600` | só o host (o Compose o lê antes de subir) |
@@ -198,13 +200,20 @@ docker --version && docker compose version
 ### 6. Diretórios e segredos
 
 ```bash
-sudo mkdir -p /opt/spark/{data,secrets,backups,state}
+sudo mkdir -p /opt/spark/{data,media,secrets,backups,state}
 sudo chown -R spark:spark /opt/spark
 
 # Compartilhados com o container, pelo grupo — e com setgid, para que o que o container criar
 # herde o grupo em vez do grupo primário de quem criou.
-sudo chown spark:spark-data /opt/spark/data /opt/spark/secrets
-sudo chmod 2770 /opt/spark/data
+#
+# `/opt/spark/media` é o volume da T17.9: as fotos dos check-ins vivem nele, fora do SQLite. Ele é
+# **separado** de `/opt/spark/data` de propósito — o snapshot do banco é uma cópia completa a cada
+# backup, e a mídia é grande, imutável e deduplicada pelo restic. Sem este diretório montado, o
+# backend **não sobe** em produção (`SOCIAL_MEDIA_ROOT`), que é o comportamento desejado: um deploy
+# que montasse o banco e esquecesse a mídia perderia todas as fotos na primeira recriação de
+# container, em silêncio.
+sudo chown spark:spark-data /opt/spark/data /opt/spark/media /opt/spark/secrets
+sudo chmod 2770 /opt/spark/data /opt/spark/media
 sudo chmod 2750 /opt/spark/secrets
 
 # Só do host: o container não os toca.
@@ -216,8 +225,9 @@ sudo -u spark git clone <url-do-repo> /opt/spark/repo
 Confira antes de seguir — é mais barato conferir agora do que descobrir no primeiro deploy:
 
 ```bash
-stat -c '%n %U:%G %a' /opt/spark/data /opt/spark/secrets
+stat -c '%n %U:%G %a' /opt/spark/data /opt/spark/media /opt/spark/secrets
 # /opt/spark/data    spark:spark-data 2770
+# /opt/spark/media   spark:spark-data 2770
 # /opt/spark/secrets spark:spark-data 2750
 ```
 

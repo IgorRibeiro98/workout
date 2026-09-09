@@ -25,6 +25,7 @@ object SocialNotificationChannels {
     const val DESTINATION_FRIENDS = "friends"
     const val DESTINATION_CHALLENGES = "challenges"
     const val DESTINATION_CHALLENGE_DETAIL = "challenge_detail"
+    const val DESTINATION_SHARED_WORKOUTS = "shared_workouts"
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

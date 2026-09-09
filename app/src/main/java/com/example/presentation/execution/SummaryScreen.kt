@@ -24,10 +24,26 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * O resumo do treino recém-concluído.
+ *
+ * ## A ordem, e por que ela importa (T17.8 §98/§99)
+ *
+ * Quando esta tela é composta, a sessão **já** está `COMPLETED` e salva: `WorkoutEngine` gravou
+ * `finishedAt` e o status, publicou os eventos de gamificação e só então a navegação trouxe o
+ * `sessionId` até aqui. O convite social entra depois disso, como um bloco opcional — e nunca
+ * como um passo do fluxo de conclusão.
+ *
+ * [shareCheckIn] é um slot justamente para manter essa separação: esta tela continua sendo uma
+ * função do sumário do treino e não conhece o domínio social. Sem ele — build sem backend, conta
+ * desconectada, Social desativado — o Resumo é exatamente o que sempre foi, e "CONCLUIR" continua
+ * fechando tudo sem depender de nada online.
+ */
 @Composable
 fun SummaryScreen(
     summary: SessionCalendarSummary,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    shareCheckIn: @Composable () -> Unit = {}
 ) {
     val durationMs = if (summary.session.finishedAt != null) summary.session.finishedAt - summary.session.startedAt else 0L
     val durationMin = durationMs / 60000
@@ -89,6 +105,12 @@ fun SummaryScreen(
                     }
                 }
                 
+                // O convite social (T17.8). Ele vem depois dos números do treino e antes da
+                // progressão, e é o único bloco desta tela que pode não existir: sem backend, sem
+                // conta ou com o Social desativado ele não desenha nada.
+                Spacer(modifier = Modifier.height(24.dp))
+                shareCheckIn()
+
                 Spacer(modifier = Modifier.height(32.dp))
                 HorizontalDivider(color = BorderLight)
                 Spacer(modifier = Modifier.height(16.dp))

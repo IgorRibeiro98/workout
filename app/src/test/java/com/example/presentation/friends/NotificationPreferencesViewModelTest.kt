@@ -227,7 +227,8 @@ class NotificationPreferencesViewModelTest {
             friendRequestAccepted: Boolean?,
             challengeInvitationReceived: Boolean?,
             challengeStartingSoon: Boolean?,
-            challengeEnded: Boolean?
+            challengeEnded: Boolean?,
+            workoutShareReceived: Boolean?
         ): Result<SocialNotificationPreferences> {
             updatePreferencesError?.let { return Result.failure(it) }
             preferences = preferences.copy(
@@ -236,7 +237,8 @@ class NotificationPreferencesViewModelTest {
                 friendRequestAccepted = friendRequestAccepted ?: preferences.friendRequestAccepted,
                 challengeInvitationReceived = challengeInvitationReceived ?: preferences.challengeInvitationReceived,
                 challengeStartingSoon = challengeStartingSoon ?: preferences.challengeStartingSoon,
-                challengeEnded = challengeEnded ?: preferences.challengeEnded
+                challengeEnded = challengeEnded ?: preferences.challengeEnded,
+                workoutShareReceived = workoutShareReceived ?: preferences.workoutShareReceived
             )
             return Result.success(preferences)
         }

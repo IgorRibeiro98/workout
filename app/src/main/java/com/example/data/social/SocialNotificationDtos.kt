@@ -25,7 +25,8 @@ data class NotificationPreferencesDto(
     val friendRequestAccepted: Boolean,
     val challengeInvitationReceived: Boolean,
     val challengeStartingSoon: Boolean,
-    val challengeEnded: Boolean
+    val challengeEnded: Boolean,
+    val workoutShareReceived: Boolean = true
 )
 
 @Serializable
@@ -35,7 +36,8 @@ data class UpdateNotificationPreferencesRequestDto(
     val friendRequestAccepted: Boolean? = null,
     val challengeInvitationReceived: Boolean? = null,
     val challengeStartingSoon: Boolean? = null,
-    val challengeEnded: Boolean? = null
+    val challengeEnded: Boolean? = null,
+    val workoutShareReceived: Boolean? = null
 )
 
 /**

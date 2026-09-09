@@ -146,6 +146,11 @@ class SparkFirebaseMessagingService : FirebaseMessagingService() {
                 getString(R.string.notification_challenge_ended_title),
                 getString(R.string.notification_challenge_ended_body)
             )
+            SocialNotificationType.WORKOUT_SHARE_RECEIVED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
+                getString(R.string.notification_workout_share_received_title),
+                getString(R.string.notification_workout_share_received_body)
+            )
         }
 
         val pendingIntent = SocialNotificationChannels.buildPendingIntent(

@@ -13,6 +13,15 @@ set -euo pipefail
 
 # Diretório de dados montado no container em `/data`. É onde `spark.db` vive de verdade.
 SPARK_DATA_DIR="${SPARK_DATA_DIR:-/opt/spark/data}"
+# Diretório de mídia social montado no container em `/media` (T17.9 §26/§135).
+#
+# Separado do banco de propósito. O snapshot do SQLite é uma **cópia completa** a cada execução
+# (`VACUUM INTO`); a mídia é grande, imutável depois de escrita, e o restic a deduplica entre
+# snapshots. Se as fotos vivessem dentro de `/opt/spark/data`, cada `VACUUM INTO` continuaria
+# copiando só o banco — mas o `restic backup` do diretório inteiro passaria a arrastar mídia e
+# banco no mesmo caminho, e a restauração perderia a distinção entre "o banco está íntegro" e "os
+# arquivos vieram junto". Duas coisas com ciclos de vida diferentes, dois caminhos.
+SPARK_MEDIA_DIR="${SPARK_MEDIA_DIR:-/opt/spark/media}"
 # Área de trabalho do backup: snapshot temporário + manifesto, antes de irem para o off-site.
 SPARK_STAGING_DIR="${SPARK_STAGING_DIR:-/opt/spark/backups}"
 # Estado operacional legível por máquina (idade do último backup, por exemplo).

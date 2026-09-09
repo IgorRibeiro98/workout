@@ -99,6 +99,29 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     // Usuários bloqueados (T17.6).
     object BlockedUsers : Screen("blocked_users", R.string.nav_profile, Icons.Default.Person)
 
+    // Treinos compartilhados (T17.7).
+    object SharedWorkouts : Screen("shared_workouts", R.string.nav_workouts, Icons.Default.FitnessCenter)
+
+    // Feed de check-ins (T17.8). Dentro da área Social do Perfil, e **sem** item novo de bottom
+    // navigation (§83): a barra inferior é do núcleo do produto — treinar, histórico, evolução.
+    //
+    // Nenhum identificador entra na rota. O Feed é sempre o do próprio usuário: quem aparece nele
+    // é derivado no servidor a partir do token, das amizades atuais e da política de bloqueio.
+    object SocialFeed : Screen("social_feed", R.string.nav_profile, Icons.Default.Person)
+
+    /**
+     * O detalhe de uma publicação (T17.9 §118).
+     *
+     * Empilhada sobre o Feed, **sem** item novo de bottom navigation (§118): a barra inferior
+     * continua sendo do núcleo do produto.
+     *
+     * A rota carrega só o `checkInId` — um identificador opaco do servidor. Nenhum dado de treino,
+     * nenhum `socialId` e nenhum uid entram em rota de navegação.
+     */
+    object CheckInDetail : Screen("check_in/{checkInId}", R.string.nav_profile, Icons.Default.Person) {
+        fun createRoute(checkInId: String) = "check_in/$checkInId"
+    }
+
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

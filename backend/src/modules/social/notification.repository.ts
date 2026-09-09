@@ -58,7 +58,8 @@ export class NotificationRepository {
     const row = this.db
       .prepare(
         `SELECT push_enabled, friend_request_received, friend_request_accepted,
-                challenge_invitation_received, challenge_starting_soon, challenge_ended, updated_at
+                challenge_invitation_received, challenge_starting_soon, challenge_ended,
+                workout_share_received, updated_at
          FROM social_notification_preferences
          WHERE owner_uid = ?`,
       )
@@ -70,6 +71,7 @@ export class NotificationRepository {
           challenge_invitation_received: number;
           challenge_starting_soon: number;
           challenge_ended: number;
+          workout_share_received: number;
           updated_at: number;
         }
       | undefined;
@@ -82,6 +84,7 @@ export class NotificationRepository {
         challengeInvitationReceived: true,
         challengeStartingSoon: true,
         challengeEnded: true,
+        workoutShareReceived: true,
         updatedAt: 0,
       };
     }
@@ -93,6 +96,7 @@ export class NotificationRepository {
       challengeInvitationReceived: row.challenge_invitation_received === 1,
       challengeStartingSoon: row.challenge_starting_soon === 1,
       challengeEnded: row.challenge_ended === 1,
+      workoutShareReceived: row.workout_share_received === 1,
       updatedAt: row.updated_at,
     };
   }
@@ -111,6 +115,7 @@ export class NotificationRepository {
         updates.challengeInvitationReceived ?? current.challengeInvitationReceived,
       challengeStartingSoon: updates.challengeStartingSoon ?? current.challengeStartingSoon,
       challengeEnded: updates.challengeEnded ?? current.challengeEnded,
+      workoutShareReceived: updates.workoutShareReceived ?? current.workoutShareReceived,
       updatedAt: now,
     };
 
@@ -118,8 +123,9 @@ export class NotificationRepository {
       .prepare(
         `INSERT INTO social_notification_preferences
            (owner_uid, push_enabled, friend_request_received, friend_request_accepted,
-            challenge_invitation_received, challenge_starting_soon, challenge_ended, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            challenge_invitation_received, challenge_starting_soon, challenge_ended,
+            workout_share_received, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner_uid) DO UPDATE SET
            push_enabled = excluded.push_enabled,
            friend_request_received = excluded.friend_request_received,
@@ -127,6 +133,7 @@ export class NotificationRepository {
            challenge_invitation_received = excluded.challenge_invitation_received,
            challenge_starting_soon = excluded.challenge_starting_soon,
            challenge_ended = excluded.challenge_ended,
+           workout_share_received = excluded.workout_share_received,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -137,6 +144,7 @@ export class NotificationRepository {
         updated.challengeInvitationReceived ? 1 : 0,
         updated.challengeStartingSoon ? 1 : 0,
         updated.challengeEnded ? 1 : 0,
+        updated.workoutShareReceived ? 1 : 0,
         now,
       );
 

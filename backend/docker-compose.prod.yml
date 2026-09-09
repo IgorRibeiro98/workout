@@ -82,6 +82,11 @@ services:
       NODE_ENV: production
       PORT: 8080
       DATABASE_PATH: /data/spark.db
+      # T17.9 §26/§28 — a mídia social vive em volume persistente, e o caminho é **obrigatório**
+      # em produção: `AppConfig.missingRequirements()` derruba o startup se ele faltar. Um default
+      # silencioso apontaria para a camada efêmera do container, e a foto de todo mundo sumiria no
+      # próximo `up` sem erro, sem log e sem ninguém perceber até alguém abrir o Feed.
+      SOCIAL_MEDIA_ROOT: /media
       LOG_LEVEL: ${SPARK_LOG_LEVEL:-info}
       # UTC para tudo o que é técnico (§124/§126). O sync não depende de relógio para causalidade,
       # mas log, certificado e nome de backup dependem de um horário que não mude duas vezes por ano.
@@ -110,6 +115,15 @@ services:
       # host, e "onde está meu banco?" precisa ter resposta com um `ls`. Derrubar e recriar o
       # container não toca neste diretório.
       - ${SPARK_DATA_DIR:-/opt/spark/data}:/data
+      # A mídia social (T17.9 §26). Bind mount separado do banco, pelo mesmo motivo do `/data`:
+      # `ops/backup.sh` precisa enxergá-la do host, e "onde estão as fotos?" precisa ter resposta
+      # com um `ls`. Separada do banco porque o snapshot do SQLite é copiado inteiro a cada backup
+      # e a mídia é deduplicada pelo restic — juntá-las faria cada backup diário arrastar todas as
+      # fotos de novo.
+      #
+      # Derrubar e recriar o container não toca neste diretório, que é a única razão de ele
+      # existir: a T17.9 recusa produção sem ele (§28).
+      - ${SPARK_MEDIA_DIR:-/opt/spark/media}:/media
       # A service account entra por montagem somente-leitura, a partir de um arquivo que existe só
       # nesta VPS. Ela nunca entra na imagem nem no Git (§53).
       #

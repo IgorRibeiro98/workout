@@ -421,6 +421,37 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         return { relevant: true };
       }
 
+      case 'WORKOUT_SHARE_RECEIVED': {
+        const row = this.db
+          .prepare(
+            `SELECT status, expires_at, sender_uid
+             FROM workout_shares
+             WHERE id = ?`,
+          )
+          .get(event.entityId) as
+          | { status: string; expires_at: number; sender_uid: string }
+          | undefined;
+
+        if (!row || row.status !== 'PENDING' || now >= row.expires_at) {
+          return { relevant: false, reason: 'SHARE_NO_LONGER_PENDING' };
+        }
+
+        const blocked = this.db
+          .prepare(
+            `SELECT 1 FROM social_blocks
+             WHERE (blocker_uid = ? AND blocked_uid = ?)
+                OR (blocker_uid = ? AND blocked_uid = ?)
+             LIMIT 1`,
+          )
+          .get(row.sender_uid, event.recipientUid, event.recipientUid, row.sender_uid);
+
+        if (blocked) {
+          return { relevant: false, reason: 'BLOCKED' };
+        }
+
+        return { relevant: true };
+      }
+
       default:
         return { relevant: false, reason: 'UNKNOWN_TYPE' };
     }
@@ -440,6 +471,8 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         return prefs.challengeStartingSoon;
       case 'CHALLENGE_ENDED':
         return prefs.challengeEnded;
+      case 'WORKOUT_SHARE_RECEIVED':
+        return prefs.workoutShareReceived;
     }
   }
 

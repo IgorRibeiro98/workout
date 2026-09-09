@@ -914,6 +914,189 @@ para quem treinou offline.
 - **Deduplicação e Desacoplamento:** O cliente deduplica eventos por `eventId` em cache LRU em memória. Falhas de FCM ou descarte de push nunca revertem nem bloqueiam transações de negócios no backend (Transactional Outbox).
 - **Preferências e Ciclo de Vida:** O usuário tem controle master (`pushEnabled`) e switches por categoria. Logout ou desativação social desregistra imediatamente os dispositivos no backend e limpa o escopo local de push.
 
+## 13.14 Check-ins de treino e Feed Social (T17.8)
+
+O Spark passou a ter uma **publicação social explícita**. As regras abaixo são o que impede essa
+publicação de virar postagem automática, de virar um segundo caminho de upload de treino, ou de
+virar uma vitrine do que o histórico tem de íntimo.
+
+- **O núcleo não paga nada por isso.** Check-in é opcional, como todo o social. Sem conta, sem
+  perfil, com o servidor fora: treinar, concluir, consultar histórico, gamificação, backup, restore,
+  sync e Coach continuam exatamente como estavam. Falha ao publicar **nunca** reverte conclusão de
+  treino, XP, PR ou streak — o treino já está salvo antes de o CTA existir na tela.
+- **Concluir um treino não publica nada.** Não existe gatilho no fim da sessão, no ciclo de sync, na
+  abertura de tela ou em background. A ordem é `commit COMPLETED → resultado salvo → opção social`,
+  nunca o inverso. E o **primeiro toque no CTA não faz requisição**: ele abre o preview, que lista o
+  que vai e o que **não** vai. Só a confirmação publica.
+- **O consentimento é por sessão, e é independente de todos os outros.**
+  `activitySharingEnabled = false` não impede publicar; `= true` não publica nada.
+  `friendRankingParticipationEnabled`, Challenge (T17.3) e Workout Share (T17.7) não interferem no
+  Feed em nenhuma direção, e publicar não altera nenhum deles.
+- **O cliente não declara conclusão.** `completed`, `status`, `ownerUid`, `authorUid`, `publishedAt`,
+  `checkInId`, `caption`, `photoUrl` e `audience` são recusados **por nome**, invalidando a
+  requisição inteira. O corpo tem duas strings: `sessionSyncId` e `clientRequestId`. O dono sai do
+  token verificado; o estado da sessão sai da fonte canônica; o instante sai do `Clock` do servidor.
+- **A fonte canônica é a da T17.4.1, e não ganha concorrente.**
+  `CanonicalTrainingSource.findSessionForCheckIn` é uma operação **estreita** no mesmo adapter que
+  responde perfil, desafio e atividade. Nenhum arquivo de check-in consulta `sync_entities`,
+  `json_extract` ou `'WORKOUT_SESSION'` por conta própria — há teste estrutural. Só saem cinco
+  escalares; `payload` nunca é materializado.
+- **O instante é `COALESCE(finishedAt, startedAt)`, e não um significado novo.** `finishedAt` é o
+  fim do treino e tem um escritor só, mas é nulável no contrato; o fallback é o instante canônico já
+  usado pela semana da T17.2 e pelo dia da T17.3. Como `startedAt ≤ finishedAt`, ele só encurta a
+  janela — nunca a alarga. A atribuição de treino a **dia** (§13.11) continua intocada.
+- **Não existe segundo uploader de sessão.** Quando o servidor não conhece a sessão, o app pede um
+  ciclo do **Sync T16** e tenta de novo com o mesmo `clientRequestId`. É proibido montar push,
+  escrever na Outbox ou falar com `sync_entities` a partir do caminho social — há teste estrutural.
+- **Adoção de nuvem continua explícita.** Sem `cloud_data_binding`, ou com dataset de outra conta, a
+  publicação não acontece e a tela explica. Criar o vínculo em silêncio para o Feed funcionar seria
+  associar o dataset inteiro de alguém a uma conta sem que a pessoa tivesse pedido.
+- **Um treino, no máximo um check-in — e a garantia é do banco.**
+  `UNIQUE (author_uid, source_session_sync_id)` e `UNIQUE (author_uid, client_request_id)`. Mesmo
+  `clientRequestId` em outra sessão é conflito; excluir é definitivo para aquela sessão, porque a
+  linha permanece e a `UNIQUE` continua valendo.
+- **Sem Outbox social, e sem fila.** Offline, publicar **não acontece**: não fica pendente, não é
+  reenviado e a tela diz isso. O retry é ação nova do usuário, pelo Histórico, dentro da janela.
+- **O Feed é `FRIENDS_ONLY`, e a autorização mora na consulta.**
+  `{ viewer } ∪ { amigos diretos atuais ∧ perfil ACTIVE ∧ ¬bloqueado }`, avaliado **a cada
+  leitura**. Pedido pendente não concede; `unfriend` revoga; bloqueio revoga nas duas direções;
+  Social desativado some dos outros e volta ao reativar. Filtrar amizade no Android não é controle
+  de acesso. Não existe `?users=`, não existe rota pública por `socialId`, e não existe feed
+  infinito: 30 dias, `limit` padrão 20 e teto 50, ordenado por publicação com desempate por
+  `checkInId`.
+- **O DTO é o contrato inteiro**: `type`, `checkInId`, `author { socialId, displayName }`,
+  `publishedAt`, `isCurrentUser`. `publishedAt` é quando **publicou**, nunca quando treinou. Não
+  cruzam a fronteira: uid, e-mail, `friendCode`, `sessionSyncId`, `startedAt`, `finishedAt`,
+  `templateId`, nome do treino, exercício, série, repetição, carga, duração, volume, PR, caloria,
+  nota, medida e horário do treino. Há teste que varre a resposta real atrás de todos.
+- **Sem conteúdo livre nesta fase.** Sem legenda, foto, vídeo, comentário, reação ou curtida — a
+  ausência evita trazer moderação de UGC, denúncia de post, edição e sanitização junto. A T17.9
+  expande **este** agregado; ela não cria um segundo feed.
+- **Nada disso é evento de domínio.** Publicar e ler não dão XP, conquista, missão, streak nem
+  pontuação, não escrevem em `sync_entities`, na Outbox, no backup ou no restore, e **não disparam
+  push** — `WORKOUT_CHECK_IN` não tem notificação, e nenhuma preferência nova foi criada.
+- **Excluir a publicação ≠ excluir o treino.** Só o autor exclui (outro recebe a mesma resposta de
+  "não existe"), é idempotente, não toca a sessão — e excluir a sessão **não** apaga a publicação. A
+  tela de exclusão do Histórico diz isso, porque prometer o contrário seria a ambiguidade mais cara
+  daquela tela.
+- **Cache do Feed é memória, e só.** Sem Room, sem DataStore, account-scoped, limpo **antes** de a
+  requisição da conta nova sair, e a resposta de uma requisição da conta anterior é descartada.
+  Logout e desativação limpam na hora. Sem polling, sem WebSocket, sem SSE.
+- **Logs.** No servidor: `requestId`, prefixo de uid, evento, status e `returnedCount`. Nunca
+  `sessionSyncId`, `displayName`, `socialId`, uid completo, `friendCode` ou payload de treino. No
+  Android: nada.
+- **Anti-fraude, honestamente.** O servidor exige sessão canônica sincronizada e `COMPLETED`, e não
+  aceita `completed = true`. Isso **não** torna o check-in à prova de fraude: um cliente
+  comprometido que fabrique dados canônicos válidos produziria um check-in correspondente — problema
+  de integridade do dado de treino, que existiria sem o Feed. Attestation avançada está fora de
+  escopo.
+- **Testes.** Toda mudança no check-in roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.data.repository.WorkoutCheckIn*" --tests
+  "com.example.presentation.friends.SocialFeed*" --tests
+  "com.example.presentation.friends.WorkoutCheckIn*"`. As duas são offline e usam dublê de
+  autenticação.
+
+## 13.15 Check-ins ricos: foto, legenda, reações e comentários (T17.9)
+
+O Feed passou a carregar **conteúdo gerado por usuário**. As regras abaixo são o que impede esse
+conteúdo de virar uma segunda publicação, de virar um vazamento de localização, e de virar um
+canal em que o bloqueio deixa de proteger.
+
+- **O núcleo não paga nada por isso.** Foto e legenda são opcionais dentro de uma publicação que já
+  era opcional. Sem conta, sem perfil, com o servidor fora: treinar, concluir, histórico,
+  gamificação, backup, restore, sync e Coach continuam exatamente como estavam. Falha ao enviar
+  foto **nunca** reverte conclusão de treino, XP, PR ou streak.
+- **Um agregado, e nenhum segundo Feed.** A T17.9 expande o `WorkoutCheckIn` da T17.8: `caption`,
+  no máximo **uma** `media`, `reactions` e `comments`. Não existe `SocialPost`, não existe
+  `/v1/social/posts` e não existe uma segunda rota de leitura. Publicação da T17.8 continua válida
+  sem backfill — `caption = null`, `media = null`, `reactions = {}`, `commentCount = 0`.
+- **Concluir um treino continua não publicando nada** (§13.14), e escolher uma foto também não: o
+  primeiro toque abre o compositor, a leitura da imagem acontece no aparelho, e só a confirmação
+  envia alguma coisa.
+- **A legenda nasce do teclado, nunca de uma nota.** É proibido preencher `caption` a partir de
+  `WorkoutSession.notes`, `WorkoutTemplate.notes` ou do nome do treino. Publicar o que a pessoa
+  escreveu para si mesma é o vazamento mais fácil desta fase.
+- **Texto é texto.** `0..280` (legenda) e `1..300` (comentário) em **code points**, NFC, sem
+  controle C0/C1, sem zero-width, sem override bidirecional, com quebras de linha bounded. HTML,
+  Markdown e JavaScript **não são interpretados e não são escapados**: o Android desenha com `Text`
+  de Compose, e escapar corromperia o texto da pessoa para se defender de um risco que este caminho
+  não tem. URL, `@menção` e `#hashtag` são caracteres — não existe detecção, link clicável nem
+  preview.
+- **O `Content-Type` não decide nada.** O servidor **decodifica de verdade** (`sharp`/libvips),
+  recusa animação antes de recusar formato, valida pixels e arestas antes de alocar, aplica a
+  orientação EXIF aos **pixels** e re-encoda em WebP **sem** `withMetadata()`. É a ausência dessa
+  chamada que remove GPS, modelo do aparelho e data original — a foto de um treino tirada em casa
+  carrega a coordenada da casa da pessoa. O original nunca encosta no disco.
+- **A imagem não entra no SQLite, e a chave é do servidor.** Metadata em `social_checkin_media`,
+  bytes em `SocialMediaStore` sob `SOCIAL_MEDIA_ROOT`. A chave é opaca
+  (`checkins/xx/yy/<uuid>.webp`), nunca deriva de uid, `socialId`, `friendCode`, `displayName` ou
+  nome de arquivo, e **nunca** vem do cliente. Path traversal tem duas barreiras: allowlist de
+  forma e confinamento na raiz.
+- **Produção sem volume de mídia não sobe.** `SOCIAL_MEDIA_ROOT` é obrigatória quando
+  `NODE_ENV=production` (`AppConfig.missingRequirements`). Um default derivado acompanharia
+  `DATABASE_PATH`, e um deploy que montasse o banco sem montar a mídia perderia todas as fotos na
+  primeira recriação de container — em silêncio.
+- **Upload exige sessão elegível.** `POST /v1/social/checkin-media` não é armazenamento genérico:
+  ele exige `sessionSyncId` de uma sessão canônica, `COMPLETED`, do dono autenticado, dentro da
+  janela — a mesma verificação do check-in, pela mesma `CanonicalTrainingSource`. `mediaId` é
+  owner-scoped, session-scoped, usado **uma vez**, e o retry converge pelo `clientUploadId`.
+- **A foto que falha não some em silêncio.** A publicação **para**, e a decisão entre "tentar de
+  novo" e "publicar sem foto" é do usuário. Um caminho que seguisse em frente a tomaria por ele —
+  com o resultado no Feed dos amigos antes de ele perceber.
+- **Uma política de visibilidade, em um lugar.** `workout-checkin.access-policy.ts` define
+  `eligible_authors` e é usada por Feed, detalhe, mídia, reações, comentários e denúncia. Um
+  controller que consulte `friendships` ou `social_blocks` por conta própria é bloqueante
+  arquitetural — há teste que varre os controllers atrás de `SELECT`.
+- **Bloqueio é autorização por viewer, nunca exclusão global.** No post de um terceiro, A e B
+  deixam de ver a interação um do outro **sem** que nada seja apagado para o dono do post. E as
+  contagens são **do viewer**: um `COUNT(*)` global vazaria a participação de quem o bloqueio
+  esconde. O Android não recalcula contagem nenhuma.
+- **Conhecer o `mediaId` não concede acesso.** `GET /v1/social/media/{id}` exige token e passa pela
+  mesma política; não-amigo, par bloqueado, autor desativado e post excluído recebem `404`. Não
+  existe URL pública, diretório estático, URL assinada, `ETag` ou `Cache-Control: public`.
+- **Cache de mídia é memória, e é da conta.** Sem disco, sem Coil com `diskCache`, sem arquivo em
+  `cacheDir`. O cache é trocado **antes** de a primeira requisição da conta nova sair. A foto de A
+  reaparecendo para B é bloqueante.
+- **Photo Picker oficial, e nenhuma permissão nova.** `ActivityResultContracts.PickVisualMedia`;
+  `READ_MEDIA_IMAGES`, `READ_EXTERNAL_STORAGE` e `CAMERA` continuam fora do manifesto, e há teste
+  que lê o manifesto.
+- **Reação é otimista; comentário não é.** A reação é reversível — a tela responde na hora e faz
+  rollback para o estado que veio do servidor. O comentário espera a resposta, e o rascunho
+  permanece quando o envio falha: um comentário que aparece e some faz quem escreveu acreditar que
+  a outra pessoa leu.
+- **Enum fechado para reação.** `FIRE`/`MUSCLE`/`CLAP` no contrato e no `CHECK` do banco. O cliente
+  não envia emoji; qual desenhar é decisão da tela.
+- **Denúncia: o cliente diz o quê, o servidor diz de quem.** `targetType` ∈ `USER|CHECKIN|COMMENT`
+  — **não existe `MEDIA`**, porque a foto pertence ao check-in. `reportedUid` é recusado por nome.
+  Denunciar exige ver o alvo, não permite o próprio conteúdo, não pune, não oculta e não notifica.
+- **Nada disso é evento de domínio.** Foto, legenda, reação e comentário não dão XP, não
+  desbloqueiam conquista, não movem missão, não alteram streak, ranking ou desafio, **não geram
+  push** e não aparecem na Activity da T17.4. Nenhuma preferência de notificação foi criada.
+- **Exclusão leva tudo junto.** Excluir a publicação revoga foto, reações e comentários na hora
+  (o arquivo sai no cleanup) e **não** toca a sessão de treino. Excluir a conta remove posts,
+  legendas, mídia (banco **e** arquivos), comentários — inclusive os feitos em posts alheios — e
+  reações. As chaves de armazenamento são lidas **antes** do purge: depois dele não há o que ler.
+- **Backup e DR levam a mídia.** `ops/backup.sh` manda `$SPARK_MEDIA_DIR` no mesmo snapshot restic;
+  `ops/restore.sh` restaura e instala os dois; `ops/verify-backup.sh` lê os bytes de dentro do
+  container. Depois de um restore antigo, a reconciliação de tombstones purga banco **e** arquivos.
+- **Nada é periódico além do necessário.** Um `setInterval` bounded (`SocialMediaCleaner`) recolhe
+  `PENDING` expirada, mídia `DELETED` e órfãos, em lotes fixos. Sem fila externa, sem scheduler
+  novo, sem polling no Android.
+- **Logs.** No servidor: evento, `requestId`, prefixo de uid, prefixo de `mediaId`, bytes
+  processados, dimensões, formato de origem, status, tipo de reação, comprimento do comentário.
+  **Nunca** legenda, corpo de comentário, bytes, caminho de arquivo, nome original, `displayName`,
+  `socialId`, `friendCode` ou uid completo. No Android: nada.
+- **Dependência.** O pipeline de imagem é `sharp` (libvips), pinado em versão exata, e ele é a
+  **única** biblioteca de imagem da árvore de produção — há teste. `docker build` é gate: se o
+  binário nativo não vier, a imagem não sai. Multipart continua **fora** do caminho de execução, e
+  há teste que garante isso.
+- **Testes.** Toda mudança nesta fase roda `npm test` em `backend/` e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.data.media.*" --tests "com.example.presentation.friends.CheckIn*" --tests
+  "com.example.presentation.friends.SocialFeed*"`. As duas são offline e usam dublê de
+  autenticação.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

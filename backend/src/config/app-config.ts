@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { envSchema, SparkEnv } from './env.schema';
 
 export class ConfigValidationError extends Error {
@@ -179,6 +180,45 @@ export class AppConfig {
     return this.env.DELETION_TOMBSTONES_FILE_PATH;
   }
 
+  // --- Mídia social (T17.9) -------------------------------------------------------------
+
+  /**
+   * Onde os arquivos de mídia social vivem (§22/§26/§28).
+   *
+   * Em produção o valor **precisa** vir do ambiente, e `missingRequirements()` derruba o startup
+   * quando ele não vem. Fora de produção, o padrão é um diretório ao lado do banco: teste e
+   * desenvolvimento precisam funcionar sem configuração nenhuma, e ali o armazenamento efêmero é
+   * exatamente o que se quer. `:memory:` não tem diretório — nesse caso o fallback é um diretório
+   * de trabalho local, que é onde o teste já escreve.
+   */
+  get socialMediaRoot(): string {
+    const configured = this.env.SOCIAL_MEDIA_ROOT;
+    if (configured) {
+      return configured;
+    }
+    if (this.databasePath === ':memory:') {
+      return join(process.cwd(), '.spark-media');
+    }
+    return join(dirname(this.databasePath), 'media');
+  }
+
+  /** `true` quando o operador declarou o caminho, e não quando ele foi derivado. */
+  get socialMediaRootIsExplicit(): boolean {
+    return this.env.SOCIAL_MEDIA_ROOT !== undefined;
+  }
+
+  get socialMediaMaxUploadBytes(): number {
+    return this.env.SOCIAL_MEDIA_MAX_UPLOAD_BYTES;
+  }
+
+  get socialMediaMaxUserBytes(): number {
+    return this.env.SOCIAL_MEDIA_MAX_USER_BYTES;
+  }
+
+  get socialMediaCleanupIntervalMs(): number {
+    return this.env.SOCIAL_MEDIA_CLEANUP_INTERVAL_MS;
+  }
+
   /**
    * As exigências que o operador declarou e o ambiente não cumpre.
    *
@@ -200,6 +240,17 @@ export class AppConfig {
     }
     if (this.requireGemini && !this.aiEnabled) {
       missing.push('REQUIRE_GEMINI=true e AI_ENABLED=false são contraditórios');
+    }
+    // T17.9 §28 — produção não pode cair num diretório derivado para guardar mídia.
+    //
+    // O derivado é seguro em desenvolvimento e desastroso em produção: ele acompanharia
+    // `DATABASE_PATH`, e um deploy que montasse o banco sem montar a mídia perderia todas as
+    // fotos na primeira recriação de container — em silêncio, porque escrever num diretório
+    // efêmero funciona perfeitamente até alguém reiniciar. Falhar no startup é visível.
+    if (this.isProduction && !this.socialMediaRootIsExplicit) {
+      missing.push(
+        'NODE_ENV=production exige SOCIAL_MEDIA_ROOT apontando para um volume persistente',
+      );
     }
     return missing;
   }

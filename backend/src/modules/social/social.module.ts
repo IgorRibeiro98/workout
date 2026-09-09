@@ -1,5 +1,7 @@
-import { Module } from '@nestjs/common';
+import { Inject, MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
+import { raw } from 'express';
 import { AuthModule } from '../auth/auth.module';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import { ChallengeAccessPolicy } from './challenge.access-policy';
 import { ChallengeController } from './challenge.controller';
 import { ChallengeRateLimiter } from './challenge.rate-limit';
@@ -43,6 +45,23 @@ import { BlockRepository } from './block.repository';
 import { ReportController } from './report.controller';
 import { ReportService } from './report.service';
 import { ReportRepository } from './report.repository';
+import { WorkoutShareController } from './workout-share.controller';
+import { WorkoutShareService } from './workout-share.service';
+import { WorkoutShareRepository } from './workout-share.repository';
+import { WorkoutCheckInController } from './workout-checkin.controller';
+import { WorkoutCheckInService } from './workout-checkin.service';
+import { WorkoutCheckInRepository } from './workout-checkin.repository';
+import { WorkoutCheckInRateLimiter } from './workout-checkin.rate-limit';
+import { WorkoutCheckInAccessPolicy } from './workout-checkin.access-policy';
+import { CheckInInteractionRepository } from './checkin-interaction.repository';
+import { SocialContentRateLimiter } from './social-content.rate-limit';
+import { SocialMediaController } from './social-media.controller';
+import { SocialMediaService } from './social-media.service';
+import { SocialMediaRepository } from './social-media.repository';
+import { SocialMediaProcessor } from './social-media.processor';
+import { SocialMediaCleaner } from './social-media.cleaner';
+import { LocalSocialMediaStore, SOCIAL_MEDIA_STORE } from './social-media.store';
+import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
 
 /**
  * Módulo do domínio social (T17.0).
@@ -111,6 +130,9 @@ import { ReportRepository } from './report.repository';
     NotificationController,
     BlockController,
     ReportController,
+    WorkoutShareController,
+    WorkoutCheckInController,
+    SocialMediaController,
   ],
   providers: [
     SocialService,
@@ -149,6 +171,28 @@ import { ReportRepository } from './report.repository';
     BlockService,
     ReportRepository,
     ReportService,
+    // T17.7 — Compartilhamento de treinos entre amigos.
+    WorkoutShareRepository,
+    WorkoutShareService,
+    // T17.8 — Check-ins de treino + Feed Social. Ele reusa a `CanonicalTrainingSource` da T17.4.1
+    // (a mesma fronteira que responde perfil, desafio e atividade) em vez de abrir um quarto
+    // caminho até `sync_entities`, e `SocialRepository` para exigir perfil ativo dos dois lados.
+    // O teto próprio existe para conter laço de cliente; a proteção contra spam é de domínio —
+    // uma sessão canônica concluída, no máximo um check-in.
+    WorkoutCheckInRepository,
+    WorkoutCheckInService,
+    WorkoutCheckInRateLimiter,
+    // T17.9 — legenda, foto, reações e comentários sobre o **mesmo** agregado (§5). A política de
+    // acesso saiu de dentro da consulta do feed e virou um provider próprio, consumido por seis
+    // superfícies: Feed, detalhe, mídia, reações, comentários e denúncia (§129/§130).
+    WorkoutCheckInAccessPolicy,
+    CheckInInteractionRepository,
+    SocialContentRateLimiter,
+    SocialMediaRepository,
+    SocialMediaProcessor,
+    SocialMediaService,
+    SocialMediaCleaner,
+    { provide: SOCIAL_MEDIA_STORE, useClass: LocalSocialMediaStore },
   ],
   exports: [
     SocialAccessPolicy,
@@ -156,6 +200,49 @@ import { ReportRepository } from './report.repository';
     NotificationRepository,
     BlockService,
     BlockRepository,
+    WorkoutShareService,
+    WorkoutShareRepository,
+    // A exclusão de conta (T17.6) precisa apagar os **arquivos** de mídia (T17.9 §114): o
+    // `ON DELETE CASCADE` do SQLite leva a metadata e não alcança o sistema de arquivos.
+    SocialMediaRepository,
+    SOCIAL_MEDIA_STORE,
   ],
 })
-export class SocialModule {}
+export class SocialModule implements NestModule {
+  constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {}
+
+  /**
+   * O parser binário do upload de mídia (T17.9 §33), montado **só** na rota dele.
+   *
+   * ## Por que não global
+   *
+   * O processo já tem um parser JSON com o teto do backup (4 MiB). Registrar um parser binário
+   * global faria toda rota bufferizar corpo, com um teto que não é o dela — e o teto do upload é
+   * outro (`SOCIAL_MEDIA_MAX_UPLOAD_BYTES`). Escopar por rota é o que mantém os dois tetos
+   * separados e o custo onde ele pertence.
+   *
+   * ## Por que não multipart
+   *
+   * `multipart/form-data` traria `multer` para o caminho de execução por um ganho de zero: o corpo
+   * tem **um** arquivo e nenhum campo, e os dois identificadores (`sessionSyncId`,
+   * `clientUploadId`) cabem no query string. Menos superfície, menos dependência, menos parser
+   * entre a rede e a decodificação da imagem.
+   *
+   * ## O `type` não autoriza nada (§14)
+   *
+   * A lista de `Content-Type` abaixo escolhe **qual parser roda**, e não o que é aceito: um
+   * cabeçalho `image/jpeg` sobre bytes de outra coisa passa por aqui e é recusado no
+   * `SocialMediaProcessor`, que decodifica de verdade. Ela existe para que uma requisição com
+   * `Content-Type: application/json` não seja bufferizada como binário por engano.
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(
+        raw({
+          type: ACCEPTED_IMAGE_FORMATS.map((format) => `image/${format}`),
+          limit: this.config.socialMediaMaxUploadBytes,
+        }),
+      )
+      .forRoutes({ path: 'v1/social/checkin-media', method: RequestMethod.POST });
+  }
+}

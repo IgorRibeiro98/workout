@@ -3,6 +3,14 @@
 # Restauração do SQLite do servidor a partir do backup off-site (T16.8 §43/§44/§130).
 #
 #   restic (off-site) ──▶ diretório temporário ──▶ integrity_check ──▶ [--install] ──▶ /data
+#                                                └─▶ mídia social  ──▶ [--install] ──▶ /media
+#
+# ## O banco **e** a mídia (T17.9 §138)
+#
+# Desde a T17.9 o Feed tem fotos, e elas vivem fora do SQLite. Restaurar só o banco produz um Feed
+# que aponta para arquivos que não existem: `integrity_check` passa, `/health/ready` responde, e
+# cada card com foto fica sem imagem. O runbook só pode declarar o Feed recuperado quando os dois
+# voltaram — e é por isso que este script extrai, verifica e (com `--install`) instala os dois.
 #
 # ## O que ele nunca faz
 #
@@ -17,8 +25,8 @@
 # Uso:
 #   ops/restore.sh --to /tmp/drill                      # só extrai e verifica (padrão seguro)
 #   ops/restore.sh --snapshot <id> --to /tmp/drill
-#   ops/restore.sh --from-file /caminho/spark.db --to /tmp/drill
-#   ops/restore.sh --to /tmp/drill --install            # troca o banco de produção
+#   ops/restore.sh --from-file /caminho/spark.db --media-from /caminho/media --to /tmp/drill
+#   ops/restore.sh --to /tmp/drill --install            # troca o banco e a mídia de produção
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/lib.sh
@@ -29,14 +37,18 @@ load_env_file
 SNAPSHOT="latest"
 TARGET_DIR=""
 FROM_FILE=""
+FROM_MEDIA=""
 INSTALL=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --snapshot)  SNAPSHOT="${2:?--snapshot exige um valor}"; shift 2 ;;
-    --to)        TARGET_DIR="${2:?--to exige um caminho}"; shift 2 ;;
-    --from-file) FROM_FILE="${2:?--from-file exige um caminho}"; shift 2 ;;
-    --install)   INSTALL=1; shift ;;
+    --snapshot)   SNAPSHOT="${2:?--snapshot exige um valor}"; shift 2 ;;
+    --to)         TARGET_DIR="${2:?--to exige um caminho}"; shift 2 ;;
+    --from-file)  FROM_FILE="${2:?--from-file exige um caminho}"; shift 2 ;;
+    # Ensaio local com mídia (T17.9 §142): o par de `--from-file`, para exercitar a restauração
+    # completa sem credencial de storage.
+    --media-from) FROM_MEDIA="${2:?--media-from exige um caminho}"; shift 2 ;;
+    --install)    INSTALL=1; shift ;;
     *) fail "argumento desconhecido: $1" ;;
   esac
 done
@@ -47,6 +59,7 @@ mkdir -p "$TARGET_DIR"
 chmod 700 "$TARGET_DIR" 2> /dev/null || true
 
 RESTORED_DB=""
+RESTORED_MEDIA=""
 
 if [ -n "$FROM_FILE" ]; then
   # Caminho sem off-site: usado pelo ensaio local e pelo CI, onde não há — e não deve haver —
@@ -55,6 +68,14 @@ if [ -n "$FROM_FILE" ]; then
   RESTORED_DB="${TARGET_DIR}/${DB_FILENAME}"
   cp "$FROM_FILE" "$RESTORED_DB"
   log "restaurado de arquivo local: ${FROM_FILE}"
+  # O ensaio local pode trazer a mídia junto, por `--media-from`.
+  if [ -n "$FROM_MEDIA" ]; then
+    [ -d "$FROM_MEDIA" ] || fail "diretório de mídia não encontrado: ${FROM_MEDIA}"
+    RESTORED_MEDIA="${TARGET_DIR}/media"
+    mkdir -p "$RESTORED_MEDIA"
+    cp -a "${FROM_MEDIA}/." "$RESTORED_MEDIA/"
+    log "mídia restaurada de: ${FROM_MEDIA}"
+  fi
 else
   require_restic_env
   log "restaurando o snapshot '${SNAPSHOT}' do repositório off-site"
@@ -64,6 +85,19 @@ else
   [ -n "$RESTORED_DB" ] || fail "o snapshot não contém ${DB_FILENAME}"
   MANIFEST="$(find "$TARGET_DIR" -name manifest.json -type f | head -1)"
   [ -n "$MANIFEST" ] && log "manifesto: $(tr -d '\n ' < "$MANIFEST")"
+
+  # A mídia (T17.9 §138). O restic reconstrói a árvore de caminhos original, então o diretório
+  # aparece em `$TARGET_DIR` sob o caminho absoluto que ele tinha na VPS. Procuramos pelo
+  # subdiretório `checkins`, que é a estrutura que `LocalSocialMediaStore` cria — e não pelo nome
+  # do diretório de mídia, que é configurável e pode ter mudado entre o backup e a restauração.
+  RESTORED_MEDIA="$(find "$TARGET_DIR" -type d -name checkins | head -1)"
+  if [ -n "$RESTORED_MEDIA" ]; then
+    RESTORED_MEDIA="$(dirname "$RESTORED_MEDIA")"
+    log "mídia encontrada no snapshot: $(find "$RESTORED_MEDIA" -type f | wc -l | tr -d ' ') arquivo(s)"
+  else
+    # Um snapshot anterior à T17.9, ou de um servidor que nunca recebeu foto. Não é erro.
+    log "aviso: o snapshot não contém mídia social"
+  fi
 fi
 
 # --- verificação obrigatória (§44) ---------------------------------------------------------
@@ -109,6 +143,9 @@ printf '%s' "$VERIFICATION" | grep -q '"integrity":"ok"' || fail "integrity_chec
 
 if [ "$INSTALL" -eq 0 ]; then
   log "restauração verificada em ${RESTORED_DB} (sem --install: a produção não foi tocada)"
+  [ -n "$RESTORED_MEDIA" ] && log "mídia verificada em ${RESTORED_MEDIA}"
+  # stdout continua carregando **só** o caminho do banco: é isso que `ops/verify-backup.sh`
+  # captura. A mídia sai em `SPARK_RESTORED_MEDIA`, para quem precisar dela.
   printf '%s\n' "$RESTORED_DB"
   exit 0
 fi
@@ -146,4 +183,30 @@ DATA_GID="$(spark_data_gid)" \
 install -m 660 -g "$DATA_GID" "$RESTORED_DB" "$PREVIOUS" \
   || fail "não foi possível instalar o banco com o grupo ${DATA_GID}; o usuário atual pertence a ele? (ver docs/operations/PRODUCTION_DEPLOYMENT.md, 'usuários, grupos e permissões')"
 
-log "banco instalado em ${PREVIOUS}. Suba o backend e confira /health/ready."
+# --- mídia social (T17.9 §138) ---------------------------------------------------------------
+#
+# O mesmo princípio do banco: preservar, nunca apagar. O diretório anterior é **renomeado**, e não
+# removido — se a restauração for a errada, as fotos que existiam ainda estão lá.
+if [ -n "$RESTORED_MEDIA" ]; then
+  if [ -d "$SPARK_MEDIA_DIR" ] && [ -n "$(ls -A "$SPARK_MEDIA_DIR" 2> /dev/null)" ]; then
+    KEEP_MEDIA="${SPARK_MEDIA_DIR}.pre-restore-$(timestamp)"
+    mv "$SPARK_MEDIA_DIR" "$KEEP_MEDIA"
+    log "mídia anterior preservada em ${KEEP_MEDIA}"
+  fi
+
+  mkdir -p "$SPARK_MEDIA_DIR"
+  cp -a "${RESTORED_MEDIA}/." "$SPARK_MEDIA_DIR/"
+  # O mesmo modelo de permissão do diretório de dados (T16.8.1 §3): o processo do container e o
+  # operador do host se encontram pelo **grupo compartilhado**, com uids diferentes. `2770` no
+  # diretório (setgid, para que o que o container criar herde o grupo) e `640` nos arquivos.
+  chgrp -R "$DATA_GID" "$SPARK_MEDIA_DIR"
+  chmod 2770 "$SPARK_MEDIA_DIR"
+  find "$SPARK_MEDIA_DIR" -type d -exec chmod 2770 {} +
+  find "$SPARK_MEDIA_DIR" -type f -exec chmod 640 {} +
+  log "mídia instalada em ${SPARK_MEDIA_DIR} ($(find "$SPARK_MEDIA_DIR" -type f | wc -l | tr -d ' ') arquivo(s))"
+else
+  log "aviso: nenhuma mídia restaurada; ${SPARK_MEDIA_DIR} permanece como está"
+fi
+
+log "banco e mídia instalados. Suba o backend e confira /health/ready."
+log "Antes de declarar o Feed recuperado: rode a reconciliação de tombstones (§139) — ver docs/runbooks/account-deletion-dr.md."

@@ -100,7 +100,13 @@ fun MainScreen() {
         pushAccountScope = app.pushAccountScope,
         blockGateway = app.blockGateway,
         reportGateway = app.reportGateway,
-        accountDeletionGateway = app.accountDeletionGateway
+        accountDeletionGateway = app.accountDeletionGateway,
+        workoutShareGateway = app.workoutShareGateway,
+        workoutShareImporter = app.workoutShareImporter,
+        workoutCheckInGateway = app.workoutCheckInGateway,
+        workoutCheckInPublisher = app.workoutCheckInPublisher,
+        socialMediaCache = app.socialMediaCache,
+        checkInPhotoSource = app.checkInPhotoSource
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -164,6 +170,9 @@ fun MainScreen() {
         Screen.Activity.route to Screen.Today.route,
         Screen.NotificationPreferences.route to Screen.Today.route,
         Screen.BlockedUsers.route to Screen.Today.route,
+        Screen.SharedWorkouts.route to Screen.Today.route,
+        Screen.SocialFeed.route to Screen.Today.route,
+        Screen.CheckInDetail.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
@@ -199,6 +208,9 @@ fun MainScreen() {
                 } else {
                     navController.navigate(Screen.Challenges.route)
                 }
+            }
+            com.example.service.SocialNotificationChannels.DESTINATION_SHARED_WORKOUTS -> {
+                navController.navigate(Screen.SharedWorkouts.route)
             }
         }
         com.example.MainActivity.clearNotificationNavTarget()
@@ -367,7 +379,18 @@ fun MainScreen() {
                     }
                 )
             }
-            composable(Screen.History.route) { com.example.presentation.history.HistoryScreen(historyViewModel) }
+            composable(Screen.History.route) {
+                // A mesma ViewModel de check-in do Resumo, criada por rota. Ela não faz requisição
+                // nenhuma ao ser criada: o `init` só observa a sessão para invalidar o estado na
+                // troca de conta, e a primeira leitura sai de `startShareFor`, que só acontece no
+                // toque do usuário sobre uma sessão.
+                val checkInViewModel: com.example.presentation.friends.WorkoutCheckInViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.history.HistoryScreen(
+                    viewModel = historyViewModel,
+                    checkInViewModel = checkInViewModel
+                )
+            }
             composable(Screen.Profile.route) {
                 val profileViewModel: com.example.presentation.profile.ProfileViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
@@ -416,6 +439,12 @@ fun MainScreen() {
                     },
                     onNavigateToBlockedUsers = {
                         navController.navigate(Screen.BlockedUsers.route)
+                    },
+                    onNavigateToSharedWorkouts = {
+                        navController.navigate(Screen.SharedWorkouts.route)
+                    },
+                    onNavigateToSocialFeed = {
+                        navController.navigate(Screen.SocialFeed.route)
                     },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
@@ -539,6 +568,44 @@ fun MainScreen() {
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
+            composable(Screen.SharedWorkouts.route) {
+                val sharedWorkoutsViewModel: com.example.presentation.friends.SharedWorkoutsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.SharedWorkoutsScreen(
+                    viewModel = sharedWorkoutsViewModel,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.SocialFeed.route) {
+                val socialFeedViewModel: com.example.presentation.friends.SocialFeedViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.SocialFeedScreen(
+                    viewModel = socialFeedViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    // Bloquear e denunciar o autor já existem no perfil do amigo (T17.2/T17.6). O
+                    // Feed leva para lá em vez de repetir os diálogos (§88).
+                    onOpenFriendProfile = { socialId, displayName ->
+                        navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
+                    },
+                    // T17.9 §118 — a conversa acontece no detalhe, e não no card.
+                    onOpenCheckIn = { checkInId ->
+                        navController.navigate(Screen.CheckInDetail.createRoute(checkInId))
+                    }
+                )
+            }
+            composable(Screen.CheckInDetail.route) { backStackEntry ->
+                val checkInId = backStackEntry.arguments?.getString("checkInId").orEmpty()
+                val detailViewModel: com.example.presentation.friends.CheckInDetailViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.CheckInDetailScreen(
+                    viewModel = detailViewModel,
+                    checkInId = checkInId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenFriendProfile = { socialId, displayName ->
+                        navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
+                    }
+                )
+            }
             composable(Screen.Missions.route) {
                 val missionViewModel: com.example.presentation.missions.MissionViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
@@ -638,9 +705,21 @@ fun MainScreen() {
                 val summary by summaryViewModel.getSummary(sessionId).collectAsState(initial = null)
                 val currentSummary = summary
                 if (currentSummary != null) {
+                    // O CTA social é montado **depois** de a sessão já estar concluída e salva: o
+                    // `sessionId` desta rota só existe porque o treino terminou (§98/§99). A
+                    // ViewModel é criada aqui e não dentro do `SummaryScreen` para que a tela de
+                    // resumo continue sendo uma função do sumário, sem conhecer o social.
+                    val checkInViewModel: com.example.presentation.friends.WorkoutCheckInViewModel =
+                        androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                     com.example.presentation.execution.SummaryScreen(
                         summary = currentSummary,
-                        onClose = { navController.navigate(Screen.Today.route) { popUpTo(0) } }
+                        onClose = { navController.navigate(Screen.Today.route) { popUpTo(0) } },
+                        shareCheckIn = {
+                            com.example.presentation.friends.ShareCheckInSection(
+                                viewModel = checkInViewModel,
+                                sessionId = sessionId
+                            )
+                        }
                     )
                 }
             }

@@ -20,6 +20,10 @@ services:
       PORT: 8080
       # Dentro do container o banco vive no volume montado, nunca na camada de escrita do container.
       DATABASE_PATH: /data/spark.db
+      # A mídia social (T17.9 §26). `NODE_ENV: production` neste arquivo torna a variável
+      # obrigatória — é o mesmo portão da produção real, e é bom que a composição local o
+      # exercite: um desenvolvedor que a esqueça descobre aqui, e não na VPS.
+      SOCIAL_MEDIA_ROOT: /media
       LOG_LEVEL: info
       SQLITE_BUSY_TIMEOUT_MS: 5000
       SHUTDOWN_TIMEOUT_MS: 10000
@@ -41,6 +45,7 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - spark-data:/data
+      - spark-media:/media
       # A service account entra por montagem somente-leitura, a partir de um arquivo que existe
       # só na VPS e nunca no Git nem na imagem:
       # - /etc/spark/firebase-admin.json:/run/secrets/spark-firebase-admin.json:ro
@@ -51,3 +56,5 @@ volumes:
   # Volume nomeado: `docker compose down` e a recriação do container preservam o banco.
   # Só `docker compose down -v` apaga — e isso é destrutivo por definição.
   spark-data:
+  # O mesmo para a mídia social (T17.9 §26): as fotos não podem viver na camada efêmera.
+  spark-media:

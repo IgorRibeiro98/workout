@@ -79,14 +79,58 @@ export class AccountDeletionRepository {
       ).run(ownerUid, ownerUid);
       db.prepare(`DELETE FROM challenge_creation_requests WHERE owner_uid = ?`).run(ownerUid);
 
-      // Desafios criados pelo usuário (cascade remove participantes e convites associados)
-      db.prepare(`DELETE FROM challenges WHERE creator_uid = ?`).run(ownerUid);
+      // 9. Workout Shares (T17.7)
+      db.prepare(`DELETE FROM workout_shares WHERE sender_uid = ? OR recipient_uid = ?`).run(
+        ownerUid,
+        ownerUid,
+      );
 
-      // 9. Perfil Social raiz
+      // 10. Workout Check-ins (T17.8) e o conteúdo da T17.9.
+      //
+      // A ordem importa e é explícita de propósito. O `ON DELETE CASCADE` de `social_profiles`
+      // levaria tudo isso junto no passo 11, mas escrever cada `DELETE` aqui é o que torna a
+      // política **legível** — e o que garante §112 e §113: os comentários e as reações que a
+      // pessoa deixou em publicações **de outras pessoas** somem, e não só o que estava na dela.
+      // Um cascade silencioso funcionaria hoje e deixaria a próxima tabela fora sem que ninguém
+      // percebesse.
+      db.prepare(`DELETE FROM social_checkin_comments WHERE author_uid = ?`).run(ownerUid);
+      db.prepare(`DELETE FROM social_checkin_reactions WHERE reactor_uid = ?`).run(ownerUid);
+      // Comentários e reações **de terceiros** nas publicações desta conta saem junto com elas:
+      // sem a publicação, eles não têm onde existir.
+      db.prepare(
+        `DELETE FROM social_checkin_comments
+          WHERE checkin_id IN (SELECT id FROM social_workout_checkins WHERE author_uid = ?)`,
+      ).run(ownerUid);
+      db.prepare(
+        `DELETE FROM social_checkin_reactions
+          WHERE checkin_id IN (SELECT id FROM social_workout_checkins WHERE author_uid = ?)`,
+      ).run(ownerUid);
+      // A metadata de mídia. Os **arquivos** são apagados pelo serviço, com as chaves lidas antes
+      // desta transação (§114): o SQLite não alcança o sistema de arquivos.
+      db.prepare(`DELETE FROM social_checkin_media WHERE owner_uid = ?`).run(ownerUid);
+      db.prepare(`DELETE FROM social_workout_checkins WHERE author_uid = ?`).run(ownerUid);
+
+      // 11. Perfil Social raiz
       db.prepare(`DELETE FROM social_profiles WHERE owner_uid = ?`).run(ownerUid);
     });
 
     tx();
+  }
+
+  /**
+   * As chaves de armazenamento de toda a mídia desta conta (T17.9 §114/§139).
+   *
+   * Lida **antes** de [purgeAccountData], e não depois: o purge remove as linhas, e sem elas não
+   * há como saber quais arquivos apagar. Sem esta leitura, excluir a conta deixaria as fotos da
+   * pessoa no disco de um servidor que jura tê-las apagado — e um restore posterior as traria de
+   * volta com metadata nova.
+   */
+  listMediaStorageKeys(ownerUid: string): string[] {
+    const db = this.sqlite.connection;
+    const rows = db
+      .prepare(`SELECT storage_key AS key FROM social_checkin_media WHERE owner_uid = ?`)
+      .all(ownerUid) as Array<{ key: string }>;
+    return rows.map((row) => row.key);
   }
 
   insertTombstone(id: string, uidHash: string, now: number): void {
@@ -162,6 +206,8 @@ export class AccountDeletionRepository {
          SELECT DISTINCT owner_uid FROM sync_entities
          UNION
          SELECT DISTINCT owner_uid FROM backup_snapshots
+         UNION
+         SELECT DISTINCT author_uid AS owner_uid FROM social_workout_checkins
          UNION
          SELECT DISTINCT uid AS owner_uid FROM ai_usage_daily`,
       )

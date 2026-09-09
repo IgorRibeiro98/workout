@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +38,7 @@ import com.example.ui.components.SwipeActionRow
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.res.stringResource
 import com.example.R
+import com.example.presentation.friends.ShareWorkoutDialog
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
@@ -50,11 +52,13 @@ fun TemplateDetailsScreen(
 ) {
     val template by viewModel.template.collectAsState()
     val exercises by viewModel.exercises.collectAsState()
+    val rawExercises by viewModel.rawExercises.collectAsState()
     val allExercises by viewModel.allExercises.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
     val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
     
+    var showShareDialog by remember { mutableStateOf(false) }
     var showAddPickerSheet by remember { mutableStateOf(false) }
     var exerciseToEdit by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
     var activeExerciseActionSheet by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
@@ -78,6 +82,17 @@ fun TemplateDetailsScreen(
                     }
                 },
                 actions = {
+                    // Compartilhar treino com amigos (T17.7)
+                    IconButton(
+                        onClick = { showShareDialog = true },
+                        enabled = exercises.isNotEmpty()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Compartilhar treino",
+                            tint = if (exercises.isNotEmpty()) Lime400 else TextSecondary
+                        )
+                    }
                     // O Coach entra a partir do treino aberto; ele sugere, quem altera é o usuário.
                     IconButton(onClick = onAdaptWithCoach, enabled = exercises.isNotEmpty()) {
                         Icon(
@@ -558,5 +573,24 @@ fun TemplateDetailsScreen(
                 }
             }
         }
+    }
+
+    if (showShareDialog && template != null) {
+        val app = context.applicationContext as com.example.MainApplication
+        ShareWorkoutDialog(
+            template = template!!,
+            exercises = rawExercises,
+            friendGateway = app.friendGateway,
+            shareGateway = app.workoutShareGateway,
+            onDismiss = { showShareDialog = false },
+            onShareSuccess = {
+                showShareDialog = false
+                android.widget.Toast.makeText(
+                    context,
+                    "Treino compartilhado com sucesso!",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        )
     }
 }
