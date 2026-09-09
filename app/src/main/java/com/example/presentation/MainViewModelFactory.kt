@@ -136,7 +136,10 @@ class MainViewModelFactory(
                     // O seletor de convite lê a lista de amigos (§137). O servidor revalida a
                     // amizade no envio e no aceite: filtrar aqui é conveniência, nunca autorização.
                     friends = friendGateway,
-                    mediaCache = socialMediaCache
+                    mediaCache = socialMediaCache,
+                    // T17.12 §12 — reagir dentro do Squad é uma interação de check-in, e passa
+                    // pela mesma fronteira do Feed. Não existe um segundo gateway de reação.
+                    checkInGateway = workoutCheckInGateway
                 ) as T
             }
         }

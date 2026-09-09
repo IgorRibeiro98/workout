@@ -16,6 +16,12 @@ package com.example.domain.social
  * visível**. `UNAVAILABLE` chega à ViewModel como indisponibilidade e aparece no estado; um
  * `Success(emptyList())` silencioso passaria despercebido e o teste afirmaria ter exercitado um
  * caminho que ele nunca tocou.
+ *
+ * ## O contexto de audiência não tem valor padrão aqui (T17.12 §7)
+ *
+ * Ele é parâmetro obrigatório da fronteira desde a T17.12, e continua obrigatório no dublê: um
+ * padrão silencioso faria um teste que esqueceu de passar a audiência afirmar que a interação
+ * nasceu no Feed de amigos — que é justamente o defeito que esta fase existe para impedir.
  */
 open class StubWorkoutCheckInGateway : WorkoutCheckInGateway {
 
@@ -42,7 +48,10 @@ open class StubWorkoutCheckInGateway : WorkoutCheckInGateway {
     override suspend fun feed(limit: Int?): WorkoutCheckInOutcome<List<WorkoutCheckIn>> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 
-    override suspend fun checkIn(checkInId: String): WorkoutCheckInOutcome<WorkoutCheckIn> =
+    override suspend fun checkIn(
+        checkInId: String,
+        context: InteractionContext
+    ): WorkoutCheckInOutcome<WorkoutCheckIn> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 
     override suspend fun deleteCheckIn(checkInId: String): WorkoutCheckInOutcome<Unit> =
@@ -50,24 +59,28 @@ open class StubWorkoutCheckInGateway : WorkoutCheckInGateway {
 
     override suspend fun putReaction(
         checkInId: String,
-        type: ReactionType
+        type: ReactionType,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<WorkoutCheckIn> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 
     override suspend fun removeReaction(
-        checkInId: String
+        checkInId: String,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<WorkoutCheckIn> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 
     override suspend fun comments(
         checkInId: String,
-        limit: Int?
+        limit: Int?,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<List<CheckInComment>> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 
     override suspend fun createComment(
         checkInId: String,
-        body: String
+        body: String,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<CheckInComment> =
         WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
 

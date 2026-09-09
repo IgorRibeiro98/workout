@@ -141,14 +141,52 @@ export interface WorkoutCheckInMediaDto {
 export const REACTION_TYPES = ['FIRE', 'MUSCLE', 'CLAP'] as const;
 export type ReactionType = (typeof REACTION_TYPES)[number];
 
-/** `PUT /v1/social/workout-checkins/{id}/reaction` — o corpo inteiro (T17.9 §66). */
-export interface PutReactionRequest {
-  readonly type: ReactionType;
+/**
+ * As audiências de interação (T17.12 §4/§29).
+ *
+ * Só duas, e a T17.12 não acrescenta uma terceira: `PUBLIC`, `FOLLOWERS`, `CUSTOM`, `MULTI_GROUP` e
+ * `DIRECT_MESSAGE` continuam fora de escopo por desenho (§4).
+ *
+ * ```text
+ * FRIEND  — o Feed de amigos. Sem group_id.
+ * GROUP   — um Squad específico. Sempre com um groupId.
+ * ```
+ */
+export const INTERACTION_AUDIENCE_TYPES = ['FRIEND', 'GROUP'] as const;
+export type InteractionAudienceType = (typeof INTERACTION_AUDIENCE_TYPES)[number];
+
+/**
+ * O contexto que o **cliente propõe** para uma interação (T17.12 §7/§67).
+ *
+ * Propõe, e nunca decide: `WorkoutCheckInContextResolver` revalida contra as tabelas — Squad
+ * ativo, check-in compartilhado ali, participação ativa do requisitante e do autor, ¬bloqueio — a
+ * cada requisição (§9/§67/§69). Um `groupId` que não corresponda ao Squad onde o check-in
+ * realmente está nunca "cai" para `FRIEND`: ele é recusado (§69/§135).
+ *
+ * Ausente é aceito por compatibilidade e significa `FRIEND` (§68) — um APK anterior à T17.12 que
+ * ainda não envia `context` continua reagindo e comentando no Feed de amigos exatamente como antes.
+ */
+export interface InteractionContextRequest {
+  readonly type: InteractionAudienceType;
+  /** Obrigatório quando `type` é `GROUP`; recusado quando `type` é `FRIEND` (§27). */
+  readonly groupId?: string;
 }
 
-/** `POST /v1/social/workout-checkins/{id}/comments` — o corpo inteiro (T17.9 §81). */
+/** `PUT /v1/social/workout-checkins/{id}/reaction` — o corpo inteiro (T17.9 §66; T17.12 §15). */
+export interface PutReactionRequest {
+  readonly type: ReactionType;
+  readonly context?: InteractionContextRequest;
+}
+
+/** `DELETE /v1/social/workout-checkins/{id}/reaction` — o corpo, quando enviado (T17.12 §16). */
+export interface RemoveReactionRequest {
+  readonly context?: InteractionContextRequest;
+}
+
+/** `POST /v1/social/workout-checkins/{id}/comments` — o corpo inteiro (T17.9 §81; T17.12 §17). */
 export interface CreateCommentRequest {
   readonly body: string;
+  readonly context?: InteractionContextRequest;
 }
 
 /**

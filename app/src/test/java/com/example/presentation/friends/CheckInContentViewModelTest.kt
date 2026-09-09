@@ -22,6 +22,8 @@ import com.example.domain.auth.FakeAuthGateway
 import com.example.domain.auth.SparkAccount
 import com.example.domain.social.CheckInComment
 import com.example.domain.social.CheckInMedia
+import com.example.domain.social.InteractionContext
+import com.example.domain.social.interactionKey
 import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialCheckInAuthor
 import com.example.domain.social.SocialDiscoverability
@@ -113,6 +115,20 @@ class CheckInContentViewModelTest {
         var commentsResult: WorkoutCheckInOutcome<List<CheckInComment>> =
             WorkoutCheckInOutcome.Success(emptyList())
         var createCommentResult: WorkoutCheckInOutcome<CheckInComment>? = null
+
+        // --- T17.12: a audiência de cada chamada, e respostas **por audiência** ---------
+        //
+        // Sem isto um teste não consegue distinguir "pediu os comentários do Squad X" de "pediu os
+        // do Feed de amigos": as duas chamadas têm o mesmo `checkInId`, e é exatamente essa
+        // confusão que a fase existe para impedir.
+        val reactionContexts = mutableListOf<InteractionContext>()
+        val commentContexts = mutableListOf<InteractionContext>()
+        val createdCommentContexts = mutableListOf<InteractionContext>()
+        val checkInContexts = mutableListOf<InteractionContext>()
+
+        /** Resposta por `(audiência, checkInId)`. O que não estiver aqui cai no resultado geral. */
+        val checkInByKey = mutableMapOf<String, WorkoutCheckInOutcome<WorkoutCheckIn>>()
+        val commentsByKey = mutableMapOf<String, WorkoutCheckInOutcome<List<CheckInComment>>>()
         var deleteCommentResult: WorkoutCheckInOutcome<Unit> = WorkoutCheckInOutcome.Success(Unit)
         val deletedComments = mutableListOf<String>()
         val reports = mutableListOf<Triple<SocialReportTarget, String, String>>()
@@ -141,30 +157,51 @@ class CheckInContentViewModelTest {
 
         override suspend fun feed(limit: Int?) = feedResult
 
-        override suspend fun checkIn(checkInId: String) =
-            checkInResult ?: WorkoutCheckInOutcome.Failure(WorkoutCheckInError.CHECKIN_NOT_FOUND)
+        override suspend fun checkIn(checkInId: String, context: InteractionContext) = run {
+            checkInContexts += context
+            checkInByKey[interactionKey(checkInId, context)]
+                ?: checkInResult
+                ?: WorkoutCheckInOutcome.Failure(WorkoutCheckInError.CHECKIN_NOT_FOUND)
+        }
 
         override suspend fun putReaction(
             checkInId: String,
-            type: ReactionType
+            type: ReactionType,
+            context: InteractionContext
         ): WorkoutCheckInOutcome<WorkoutCheckIn> {
             reactionCalls += checkInId to type
+            reactionContexts += context
             return reactionResult
                 ?: WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
         }
 
         override suspend fun removeReaction(
-            checkInId: String
+            checkInId: String,
+            context: InteractionContext
         ): WorkoutCheckInOutcome<WorkoutCheckIn> {
             reactionCalls += checkInId to null
+            reactionContexts += context
             return reactionResult
                 ?: WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
         }
 
-        override suspend fun comments(checkInId: String, limit: Int?) = commentsResult
+        override suspend fun comments(
+            checkInId: String,
+            limit: Int?,
+            context: InteractionContext
+        ) = run {
+            commentContexts += context
+            commentsByKey[interactionKey(checkInId, context)] ?: commentsResult
+        }
 
-        override suspend fun createComment(checkInId: String, body: String) =
+        override suspend fun createComment(
+            checkInId: String,
+            body: String,
+            context: InteractionContext
+        ) = run {
+            createdCommentContexts += context
             createCommentResult ?: WorkoutCheckInOutcome.Failure(WorkoutCheckInError.UNAVAILABLE)
+        }
 
         override suspend fun deleteComment(
             checkInId: String,
@@ -853,5 +890,215 @@ class CheckInContentViewModelTest {
         // Nada da conta anterior sobrevive — nem a publicação, nem a conversa, nem a foto (§145).
         assertFalse(viewModel.uiState.value.phase is CheckInDetailPhase.Success)
         assertNull(viewModel.uiState.value.photo)
+    }
+
+    // =====================================================================
+    // T17.12 — a interação pertence a uma audiência
+    // =====================================================================
+
+    private val squadA = InteractionContext.Group("grupo-a")
+    private val squadB = InteractionContext.Group("grupo-b")
+
+    /** Prepara a publicação e a conversa **de uma audiência específica**. */
+    private fun givenConversation(
+        context: InteractionContext,
+        checkIn: WorkoutCheckIn = feedItem(),
+        comments: List<CheckInComment>
+    ) {
+        val key = interactionKey(checkIn.checkInId, context)
+        gateway.checkInByKey[key] = WorkoutCheckInOutcome.Success(checkIn)
+        gateway.commentsByKey[key] = WorkoutCheckInOutcome.Success(comments)
+    }
+
+    @Test
+    fun `o Feed de amigos interage sempre na audiencia de amigos`() = runTest(testDispatcher) {
+        gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(feedItem()))
+        val viewModel = feedViewModel()
+        advanceUntilIdle()
+
+        gateway.reactionResult = WorkoutCheckInOutcome.Success(feedItem())
+        viewModel.toggleReaction("checkin-1", ReactionType.FIRE)
+        advanceUntilIdle()
+
+        // §14 — o Feed de amigos é uma audiência só, e ela viaja **explícita**. Omitir o contexto
+        // funcionaria por compatibilidade (§68) e deixaria a intenção desta tela indistinguível de
+        // um esquecimento.
+        assertEquals(listOf<InteractionContext>(InteractionContext.Friend), gateway.reactionContexts)
+    }
+
+    @Test
+    fun `o mesmo check-in aberto em dois squads nao mistura as conversas`() =
+        runTest(testDispatcher) {
+            givenConversation(squadA, comments = listOf(comment("c-do-squad-a")))
+            givenConversation(squadB, comments = listOf(comment("c-do-squad-b")))
+
+            val viewModel = detailViewModel()
+            advanceUntilIdle()
+
+            viewModel.open("checkin-1", squadA)
+            advanceUntilIdle()
+            assertEquals(
+                listOf("c-do-squad-a"),
+                (viewModel.uiState.value.phase as CheckInDetailPhase.Success)
+                    .comments.map { it.commentId }
+            )
+
+            viewModel.open("checkin-1", squadB)
+            advanceUntilIdle()
+
+            // §61 — o defeito bloqueante desta fase: um estado indexado só pelo `checkInId`
+            // mostraria a conversa do Squad A dentro do Squad B. O `checkInId` é o mesmo nos dois.
+            assertEquals(
+                listOf("c-do-squad-b"),
+                (viewModel.uiState.value.phase as CheckInDetailPhase.Success)
+                    .comments.map { it.commentId }
+            )
+            assertEquals(squadB, viewModel.uiState.value.context)
+        }
+
+    @Test
+    fun `trocar de audiencia limpa a conversa antes de a nova leitura chegar`() =
+        runTest(testDispatcher) {
+            givenConversation(squadA, comments = listOf(comment("c-do-squad-a")))
+            givenConversation(squadB, comments = listOf(comment("c-do-squad-b")))
+
+            val viewModel = detailViewModel()
+            advanceUntilIdle()
+            viewModel.open("checkin-1", squadA)
+            advanceUntilIdle()
+
+            viewModel.open("checkin-1", squadB)
+
+            // Ainda **antes** de a resposta do Squad B chegar, a conversa do Squad A já saiu da
+            // tela: mantê-la enquanto a leitura corre é exibir a conversa de um grupo a outro.
+            assertFalse(viewModel.uiState.value.phase is CheckInDetailPhase.Success)
+        }
+
+    @Test
+    fun `amigos e squad sao conversas independentes do mesmo check-in`() =
+        runTest(testDispatcher) {
+            givenConversation(InteractionContext.Friend, comments = listOf(comment("c-amigos")))
+            givenConversation(squadA, comments = listOf(comment("c-squad")))
+
+            val viewModel = detailViewModel()
+            advanceUntilIdle()
+
+            viewModel.open("checkin-1", InteractionContext.Friend)
+            advanceUntilIdle()
+            assertEquals(
+                listOf("c-amigos"),
+                (viewModel.uiState.value.phase as CheckInDetailPhase.Success)
+                    .comments.map { it.commentId }
+            )
+
+            viewModel.open("checkin-1", squadA)
+            advanceUntilIdle()
+            assertEquals(
+                listOf("c-squad"),
+                (viewModel.uiState.value.phase as CheckInDetailPhase.Success)
+                    .comments.map { it.commentId }
+            )
+
+            // §5 — a mesma publicação, duas conversas. Cada leitura pediu a sua audiência.
+            assertEquals(
+                listOf<InteractionContext>(InteractionContext.Friend, squadA),
+                gateway.commentContexts
+            )
+        }
+
+    @Test
+    fun `comentar e reagir dentro de um squad nascem naquela audiencia`() =
+        runTest(testDispatcher) {
+            givenConversation(squadA, comments = emptyList())
+            val viewModel = detailViewModel()
+            advanceUntilIdle()
+            viewModel.open("checkin-1", squadA)
+            advanceUntilIdle()
+
+            gateway.createCommentResult =
+                WorkoutCheckInOutcome.Success(comment("c-novo", own = true, canDelete = true))
+            viewModel.onDraftChanged("Boa!")
+            viewModel.sendComment()
+            advanceUntilIdle()
+
+            gateway.reactionResult = WorkoutCheckInOutcome.Success(feedItem())
+            viewModel.toggleReaction(ReactionType.CLAP)
+            advanceUntilIdle()
+
+            assertEquals(listOf<InteractionContext>(squadA), gateway.createdCommentContexts)
+            assertEquals(listOf<InteractionContext>(squadA), gateway.reactionContexts)
+        }
+
+    @Test
+    fun `apagar comentario nao carrega audiencia — o servidor a deriva`() =
+        runTest(testDispatcher) {
+            givenConversation(
+                squadA,
+                checkIn = feedItem(comments = 1),
+                comments = listOf(comment("c1", own = true, canDelete = true))
+            )
+            val viewModel = detailViewModel()
+            advanceUntilIdle()
+            viewModel.open("checkin-1", squadA)
+            advanceUntilIdle()
+
+            viewModel.deleteComment("c1")
+            advanceUntilIdle()
+
+            // §18 — a audiência é propriedade do comentário guardado. Mandá-la aqui criaria uma
+            // segunda verdade sobre um fato que já está gravado, e a assinatura recusa isso.
+            assertEquals(listOf("c1"), gateway.deletedComments)
+            assertEquals(
+                emptyList<CheckInComment>(),
+                (viewModel.uiState.value.phase as CheckInDetailPhase.Success).comments
+            )
+        }
+
+    @Test
+    fun `resposta de uma audiencia que ja nao e o alvo e descartada`() = runTest(testDispatcher) {
+        givenConversation(squadA, comments = listOf(comment("c-do-squad-a")))
+        givenConversation(squadB, comments = listOf(comment("c-do-squad-b")))
+
+        val viewModel = detailViewModel()
+        advanceUntilIdle()
+
+        // Duas aberturas antes de qualquer resposta chegar: as duas leituras ficam em voo ao
+        // mesmo tempo, e é a corrida que §62 descreve.
+        viewModel.open("checkin-1", squadA)
+        viewModel.open("checkin-1", squadB)
+        advanceUntilIdle()
+
+        // A resposta do Squad A chega depois de a tela já estar no Squad B, e é jogada fora.
+        // Aplicá-la colocaria a conversa de um squad na tela do outro, sem nenhum sintoma de erro.
+        assertEquals(squadB, viewModel.uiState.value.context)
+        assertEquals(
+            listOf("c-do-squad-b"),
+            (viewModel.uiState.value.phase as CheckInDetailPhase.Success)
+                .comments.map { it.commentId }
+        )
+    }
+
+    @Test
+    fun `trocar de conta nao deixa a conversa do squad para tras`() = runTest(testDispatcher) {
+        givenConversation(squadA, comments = listOf(comment("c-do-squad-a")))
+        val viewModel = detailViewModel()
+        advanceUntilIdle()
+        viewModel.open("checkin-1", squadA, squadName = "Os Monstros")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.phase is CheckInDetailPhase.Success)
+
+        // A conta nova não alcança a publicação: ela não é membro daquele Squad.
+        gateway.checkInByKey.clear()
+        gateway.checkInResult =
+            WorkoutCheckInOutcome.Failure(WorkoutCheckInError.CHECKIN_NOT_FOUND)
+        authGateway.nextOutcome = AuthOutcome.Success(SparkAccount("uid-b", "Bruno"))
+        authGateway.signIn(context)
+        advanceUntilIdle()
+
+        // §90 — a conversa e a foto eram o que a **conta anterior** podia ver, e não sobrevivem.
+        // A audiência sobrevive porque ela descreve onde a tela está, e não quem está logado.
+        assertFalse(viewModel.uiState.value.phase is CheckInDetailPhase.Success)
+        assertNull(viewModel.uiState.value.photo)
+        assertEquals(squadA, viewModel.uiState.value.context)
     }
 }

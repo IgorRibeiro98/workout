@@ -1212,6 +1212,66 @@ da fase — cada uma tem teste, e cada uma existe porque a alternativa produz um
   de `GROUP_OWNED_LIMIT_REACHED` — uma mensagem que não explica nada e que some sozinha depois de um
   minuto, ensinando a pessoa a tentar de novo em vez de a entender o limite.
 
+## 13.18 Interações contextuais: reações e comentários por audiência (T17.12)
+
+A T17.11 deixou reagir e comentar como privilégio de relação direta, e o motivo não era
+desconfiança do grupo: o mesmo check-in pode estar no Feed de amigos e em vários Squads ao mesmo
+tempo, e uma interação sem audiência vazaria de um lugar para o outro. A T17.12 resolve o problema
+em vez de contorná-lo — **a interação passa a pertencer a uma audiência explícita** — e por isso a
+restrição caiu.
+
+- **Uma publicação, várias audiências, uma conversa em cada.** O `WorkoutCheckIn` continua sendo um
+  objeto só: não existe post duplicado por Squad, não existe segundo modelo de publicação. O que
+  passa a existir é a audiência da interação: `FRIEND` (o Feed de amigos) e `GROUP(groupId)` (um
+  Squad específico). Não existe `PUBLIC`, `FOLLOWERS`, `CUSTOM` nem `MULTI_GROUP`, e `SELF` não é
+  audiência persistida — o autor enxerga as audiências em que a própria publicação existe.
+- **O contexto é uma proposta do cliente, e nunca uma concessão.** A tela diz de onde veio; o
+  servidor revalida tudo, contra as tabelas, a cada requisição: Squad ativo, check-in explicitamente
+  compartilhado ali, participação ativa do requisitante **e** do autor, e ausência de bloqueio. Um
+  `groupId` sozinho não abre nada — é a mesma regra que faz um `checkInId` ou um `mediaId` vazado
+  não valer nada desde a T17.9.
+- **Fail-closed, sempre.** Um contexto de grupo inválido — Squad errado, sem compartilhamento, sem
+  participação — é `404`, e **nunca** um rebaixamento silencioso para `FRIEND`. O caminho contrário
+  publicaria no Feed de amigos algo que a pessoa escreveu achando que estava dentro de um Squad.
+  Um contexto malformado (`GROUP` sem `groupId`) é `400`: o pedido está errado, e dizer "não
+  encontrado" mandaria o cliente procurar o defeito no lugar errado.
+- **Participação autoriza dentro do Squad, e só dentro dele.** Um membro sem amizade nenhuma reage e
+  comenta na audiência daquele Squad. Isso **não** cria amizade, não concede perfil de amigo, não
+  abre o Feed de amigos, não habilita compartilhamento de treino nem desafio, e não autoriza
+  interagir com a mesma publicação no Feed de amigos.
+- **Uma reação por pessoa, por publicação, por audiência.** A mesma pessoa pode ter 🔥 no Feed de
+  amigos e 💪 no Squad X sobre o mesmo check-in: são interações independentes, e trocar ou remover
+  uma não toca a outra. A garantia é do banco, por **dois índices únicos parciais** — um por
+  partição de audiência. Uma `UNIQUE` comum não serviria: no SQLite cada `NULL` é distinto de
+  qualquer outro, e duas reações `FRIEND` da mesma pessoa (as duas com `group_id IS NULL`) passariam
+  sem conflito.
+- **Contagens e listas são por audiência _e_ por viewer.** As duas filtragens são independentes: a
+  primeira impede que a conversa do Squad X apareça em Y ou no Feed de amigos; a segunda mantém o
+  bloqueio viewer-safe da T17.9 — quem está em bloqueio não transparece nem como número, e some para
+  o par sem ser apagado para os outros.
+- **Participação é o consentimento que sustenta a audiência.** Sair do Squad, ser removido ou
+  desativar o Social encerram as interações daquela pessoa **naquele** Squad — e também as que os
+  outros deixaram nas publicações dela ali, porque os compartilhamentos dela saem junto e a conversa
+  perde o objeto. Voltar não ressuscita nada. Desfazer o compartilhamento revoga a audiência daquele
+  Squad; excluir o Squad apaga a audiência dele. Nenhuma dessas operações alcança o Feed de amigos,
+  outro Squad ou a publicação — e desfazer a **amizade** não alcança audiência de Squad nenhuma.
+- **Moderação segue a audiência.** Podem apagar um comentário: o autor dele, o autor do check-in e —
+  **só** quando a audiência é `GROUP` daquele Squad — o dono do Squad. O privilégio de dono não
+  atravessa para o Feed de amigos, nem quando dono e autor são amigos; não alcança outro Squad; e
+  não vira exceção de privacidade: um comentário que o bloqueio já esconde do dono não se torna
+  visível para ser moderado. Denunciar continua exigindo enxergar o conteúdo **naquela** audiência.
+- **A audiência é uma propriedade do comentário, não do pedido.** Por isso apagar um comentário não
+  recebe contexto: o servidor lê de qual audiência ele é. Aceitar um contexto ali deixaria a tela
+  declarar em que audiência ela acha que está — que é exatamente o que não pode decidir moderação.
+- **No Android o contexto pertence à tela, e toda chave de cache o inclui.** Nunca estado global.
+  Uma chave por `checkInId` sozinha mostraria os comentários do Squad X dentro do Squad Y só por
+  cache, sem que o servidor tivesse errado nada.
+- **O que a T17.12 continua não fazendo.** Nenhum push de reação ou comentário, nenhum XP, missão,
+  conquista, ranking ou desafio, nenhum evento de Activity, nenhuma alteração de ordenação de feed,
+  nenhum contador de não lidos, nada de realtime, e nada no Room nem no Outbox. O teto de
+  comentários por publicação atravessa as audiências de propósito: contá-lo por audiência daria a
+  quem quisesse floodar um multiplicador pelo número de Squads em que o post está.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

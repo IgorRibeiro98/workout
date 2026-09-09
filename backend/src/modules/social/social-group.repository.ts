@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
 import type { SocialGroupRole, SocialGroupStatus } from './social-group.contract';
-import { VIEWER_SCOPE_CTE } from './workout-checkin.access-policy';
+import { VIEWER_BLOCKED_CTE } from './workout-checkin.access-policy';
 
 /** Um Squad como ele mora no banco (§6). */
 export interface StoredSocialGroup {
@@ -77,8 +77,11 @@ export interface GroupInvitationRow {
 /**
  * Uma linha do feed do Squad, já com a identidade pública do autor resolvida (§121).
  *
- * `direct` é `1` quando o viewer também alcança este check-in por relação direta — ele é o próprio
- * autor, ou é amigo dele. É o que decide `canInteract` (§70/§73/§159) sem uma segunda consulta.
+ * Até a T17.11 esta linha carregava um `direct`, que dizia se o viewer também alcançava o
+ * check-in por amizade — era ele que decidia `canInteract`, porque interagir exigia relação direta.
+ * A T17.12 removeu a coluna junto com a regra (§76): dentro do Squad, **participação ativa é a
+ * autorização**, e todo item deste feed é interagível na audiência `GROUP` daquele Squad. Manter um
+ * campo que ninguém mais lê seria deixar no código a pergunta que a fase inteira respondeu.
  */
 export interface GroupFeedRow {
   readonly checkInId: string;
@@ -88,7 +91,6 @@ export interface GroupFeedRow {
   readonly caption: string | null;
   readonly publishedAt: number;
   readonly sharedToGroupAt: number;
-  readonly direct: number;
 }
 
 interface GroupRow {
@@ -442,6 +444,26 @@ export class SocialGroupRepository {
     return result.changes;
   }
 
+  /**
+   * Quais check-ins desta pessoa estão neste Squad (T17.12 §71/§143).
+   *
+   * Lido **antes** de [deleteSharesByAuthorInGroup], porque depois dela não há como saber quais
+   * eram: some a aresta, e com ela o objeto da conversa que acontecia em cima dela. Quem sai leva
+   * junto não só o que escreveu (§43) como também o que os outros escreveram nas publicações
+   * **dele** naquele Squad — é o mesmo evento de "o compartilhamento acabou" que `unshare` já
+   * tratava (§70), e ele não pode ter dois efeitos diferentes conforme o caminho.
+   */
+  listSharedCheckInIdsByAuthorInGroup(groupId: string, authorUid: string): string[] {
+    const rows = this.sqlite.connection
+      .prepare(
+        `SELECT checkin_id AS checkInId
+           FROM social_group_checkin_shares
+          WHERE group_id = ? AND author_uid = ?`,
+      )
+      .all(groupId, authorUid) as Array<{ checkInId: string }>;
+    return rows.map((row) => row.checkInId);
+  }
+
   /** A transferência de posse (§40/§150). Duas escritas, sempre dentro da mesma transação. */
   updateMembershipRole(membershipId: string, role: SocialGroupRole): void {
     this.sqlite.connection
@@ -693,10 +715,6 @@ export class SocialGroupRepository {
    * alguém escrevesse um segundo caminho até aqui. Com ele, a consulta não tem como devolver
    * linha para quem não é membro — nem por engano.
    *
-   * `direct` é `1` quando o viewer também alcança o autor por relação direta (`eligible_authors`,
-   * a mesma CTE do Feed de amigos). É o que decide `canInteract` sem uma segunda consulta, e é o
-   * que faz §73/§159 valerem: o amigo que também é do Squad continua podendo reagir e comentar.
-   *
    * ## Bounded por construção (§86/§87)
    *
    * Janela de 30 dias sobre a data do **compartilhamento** no `WHERE`, teto de itens no `LIMIT`, e
@@ -711,16 +729,14 @@ export class SocialGroupRepository {
   ): GroupFeedRow[] {
     return this.sqlite.connection
       .prepare(
-        `WITH ${VIEWER_SCOPE_CTE}
+        `WITH ${VIEWER_BLOCKED_CTE}
          SELECT c.id            AS checkInId,
                 c.author_uid    AS authorUid,
                 p.social_id     AS authorSocialId,
                 p.display_name  AS authorDisplayName,
                 c.caption       AS caption,
                 c.created_at    AS publishedAt,
-                s.created_at    AS sharedToGroupAt,
-                CASE WHEN EXISTS (SELECT 1 FROM eligible_authors ea WHERE ea.uid = c.author_uid)
-                     THEN 1 ELSE 0 END AS direct
+                s.created_at    AS sharedToGroupAt
            FROM social_group_checkin_shares s
            JOIN social_groups g             ON g.id = s.group_id AND g.status = 'ACTIVE'
            JOIN social_workout_checkins c   ON c.id = s.checkin_id

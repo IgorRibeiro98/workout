@@ -20,6 +20,7 @@ import {
   type ReportTargetType,
 } from './report.contract';
 import { WorkoutCheckInAccessPolicy } from './workout-checkin.access-policy';
+import type { InteractionAudience } from './workout-checkin-context.resolver';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
 import { WorkoutCheckInErrors } from './workout-checkin.errors';
 import { COMMENTS_MAX_LIMIT } from './social-media.limits';
@@ -191,30 +192,55 @@ export class ReportService {
     }
 
     if (targetType === 'CHECKIN') {
-      // §104 — a visibilidade é a mesma do Feed. Um post de não-amigo, de par bloqueado, de autor
-      // com Social desativado ou já excluído é indistinguível de inexistente.
-      const visible = this.checkInAccess.findVisibleCheckIn(reporterUid, targetId);
+      // §104 — a regra é "quem enxerga pode denunciar", e desde a T17.12 enxergar inclui alcançar a
+      // publicação por um Squad (T17.12 §128). `findAccessibleCheckIn` é a mesma política que serve
+      // o detalhe e os bytes da foto: `self ∨ amizade ∨ Squad compartilhado`.
+      //
+      // Usar `findVisibleCheckIn` aqui deixaria um buraco que a T17.12 abriu: um membro de Squad
+      // passou a poder **comentar** naquela publicação, e ficaria sem o mecanismo sancionado para
+      // denunciá-la — justamente ele, que é quem a está vendo. Um post que o requisitante não
+      // alcança por caminho nenhum continua indistinguível de inexistente.
+      const visible = this.checkInAccess.findAccessibleCheckIn(reporterUid, targetId);
       if (!visible) {
         throw WorkoutCheckInErrors.invalidReportTarget('publicação não encontrada');
       }
       return { authorUid: visible.authorUid, targetId };
     }
 
-    // COMMENT (§105) — duas condições: o post precisa ser visível **e** o comentário precisa estar
-    // entre os que este viewer enxerga. A segunda importa por causa do bloqueio de terceiro (§86):
-    // um comentário que o denunciante não vê não pode ser denunciado por ele, porque ele não teria
-    // como saber que existe.
+    // COMMENT (§105; T17.12 §58/§59/§151) — duas condições: o post precisa ser visível **naquela
+    // audiência** e o comentário precisa estar entre os que este viewer enxerga ali. A segunda
+    // importa por causa do bloqueio de terceiro (§86) e, desde a T17.12, também por causa da
+    // audiência: um comentário de `GROUP(X)` só pode ser denunciado por quem consegue lê-lo em `X`.
+    //
+    // A audiência sai do **próprio comentário**, e nunca de um parâmetro: o denunciante informa um
+    // `commentId`, e o servidor deriva o contexto (§58). Conhecer o identificador continua não
+    // concedendo nada.
     const comment = this.interactions.findComment(targetId);
     if (!comment || comment.deletedAt !== null) {
       throw WorkoutCheckInErrors.invalidReportTarget('comentário não encontrado');
     }
-    const post = this.checkInAccess.findVisibleCheckIn(reporterUid, comment.checkInId);
+
+    const audience: InteractionAudience =
+      comment.audienceType === 'GROUP' && comment.groupId !== null
+        ? { type: 'GROUP', groupId: comment.groupId }
+        : { type: 'FRIEND' };
+
+    const post =
+      audience.type === 'GROUP'
+        ? this.checkInAccess.findGroupAccessibleCheckIn(
+            reporterUid,
+            comment.checkInId,
+            audience.groupId,
+          )
+        : this.checkInAccess.findVisibleCheckIn(reporterUid, comment.checkInId);
     if (!post) {
       throw WorkoutCheckInErrors.invalidReportTarget('comentário não encontrado');
     }
+
     const visibleComments = this.interactions.listComments(
       reporterUid,
       comment.checkInId,
+      audience,
       COMMENTS_MAX_LIMIT,
     );
     if (!visibleComments.some((item) => item.commentId === targetId)) {

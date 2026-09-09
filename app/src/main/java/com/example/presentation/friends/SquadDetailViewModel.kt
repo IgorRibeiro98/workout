@@ -10,12 +10,19 @@ import com.example.domain.auth.AuthState
 import com.example.domain.social.Friend
 import com.example.domain.social.FriendGateway
 import com.example.domain.social.FriendOutcome
+import com.example.domain.social.InteractionContext
+import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialGroupDetail
 import com.example.domain.social.SocialGroupError
 import com.example.domain.social.SocialGroupFeedItem
 import com.example.domain.social.SocialGroupGateway
 import com.example.domain.social.SocialGroupMember
 import com.example.domain.social.SocialGroupOutcome
+import com.example.domain.social.WorkoutCheckIn
+import com.example.domain.social.WorkoutCheckInError
+import com.example.domain.social.WorkoutCheckInGateway
+import com.example.domain.social.WorkoutCheckInOutcome
+import com.example.domain.social.interactionKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +68,14 @@ data class SquadDetailUiState(
     val invitableFriends: List<Friend> = emptyList(),
     /** O membro/convite/ação em voo. Ocupação **por alvo**, nunca um `isLoading` global. */
     val busyTargetId: String? = null,
+    /**
+     * As publicações cuja reação está em voo **neste Squad** (T17.12 §61).
+     *
+     * A chave é `(audiência, checkInId)` — [interactionKey] —, e nunca o `checkInId` sozinho: a
+     * mesma publicação está aberta no Feed de amigos e possivelmente em outro Squad, e uma chave
+     * sem audiência travaria o botão dos outros lugares enquanto esta requisição corre.
+     */
+    val pendingReactions: Set<String> = emptySet(),
     /** `true` quando a saída ou a exclusão concluiu: a tela volta para a lista. */
     val closed: Boolean = false,
     val notice: String? = null
@@ -88,6 +103,19 @@ data class SquadDetailUiState(
  * O seletor mostra amigos atuais porque só eles podem ser convidados (§23). Filtrar aqui é
  * conveniência — o servidor confere a amizade e o bloqueio de novo, no envio e no aceite (§25/§29),
  * e é ele quem recusa um `socialId` que o app não deveria ter oferecido.
+ *
+ * ## Reagir aqui é reagir **neste Squad** (T17.12 §12/§14)
+ *
+ * Até a T17.11 esta tela não oferecia reação nem comentário: um mesmo check-in em dois Squads e no
+ * Feed de amigos teria uma conversa com três audiências sobrepostas, e a fase preferiu leitura a
+ * vazamento (T17.11 §70/§71). A T17.12 resolve a causa — a interação passa a pertencer a uma
+ * audiência —, e por isso toda ação daqui viaja com [InteractionContext.Group] deste `groupId`.
+ * Ela não toca a reação que a pessoa deixou no Feed de amigos nem a de outro Squad: são estados
+ * independentes do mesmo check-in.
+ *
+ * O `groupId` é **proposta**, e não autorização (§7/§67): o servidor revalida o compartilhamento,
+ * a participação ativa e o bloqueio a cada requisição, e recusa com `404` em vez de rebaixar para
+ * o Feed de amigos.
  */
 class SquadDetailViewModel(
     private val groupId: String,
@@ -96,7 +124,14 @@ class SquadDetailViewModel(
     /** A lista de amigos, para o seletor de convite (§137). Opcional: sem ela, não se convida. */
     private val friends: FriendGateway? = null,
     /** O cache de fotos, em memória e com escopo de conta (T17.9 §56/§57). */
-    private val mediaCache: SocialMediaCache? = null
+    private val mediaCache: SocialMediaCache? = null,
+    /**
+     * A fronteira do check-in, para reagir dentro deste Squad (T17.12 §12).
+     *
+     * Opcional pela mesma razão dos outros: um build sem Spark Backend não tem Squads (T17.11
+     * §116), e sem ela a tela continua completa — o card simplesmente não oferece reação.
+     */
+    private val checkInGateway: WorkoutCheckInGateway? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SquadDetailUiState())
@@ -271,6 +306,76 @@ class SquadDetailViewModel(
     }
 
     /**
+     * Reagir, trocar de reação ou remover — **dentro deste Squad** (T17.12 §12/§14).
+     *
+     * Otimista com rollback, como no Feed de amigos (T17.9 §121): a reação é reversível e barata,
+     * então a tela responde na hora e reconcilia com a resposta do servidor. O rollback é o
+     * **estado que veio do servidor**, e não uma contagem recalculada — a contagem é filtrada por
+     * viewer lá (§69), e refazê-la aqui recolocaria na conta quem o bloqueio tirou.
+     *
+     * A audiência é `GROUP(groupId)`, sempre. A mesma pessoa pode ter 🔥 aqui e 💪 no Feed de
+     * amigos sobre o mesmo check-in, e as duas são independentes (§5).
+     */
+    fun toggleReaction(checkInId: String, type: ReactionType) {
+        val uid = currentUid() ?: return
+        val gatewayForCheckIns = checkInGateway ?: return
+        val phase = _uiState.value.phase as? SquadDetailPhase.Success ?: return
+
+        val context = InteractionContext.Group(groupId)
+        val pendingKey = interactionKey(checkInId, context)
+        if (pendingKey in _uiState.value.pendingReactions) return
+
+        val item = phase.feed.firstOrNull { it.checkIn.checkInId == checkInId } ?: return
+        // §144 — o servidor recusa de qualquer forma; não oferecer o que vai falhar é a razão de
+        // olhar `canInteract` aqui.
+        if (!item.checkIn.canInteract) return
+
+        val before = item.checkIn
+        val removing = before.currentUserReaction == type
+
+        _uiState.update { state ->
+            state.copy(
+                pendingReactions = state.pendingReactions + pendingKey,
+                phase = replaceCheckIn(state.phase, checkInId) {
+                    optimistic(before, type, removing)
+                }
+            )
+        }
+
+        viewModelScope.launch {
+            val outcome = if (removing) {
+                gatewayForCheckIns.removeReaction(checkInId, context)
+            } else {
+                gatewayForCheckIns.putReaction(checkInId, type, context)
+            }
+            if (currentUid() != uid) return@launch
+
+            _uiState.update { state ->
+                when (outcome) {
+                    is WorkoutCheckInOutcome.Success -> state.copy(
+                        pendingReactions = state.pendingReactions - pendingKey,
+                        phase = replaceCheckIn(state.phase, checkInId) { outcome.data }
+                    )
+
+                    is WorkoutCheckInOutcome.Failure -> state.copy(
+                        pendingReactions = state.pendingReactions - pendingKey,
+                        phase = replaceCheckIn(state.phase, checkInId) { before },
+                        notice = when (outcome.error) {
+                            WorkoutCheckInError.NETWORK ->
+                                "Sem conexão. Sua reação não foi registrada."
+                            WorkoutCheckInError.CHECKIN_NOT_FOUND ->
+                                "Esta publicação não está mais disponível neste squad."
+                            WorkoutCheckInError.RATE_LIMITED ->
+                                "Muitas reações seguidas. Tente em instantes."
+                            else -> "Não foi possível registrar sua reação agora."
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Carrega a foto de um item, se ainda não estiver em memória (T17.9 §56).
      *
      * Chamado pela tela quando o card entra em composição. O `uid` esperado é conferido dentro do
@@ -374,6 +479,50 @@ class SquadDetailViewModel(
                 )
             }
         }
+    }
+
+    /** Substitui o check-in de um item do feed preservando a ordem e o `sharedToGroupAt`. */
+    private fun replaceCheckIn(
+        phase: SquadDetailPhase,
+        checkInId: String,
+        transform: (WorkoutCheckIn) -> WorkoutCheckIn
+    ): SquadDetailPhase {
+        if (phase !is SquadDetailPhase.Success) return phase
+        return phase.copy(
+            feed = phase.feed.map { item ->
+                if (item.checkIn.checkInId == checkInId) {
+                    item.copy(checkIn = transform(item.checkIn))
+                } else {
+                    item
+                }
+            }
+        )
+    }
+
+    /**
+     * A projeção otimista de uma reação — a mesma do Feed de amigos (T17.9 §121).
+     *
+     * Ela mexe só no que a ação determina: a reação do usuário e a contagem do tipo tocado (mais a
+     * do tipo anterior, quando é troca). Nenhum outro número é tocado, porque a resposta do
+     * servidor chega logo em seguida e substitui tudo.
+     */
+    private fun optimistic(
+        item: WorkoutCheckIn,
+        type: ReactionType,
+        removing: Boolean
+    ): WorkoutCheckIn {
+        val counts = item.reactions.toMutableMap()
+        item.currentUserReaction?.let { previous ->
+            val next = (counts[previous] ?: 1) - 1
+            if (next <= 0) counts.remove(previous) else counts[previous] = next
+        }
+        if (!removing) {
+            counts[type] = (counts[type] ?: 0) + 1
+        }
+        return item.copy(
+            reactions = counts,
+            currentUserReaction = if (removing) null else type
+        )
     }
 
     private fun currentUid(): String? =

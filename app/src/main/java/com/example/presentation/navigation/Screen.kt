@@ -110,16 +110,66 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object SocialFeed : Screen("social_feed", R.string.nav_profile, Icons.Default.Person)
 
     /**
-     * O detalhe de uma publicação (T17.9 §118).
+     * O detalhe de uma publicação (T17.9 §118; T17.12 §35/§63).
      *
      * Empilhada sobre o Feed, **sem** item novo de bottom navigation (§118): a barra inferior
      * continua sendo do núcleo do produto.
      *
-     * A rota carrega só o `checkInId` — um identificador opaco do servidor. Nenhum dado de treino,
-     * nenhum `socialId` e nenhum uid entram em rota de navegação.
+     * A rota carrega o `checkInId` — um identificador opaco do servidor — e, desde a T17.12, **de
+     * onde o usuário veio**: o Feed de amigos ou um Squad. Nenhum dado de treino, nenhum
+     * `socialId` e nenhum uid entram em rota de navegação.
+     *
+     * ## Por que a audiência viaja na rota
+     *
+     * Porque o mesmo check-in é alcançável pelo Feed de amigos e por cada Squad em que ele foi
+     * compartilhado, e até a T17.11 os dois caminhos abriam **exatamente a mesma rota** — a tela
+     * não tinha como saber onde a conversa estava acontecendo, e a interação nascia sempre no Feed
+     * de amigos. Levar a origem no destino é o que faz a tela pedir a conversa certa.
+     *
+     * ## Isto é navegação local, e nunca autorização (T17.12 §67/§69)
+     *
+     * O `groupId` aqui descreve de onde o **próprio usuário** tocou, neste aparelho. Ele nunca vem
+     * de uma resposta do servidor, e não concede nada: o servidor revalida compartilhamento,
+     * participação ativa e bloqueio a cada requisição, e responde `404` para um contexto que não
+     * confere — em vez de rebaixar em silêncio para o Feed de amigos.
      */
-    object CheckInDetail : Screen("check_in/{checkInId}", R.string.nav_profile, Icons.Default.Person) {
-        fun createRoute(checkInId: String) = "check_in/$checkInId"
+    object CheckInDetail : Screen(
+        "check_in/{checkInId}?context={context}&groupId={groupId}&groupName={groupName}",
+        R.string.nav_profile,
+        Icons.Default.Person
+    ) {
+        /** Os valores que a rota aceita em `context`. Minúsculos: eles não são o protocolo. */
+        const val CONTEXT_FRIEND = "friend"
+        const val CONTEXT_GROUP = "group"
+
+        /** Aberto pelo Feed de amigos: a audiência é a relação direta. */
+        fun createRoute(checkInId: String): String =
+            "check_in/${encode(checkInId)}?context=$CONTEXT_FRIEND"
+
+        /**
+         * Aberto de dentro de um Squad.
+         *
+         * [groupName] viaja só para a tela poder dizer **onde** a conversa acontece ("No squad:
+         * Os Monstros"). Ele é texto que alguém digitou, então vai codificado — e a tela nunca
+         * mostra o `groupId` nem o nome técnico da audiência, que não significam nada para quem lê.
+         */
+        fun createGroupRoute(
+            checkInId: String,
+            groupId: String,
+            groupName: String
+        ): String =
+            "check_in/${encode(checkInId)}?context=$CONTEXT_GROUP" +
+                "&groupId=${encode(groupId)}&groupName=${encode(groupName)}"
+
+        /**
+         * Escapa um valor para o query string da rota.
+         *
+         * O `+` que o `URLEncoder` produz para espaço é trocado por `%20` porque quem desfaz o
+         * escape do outro lado é o `Uri.decode` da navegação, que **não** trata `+` como espaço —
+         * sem esta troca, "Os Monstros" chegaria à tela como "Os+Monstros".
+         */
+        private fun encode(value: String): String =
+            java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     }
 
     /**

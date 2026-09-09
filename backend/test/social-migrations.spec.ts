@@ -225,6 +225,112 @@ describe('T17.10 — migrations sociais', () => {
     sqlite.close();
   });
 
+  /**
+   * T17.12 §166/§167 — o banco de quem já usava reações e comentários.
+   *
+   * A 0020 é a primeira migration desta série que **reescreve** as duas tabelas de interação (o
+   * SQLite exige o rebuild para trocar a `PRIMARY KEY` e para ganhar um `CHECK` que compara duas
+   * colunas). É o tipo de migration em que uma linha perdida não faz barulho nenhum: o servidor
+   * sobe, as telas abrem, e a conversa de alguém simplesmente não está mais lá.
+   *
+   * Por isso este teste grava dado real **pelo schema antigo** — sem `audience_type`, sem
+   * `group_id` — e prova depois que cada linha continua existindo, com o mesmo `id`, e que a
+   * audiência delas é `FRIEND` (§24/§26): antes desta fase, toda interação nascia de relação
+   * direta, e é isso que `FRIEND` significa agora.
+   */
+  it('um banco com interações da T17.9/T17.11 sobe preservando tudo, como FRIEND (§166/§167)', () => {
+    migrateUpTo(temp.path, 19);
+
+    const before = new BetterSqlite3(temp.path);
+    before.pragma('foreign_keys = ON');
+    const profile = before.prepare(
+      `INSERT INTO social_profiles
+         (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'ACTIVE', 10, 10)`,
+    );
+    profile.run('uid-autora', 'social-autora', 'SPK-AUTHOR1', 'Autora');
+    profile.run('uid-amiga', 'social-amiga', 'SPK-FRIEND1', 'Amiga');
+
+    before
+      .prepare(
+        `INSERT INTO social_workout_checkins
+           (id, author_uid, source_session_sync_id, client_request_id, status, caption,
+            created_at, deleted_at)
+         VALUES ('checkin-antigo', 'uid-autora', 'sess-1', 'req-1', 'PUBLISHED', 'legenda', 20, NULL)`,
+      )
+      .run();
+    // Uma reação e um comentário exatamente como a T17.9 os gravava: sem audiência nenhuma.
+    before
+      .prepare(
+        `INSERT INTO social_checkin_reactions (checkin_id, reactor_uid, type, created_at, updated_at)
+         VALUES ('checkin-antigo', 'uid-amiga', 'FIRE', 30, 30)`,
+      )
+      .run();
+    before
+      .prepare(
+        `INSERT INTO social_checkin_comments (id, checkin_id, author_uid, body, created_at, deleted_at)
+         VALUES ('comment-antigo', 'checkin-antigo', 'uid-amiga', 'boa!', 31, NULL)`,
+      )
+      .run();
+    // E um comentário já apagado: o soft delete precisa atravessar o rebuild como estava.
+    before
+      .prepare(
+        `INSERT INTO social_checkin_comments (id, checkin_id, author_uid, body, created_at, deleted_at)
+         VALUES ('comment-apagado', 'checkin-antigo', 'uid-amiga', 'ops', 32, 33)`,
+      )
+      .run();
+    before.close();
+
+    const sqlite = sqliteFor(configFor(temp.path));
+    sqlite.initialize(MIGRATIONS_DIR);
+    expect(sqlite.appliedVersions()).toEqual(sqlite.expectedVersions());
+
+    const db = sqlite.connection;
+
+    expect(
+      db
+        .prepare(
+          `SELECT reactor_uid AS reactor, type, audience_type AS audience, group_id AS groupId,
+                  created_at AS createdAt
+             FROM social_checkin_reactions`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        reactor: 'uid-amiga',
+        type: 'FIRE',
+        audience: 'FRIEND',
+        groupId: null,
+        createdAt: 30,
+      },
+    ]);
+
+    // §97 — os identificadores dos comentários são preservados: eles já circularam como alvo de
+    // denúncia, e recriá-los quebraria a linha de `social_reports` que aponta para eles.
+    expect(
+      db
+        .prepare(
+          `SELECT id, body, audience_type AS audience, group_id AS groupId, deleted_at AS deletedAt
+             FROM social_checkin_comments ORDER BY created_at`,
+        )
+        .all(),
+    ).toEqual([
+      { id: 'comment-antigo', body: 'boa!', audience: 'FRIEND', groupId: null, deletedAt: null },
+      { id: 'comment-apagado', body: 'ops', audience: 'FRIEND', groupId: null, deletedAt: 33 },
+    ]);
+
+    // O check-in não foi tocado pelo rebuild das tabelas vizinhas.
+    expect(db.prepare(`SELECT caption, status FROM social_workout_checkins`).get()).toEqual({
+      caption: 'legenda',
+      status: 'PUBLISHED',
+    });
+
+    // §165 — as FKs recriadas apontam para onde deviam, e o arquivo continua íntegro.
+    expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    sqlite.close();
+  });
+
   it('o schema final é o mesmo vindo do zero e vindo de uma versão anterior (§112/§113)', () => {
     const fromScratch = createTempDb();
     const upgraded = createTempDb();

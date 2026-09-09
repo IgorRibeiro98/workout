@@ -99,6 +99,20 @@ class SparkBackendClient(
         sendJson("PUT", path, jsonBody)
 
     /**
+     * `DELETE` autenticado **com** corpo JSON, devolvendo status e corpo crus.
+     *
+     * Existe desde a T17.12, para remover a reação de um check-in: a remoção precisa dizer de qual
+     * audiência ela é (§16), e essa informação vai no corpo em vez do query string — um caminho
+     * carrega a audiência para dentro de cache e log de proxy, e ali ela é exatamente o dado que
+     * não deveria estar.
+     *
+     * Mesmo caminho de [postJson]: um cliente, um interceptor, um lugar montando
+     * `Authorization: Bearer`.
+     */
+    suspend fun deleteJson(path: String, jsonBody: String): SparkHttpOutcome =
+        sendJson("DELETE", path, jsonBody)
+
+    /**
      * `DELETE` autenticado sem corpo, devolvendo status e corpo crus.
      *
      * Usado para unregister de aparelhos push (T17.5) sob `/v1/social/notifications/devices/:deviceId`.

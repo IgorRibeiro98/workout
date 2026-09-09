@@ -29,10 +29,17 @@ entra no feed de um Squad é o mesmo `WorkoutCheckIn` do Feed de amigos, lido po
 ## 2. O que ele deliberadamente não é
 
 Sem chat, DM, mensagem de grupo, voz ou vídeo. Sem post de texto, post genérico ou enquete. Sem
-comentário ou reação específicos de Squad. Sem desafio ou ranking de Squad. Sem template ou
-programa compartilhado para o grupo. Sem evento, agenda ou presença online. Sem grupo público,
-descoberta, busca global, link de convite, QR ou código de entrada. Sem denúncia de grupo — quem
-tem problema com uma publicação usa Bloqueio e Denúncia, que já existem no domínio.
+desafio ou ranking de Squad. Sem template ou programa compartilhado para o grupo. Sem evento,
+agenda ou presença online. Sem grupo público, descoberta, busca global, link de convite, QR ou
+código de entrada. Sem denúncia de grupo — quem tem problema com uma publicação usa Bloqueio e
+Denúncia, que já existem no domínio.
+
+> **Mudou na T17.12.** Esta lista dizia também "sem comentário ou reação específicos de Squad", e
+> era verdade nesta fase: interagir exigia relação direta, porque uma interação sem audiência
+> vazaria entre os Squads em que o mesmo check-in estivesse. A T17.12 resolveu a causa — a
+> interação passou a pertencer a uma audiência explícita — e hoje um membro reage e comenta dentro
+> do Squad, **e só ali**. Ver
+> [`social-interaction-audience.md`](social-interaction-audience.md).
 
 ## 3. Privacidade estrutural
 
@@ -152,22 +159,27 @@ o mesmo desenho de `VIEWER_SCOPE_CTE` na T17.9. Três superfícies a usam litera
 grupo, o detalhe do check-in e os bytes da foto. Três cópias seria o desenho em que, no dia de um
 ajuste, duas mudam e a terceira continua respondendo o dado de quem não devia.
 
-`findVisibleCheckIn` (SELF ∪ FRIEND) **não mudou**, e continua sendo a porta de reações, comentários
-e denúncia. `findAccessibleCheckIn` (SELF ∪ FRIEND ∪ GROUP) é nova, e serve leitura. É essa
-separação que faz "membro só de Squad tenta reagir → recusado" ser verdade por construção, e não por
-um `if` que alguém precisa lembrar de escrever.
+`findVisibleCheckIn` (SELF ∪ FRIEND) responde relação direta; `findAccessibleCheckIn`
+(SELF ∪ FRIEND ∪ GROUP) responde leitura. A T17.12 acrescentou a terceira pergunta —
+`findGroupAccessibleCheckIn`, "este viewer alcança este check-in por **este** Squad" —, que é a que
+autoriza interação com contexto.
 
-## 9. Por que interação é read-only nesta fase
+## 9. Por que interação nasceu read-only aqui — e o que a T17.12 fez com isso
 
 Um mesmo check-in pode estar no Feed de amigos e em dois Squads — são audiências distintas sobre o
-mesmo objeto. Se o acesso via Squad autorizasse comentar, aquela publicação passaria a ter uma
-conversa com três audiências sobrepostas: quem comentou pelo Squad A apareceria para o Squad B e
-para os amigos do autor, que não fazem parte daquele contexto.
+mesmo objeto. Se o acesso via Squad autorizasse comentar **com o modelo da T17.9**, aquela
+publicação passaria a ter uma conversa com três audiências sobrepostas: quem comentou pelo Squad A
+apareceria para o Squad B e para os amigos do autor, que não fazem parte daquele contexto.
 
 Resolver isso corretamente exige comentários e reações **cientes de audiência**, e a T17.11 não
-introduz essa complexidade em silêncio. O contrato carrega `canInteract`, decidido no servidor: a
-tela não desenha o que não funciona, e o servidor recusa de qualquer forma. Quem já podia interagir
-por Friendship continua podendo, sem nenhuma autorização nova.
+introduziu essa complexidade em silêncio: fechou a porta e deixou o problema nomeado. O contrato
+carrega `canInteract`, decidido no servidor.
+
+A T17.12 fez exatamente o que estava nomeado aqui: a interação passou a pertencer a uma audiência
+explícita (`FRIEND` ou `GROUP(groupId)`), e com isso um membro sem amizade nenhuma reage e comenta
+dentro do Squad — e **só** dentro dele. `canInteract` continua no contrato e continua decidido no
+servidor; o que mudou é que, no feed de um Squad, ele é `true` para todo membro ativo. Ver
+[`social-interaction-audience.md`](social-interaction-audience.md).
 
 ## 10. Ordenação e recorte
 

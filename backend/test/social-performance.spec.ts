@@ -2,8 +2,11 @@ import BetterSqlite3 from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { MIGRATIONS_DIR, configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
 import {
+  VIEWER_BLOCKED_CTE,
   VIEWER_SCOPE_CTE,
+  groupInteractionVisibleSql,
   interactionVisibleSql,
+  viewerInActiveGroupSql,
 } from '../src/modules/social/workout-checkin.access-policy';
 
 /**
@@ -33,10 +36,20 @@ const COMMENTS = 50_000;
 const REACTIONS = 50_000;
 const FRIENDSHIPS_PER_USER = 10;
 
+/** T17.12 §169 — o volume de Squad que a fase pede: 100 grupos de 20, com conversa dentro. */
+const GROUPS = 100;
+const MEMBERS_PER_GROUP = 20;
+const GROUP_COMMENTS = 10_000;
+const GROUP_REACTIONS = 20_000;
+
 interface Seeded {
   readonly db: BetterSqlite3.Database;
   readonly viewer: string;
   readonly uids: string[];
+  /** Um Squad de que o `viewer` participa — o alvo das consultas de audiência `GROUP`. */
+  readonly groupId: string;
+  /** Um check-in compartilhado naquele Squad. */
+  readonly sharedCheckInId: string;
 }
 
 function seed(databasePath: string): Seeded {
@@ -72,8 +85,35 @@ function seed(databasePath: string): Seeded {
        (checkin_id, reactor_uid, type, created_at, updated_at)
      VALUES (?, ?, 'FIRE', ?, ?)`,
   );
+  // T17.12 — as mesmas duas tabelas, agora na audiência de um Squad.
+  const insertGroup = db.prepare(
+    `INSERT INTO social_groups (id, owner_uid, name, status, created_at, updated_at)
+     VALUES (?, ?, ?, 'ACTIVE', ?, ?)`,
+  );
+  const insertMembership = db.prepare(
+    `INSERT INTO social_group_memberships (id, group_id, member_uid, role, joined_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const insertShare = db.prepare(
+    `INSERT OR IGNORE INTO social_group_checkin_shares
+       (id, group_id, checkin_id, author_uid, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const insertGroupComment = db.prepare(
+    `INSERT INTO social_checkin_comments
+       (id, checkin_id, author_uid, body, audience_type, group_id, created_at, deleted_at)
+     VALUES (?, ?, ?, ?, 'GROUP', ?, ?, NULL)`,
+  );
+  const insertGroupReaction = db.prepare(
+    `INSERT OR IGNORE INTO social_checkin_reactions
+       (checkin_id, reactor_uid, type, audience_type, group_id, created_at, updated_at)
+     VALUES (?, ?, 'MUSCLE', 'GROUP', ?, ?, ?)`,
+  );
 
   const checkInIds: string[] = [];
+  /** Por Squad: os membros e os check-ins trazidos para lá. */
+  const membersByGroup: string[][] = [];
+  const sharesByGroup: string[][] = [];
 
   db.transaction(() => {
     uids.forEach((uid, index) => {
@@ -128,9 +168,78 @@ function seed(databasePath: string): Seeded {
       const lap = Math.floor(i / CHECKINS);
       insertReaction.run(checkInIds[i % CHECKINS], uids[(i * 13 + lap) % USERS], now, now);
     }
+
+    // ---------------------------------------------------------------- T17.12 §169
+    //
+    // 100 Squads de 20 pessoas, cada um com os check-ins **dos próprios membros** trazidos para
+    // dentro. Os autores precisam ser membros porque a política do feed de grupo exige isso — semear
+    // shares de não-membros produziria volume que nenhuma consulta real leria, e o plano medido não
+    // seria o plano de produção.
+    for (let g = 0; g < GROUPS; g += 1) {
+      const groupId = `group-${g}`;
+      const members = Array.from(
+        { length: MEMBERS_PER_GROUP },
+        (_, m) => uids[(g * 7 + m) % USERS],
+      );
+      membersByGroup.push(members);
+      insertGroup.run(groupId, members[0], `Squad ${g}`, now, now);
+      members.forEach((member, index) => {
+        insertMembership.run(
+          `membership-${g}-${index}`,
+          groupId,
+          member,
+          index === 0 ? 'OWNER' : 'MEMBER',
+          now,
+        );
+      });
+
+      const shares: string[] = [];
+      members.forEach((member, index) => {
+        // `checkin-${i}` é de `uids[i % USERS]`, então este índice pertence a `member`.
+        const memberIndex = (g * 7 + index) % USERS;
+        const checkInId = `checkin-${memberIndex + USERS * (g % (CHECKINS / USERS))}`;
+        insertShare.run(`share-${g}-${index}`, groupId, checkInId, member, now);
+        shares.push(checkInId);
+      });
+      sharesByGroup.push(shares);
+    }
+
+    // O índice **dentro do Squad** (`k`), e não o contador global: como `GROUPS` é múltiplo de
+    // `MEMBERS_PER_GROUP`, um `i % shares.length` daria o mesmo share em todas as voltas de um
+    // mesmo grupo — a conversa inteira cairia sobre um check-in só, e a unicidade da reação
+    // engoliria o resto em silêncio (foi o que o teste de volume pegou).
+    for (let i = 0; i < GROUP_COMMENTS; i += 1) {
+      const g = i % GROUPS;
+      const k = Math.floor(i / GROUPS);
+      const shares = sharesByGroup[g];
+      const members = membersByGroup[g];
+      insertGroupComment.run(
+        `group-comment-${i}`,
+        shares[k % shares.length],
+        members[Math.floor(k / shares.length) % members.length],
+        `Comentário de squad ${i}`,
+        `group-${g}`,
+        now - (i % 1000),
+      );
+    }
+
+    for (let i = 0; i < GROUP_REACTIONS; i += 1) {
+      const g = i % GROUPS;
+      const k = Math.floor(i / GROUPS);
+      const shares = sharesByGroup[g];
+      const members = membersByGroup[g];
+      insertGroupReaction.run(
+        shares[k % shares.length],
+        members[Math.floor(k / shares.length) % members.length],
+        `group-${g}`,
+        now,
+        now,
+      );
+    }
   })();
 
-  return { db, viewer: uids[0], uids };
+  // `uids[0]` é membro (e dono) de `group-0` pela fórmula acima — é dele a leitura medida.
+  return { db, viewer: uids[0], uids, groupId: 'group-0', sharedCheckInId: sharesByGroup[0][0] };
 }
 
 /** O plano de execução, achatado numa string por linha. */
@@ -166,6 +275,9 @@ const REAL_TABLES = [
   'social_blocks',
   'social_profiles',
   'sync_entities',
+  'social_groups',
+  'social_group_memberships',
+  'social_group_checkin_shares',
 ] as const;
 
 describe('T17.10 — desempenho das consultas sociais sob volume', () => {
@@ -218,6 +330,40 @@ describe('T17.10 — desempenho das consultas sociais sob volume', () => {
        AND ${interactionVisibleSql('r.reactor_uid', 'c.author_uid')}
      GROUP BY r.checkin_id, r.type`;
 
+  /**
+   * T17.12 §168 — as mesmas duas leituras, na audiência de um Squad.
+   *
+   * São consultas **diferentes** das de amigos, e não variações: onde a de `FRIEND` junta
+   * `friendships` para saber quem alcança quem, a de `GROUP` junta `social_group_memberships`. É
+   * por isso que elas precisam do próprio plano auditado — um índice que sirva a uma não diz nada
+   * sobre a outra. As duas são as consultas reais de `CheckInInteractionRepository`, montadas com
+   * os mesmos fragmentos exportados.
+   */
+  const GROUP_COMMENTS_SQL = `
+    WITH ${VIEWER_BLOCKED_CTE}
+    SELECT cm.id, cm.author_uid, p.social_id, p.display_name, cm.body, cm.created_at
+      FROM social_checkin_comments cm
+      JOIN social_profiles p ON p.owner_uid = cm.author_uid
+     WHERE cm.checkin_id = :checkInId
+       AND cm.audience_type = 'GROUP'
+       AND cm.group_id = :groupId
+       AND cm.deleted_at IS NULL
+       AND ${viewerInActiveGroupSql()}
+       AND ${groupInteractionVisibleSql('cm.author_uid', 'cm.group_id')}
+     ORDER BY cm.created_at ASC, cm.id ASC
+     LIMIT :limit`;
+
+  const GROUP_REACTION_COUNTS_SQL = `
+    WITH ${VIEWER_BLOCKED_CTE}
+    SELECT r.checkin_id, r.type, COUNT(*) AS total
+      FROM social_checkin_reactions r
+     WHERE r.checkin_id IN (@id0, @id1, @id2)
+       AND r.audience_type = 'GROUP'
+       AND r.group_id = :groupId
+       AND ${viewerInActiveGroupSql()}
+       AND ${groupInteractionVisibleSql('r.reactor_uid', 'r.group_id')}
+     GROUP BY r.checkin_id, r.type`;
+
   const FRIENDS_SQL = `
     SELECT CASE WHEN f.user_a_uid = :viewer THEN f.user_b_uid ELSE f.user_a_uid END AS uid
       FROM friendships f
@@ -246,12 +392,34 @@ describe('T17.10 — desempenho das consultas sociais sob volume', () => {
     ],
     ['lista de amigos', FRIENDS_SQL, { viewer: '' }],
     ['bloqueados', BLOCKED_SQL, { viewer: '' }],
+    [
+      'comentários de squad',
+      GROUP_COMMENTS_SQL,
+      { viewer: '', checkInId: '', groupId: '', limit: 30 },
+    ],
+    [
+      'contagem de reações de squad',
+      GROUP_REACTION_COUNTS_SQL,
+      { viewer: '', groupId: '', id0: '', id1: '', id2: '' },
+    ],
   ];
+
+  /** Os parâmetros que só existem depois do seed — o Squad do viewer e um check-in dele. */
+  const bind = (params: Record<string, unknown>) => {
+    const shared = seeded.sharedCheckInId;
+    return {
+      ...params,
+      viewer: seeded.viewer,
+      groupId: params.groupId === '' ? seeded.groupId : params.groupId,
+      checkInId: params.checkInId === '' ? shared : params.checkInId,
+      ...(params.id0 === '' ? { id0: shared, id1: shared, id2: shared } : {}),
+    };
+  };
 
   it.each(surfaces)(
     'a consulta de %s não faz varredura completa de tabela (§36)',
     (label, sql, params) => {
-      const plan = planOf(seeded.db, sql, { ...params, viewer: seeded.viewer });
+      const plan = planOf(seeded.db, sql, bind(params));
       const scans = fullTableScans(plan, REAL_TABLES);
       expect({ label, scans, plan: scans.length > 0 ? plan : [] }).toEqual({
         label,
@@ -264,8 +432,7 @@ describe('T17.10 — desempenho das consultas sociais sob volume', () => {
   it.each(surfaces)('a consulta de %s responde rápido sob volume (§124)', (label, sql, params) => {
     const statement = seeded.db.prepare(sql);
     const bound = {
-      ...params,
-      viewer: seeded.viewer,
+      ...bind(params),
       publishedSince: Date.now() - 30 * 86_400_000,
     };
 
@@ -287,9 +454,22 @@ describe('T17.10 — desempenho das consultas sociais sob volume', () => {
       (seeded.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     expect(count('social_profiles')).toBe(USERS);
     expect(count('social_workout_checkins')).toBe(CHECKINS);
-    expect(count('social_checkin_comments')).toBe(COMMENTS);
     expect(count('friendships')).toBeGreaterThan(2_000);
-    expect(count('social_checkin_reactions')).toBeGreaterThan(40_000);
+
+    // T17.12 §169 — o volume de Squad, e a prova de que as duas audiências coexistem na mesma
+    // tabela sem uma esconder a outra.
+    expect(count('social_groups')).toBe(GROUPS);
+    expect(count('social_group_memberships')).toBe(GROUPS * MEMBERS_PER_GROUP);
+    const byAudience = (table: string, audience: string) =>
+      (
+        seeded.db
+          .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE audience_type = ?`)
+          .get(audience) as { n: number }
+      ).n;
+    expect(byAudience('social_checkin_comments', 'FRIEND')).toBe(COMMENTS);
+    expect(byAudience('social_checkin_comments', 'GROUP')).toBe(GROUP_COMMENTS);
+    expect(byAudience('social_checkin_reactions', 'FRIEND')).toBeGreaterThan(40_000);
+    expect(byAudience('social_checkin_reactions', 'GROUP')).toBe(GROUP_REACTIONS);
   });
 
   it('o banco continua íntegro depois do volume (§110)', () => {

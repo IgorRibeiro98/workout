@@ -1,5 +1,7 @@
 package com.example.data.social
 
+import com.example.domain.social.InteractionContext
+
 /**
  * Os caminhos e os códigos de erro do check-in, do Feed e do conteúdo social (T17.8/T17.9).
  *
@@ -43,12 +45,50 @@ object WorkoutCheckInContract {
         "$CHECKIN_MEDIA_PATH?sessionSyncId=${encode(sessionSyncId)}" +
             "&clientUploadId=${encode(clientUploadId)}"
 
+    /**
+     * O detalhe de uma publicação lido **na audiência de onde a tela veio** (T17.12 §35).
+     *
+     * Sem `context` a rota responde o que respondia na T17.11 — e o app manda `context=FRIEND`
+     * explicitamente mesmo assim, para que o caminho de amigos e o de Squad tenham exatamente a
+     * mesma forma. Um dos dois montado "por omissão" é o que faz o outro ser esquecido depois.
+     */
+    fun checkInPath(checkInId: String, context: InteractionContext): String =
+        withQuery(checkInPath(checkInId), contextQuery(context))
+
     fun reactionPath(checkInId: String): String = "${checkInPath(checkInId)}/reaction"
 
-    fun commentsPath(checkInId: String, limit: Int? = null): String {
-        val base = "${checkInPath(checkInId)}/comments"
-        return if (limit == null) base else "$base?limit=$limit"
+    fun commentsPath(
+        checkInId: String,
+        limit: Int? = null,
+        context: InteractionContext
+    ): String {
+        val params = buildList {
+            if (limit != null) add("limit=$limit")
+            addAll(contextQuery(context))
+        }
+        return withQuery("${checkInPath(checkInId)}/comments", params)
     }
+
+    /**
+     * O contexto de audiência no query string (T17.12 §33/§34/§66).
+     *
+     * ```text
+     * ?context=FRIEND            → o Feed de amigos
+     * ?context=GROUP&groupId=X   → o Squad X
+     * ```
+     *
+     * `GROUP` **sempre** leva o `groupId` junto: o servidor recusa `context=GROUP` sozinho com
+     * `400` em vez de assumir amigos (§69, fail-closed), e é exatamente essa recusa que impede
+     * uma requisição malformada de virar uma interação na audiência errada.
+     */
+    private fun contextQuery(context: InteractionContext): List<String> {
+        val type = "context=${context.wireType}"
+        val groupId = context.groupId ?: return listOf(type)
+        return listOf(type, "groupId=${encode(groupId)}")
+    }
+
+    private fun withQuery(base: String, params: List<String>): String =
+        if (params.isEmpty()) base else "$base?${params.joinToString("&")}"
 
     fun commentPath(checkInId: String, commentId: String): String =
         "${checkInPath(checkInId)}/comments/$commentId"

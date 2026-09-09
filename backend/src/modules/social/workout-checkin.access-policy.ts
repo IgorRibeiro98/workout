@@ -43,12 +43,14 @@ import { SqliteService } from '../../database/sqlite.service';
  * comentários e a denúncia usam literalmente a mesma definição, em vez de cinco cópias que
  * divergem. Todas as consultas passam `:viewer` como parâmetro nomeado.
  */
-export const VIEWER_SCOPE_CTE = `
-  viewer_blocked AS (
+export const VIEWER_BLOCKED_CTE = `viewer_blocked AS (
     SELECT blocked_uid AS uid FROM social_blocks WHERE blocker_uid = :viewer
     UNION
     SELECT blocker_uid AS uid FROM social_blocks WHERE blocked_uid = :viewer
-  ),
+  )`;
+
+export const VIEWER_SCOPE_CTE = `
+  ${VIEWER_BLOCKED_CTE},
   viewer_friends AS (
     SELECT CASE WHEN user_a_uid = :viewer THEN user_b_uid ELSE user_a_uid END AS uid
       FROM friendships
@@ -96,6 +98,59 @@ export function interactionVisibleSql(actorUidColumn: string, authorUidColumn: s
 }
 
 /**
+ * O predicado de "esta interação **de Squad** é visível para o viewer" (T17.12 §9/§39/§40/§41).
+ *
+ * O par de `interactionVisibleSql`, mas para audiência `GROUP`: aqui a relação que autoriza não é
+ * amizade, é participação **naquele Squad**.
+ *
+ * ```text
+ * groupInteractionVisible =
+ *     perfil ACTIVE de quem interagiu
+ *     ∧ quem interagiu ainda é membro ativo daquele Squad     (§43/§143 — sair revoga a leitura)
+ *     ∧ ¬bloqueio entre viewer e quem interagiu                (§39/§40/§41 — por viewer, nunca global)
+ * ```
+ *
+ * A segunda condição é defesa em profundidade, do mesmo jeito que `groupShareVisibleSql` exige que
+ * o **autor do post** continue membro: `leave`/`removeMember` já apagam as interações da pessoa
+ * naquele Squad (§44), e esta cláusula vale mesmo se aquela escrita falhar pela metade.
+ *
+ * A consulta que usa este fragmento precisa carregar [VIEWER_BLOCKED_CTE] (ou [VIEWER_SCOPE_CTE],
+ * que o inclui) e passar `:viewer` como parâmetro nomeado.
+ *
+ * @param actorUidColumn coluna com o uid de quem interagiu (ex.: `r.reactor_uid`)
+ * @param groupIdColumn coluna com o `group_id` da própria interação (ex.: `r.group_id`)
+ */
+export function groupInteractionVisibleSql(actorUidColumn: string, groupIdColumn: string): string {
+  return `(
+    EXISTS (SELECT 1 FROM social_profiles ap
+             WHERE ap.owner_uid = ${actorUidColumn} AND ap.status = 'ACTIVE')
+    AND EXISTS (
+      SELECT 1 FROM social_group_memberships am
+       WHERE am.group_id = ${groupIdColumn} AND am.member_uid = ${actorUidColumn}
+    )
+    AND ${actorUidColumn} NOT IN (SELECT uid FROM viewer_blocked)
+  )`;
+}
+
+/**
+ * O predicado de "o viewer é membro ativo do Squad `:groupId`" (T17.12 §9/§90).
+ *
+ * Ele existe como fragmento próprio porque **toda** consulta de audiência `GROUP` precisa dele, e
+ * porque ele é a segunda barreira das rotas: o resolvedor de contexto já respondeu `404` para quem
+ * não é membro, e esta cláusula garante que nenhuma consulta futura consiga devolver linha para
+ * alguém que não seja — nem por engano, nem por um caminho novo que esqueça a checagem de fora.
+ *
+ * Exige `:groupId` e `:viewer` como parâmetros nomeados.
+ */
+export function viewerInActiveGroupSql(): string {
+  return `(
+    EXISTS (SELECT 1 FROM social_groups g WHERE g.id = :groupId AND g.status = 'ACTIVE')
+    AND EXISTS (SELECT 1 FROM social_group_memberships vm
+                 WHERE vm.group_id = :groupId AND vm.member_uid = :viewer)
+  )`;
+}
+
+/**
  * O predicado de "este check-in chegou até o viewer por um **Squad**" (T17.11 §76/§77/§78).
  *
  * ```text
@@ -134,8 +189,17 @@ export function interactionVisibleSql(actorUidColumn: string, authorUidColumn: s
  *
  * @param checkInIdColumn coluna com o id do check-in (ex.: `c.id`)
  * @param authorUidColumn coluna com o uid do autor do check-in (ex.: `c.author_uid`)
+ * @param groupIdParam quando informado (ex.: `:groupId`), fixa a busca **naquele** Squad em vez de
+ *   aceitar qualquer um (T17.12 §9/§32). É o que o resolvedor de contexto usa para responder "este
+ *   check-in está compartilhado *neste* Squad específico" em vez de "em algum Squad" — a mesma
+ *   distinção que faz `context: { type: 'GROUP', groupId: 'Y' }` ser recusado quando o
+ *   compartilhamento real é só em `X` (§135 — "wrong Squad").
  */
-export function groupShareVisibleSql(checkInIdColumn: string, authorUidColumn: string): string {
+export function groupShareVisibleSql(
+  checkInIdColumn: string,
+  authorUidColumn: string,
+  groupIdParam?: string,
+): string {
   return `(
     ${authorUidColumn} NOT IN (SELECT uid FROM viewer_blocked)
     AND EXISTS (
@@ -146,6 +210,7 @@ export function groupShareVisibleSql(checkInIdColumn: string, authorUidColumn: s
         JOIN social_group_memberships am ON am.group_id = s.group_id
                                         AND am.member_uid = ${authorUidColumn}
        WHERE s.checkin_id = ${checkInIdColumn}
+         ${groupIdParam ? `AND s.group_id = ${groupIdParam}` : ''}
     )
   )`;
 }
@@ -304,5 +369,57 @@ export class WorkoutCheckInAccessPolicy {
       grant,
       canInteract: direct,
     };
+  }
+
+  /**
+   * O check-in [checkInId], **se** o viewer o alcança por [groupId] especificamente (T17.12 §9).
+   *
+   * Esta é a validação do contexto `GROUP` explícito — usada por
+   * [WorkoutCheckInContextResolver] para autorizar reagir, comentar e listar comentários a partir
+   * de um Squad. Diferente de [findAccessibleCheckIn] (que aceita "qualquer Squad compartilhado"
+   * para leitura do detalhe), aqui o `groupId` é fixado: um `context.groupId` que não é o Squad
+   * onde o check-in realmente está compartilhado é recusado — nunca cai para `FRIEND`, e nunca
+   * "acha" outro Squad no lugar (§69/§135).
+   *
+   * ```text
+   * groupAccessible =
+   *     Squad [groupId] ACTIVE
+   *     ∧ o check-in foi explicitamente compartilhado nele
+   *     ∧ o viewer é membro ativo dele
+   *     ∧ o autor ainda é membro ativo dele
+   *     ∧ ¬bloqueio entre viewer e autor
+   *     ∧ check-in PUBLISHED ∧ os dois perfis ACTIVE
+   * ```
+   *
+   * `null` cobre "não existe", "não é membro", "não é deste Squad" e "está bloqueado" com a mesma
+   * resposta — a mesma anti-enumeração do resto do módulo (§136).
+   */
+  findGroupAccessibleCheckIn(
+    viewerUid: string,
+    checkInId: string,
+    groupId: string,
+  ): VisibleCheckIn | null {
+    const row = this.sqlite.connection
+      .prepare(
+        `WITH ${VIEWER_BLOCKED_CTE}
+         SELECT c.id           AS checkInId,
+                c.author_uid   AS authorUid,
+                p.social_id    AS authorSocialId,
+                p.display_name AS authorDisplayName,
+                c.caption      AS caption,
+                c.created_at   AS publishedAt
+           FROM social_workout_checkins c
+           JOIN social_profiles p ON p.owner_uid = c.author_uid
+          WHERE c.id = :checkInId
+            AND c.status = 'PUBLISHED'
+            AND p.status = 'ACTIVE'
+            AND EXISTS (SELECT 1 FROM social_profiles vp
+                         WHERE vp.owner_uid = :viewer AND vp.status = 'ACTIVE')
+            AND ${groupShareVisibleSql('c.id', 'c.author_uid', ':groupId')}
+          LIMIT 1`,
+      )
+      .get({ viewer: viewerUid, checkInId, groupId }) as VisibleCheckIn | undefined;
+
+    return row ?? null;
   }
 }

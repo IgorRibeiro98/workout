@@ -94,7 +94,7 @@ describe('Persistência do grafo social', () => {
       // na T17.9 — legenda, mídia, reações, comentários e o alvo das denúncias; e na T17.11, os
       // Squads. Nenhuma delas toca em perfil, amizade ou em qualquer coisa da T16.
       expect(applied.map((migration) => migration.version)).toEqual([
-        8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       ]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'friend_graph',
@@ -109,6 +109,7 @@ describe('Persistência do grafo social', () => {
         'social_checkin_reactions_comments',
         'social_reports_ugc',
         'social_groups',
+        'social_interaction_audience',
       ]);
       expect(db.prepare('SELECT * FROM social_profiles').all()).toEqual(beforeProfiles);
       expect(db.prepare('SELECT * FROM social_privacy_settings').all()).toEqual(

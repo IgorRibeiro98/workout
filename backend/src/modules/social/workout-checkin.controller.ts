@@ -27,11 +27,13 @@ import type {
 import { WorkoutCheckInService } from './workout-checkin.service';
 import {
   assertCheckInBodyWithinLimit,
+  parseCheckInDetailQuery,
   parseCommentRequest,
   parseCommentsQuery,
   parseCreateCheckInRequest,
   parseFeedQuery,
   parseReactionRequest,
+  parseRemoveReactionRequest,
 } from './workout-checkin.validator';
 
 /**
@@ -117,14 +119,22 @@ export class WorkoutCheckInController {
 
   // ================================================================ T17.9
 
-  /** O detalhe de uma publicação (§118). Mesmo DTO do Feed, mesma política. */
+  /**
+   * O detalhe de uma publicação (§118). Mesmo DTO do Feed, mesma política.
+   *
+   * T17.12 §35 — `?context=GROUP&groupId=X` diz de **onde a tela veio**, e é o que faz o detalhe
+   * mostrar a conversa daquele Squad em vez da do Feed de amigos. É navegação local, não
+   * autorização: o servidor revalida o contexto inteiro a cada requisição (§36).
+   */
   @Get('workout-checkins/:checkInId')
   @HttpCode(HttpStatus.OK)
   detail(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('checkInId') checkInId: string,
+    @Query() query: Record<string, unknown>,
   ): WorkoutCheckInDto {
-    return this.service.getCheckIn(principal.uid, checkInId);
+    const { context } = parseCheckInDetailQuery(query);
+    return this.service.getCheckIn(principal.uid, checkInId, context);
   }
 
   /**
@@ -143,23 +153,32 @@ export class WorkoutCheckInController {
     @Body() body: unknown,
   ): WorkoutCheckInDto {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.putReaction(
-      principal.uid,
-      requestIdOf(request),
-      checkInId,
-      parseReactionRequest(body),
-    );
+    const { type, context } = parseReactionRequest(body);
+    return this.service.putReaction(principal.uid, requestIdOf(request), checkInId, type, context);
   }
 
-  /** Remove a reação (§65). Idempotente: remover o que já não existe é sucesso. */
+  /**
+   * Remove a reação (§65). Idempotente: remover o que já não existe é sucesso.
+   *
+   * T17.12 §16 — o corpo carrega o contexto, e por isso este `DELETE` tem um. Sem ele, "desfazer"
+   * dentro de um Squad apagaria a reação que a pessoa deixou no Feed de amigos. Um corpo ausente
+   * continua válido e significa `FRIEND` (§68).
+   */
   @Delete('workout-checkins/:checkInId/reaction')
   @HttpCode(HttpStatus.OK)
   removeReaction(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
+    @Body() body: unknown,
   ): WorkoutCheckInDto {
-    return this.service.removeReaction(principal.uid, requestIdOf(request), checkInId);
+    assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
+    return this.service.removeReaction(
+      principal.uid,
+      requestIdOf(request),
+      checkInId,
+      parseRemoveReactionRequest(body),
+    );
   }
 
   @Get('workout-checkins/:checkInId/comments')
@@ -169,8 +188,8 @@ export class WorkoutCheckInController {
     @Param('checkInId') checkInId: string,
     @Query() query: Record<string, unknown>,
   ): CheckInCommentsDto {
-    const { limit } = parseCommentsQuery(query);
-    return this.service.listComments(principal.uid, checkInId, limit);
+    const { limit, context } = parseCommentsQuery(query);
+    return this.service.listComments(principal.uid, checkInId, limit, context);
   }
 
   @Post('workout-checkins/:checkInId/comments')
@@ -182,11 +201,13 @@ export class WorkoutCheckInController {
     @Body() body: unknown,
   ): CheckInCommentDto {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
+    const { body: commentBody, context } = parseCommentRequest(body);
     return this.service.createComment(
       principal.uid,
       requestIdOf(request),
       checkInId,
-      parseCommentRequest(body),
+      commentBody,
+      context,
     );
   }
 

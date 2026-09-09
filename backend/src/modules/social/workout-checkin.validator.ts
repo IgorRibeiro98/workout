@@ -1,6 +1,8 @@
 import {
+  INTERACTION_AUDIENCE_TYPES,
   REACTION_TYPES,
   type CreateWorkoutCheckInRequest,
+  type InteractionContextRequest,
   type ReactionType,
 } from './workout-checkin.contract';
 import { WorkoutCheckInErrors } from './workout-checkin.errors';
@@ -119,31 +121,120 @@ export function parseCreateCheckInRequest(body: unknown): CreateWorkoutCheckInRe
 }
 
 /**
- * `PUT /v1/social/workout-checkins/{id}/reaction` (T17.9 §62/§66).
+ * O contexto de audiência de uma interação (T17.12 §7/§27/§67/§69).
+ *
+ * ## O que este parser garante — e o que ele deliberadamente **não** garante
+ *
+ * Ele garante **forma**: `type` pertence ao enum fechado `FRIEND | GROUP`, `GROUP` traz um
+ * `groupId` não vazio, e `FRIEND` **não** traz nenhum. Um `{ type: 'GROUP' }` sem `groupId` é
+ * `INVALID_CHECKIN_REQUEST` (400) e não um `404`: a requisição está malformada, e responder "não
+ * encontrado" faria um cliente com bug procurar o defeito no Squad errado.
+ *
+ * Ele **não** garante autorização. Que aquele Squad exista, que o check-in esteja compartilhado
+ * nele, que o requisitante seja membro ativo e que não haja bloqueio é decidido por
+ * `WorkoutCheckInContextResolver`, contra as tabelas, a cada requisição (§7/§9). Aqui `groupId` é
+ * só texto — e é exatamente por isso que ele nunca concede nada sozinho (§179).
+ *
+ * Ausente (`undefined`/`null`) é aceito e significa `FRIEND` no resolvedor (§68): um APK anterior
+ * à T17.12 continua reagindo e comentando no Feed de amigos como sempre fez.
+ */
+export function parseInteractionContext(value: unknown): InteractionContextRequest | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw WorkoutCheckInErrors.invalid('context precisa ser um objeto');
+  }
+
+  const object = value as Record<string, unknown>;
+  rejectUnknownFields(object, ['type', 'groupId']);
+
+  const type = object.type;
+  if (
+    typeof type !== 'string' ||
+    !(INTERACTION_AUDIENCE_TYPES as readonly string[]).includes(type)
+  ) {
+    throw WorkoutCheckInErrors.invalid('context.type precisa ser FRIEND ou GROUP');
+  }
+
+  if (type === 'GROUP') {
+    // §69 — fail-closed: sem `groupId` não existe contexto de grupo, e **nunca** se cai para
+    // `FRIEND` no lugar. Um contexto de grupo incompleto que virasse interação de amigos publicaria
+    // no Feed de amigos algo que a pessoa escreveu achando que estava num Squad.
+    if (typeof object.groupId !== 'string' || object.groupId.trim().length === 0) {
+      throw WorkoutCheckInErrors.invalid(
+        'context.groupId é obrigatório quando context.type é GROUP',
+      );
+    }
+    if (object.groupId.trim().length > MAX_CHECKIN_IDENTIFIER_LENGTH) {
+      throw WorkoutCheckInErrors.invalid('context.groupId é maior que o permitido');
+    }
+    return { type: 'GROUP', groupId: object.groupId.trim() };
+  }
+
+  // §27 — `FRIEND` com `groupId` descreve um cliente confuso: as duas coisas não coexistem, e a
+  // mesma checagem existe como `CHECK` no banco.
+  if ('groupId' in object && object.groupId !== undefined && object.groupId !== null) {
+    throw WorkoutCheckInErrors.invalid('context.groupId não é aceito quando context.type é FRIEND');
+  }
+  return { type: 'FRIEND' };
+}
+
+/**
+ * `PUT /v1/social/workout-checkins/{id}/reaction` (T17.9 §62/§66; T17.12 §15).
  *
  * O enum é **fechado**, e a recusa acontece aqui antes de qualquer escrita. Não existe caminho em
  * que o cliente envie um emoji: `"🔥"` no lugar de `"FIRE"` é `INVALID_REACTION`, porque aceitar
  * um caractere arbitrário seria aceitar conteúdo livre de terceiros na publicação de alguém — sem
- * limite, sem sanitização e sem alvo de denúncia.
+ * limite, sem sanitização e sem alvo de denúncia. A T17.12 **não** acrescenta nenhum tipo novo
+ * (§14): o que ela acrescenta é a audiência em que aquela reação existe.
  */
-export function parseReactionRequest(body: unknown): ReactionType {
+export function parseReactionRequest(body: unknown): {
+  readonly type: ReactionType;
+  readonly context: InteractionContextRequest | undefined;
+} {
   const object = requireObject(body);
   rejectServerOwnedFields(object);
-  rejectUnknownFields(object, ['type']);
+  rejectUnknownFields(object, ['type', 'context']);
 
   const type = object.type;
   if (typeof type !== 'string' || !(REACTION_TYPES as readonly string[]).includes(type)) {
     throw WorkoutCheckInErrors.invalidReaction();
   }
-  return type as ReactionType;
+  return { type: type as ReactionType, context: parseInteractionContext(object.context) };
 }
 
-/** `POST /v1/social/workout-checkins/{id}/comments` — um campo (T17.9 §81). */
-export function parseCommentRequest(body: unknown): string {
+/**
+ * `DELETE /v1/social/workout-checkins/{id}/reaction` — o corpo, quando existe (T17.12 §16).
+ *
+ * Remover exige o **mesmo** contexto de quem colocou: sem ele, um toque em "desfazer" dentro do
+ * Squad X apagaria a reação que a pessoa deixou no Feed de amigos, que é uma audiência inteiramente
+ * diferente. Um `DELETE` sem corpo continua válido e significa `FRIEND` (§68), pelo mesmo motivo do
+ * `PUT`.
+ */
+export function parseRemoveReactionRequest(body: unknown): InteractionContextRequest | undefined {
+  // Um `DELETE` sem corpo chega aqui como `{}` (o parser JSON do Nest) ou `undefined`.
+  if (body === undefined || body === null) {
+    return undefined;
+  }
   const object = requireObject(body);
   rejectServerOwnedFields(object);
-  rejectUnknownFields(object, ['body']);
-  return parseCommentBody(object.body);
+  rejectUnknownFields(object, ['context']);
+  return parseInteractionContext(object.context);
+}
+
+/** `POST /v1/social/workout-checkins/{id}/comments` (T17.9 §81; T17.12 §17). */
+export function parseCommentRequest(body: unknown): {
+  readonly body: string;
+  readonly context: InteractionContextRequest | undefined;
+} {
+  const object = requireObject(body);
+  rejectServerOwnedFields(object);
+  rejectUnknownFields(object, ['body', 'context']);
+  return {
+    body: parseCommentBody(object.body),
+    context: parseInteractionContext(object.context),
+  };
 }
 
 /**
@@ -167,11 +258,59 @@ export function parseUploadQuery(query: Record<string, unknown>): {
   };
 }
 
-/** `GET /v1/social/workout-checkins/{id}/comments?limit=` — o único parâmetro aceito (§90). */
-export function parseCommentsQuery(query: Record<string, unknown>): { readonly limit?: number } {
-  rejectUnknownFields(query, ['limit']);
+/**
+ * O contexto de audiência quando ele chega pela **query string** (T17.12 §33/§34/§35/§66).
+ *
+ * As duas rotas de leitura — o detalhe do check-in e a lista de comentários — são `GET`, e um `GET`
+ * não carrega corpo. A forma é a mesma do objeto do corpo, achatada:
+ *
+ * ```text
+ * (ausente)                     → FRIEND         (§68, compatibilidade)
+ * ?context=FRIEND               → FRIEND
+ * ?context=GROUP&groupId=X      → GROUP(X)
+ * ?context=GROUP                → 400            (§69, fail-closed)
+ * ```
+ *
+ * Ela é reconstruída no mesmo [parseInteractionContext] do corpo — não existe um segundo conjunto
+ * de regras para o mesmo conceito, que é justamente o que §29/§31 proíbem.
+ */
+function parseContextQuery(query: Record<string, unknown>): InteractionContextRequest | undefined {
+  const raw = query.context;
+  if (raw === undefined || raw === null || raw === '') {
+    if (query.groupId !== undefined && query.groupId !== null && query.groupId !== '') {
+      // `groupId` sem `context` é ambíguo: pode ser um cliente que esqueceu metade do contexto.
+      // Recusar é a única resposta segura — inferir `GROUP` a partir da presença do parâmetro
+      // faria o servidor adivinhar exatamente o que §7 diz para ele nunca adivinhar.
+      throw WorkoutCheckInErrors.invalid('groupId exige context=GROUP');
+    }
+    return undefined;
+  }
+  if (typeof raw !== 'string') {
+    throw WorkoutCheckInErrors.invalid('context precisa ser FRIEND ou GROUP');
+  }
+  // `groupId` é repassado **sempre**, inclusive com `context=FRIEND`, para que a recusa de §27
+  // ("FRIEND não coexiste com groupId") aconteça também aqui. Filtrá-lo antes faria a query string
+  // aceitar em silêncio o que o corpo recusa com `400` — duas regras para o mesmo conceito, que é
+  // exatamente o que §29/§31 proíbem.
+  const groupId = query.groupId === '' ? undefined : query.groupId;
+  return parseInteractionContext({ type: raw, groupId });
+}
+
+/**
+ * `GET /v1/social/workout-checkins/{id}/comments?limit=&context=&groupId=` (§90; T17.12 §65/§66).
+ *
+ * A audiência é **obrigatória para a resposta fazer sentido**: `GROUP(X)` lista só os comentários
+ * de `GROUP(X)`, e nunca os de `GROUP(Y)` nem os do Feed de amigos (§20/§21/§137).
+ */
+export function parseCommentsQuery(query: Record<string, unknown>): {
+  readonly limit?: number;
+  readonly context?: InteractionContextRequest;
+} {
+  rejectUnknownFields(query, ['limit', 'context', 'groupId']);
+  const context = parseContextQuery(query);
+
   if (!('limit' in query) || query.limit === undefined || query.limit === '') {
-    return {};
+    return { context };
   }
   const raw = query.limit;
   if (typeof raw !== 'string' && typeof raw !== 'number') {
@@ -182,7 +321,22 @@ export function parseCommentsQuery(query: Record<string, unknown>): { readonly l
     throw WorkoutCheckInErrors.invalid('limit precisa ser um número inteiro maior que zero');
   }
   // Como no feed: pedir mais que o teto não é erro, é atendido até o teto (§90).
-  return { limit: parsed };
+  return { limit: parsed, context };
+}
+
+/**
+ * `GET /v1/social/workout-checkins/{id}?context=&groupId=` — o detalhe (T17.12 §35).
+ *
+ * Sem contexto, a rota responde exatamente o que respondia na T17.11: a publicação é resolvida por
+ * `findAccessibleCheckIn`, e quem chega até ela **só** por um Squad continua sem interação. Com
+ * `context=GROUP&groupId=X`, a leitura passa a ser a daquele Squad — as contagens são de `GROUP(X)`
+ * e a interação é permitida a qualquer membro ativo (§76).
+ */
+export function parseCheckInDetailQuery(query: Record<string, unknown>): {
+  readonly context?: InteractionContextRequest;
+} {
+  rejectUnknownFields(query, ['context', 'groupId']);
+  return { context: parseContextQuery(query) };
 }
 
 /**

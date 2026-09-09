@@ -3,10 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { uidPrefix } from '../auth/bearer-auth.guard';
+import { BlockRepository } from './block.repository';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
 } from './canonical-training.source';
+import { SocialGroupRepository } from './social-group.repository';
 import { SocialRepository } from './social.repository';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
 import { CheckInProjector } from './checkin.projector';
@@ -19,7 +21,11 @@ import {
   COMMENTS_MAX_LIMIT,
   MAX_COMMENTS_PER_CHECKIN_PER_WINDOW,
 } from './social-media.limits';
-import { WorkoutCheckInAccessPolicy } from './workout-checkin.access-policy';
+import { WorkoutCheckInAccessPolicy, type VisibleCheckIn } from './workout-checkin.access-policy';
+import {
+  WorkoutCheckInContextResolver,
+  type InteractionAudience,
+} from './workout-checkin-context.resolver';
 import {
   CHECKIN_CLOCK_SKEW_TOLERANCE_MS,
   CHECKIN_WINDOW_MS,
@@ -29,6 +35,7 @@ import {
   type CheckInCommentDto,
   type CheckInCommentsDto,
   type CreateWorkoutCheckInRequest,
+  type InteractionContextRequest,
   type ReactionType,
   type SocialFeedDto,
   type WorkoutCheckInDto,
@@ -95,6 +102,16 @@ export class WorkoutCheckInService {
     private readonly projector: CheckInProjector,
     private readonly media: SocialMediaService,
     private readonly accessPolicy: WorkoutCheckInAccessPolicy,
+    // T17.12 §32 — o **único** lugar que transforma "o contexto que a tela propôs" em "a audiência
+    // que o servidor confirmou". Reagir, comentar e listar comentários passam todos por ele, e é
+    // isso que impede que um `groupId` do cliente conceda alguma coisa sozinho (§7/§179).
+    private readonly contextResolver: WorkoutCheckInContextResolver,
+    // T17.12 §54 — a moderação do dono do Squad precisa saber quem é dono de qual Squad, e o
+    // bloqueio precisa continuar soberano (§127). Os dois são leitura, e nenhum deles é uma segunda
+    // política: `SocialGroupRepository` e `BlockRepository` continuam sendo os donos dessas
+    // perguntas, aqui apenas consultados.
+    private readonly groups: SocialGroupRepository,
+    private readonly blocks: BlockRepository,
     private readonly contentRateLimiter: SocialContentRateLimiter,
     @Inject(CANONICAL_TRAINING_SOURCE)
     private readonly canonicalTraining: CanonicalTrainingSource,
@@ -265,30 +282,45 @@ export class WorkoutCheckInService {
    * porque a tela de detalhe precisa poder recarregar **um** post depois de reagir ou comentar,
    * sem baixar o Feed inteiro — e não porque o detalhe seja um segundo tipo de publicação.
    */
-  getCheckIn(callerUid: string, checkInId: string): WorkoutCheckInDto {
+  getCheckIn(
+    callerUid: string,
+    checkInId: string,
+    context?: InteractionContextRequest,
+  ): WorkoutCheckInDto {
     this.requireActiveProfile(callerUid);
-    // T17.11 §82 — a leitura do detalhe passou a aceitar o contexto de Squad: quem abre um card do
-    // feed de um grupo precisa poder ver a publicação inteira. Quem decide **como** ele chegou até
-    // aqui é a política, e não a rota (§83) — não existe parâmetro de contexto, e não haveria o
-    // que ganhar com um: o servidor calcula os dois caminhos de qualquer forma.
-    //
-    // `canInteract` é o que sai daí, e é o que mantém §70: reagir, comentar e listar comentários
-    // continuam exigindo `findVisibleCheckIn` (relação direta), e nenhuma dessas rotas mudou.
+
+    // T17.12 §35/§66 — quando a tela informa de onde veio, o detalhe é lido **naquela audiência**:
+    // as contagens são as daquele Squad e a interação é liberada para qualquer membro ativo (§76).
+    // O `groupId` não concede nada por si: o resolvedor confirma Squad ativo, compartilhamento,
+    // participação dos dois lados e ausência de bloqueio antes de devolver a audiência (§7/§9).
+    if (context) {
+      const { audience, checkIn } = this.contextResolver.resolve(callerUid, checkInId, context);
+      return this.projectInAudience(callerUid, checkIn, audience);
+    }
+
+    // Sem contexto, a rota responde o que respondia na T17.11: quem alcança a publicação só por um
+    // Squad continua podendo **ler** e não interagir (§70 daquela fase). Não é uma restrição nova —
+    // é a única resposta honesta quando ninguém disse de qual Squad a tela está falando, e as
+    // contagens de uma audiência escolhida por sorteio seriam piores do que nenhuma.
     const accessible = this.accessPolicy.findAccessibleCheckIn(callerUid, checkInId);
     if (!accessible) {
       throw WorkoutCheckInErrors.checkInNotFound();
     }
-    return this.projector.project(callerUid, [
-      {
-        checkInId: accessible.checkInId,
-        authorUid: accessible.authorUid,
-        authorSocialId: accessible.authorSocialId,
-        authorDisplayName: accessible.authorDisplayName,
-        caption: accessible.caption,
-        publishedAt: accessible.publishedAt,
-        canInteract: accessible.canInteract,
-      },
-    ])[0];
+    return this.projector.project(
+      callerUid,
+      [
+        {
+          checkInId: accessible.checkInId,
+          authorUid: accessible.authorUid,
+          authorSocialId: accessible.authorSocialId,
+          authorDisplayName: accessible.authorDisplayName,
+          caption: accessible.caption,
+          publishedAt: accessible.publishedAt,
+          canInteract: accessible.canInteract,
+        },
+      ],
+      { type: 'FRIEND' },
+    )[0];
   }
 
   // ================================================================== reações (§61–§73)
@@ -296,9 +328,11 @@ export class WorkoutCheckInService {
   /**
    * `PUT /v1/social/workout-checkins/{id}/reaction` (§66).
    *
-   * Adicionar e **trocar** são a mesma operação (§64): a chave primária `(checkin_id,
-   * reactor_uid)` faz o `ON CONFLICT` atualizar a linha existente, então 🔥 → 💪 nunca vira duas
-   * reações. Repetir a mesma reação é sucesso e não muda nada — é o retry de resposta perdida.
+   * Adicionar e **trocar** são a mesma operação (§64): o `ON CONFLICT` atualiza a linha daquela
+   * audiência, então 🔥 → 💪 nunca vira duas reações **ali** — e não toca a reação que a pessoa
+   * tenha em outra audiência, que é uma interação independente (T17.12 §11/§13). O alvo é um dos
+   * dois índices únicos parciais da 0020, e não mais uma chave primária: a unicidade passou a ser
+   * por audiência. Repetir a mesma reação é sucesso e não muda nada — é o retry de resposta perdida.
    *
    * §67/§68 — quem pode reagir é quem consegue **ver o post agora**. "Já reagiu antes" não é
    * permissão: depois de um `unfriend` ou de um bloqueio, a próxima requisição é recusada, porque
@@ -311,29 +345,31 @@ export class WorkoutCheckInService {
     requestId: string,
     checkInId: string,
     type: ReactionType,
+    context?: InteractionContextRequest,
   ): WorkoutCheckInDto {
     if (!this.contentRateLimiter.tryAcquireReaction(callerUid)) {
       throw WorkoutCheckInErrors.rateLimited();
     }
-    const profile = this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
-      throw WorkoutCheckInErrors.checkInNotFound();
-    }
+    this.requireActiveProfile(callerUid);
+    // T17.12 §7/§9 — a autorização é da audiência, não do post: `FRIEND` continua exigindo relação
+    // direta, e `GROUP(X)` exige Squad ativo, check-in compartilhado ali, participação ativa do
+    // requisitante **e** do autor, e ausência de bloqueio. Um contexto inválido é `404`, nunca um
+    // rebaixamento silencioso para `FRIEND` (§69).
+    const { audience, checkIn } = this.contextResolver.resolve(callerUid, checkInId, context);
 
-    this.interactions.putReaction(checkInId, callerUid, type, this.clock.now());
+    this.interactions.putReaction(checkInId, callerUid, type, audience, this.clock.now());
 
-    // §160 — o tipo é vocabulário fechado do servidor, então registrá-lo não vaza conteúdo de
-    // ninguém. O uid completo e o `socialId` continuam fora.
+    // §172/§173 — o tipo e a audiência são vocabulário fechado do servidor, então registrá-los não
+    // vaza conteúdo de ninguém. O `groupId`, o uid completo e o `socialId` continuam fora.
     this.logger.info('social.reaction.changed', {
       requestId,
       uidPrefix: uidPrefix(callerUid),
       type,
+      audience: audience.type,
       operation: 'PUT',
     });
 
-    void profile;
-    return this.enrich(callerUid, [visible as FeedRow])[0];
+    return this.projectInAudience(callerUid, checkIn, audience);
   }
 
   /**
@@ -342,25 +378,30 @@ export class WorkoutCheckInService {
    * Idempotente: remover o que já não existe é sucesso. Exige visibilidade pela mesma razão do
    * `PUT` — e porque devolver o post atualizado exige poder lê-lo.
    */
-  removeReaction(callerUid: string, requestId: string, checkInId: string): WorkoutCheckInDto {
+  removeReaction(
+    callerUid: string,
+    requestId: string,
+    checkInId: string,
+    context?: InteractionContextRequest,
+  ): WorkoutCheckInDto {
     if (!this.contentRateLimiter.tryAcquireReaction(callerUid)) {
       throw WorkoutCheckInErrors.rateLimited();
     }
     this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
-      throw WorkoutCheckInErrors.checkInNotFound();
-    }
+    // §16 — remover é sempre **dentro de uma audiência**. Sem isso, desfazer a reação dentro do
+    // Squad apagaria a que a pessoa deixou no Feed de amigos, que é outra conversa inteira.
+    const { audience, checkIn } = this.contextResolver.resolve(callerUid, checkInId, context);
 
-    this.interactions.removeReaction(checkInId, callerUid);
+    this.interactions.removeReaction(checkInId, callerUid, audience);
 
     this.logger.info('social.reaction.changed', {
       requestId,
       uidPrefix: uidPrefix(callerUid),
+      audience: audience.type,
       operation: 'DELETE',
     });
 
-    return this.enrich(callerUid, [visible as FeedRow])[0];
+    return this.projectInAudience(callerUid, checkIn, audience);
   }
 
   // ================================================================== comentários (§74–§98)
@@ -375,15 +416,23 @@ export class WorkoutCheckInService {
    * um terceiro, não. A tela usa o booleano para desenhar o menu, e o servidor recusa de qualquer
    * forma — esconder um botão nunca foi controle de acesso.
    */
-  listComments(callerUid: string, checkInId: string, limit?: number): CheckInCommentsDto {
+  listComments(
+    callerUid: string,
+    checkInId: string,
+    limit?: number,
+    context?: InteractionContextRequest,
+  ): CheckInCommentsDto {
     this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
-      throw WorkoutCheckInErrors.checkInNotFound();
-    }
+    const { audience, checkIn } = this.contextResolver.resolve(callerUid, checkInId, context);
 
     const bounded = Math.min(Math.max(limit ?? COMMENTS_DEFAULT_LIMIT, 1), COMMENTS_MAX_LIMIT);
-    const rows = this.interactions.listComments(callerUid, checkInId, bounded);
+    // §65/§66 — a lista é de **uma** audiência. O comentário do Squad X não aparece no Squad Y nem
+    // no Feed de amigos, e o do Feed de amigos não aparece em Squad nenhum (§20/§21/§22).
+    const rows = this.interactions.listComments(callerUid, checkInId, audience, bounded);
+
+    // §54 — o dono do Squad pode moderar os comentários **daquela** audiência. A pergunta é feita
+    // uma vez por lista, e não por comentário: o papel é o mesmo para todas as linhas.
+    const moderatesAudience = this.moderatesGroupAudience(callerUid, audience);
 
     return {
       items: rows.map<CheckInCommentDto>((row) => ({
@@ -392,7 +441,12 @@ export class WorkoutCheckInService {
         body: row.body,
         createdAt: row.createdAt,
         isCurrentUser: row.authorUid === callerUid,
-        canDelete: row.authorUid === callerUid || visible.authorUid === callerUid,
+        // §125 — três autoridades, nesta ordem: o autor do comentário, o autor do check-in e o
+        // dono do Squad quando a audiência é a dele. Toda linha aqui já passou pelo filtro de
+        // bloqueio da consulta, então o dono nunca recebe `canDelete` sobre algo que ele não vê
+        // (§126/§127).
+        canDelete:
+          row.authorUid === callerUid || checkIn.authorUid === callerUid || moderatesAudience,
       })),
     };
   }
@@ -413,15 +467,13 @@ export class WorkoutCheckInService {
     requestId: string,
     checkInId: string,
     body: string,
+    context?: InteractionContextRequest,
   ): CheckInCommentDto {
     if (!this.contentRateLimiter.tryAcquireComment(callerUid)) {
       throw WorkoutCheckInErrors.rateLimited();
     }
     const profile = this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
-      throw WorkoutCheckInErrors.checkInNotFound();
-    }
+    const { audience } = this.contextResolver.resolve(callerUid, checkInId, context);
 
     const now = this.clock.now();
     // §158 — o teto por publicação existe além do teto global: 30 comentários espalhados por dez
@@ -436,15 +488,20 @@ export class WorkoutCheckInService {
     }
 
     const commentId = randomUUID();
-    this.interactions.createComment(commentId, checkInId, callerUid, body, now);
+    this.interactions.createComment(commentId, checkInId, callerUid, body, audience, now);
 
-    // §161 — **nunca** o corpo do comentário. Só o evento, o prefixo do uid e o comprimento, que
-    // é metadata técnica e não conteúdo.
-    this.logger.info('social.comment.created', {
-      requestId,
-      uidPrefix: uidPrefix(callerUid),
-      bodyLength: body.length,
-    });
+    // §172/§173 — **nunca** o corpo do comentário, nunca o nome do Squad, nunca o `groupId`. Só o
+    // evento, o prefixo do uid, o comprimento e a audiência — os dois últimos são metadata técnica,
+    // e a audiência é vocabulário fechado do servidor.
+    this.logger.info(
+      audience.type === 'GROUP' ? 'social.group.comment.created' : 'social.comment.created',
+      {
+        requestId,
+        uidPrefix: uidPrefix(callerUid),
+        bodyLength: body.length,
+        audience: audience.type,
+      },
+    );
 
     return {
       commentId,
@@ -460,39 +517,61 @@ export class WorkoutCheckInService {
   /**
    * `DELETE /v1/social/workout-checkins/{checkInId}/comments/{commentId}` (§93–§98).
    *
-   * Duas autoridades, e só duas: o **autor do comentário** (§93) e o **autor do check-in**, que
-   * modera a própria publicação (§94). Um terceiro amigo recebe `404` — a mesma resposta de
-   * "não existe" —, porque confirmar que o comentário existe já diria a ele algo sobre um post
-   * que ele não administra (§95).
+   * Três autoridades desde a T17.12 (§125), nesta ordem: o **autor do comentário** (§93), o
+   * **autor do check-in**, que modera a própria publicação (§94), e o **dono do Squad** — mas só
+   * quando a audiência do comentário é `GROUP` daquele Squad (§54). Qualquer outra pessoa recebe
+   * `404` — a mesma resposta de "não existe" —, porque confirmar que o comentário existe já diria
+   * a ela algo sobre uma conversa que ela não administra (§95/§123).
    *
    * Idempotente (§97): a escrita é condicional em `deleted_at IS NULL`, então o segundo `DELETE`
    * converge em vez de virar `404`. E ela não toca o check-in (§98).
    */
   deleteComment(callerUid: string, requestId: string, checkInId: string, commentId: string): void {
     this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
-      throw WorkoutCheckInErrors.checkInNotFound();
-    }
 
+    // §122 — a rota não recebe contexto, e não precisa: a audiência é uma propriedade **do
+    // comentário**, e é o servidor que a lê. Aceitar um contexto aqui deixaria a tela dizer em que
+    // audiência ela acha que está, o que é exatamente o que não pode decidir moderação.
     const comment = this.interactions.findComment(commentId);
     if (!comment || comment.checkInId !== checkInId) {
       throw WorkoutCheckInErrors.commentNotFound();
     }
-    if (comment.authorUid !== callerUid && visible.authorUid !== callerUid) {
+
+    const checkIn = this.repository.findById(checkInId);
+    const isCommentAuthor = comment.authorUid === callerUid;
+    const isPostAuthor = checkIn?.authorUid === callerUid && checkIn.status === 'PUBLISHED';
+    // §54/§55/§56 — o dono do Squad modera **a interação daquele contexto**, e nada além dela: ele
+    // não alcança comentário `FRIEND` (nem que ele e o autor sejam amigos), não alcança outro Squad
+    // e não toca o check-in. §126/§127 — o bloqueio continua soberano: um comentário que o bloqueio
+    // já esconde dele não vira visível para ser moderado.
+    const moderatesAsGroupOwner =
+      !isCommentAuthor &&
+      !isPostAuthor &&
+      comment.audienceType === 'GROUP' &&
+      comment.groupId !== null &&
+      this.moderatesGroupAudience(callerUid, { type: 'GROUP', groupId: comment.groupId }) &&
+      !this.blocks.isBlockedBidirectional(callerUid, comment.authorUid);
+
+    if (!isCommentAuthor && !isPostAuthor && !moderatesAsGroupOwner) {
+      // §123 — um membro comum não modera comentário alheio, e recebe a mesma resposta de "não
+      // existe": confirmar o comentário já diria a ele algo sobre uma conversa que ele não
+      // administra.
       throw WorkoutCheckInErrors.commentNotFound();
     }
 
     const changed = this.interactions.softDeleteComment(commentId, this.clock.now());
 
-    this.logger.info('social.comment.deleted', {
-      requestId,
-      uidPrefix: uidPrefix(callerUid),
-      status: changed ? 'DELETED' : 'ALREADY_DELETED',
-      // Quem apagou: o autor do comentário ou o dono do post. Metadata de moderação, sem
-      // identidade — os dois prefixos de uid já seriam mais do que a revisão precisa aqui.
-      actor: comment.authorUid === callerUid ? 'COMMENT_AUTHOR' : 'POST_AUTHOR',
-    });
+    this.logger.info(
+      moderatesAsGroupOwner ? 'social.group.comment.moderated' : 'social.comment.deleted',
+      {
+        requestId,
+        uidPrefix: uidPrefix(callerUid),
+        status: changed ? 'DELETED' : 'ALREADY_DELETED',
+        // §120/§121 — quem apagou, como papel. Metadata de moderação, sem identidade e sem o corpo
+        // do comentário: os prefixos de uid dos dois lados já seriam mais do que a revisão precisa.
+        actor: isCommentAuthor ? 'COMMENT_AUTHOR' : isPostAuthor ? 'POST_AUTHOR' : 'GROUP_OWNER',
+      },
+    );
   }
 
   // ------------------------------------------------------------------ internas
@@ -611,7 +690,55 @@ export class WorkoutCheckInService {
         publishedAt: row.publishedAt,
         canInteract: true,
       })),
+      // T17.12 §33/§38/§64 — o Feed de amigos é a audiência `FRIEND`, e as contagens dele contam
+      // **só** o que aconteceu ali. Uma reação deixada dentro de um Squad não entra neste número.
+      { type: 'FRIEND' },
     );
+  }
+
+  /**
+   * Um check-in projetado **dentro da audiência que acabou de ser autorizada** (T17.12 §37/§63).
+   *
+   * A resposta de reagir, remover reação e abrir o detalhe com contexto passa por aqui, e é sempre
+   * o mesmo card do feed daquela audiência — nunca uma segunda maneira de descrever a publicação,
+   * que divergiria no primeiro campo novo.
+   *
+   * `canInteract: true` não é otimismo: chegar até aqui significa que o resolvedor já confirmou a
+   * audiência contra as tabelas. Se ele não tivesse confirmado, teria lançado `404` antes.
+   */
+  private projectInAudience(
+    viewerUid: string,
+    checkIn: VisibleCheckIn,
+    audience: InteractionAudience,
+  ): WorkoutCheckInDto {
+    return this.projector.project(
+      viewerUid,
+      [
+        {
+          checkInId: checkIn.checkInId,
+          authorUid: checkIn.authorUid,
+          authorSocialId: checkIn.authorSocialId,
+          authorDisplayName: checkIn.authorDisplayName,
+          caption: checkIn.caption,
+          publishedAt: checkIn.publishedAt,
+          canInteract: true,
+        },
+      ],
+      audience,
+    )[0];
+  }
+
+  /**
+   * O viewer é dono do Squad desta audiência? (T17.12 §54/§55/§150.)
+   *
+   * `false` para toda audiência `FRIEND`, sempre — e é o ponto de §55: privilégio de grupo não
+   * atravessa para o Feed de amigos, nem quando o dono e o autor do comentário são amigos.
+   */
+  private moderatesGroupAudience(viewerUid: string, audience: InteractionAudience): boolean {
+    if (audience.type !== 'GROUP') {
+      return false;
+    }
+    return this.groups.findActiveMembership(audience.groupId, viewerUid)?.role === 'OWNER';
   }
 
   /**

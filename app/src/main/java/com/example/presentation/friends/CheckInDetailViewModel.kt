@@ -8,6 +8,7 @@ import com.example.data.social.WorkoutCheckInContract
 import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthState
 import com.example.domain.social.CheckInComment
+import com.example.domain.social.InteractionContext
 import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialReportTarget
 import com.example.domain.social.WorkoutCheckIn
@@ -48,6 +49,21 @@ sealed interface CheckInDetailPhase {
 
 data class CheckInDetailUiState(
     val checkInId: String = "",
+    /**
+     * A audiência em que esta tela foi aberta (T17.12 §35/§61).
+     *
+     * Ela faz parte da **identidade** do que está na tela, junto com o `checkInId`: a mesma
+     * publicação aberta a partir do Squad A e do Squad B são duas conversas diferentes, e um
+     * estado que só soubesse do `checkInId` mostraria os comentários de uma dentro da outra.
+     */
+    val context: InteractionContext = InteractionContext.Friend,
+    /**
+     * O nome do Squad de onde a tela veio, quando ela veio de um (T17.12 §63).
+     *
+     * Só para o usuário saber onde está falando. A tela nunca mostra o tipo da audiência nem o
+     * identificador do Squad: "GROUP" e um UUID não dizem nada a ninguém, e o nome diz tudo.
+     */
+    val squadName: String? = null,
     val phase: CheckInDetailPhase = CheckInDetailPhase.Loading,
     val photo: ImageBitmap? = null,
     val draft: String = "",
@@ -87,6 +103,18 @@ data class CheckInDetailUiState(
  * A reação é reversível e barata, então a tela responde na hora e reconcilia com a resposta do
  * servidor (§121). O comentário espera o servidor (§122): ele carrega texto que a pessoa escreveu,
  * e um que aparece e some faz quem escreveu acreditar que a outra pessoa leu.
+ *
+ * ## A audiência é parte da identidade da tela (T17.12 §35/§61)
+ *
+ * O mesmo check-in abre no Feed de amigos e em cada Squad em que foi compartilhado, e cada um
+ * desses lugares tem **a sua própria** conversa. Por isso [open] recebe a audiência junto com o
+ * `checkInId`, toda chamada ao gateway a carrega, e trocar de audiência **limpa** o estado antes
+ * de ler de novo: reaproveitar o que estava na tela mostraria os comentários do Squad X dentro do
+ * Squad Y — o defeito que a T17.12 chama de bloqueante.
+ *
+ * A audiência vem da **navegação local** (de onde o usuário tocou), e nunca de algo que o servidor
+ * respondeu (§67). O servidor revalida tudo de qualquer forma e recusa com `404` o contexto que
+ * não confere, em vez de rebaixar para o Feed de amigos (§69).
  */
 class CheckInDetailViewModel(
     private val gateway: WorkoutCheckInGateway,
@@ -108,39 +136,69 @@ class CheckInDetailViewModel(
 
                 // Limpar vem primeiro, sempre — inclusive a foto (§57/§145).
                 mediaCache?.switchAccount(newUid)
-                val checkInId = _uiState.value.checkInId
+                val previous = _uiState.value
+                // A publicação e a audiência sobrevivem à troca de conta porque são **de onde a
+                // tela está**, e não da sessão. Comentários, reações e foto, não: eles são o que a
+                // conta anterior podia ver (T17.12 §90).
                 _uiState.value = CheckInDetailUiState(
-                    checkInId = checkInId,
+                    checkInId = previous.checkInId,
+                    context = previous.context,
+                    squadName = previous.squadName,
                     phase = if (newUid == null) {
                         CheckInDetailPhase.SignedOut
                     } else {
                         CheckInDetailPhase.Loading
                     }
                 )
-                if (newUid != null && checkInId.isNotBlank()) load(checkInId, newUid)
+                if (newUid != null && previous.checkInId.isNotBlank()) {
+                    load(previous.checkInId, previous.context, newUid)
+                }
             }
         }
     }
 
-    /** Abrir a tela busca a publicação e os comentários. */
-    fun open(checkInId: String) {
+    /**
+     * Abrir a tela busca a publicação e os comentários **daquela audiência** (T17.12 §35).
+     *
+     * [context] descreve de onde o usuário veio: o Feed de amigos ou um Squad específico. Ele é
+     * carregado pela rota de navegação e nunca lido de uma resposta do servidor (§67).
+     *
+     * Trocar de audiência sobre o mesmo `checkInId` **descarta** o que estava na tela, exatamente
+     * como trocar de publicação: manter os comentários enquanto a nova leitura corre mostraria a
+     * conversa de um Squad dentro do outro (§61).
+     */
+    fun open(
+        checkInId: String,
+        context: InteractionContext = InteractionContext.Friend,
+        squadName: String? = null
+    ) {
         val uid = currentUid() ?: run {
             _uiState.value = CheckInDetailUiState(
                 checkInId = checkInId,
+                context = context,
+                squadName = squadName,
                 phase = CheckInDetailPhase.SignedOut
             )
             return
         }
-        if (_uiState.value.checkInId != checkInId) {
-            _uiState.value = CheckInDetailUiState(checkInId = checkInId)
+        val current = _uiState.value
+        if (current.checkInId != checkInId || current.context != context) {
+            _uiState.value = CheckInDetailUiState(
+                checkInId = checkInId,
+                context = context,
+                squadName = squadName
+            )
+        } else if (current.squadName != squadName) {
+            _uiState.update { it.copy(squadName = squadName) }
         }
-        load(checkInId, uid)
+        load(checkInId, context, uid)
     }
 
     fun refresh() {
         val uid = currentUid() ?: return
-        val checkInId = _uiState.value.checkInId.takeIf { it.isNotBlank() } ?: return
-        load(checkInId, uid)
+        val state = _uiState.value
+        val checkInId = state.checkInId.takeIf { it.isNotBlank() } ?: return
+        load(checkInId, state.context, uid)
     }
 
     /** Reagir, trocar ou remover (§120/§121). Tocar na reação atual de novo a remove. */
@@ -151,6 +209,7 @@ class CheckInDetailViewModel(
 
         val before = phase.checkIn
         val removing = before.currentUserReaction == type
+        val context = _uiState.value.context
 
         _uiState.update {
             it.copy(
@@ -161,11 +220,14 @@ class CheckInDetailViewModel(
 
         viewModelScope.launch {
             val outcome = if (removing) {
-                gateway.removeReaction(before.checkInId)
+                gateway.removeReaction(before.checkInId, context)
             } else {
-                gateway.putReaction(before.checkInId, type)
+                gateway.putReaction(before.checkInId, type, context)
             }
-            if (currentUid() != uid) return@launch
+            // A audiência pode ter mudado durante o voo — a tela navegou para o mesmo check-in em
+            // outro Squad. Aplicar esta resposta escreveria a contagem de uma conversa sobre a
+            // outra (T17.12 §62).
+            if (!isStillTargeting(uid, before.checkInId, context)) return@launch
 
             _uiState.update { state ->
                 val current = state.phase as? CheckInDetailPhase.Success ?: return@update state
@@ -207,11 +269,13 @@ class CheckInDetailViewModel(
         if (!state.canSendComment) return
 
         val body = state.draft.trim()
+        val context = state.context
+        val checkInId = phase.checkIn.checkInId
         _uiState.update { it.copy(isSendingComment = true) }
 
         viewModelScope.launch {
-            val outcome = gateway.createComment(phase.checkIn.checkInId, body)
-            if (currentUid() != uid) return@launch
+            val outcome = gateway.createComment(checkInId, body, context)
+            if (!isStillTargeting(uid, checkInId, context)) return@launch
 
             when (outcome) {
                 is WorkoutCheckInOutcome.Success -> _uiState.update { current ->
@@ -257,11 +321,15 @@ class CheckInDetailViewModel(
         val phase = _uiState.value.phase as? CheckInDetailPhase.Success ?: return
         if (_uiState.value.deletingCommentId != null) return
 
+        val context = _uiState.value.context
+        val checkInId = phase.checkIn.checkInId
         _uiState.update { it.copy(deletingCommentId = commentId) }
 
         viewModelScope.launch {
-            val outcome = gateway.deleteComment(phase.checkIn.checkInId, commentId)
-            if (currentUid() != uid) return@launch
+            // Sem contexto, e é de propósito (T17.12 §18): a audiência é propriedade do comentário
+            // guardado, e o servidor a deriva do `commentId`.
+            val outcome = gateway.deleteComment(checkInId, commentId)
+            if (!isStillTargeting(uid, checkInId, context)) return@launch
 
             _uiState.update { state ->
                 val current = state.phase as? CheckInDetailPhase.Success
@@ -322,15 +390,19 @@ class CheckInDetailViewModel(
 
     // ------------------------------------------------------------------ internas
 
-    private fun load(checkInId: String, expectedUid: String) {
+    private fun load(
+        checkInId: String,
+        context: InteractionContext,
+        expectedUid: String
+    ) {
         viewModelScope.launch {
-            val checkIn = gateway.checkIn(checkInId)
-            if (currentUid() != expectedUid) return@launch
+            val checkIn = gateway.checkIn(checkInId, context)
+            if (!isStillTargeting(expectedUid, checkInId, context)) return@launch
 
             when (checkIn) {
                 is WorkoutCheckInOutcome.Success -> {
-                    val comments = gateway.comments(checkInId)
-                    if (currentUid() != expectedUid) return@launch
+                    val comments = gateway.comments(checkInId, context = context)
+                    if (!isStillTargeting(expectedUid, checkInId, context)) return@launch
 
                     val items = (comments as? WorkoutCheckInOutcome.Success)?.data ?: emptyList()
                     _uiState.update {
@@ -385,6 +457,24 @@ class CheckInDetailViewModel(
             reactions = counts,
             currentUserReaction = if (removing) null else type
         )
+    }
+
+    /**
+     * Se a resposta que acabou de chegar ainda descreve **o que está na tela** (T17.12 §62/§90).
+     *
+     * Conta, publicação e audiência, os três. A conta sozinha nunca bastou; desde a T17.12 a
+     * audiência também entra, porque a mesma publicação vive em várias delas e uma resposta de
+     * `GROUP(A)` aplicada depois de a tela ter ido para `GROUP(B)` colocaria a conversa de um
+     * Squad na tela do outro sem nenhum sintoma de erro.
+     */
+    private fun isStillTargeting(
+        expectedUid: String,
+        checkInId: String,
+        context: InteractionContext
+    ): Boolean {
+        if (currentUid() != expectedUid) return false
+        val state = _uiState.value
+        return state.checkInId == checkInId && state.context == context
     }
 
     private fun currentUid(): String? =

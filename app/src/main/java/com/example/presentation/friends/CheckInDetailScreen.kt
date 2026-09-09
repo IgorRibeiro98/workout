@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.social.CheckInComment
+import com.example.domain.social.InteractionContext
 import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialReportTarget
 import com.example.domain.social.WorkoutCheckIn
@@ -116,6 +117,15 @@ private val REPORT_REASONS = listOf(
 fun CheckInDetailScreen(
     viewModel: CheckInDetailViewModel,
     checkInId: String,
+    /**
+     * A audiência em que esta tela foi aberta (T17.12 §35).
+     *
+     * Ela vem da **rota de navegação** — de onde o usuário tocou —, e nunca de uma resposta do
+     * servidor (§67). O padrão é o Feed de amigos, que é o que esta tela sempre foi.
+     */
+    interactionContext: InteractionContext = InteractionContext.Friend,
+    /** O nome do Squad de onde a tela veio, quando ela veio de um (T17.12 §63). */
+    squadName: String? = null,
     onNavigateBack: () -> Unit,
     onOpenFriendProfile: (socialId: String, displayName: String) -> Unit,
     now: Long = System.currentTimeMillis(),
@@ -130,7 +140,11 @@ fun CheckInDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     var sharingToSquad by remember { mutableStateOf(false) }
 
-    LaunchedEffect(checkInId) { viewModel.open(checkInId) }
+    // A chave inclui a audiência: abrir o **mesmo** check-in vindo de outro Squad é outra
+    // conversa, e um efeito que só observasse o `checkInId` não recarregaria nada (T17.12 §61).
+    LaunchedEffect(checkInId, interactionContext) {
+        viewModel.open(checkInId, interactionContext, squadName)
+    }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -195,6 +209,7 @@ fun CheckInDetailScreen(
                     checkIn = phase.checkIn,
                     comments = phase.comments,
                     uiState = uiState,
+                    audienceLabel = audienceLabel(uiState),
                     now = now,
                     onReact = viewModel::toggleReaction,
                     onDraftChanged = viewModel::onDraftChanged,
@@ -230,11 +245,27 @@ fun CheckInDetailScreen(
     }
 }
 
+/**
+ * Onde a conversa está acontecendo, em linguagem de gente (T17.12 §63/§64).
+ *
+ * Ela nomeia o **Squad**, e nunca a audiência: "GROUP", "FRIEND" e um identificador de grupo são
+ * vocabulário do protocolo e não dizem nada a quem lê. No Feed de amigos não há rótulo nenhum —
+ * ele é o lugar padrão, e anunciá-lo só acrescentaria ruído a toda publicação.
+ */
+private fun audienceLabel(uiState: CheckInDetailUiState): String? {
+    if (uiState.context !is InteractionContext.Group) return null
+    val name = uiState.squadName?.takeIf { it.isNotBlank() }
+        ?: return "Conversa dentro do squad"
+    return "No squad: $name"
+}
+
 @Composable
 private fun DetailBody(
     checkIn: WorkoutCheckIn,
     comments: List<CheckInComment>,
     uiState: CheckInDetailUiState,
+    /** `null` no Feed de amigos: só o Squad precisa se anunciar (T17.12 §63). */
+    audienceLabel: String?,
     now: Long,
     onReact: (ReactionType) -> Unit,
     onDraftChanged: (String) -> Unit,
@@ -271,6 +302,17 @@ private fun DetailBody(
             }
 
             item { HorizontalDivider(color = BorderLight) }
+
+            audienceLabel?.let { label ->
+                item {
+                    Text(
+                        text = label,
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            }
 
             if (comments.isEmpty()) {
                 item {

@@ -49,7 +49,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.ImageBitmap
+import com.example.domain.social.InteractionContext
 import com.example.domain.social.ReactionType
+import com.example.domain.social.interactionKey
 import com.example.domain.social.WorkoutCheckIn
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
@@ -244,7 +246,12 @@ private fun SocialFeedBody(
                         now = now,
                         photo = checkIn.media?.let { uiState.photos[it.mediaId] },
                         isDeleting = uiState.deletingCheckInId == checkIn.checkInId,
-                        isReacting = checkIn.checkInId in uiState.pendingReactions,
+                        // A ocupação é por `(audiência, publicação)` (T17.12 §61): esta tela é
+                        // sempre o Feed de amigos, e a chave diz isso em vez de deixar implícito.
+                        isReacting = interactionKey(
+                            checkIn.checkInId,
+                            InteractionContext.Friend
+                        ) in uiState.pendingReactions,
                         onDelete = { onDelete(checkIn.checkInId) },
                         onOpenFriendProfile = {
                             onOpenFriendProfile(checkIn.author.socialId, checkIn.author.displayName)
@@ -467,9 +474,14 @@ private fun CheckInPhoto(image: ImageBitmap?, aspectRatio: Float) {
  * Um toque reage; tocar de novo na reação atual remove (§120). A que está ativa fica destacada, e
  * o número ao lado é o que **este** viewer pode ver — contagem filtrada no servidor (§69), nunca
  * recalculada aqui.
+ *
+ * `internal` desde a T17.12 (§12/§133): o card do Squad passou a oferecer reação e comentário, e
+ * ele desenha **esta** barra. Uma segunda cópia divergiria no dia em que um quarto tipo de reação
+ * entrasse — e a divergência apareceria como um botão que existe em uma tela e não na outra.
+ * Quem muda entre as duas telas é a audiência das ações, e ela não é assunto deste desenho.
  */
 @Composable
-private fun ReactionBar(
+internal fun ReactionBar(
     reactions: Map<ReactionType, Int>,
     currentUserReaction: ReactionType?,
     isBusy: Boolean,

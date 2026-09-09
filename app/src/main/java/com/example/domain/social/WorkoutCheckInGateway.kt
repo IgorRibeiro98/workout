@@ -86,8 +86,21 @@ interface WorkoutCheckInGateway {
      */
     suspend fun feed(limit: Int? = null): WorkoutCheckInOutcome<List<WorkoutCheckIn>>
 
-    /** Uma publicação, para a tela de detalhe (T17.9 §118). Mesma política, mesmo DTO do Feed. */
-    suspend fun checkIn(checkInId: String): WorkoutCheckInOutcome<WorkoutCheckIn>
+    /**
+     * Uma publicação, para a tela de detalhe (T17.9 §118). Mesma política, mesmo DTO do Feed.
+     *
+     * [context] diz **de onde a tela veio** (T17.12 §35). Aberta a partir de um Squad, a leitura é
+     * a daquele Squad: as contagens são de `GROUP(groupId)` e `canInteract` vale para qualquer
+     * membro ativo. Sem ele — [InteractionContext.Friend] — o comportamento é o da T17.11, em que
+     * alcançar a publicação só por Squad continua sendo leitura.
+     *
+     * Ele é **proposta**, nunca autorização: o servidor revalida o contexto inteiro e recusa com
+     * `404` o que não confere, em vez de rebaixar para o Feed de amigos (§69).
+     */
+    suspend fun checkIn(
+        checkInId: String,
+        context: InteractionContext
+    ): WorkoutCheckInOutcome<WorkoutCheckIn>
 
     /** Exclui uma publicação própria. Idempotente: repetir converge. */
     suspend fun deleteCheckIn(checkInId: String): WorkoutCheckInOutcome<Unit>
@@ -101,16 +114,33 @@ interface WorkoutCheckInGateway {
      */
     suspend fun putReaction(
         checkInId: String,
-        type: ReactionType
+        type: ReactionType,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<WorkoutCheckIn>
 
-    /** Remove a reação (§65). Idempotente: remover o que já não existe é sucesso. */
-    suspend fun removeReaction(checkInId: String): WorkoutCheckInOutcome<WorkoutCheckIn>
+    /**
+     * Remove a reação (§65). Idempotente: remover o que já não existe é sucesso.
+     *
+     * [context] é obrigatório aqui pelo mesmo motivo de [putReaction] (T17.12 §16): desfazer tem
+     * de alcançar **a mesma** audiência que recebeu a reação. Sem ele, um toque em "desfazer"
+     * dentro de um Squad apagaria a reação que a pessoa deixou no Feed de amigos.
+     */
+    suspend fun removeReaction(
+        checkInId: String,
+        context: InteractionContext
+    ): WorkoutCheckInOutcome<WorkoutCheckIn>
 
-    /** Os comentários **visíveis para este usuário** (§89/§92). Bounded pelo servidor (§90). */
+    /**
+     * Os comentários **visíveis para este usuário** (§89/§92). Bounded pelo servidor (§90).
+     *
+     * A resposta traz só os comentários de [context] (T17.12 §65). É por isso que nenhum estado de
+     * tela pode ser indexado apenas pelo `checkInId`: a mesma publicação tem uma conversa por
+     * audiência, e misturá-las mostraria o Squad X dentro do Squad Y.
+     */
     suspend fun comments(
         checkInId: String,
-        limit: Int? = null
+        limit: Int? = null,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<List<CheckInComment>>
 
     /**
@@ -122,10 +152,18 @@ interface WorkoutCheckInGateway {
      */
     suspend fun createComment(
         checkInId: String,
-        body: String
+        body: String,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<CheckInComment>
 
-    /** Apaga um comentário. Só o autor dele ou o autor do post (§93/§94). Idempotente (§97). */
+    /**
+     * Apaga um comentário. Só o autor dele ou o autor do post (§93/§94). Idempotente (§97).
+     *
+     * **Sem contexto, e é de propósito** (T17.12 §18): a audiência é propriedade do comentário
+     * guardado, e o servidor a deriva do próprio `commentId`. Pedi-la aqui abriria a possibilidade
+     * de o app mandar uma audiência diferente da que o comentário tem — uma segunda verdade sobre
+     * um fato que já está gravado.
+     */
     suspend fun deleteComment(checkInId: String, commentId: String): WorkoutCheckInOutcome<Unit>
 
     /**

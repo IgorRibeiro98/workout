@@ -1675,7 +1675,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-09): T17.0 a T17.11 implementadas.**
+> **Status (verificado em 2026-09-09): T17.0 a T17.12 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1732,14 +1732,32 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > `WorkoutCheckIn` lido por outra audiência — `social_group_checkin_shares` é uma aresta, e não um
 > post. Papéis `OWNER`/`MEMBER` com **exatamente um** dono garantido por índice único parcial;
 > convite só do dono e só para amigo direto ativo, revalidado no envio **e** no aceite; bloqueio
-> corta visibilidade sem destruir participação; relação puramente de grupo é **read-only** (reagir e
-> comentar continuam exigindo relação direta). `WorkoutCheckInAccessPolicy` passou a responder
+> corta visibilidade sem destruir participação; relação puramente de grupo nasceu **read-only**
+> (reagir e comentar exigiam relação direta — a T17.12 removeu essa restrição resolvendo a causa).
+> `WorkoutCheckInAccessPolicy` passou a responder
 > `self ∨ amizade ∨ Squad`, e a mídia usa literalmente o mesmo predicado. Um push
 > (`GROUP_INVITATION_RECEIVED`, data-only, sem nome de Squad). Migration `0019_social_groups.sql`,
 > dezessete rotas sob `/v1/social`, e a área de Squads dentro do Social do Perfil.
-> **Continuam fora:** chat, DM, post de texto, enquete, comentário/reação específicos de Squad,
-> desafio ou ranking de Squad, template/programa compartilhado para Squad, evento, agenda, presença
-> online, grupo público, descoberta e denúncia de grupo.
+> **Continuam fora:** chat, DM, post de texto, enquete, desafio ou ranking de Squad,
+> template/programa compartilhado para Squad, evento, agenda, presença online, grupo público,
+> descoberta e denúncia de grupo.
+>
+> **T17.12** — **interações contextuais em Squads**. A restrição de leitura da T17.11 existia porque
+> o mesmo check-in pode estar no Feed de amigos e em vários Squads, e uma interação sem audiência
+> vazaria de um para o outro; a T17.12 resolve a causa: **a interação passa a pertencer a uma
+> audiência explícita**, `FRIEND` ou `GROUP(groupId)`. O `WorkoutCheckIn` continua único — nenhum
+> post duplicado, nenhum segundo Feed. Um membro sem amizade nenhuma reage e comenta dentro do
+> Squad, e **só** ali: participação de grupo não vira amizade, perfil, Feed de amigos, desafio nem
+> compartilhamento de treino. O contexto é proposta do cliente e é revalidado a cada requisição
+> (Squad ativo ∧ compartilhamento ∧ participação dos dois lados ∧ ¬bloqueio); contexto inválido é
+> `404`, nunca um rebaixamento para `FRIEND`. Contagens e listas passam a ser por audiência **e**
+> por viewer, com o bloqueio viewer-safe da T17.9 intacto. Uma reação por pessoa/publicação/audiência,
+> garantida por **dois índices únicos parciais** — uma `UNIQUE` comum não serviria, porque no SQLite
+> cada `NULL` é distinto de qualquer outro. O dono do Squad passa a moderar comentários daquela
+> audiência, e o privilégio não atravessa para o Feed de amigos. Migration
+> `0020_social_interaction_audience.sql` (rebuild em 12 passos, backfill de todo o histórico como
+> `FRIEND`). **Continuam fora:** push de reação/comentário, XP, Activity, ranking, contador de não
+> lidos, realtime, thread, menção — e nada disso mora no Room ou no Outbox.
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),
@@ -1749,7 +1767,9 @@ Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-
 [`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5) e
 [`docs/architecture/social-domain.md` §11–§13](docs/architecture/social-domain.md) (T17.6, T17.7 e
 T17.8) e
-[`docs/architecture/social-groups.md`](docs/architecture/social-groups.md) (T17.11);
+[`docs/architecture/social-groups.md`](docs/architecture/social-groups.md) (T17.11) e
+[`docs/architecture/social-interaction-audience.md`](docs/architecture/social-interaction-audience.md)
+(T17.12);
 contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades

@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.media.SocialMediaCache
 import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthState
+import com.example.domain.social.InteractionContext
 import com.example.domain.social.ReactionType
+import com.example.domain.social.interactionKey
 import com.example.domain.social.WorkoutCheckIn
 import com.example.domain.social.WorkoutCheckInError
 import com.example.domain.social.WorkoutCheckInGateway
@@ -49,7 +51,15 @@ data class SocialFeedUiState(
      * cache que o alimenta (§57/§145).
      */
     val photos: Map<String, ImageBitmap> = emptyMap(),
-    /** Os check-ins cuja reação está em voo. Ocupação **por alvo**, nunca um `isLoading`. */
+    /**
+     * Os check-ins cuja reação está em voo. Ocupação **por alvo**, nunca um `isLoading`.
+     *
+     * A chave é `(audiência, checkInId)` — [interactionKey] —, e não o `checkInId` sozinho
+     * (T17.12 §61). Aqui a audiência é sempre [InteractionContext.Friend], então na prática não há
+     * colisão possível; a chave composta existe para que ela continue impossível no dia em que
+     * esta tela mostrar mais de uma audiência, em vez de virar um bug silencioso em que a reação
+     * de um Squad trava o botão do Feed.
+     */
     val pendingReactions: Set<String> = emptySet(),
     val notice: String? = null
 )
@@ -75,6 +85,13 @@ data class SocialFeedUiState(
  *
  * Sem polling (§93), sem WebSocket (§94), sem push (§95). O que busca é abrir a tela e o
  * "puxar para atualizar" (§92) — nada roda em background, e nada se agenda.
+ *
+ * ## A audiência aqui é sempre o Feed de amigos (T17.12 §14)
+ *
+ * Esta tela é o Feed de amigos, e nada mais: toda reação e todo comentário nascidos nela pertencem
+ * a [InteractionContext.Friend]. A audiência viaja explicitamente mesmo assim — um cliente que
+ * omitisse o contexto seria tratado como `FRIEND` por compatibilidade (§68), e depender disso
+ * deixaria a intenção desta tela indistinguível de um esquecimento.
  */
 class SocialFeedViewModel(
     private val gateway: WorkoutCheckInGateway,
@@ -202,14 +219,15 @@ class SocialFeedViewModel(
         val uid = currentUid() ?: return
         val state = _uiState.value
         val phase = state.phase as? SocialFeedPhase.Success ?: return
-        if (checkInId in state.pendingReactions) return
+        val pendingKey = interactionKey(checkInId, InteractionContext.Friend)
+        if (pendingKey in state.pendingReactions) return
 
         val current = phase.items.firstOrNull { it.checkInId == checkInId } ?: return
         val removing = current.currentUserReaction == type
 
         _uiState.update {
             it.copy(
-                pendingReactions = it.pendingReactions + checkInId,
+                pendingReactions = it.pendingReactions + pendingKey,
                 phase = SocialFeedPhase.Success(
                     phase.items.map { item ->
                         if (item.checkInId == checkInId) optimistic(item, type, removing) else item
@@ -220,9 +238,9 @@ class SocialFeedViewModel(
 
         viewModelScope.launch {
             val outcome = if (removing) {
-                gateway.removeReaction(checkInId)
+                gateway.removeReaction(checkInId, InteractionContext.Friend)
             } else {
-                gateway.putReaction(checkInId, type)
+                gateway.putReaction(checkInId, type, InteractionContext.Friend)
             }
             if (currentUid() != uid) return@launch
 
@@ -247,7 +265,7 @@ class SocialFeedViewModel(
                     }
                 }
             }
-            _uiState.update { it.copy(pendingReactions = it.pendingReactions - checkInId) }
+            _uiState.update { it.copy(pendingReactions = it.pendingReactions - pendingKey) }
         }
     }
 

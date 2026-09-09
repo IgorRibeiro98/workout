@@ -82,7 +82,7 @@ describe('Persistência do domínio social', () => {
       // A T17.0 é a `0007`, e a série vai até a `0019` da T17.11. Todas são aditivas, e o que
       // este teste afirma é sobre a T16: nada do que ela gravou muda quando o social sobe.
       expect(applied.map((migration) => migration.version)).toEqual([
-        7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       ]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'social_foundation',
@@ -98,6 +98,7 @@ describe('Persistência do domínio social', () => {
         'social_checkin_reactions_comments',
         'social_reports_ugc',
         'social_groups',
+        'social_interaction_audience',
       ]);
       expect(db.prepare('SELECT * FROM backup_snapshots').all()).toEqual(beforeBackup);
       expect(db.prepare('SELECT * FROM sync_entities').all()).toEqual(beforeEntity);
@@ -352,6 +353,7 @@ function groupServiceFor(sqlite: SqliteService, repository: SocialRepository): S
     new FriendshipRepository(sqlite),
     new BlockRepository(sqlite),
     new WorkoutCheckInRepository(sqlite),
+    new CheckInInteractionRepository(sqlite),
     new CheckInProjector(
       new SocialMediaRepository(sqlite),
       new CheckInInteractionRepository(sqlite),

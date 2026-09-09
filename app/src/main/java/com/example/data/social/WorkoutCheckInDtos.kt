@@ -133,11 +133,43 @@ internal data class UploadedMediaDto(
         }
 }
 
+/**
+ * O contexto de audiência no corpo de uma mutação (T17.12 §7/§15/§16/§17).
+ *
+ * `groupId` sai do JSON quando é nulo (`explicitNulls = false`), e é o que o servidor espera: ele
+ * recusa `groupId` junto de `FRIEND` porque as duas coisas não coexistem (§27), e recusa `GROUP`
+ * sem `groupId` em vez de rebaixar para amigos (§69).
+ *
+ * Nada aqui é autorização. O servidor revalida compartilhamento, participação e bloqueio a cada
+ * requisição — este objeto só diz **onde o usuário estava** quando tocou.
+ */
 @Serializable
-internal data class PutReactionRequestDto(val type: String)
+internal data class InteractionContextDto(
+    val type: String,
+    val groupId: String? = null
+)
 
 @Serializable
-internal data class CreateCommentRequestDto(val body: String)
+internal data class PutReactionRequestDto(
+    val type: String,
+    val context: InteractionContextDto
+)
+
+/**
+ * O corpo do `DELETE` da reação (T17.12 §16).
+ *
+ * Um `DELETE` com corpo é incomum, e é o desenho certo aqui: desfazer precisa alcançar **a mesma**
+ * audiência que recebeu a reação, e um `?context=` no caminho de uma remoção deixaria a audiência
+ * no lugar em que caches e logs de proxy a guardam.
+ */
+@Serializable
+internal data class RemoveReactionRequestDto(val context: InteractionContextDto)
+
+@Serializable
+internal data class CreateCommentRequestDto(
+    val body: String,
+    val context: InteractionContextDto
+)
 
 @Serializable
 internal data class CheckInCommentDto(

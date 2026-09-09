@@ -4,6 +4,7 @@ import com.example.data.remote.spark.SparkBackendClient
 import com.example.data.remote.spark.SparkBytesOutcome
 import com.example.data.remote.spark.SparkHttpOutcome
 import com.example.domain.social.CheckInComment
+import com.example.domain.social.InteractionContext
 import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialReportTarget
 import com.example.domain.social.UploadedCheckInMedia
@@ -148,12 +149,15 @@ class SparkWorkoutCheckInGateway(
         }
     }
 
-    override suspend fun checkIn(checkInId: String): WorkoutCheckInOutcome<WorkoutCheckIn> {
+    override suspend fun checkIn(
+        checkInId: String,
+        context: InteractionContext
+    ): WorkoutCheckInOutcome<WorkoutCheckIn> {
         val activeClient = client
             ?: return WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NOT_CONFIGURED)
 
         return interpret(
-            activeClient.getJson(WorkoutCheckInContract.checkInPath(checkInId))
+            activeClient.getJson(WorkoutCheckInContract.checkInPath(checkInId, context))
         ) { raw ->
             json.decodeFromString<WorkoutCheckInDto>(raw).toDomainOrNull()
         }
@@ -172,12 +176,13 @@ class SparkWorkoutCheckInGateway(
 
     override suspend fun putReaction(
         checkInId: String,
-        type: ReactionType
+        type: ReactionType,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<WorkoutCheckIn> {
         val activeClient = client
             ?: return WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NOT_CONFIGURED)
 
-        val body = json.encodeToString(PutReactionRequestDto(type.name))
+        val body = json.encodeToString(PutReactionRequestDto(type.name, context.toDto()))
         return interpret(
             activeClient.putJson(WorkoutCheckInContract.reactionPath(checkInId), body)
         ) { raw ->
@@ -186,13 +191,17 @@ class SparkWorkoutCheckInGateway(
     }
 
     override suspend fun removeReaction(
-        checkInId: String
+        checkInId: String,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<WorkoutCheckIn> {
         val activeClient = client
             ?: return WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NOT_CONFIGURED)
 
+        // Um `DELETE` com corpo (T17.12 §16): a remoção precisa dizer de qual audiência ela é, ou
+        // "desfazer" dentro de um Squad apagaria a reação deixada no Feed de amigos.
+        val body = json.encodeToString(RemoveReactionRequestDto(context.toDto()))
         return interpret(
-            activeClient.delete(WorkoutCheckInContract.reactionPath(checkInId))
+            activeClient.deleteJson(WorkoutCheckInContract.reactionPath(checkInId), body)
         ) { raw ->
             json.decodeFromString<WorkoutCheckInDto>(raw).toDomainOrNull()
         }
@@ -202,13 +211,14 @@ class SparkWorkoutCheckInGateway(
 
     override suspend fun comments(
         checkInId: String,
-        limit: Int?
+        limit: Int?,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<List<CheckInComment>> {
         val activeClient = client
             ?: return WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NOT_CONFIGURED)
 
         return interpret(
-            activeClient.getJson(WorkoutCheckInContract.commentsPath(checkInId, limit))
+            activeClient.getJson(WorkoutCheckInContract.commentsPath(checkInId, limit, context))
         ) { raw ->
             json.decodeFromString<CheckInCommentsDto>(raw).items.map { dto ->
                 dto.toDomainOrNull() ?: return@interpret null
@@ -218,14 +228,18 @@ class SparkWorkoutCheckInGateway(
 
     override suspend fun createComment(
         checkInId: String,
-        body: String
+        body: String,
+        context: InteractionContext
     ): WorkoutCheckInOutcome<CheckInComment> {
         val activeClient = client
             ?: return WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NOT_CONFIGURED)
 
-        val payload = json.encodeToString(CreateCommentRequestDto(body))
+        val payload = json.encodeToString(CreateCommentRequestDto(body, context.toDto()))
         return interpret(
-            activeClient.postJson(WorkoutCheckInContract.commentsPath(checkInId), payload)
+            activeClient.postJson(
+                WorkoutCheckInContract.commentsPath(checkInId, context = context),
+                payload
+            )
         ) { raw ->
             json.decodeFromString<CheckInCommentDto>(raw).toDomainOrNull()
         }
@@ -262,6 +276,18 @@ class SparkWorkoutCheckInGateway(
         )
         return interpret(activeClient.postJson(WorkoutCheckInContract.REPORTS_PATH, body)) { Unit }
     }
+
+    // ------------------------------------------------------------------ contexto
+
+    /**
+     * A audiência do domínio no formato do protocolo (T17.12 §7).
+     *
+     * A conversão mora aqui, e não no tipo de domínio: `InteractionContext` descreve **onde a
+     * conversa acontece** e não deve conhecer a forma do JSON, pela mesma razão que nenhum outro
+     * modelo de `domain/social` conhece.
+     */
+    private fun InteractionContext.toDto(): InteractionContextDto =
+        InteractionContextDto(type = wireType, groupId = groupId)
 
     // ------------------------------------------------------------------ interpretação
 

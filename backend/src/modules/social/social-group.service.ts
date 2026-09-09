@@ -4,6 +4,7 @@ import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import { BlockRepository } from './block.repository';
+import { CheckInInteractionRepository } from './checkin-interaction.repository';
 import { CheckInProjector, type ProjectableCheckIn } from './checkin.projector';
 import { FriendshipRepository } from './friendship.repository';
 import { NotificationService } from './notification.service';
@@ -84,6 +85,12 @@ export class SocialGroupService {
     private readonly friendships: FriendshipRepository,
     private readonly blocks: BlockRepository,
     private readonly checkIns: WorkoutCheckInRepository,
+    // T17.12 §43/§70/§72 — participação é o consentimento que autoriza a audiência de um Squad.
+    // Quando ela acaba — saída, remoção, desativação do Social — ou quando o objeto da conversa
+    // some — compartilhamento desfeito, Squad excluído — as interações daquela audiência vão junto,
+    // na mesma transação. As tabelas continuam sendo do repositório de interações; aqui elas são
+    // apenas acionadas pelo ciclo de vida que este serviço governa.
+    private readonly interactions: CheckInInteractionRepository,
     private readonly projector: CheckInProjector,
     private readonly rateLimiter: SocialGroupRateLimiter,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -523,8 +530,9 @@ export class SocialGroupService {
       );
     }
 
+    const now = this.clock.now();
     this.repository.transaction(() => {
-      this.repository.deleteSharesByAuthorInGroup(groupId, callerUid);
+      this.purgeMemberFootprint(groupId, callerUid, now);
       this.repository.deleteMembership(groupId, callerUid);
     });
 
@@ -565,8 +573,10 @@ export class SocialGroupService {
       );
     }
 
+    const now = this.clock.now();
     this.repository.transaction(() => {
-      this.repository.deleteSharesByAuthorInGroup(groupId, target.memberUid);
+      // §144 — remover alguém tem exatamente o mesmo efeito que a saída.
+      this.purgeMemberFootprint(groupId, target.memberUid, now);
       this.repository.deleteMembership(groupId, target.memberUid);
     });
 
@@ -662,6 +672,11 @@ export class SocialGroupService {
     this.repository.transaction(() => {
       this.repository.markGroupDeleted(groupId, callerUid, now);
       this.repository.purgeGroupContext(groupId, now);
+      // T17.12 §72/§146 — a audiência `GROUP(este Squad)` deixa de existir junto com o Squad. O
+      // `ON DELETE CASCADE` da FK não cobre isto: a exclusão é soft (§46), a linha de
+      // `social_groups` continua lá e nenhum cascade dispara. O que continua intocado é tudo o
+      // resto — `FRIEND`, os outros Squads e o check-in de quem quer que seja.
+      this.interactions.purgeGroupInteractions(groupId, now);
     });
 
     this.logger.info('social.group.deleted', {
@@ -754,7 +769,7 @@ export class SocialGroupService {
 
     // Projetado pelo **mesmo** caminho do feed: a resposta do `POST` é exatamente o que a próxima
     // leitura devolveria, em vez de uma segunda maneira de descrever o mesmo card.
-    const [item] = this.projectFeedRows(callerUid, [
+    const [item] = this.projectFeedRows(callerUid, groupId, [
       {
         checkInId,
         authorUid: callerUid,
@@ -763,7 +778,6 @@ export class SocialGroupService {
         caption: checkIn.caption,
         publishedAt: checkIn.createdAt,
         sharedToGroupAt: share.createdAt,
-        direct: 1,
       },
     ]);
 
@@ -791,7 +805,19 @@ export class SocialGroupService {
     }
     this.requireActiveProfile(callerUid);
 
-    const removed = this.repository.deleteShare(groupId, checkInId, callerUid);
+    const now = this.clock.now();
+    // T17.12 §70/§71/§145 — tirar o check-in do Squad revoga a audiência `GROUP` dele **na hora**,
+    // e isso já valeria sem esta limpeza: a política exige o compartilhamento a cada leitura. A
+    // limpeza existe para não deixar uma conversa inalcançável crescendo para sempre no banco, e
+    // ela é `(este Squad, este check-in)` — `FRIEND` e os outros Squads não são tocados.
+    const removed = this.repository.transaction(() => {
+      const deleted = this.repository.deleteShare(groupId, checkInId, callerUid);
+      if (deleted) {
+        this.interactions.purgeGroupInteractionsForShare(groupId, checkInId, now);
+      }
+      return deleted;
+    });
+
     if (removed) {
       this.logger.info('social.group.checkin_unshared', {
         requestId,
@@ -835,7 +861,7 @@ export class SocialGroupService {
       returnedCount: rows.length,
     });
 
-    return { items: this.projectFeedRows(callerUid, rows) };
+    return { items: this.projectFeedRows(callerUid, groupId, rows) };
   }
 
   /** §141 — em quais Squads este check-in **próprio** já está. Alimenta o seletor da tela. */
@@ -890,12 +916,15 @@ export class SocialGroupService {
       // Só sobram os Squads em que a pessoa está sozinha — a checagem acima garantiu isso.
       this.repository.markGroupDeleted(groupId, ownerUid, now);
       this.repository.purgeGroupContext(groupId, now);
+      this.interactions.purgeGroupInteractions(groupId, now);
       groupsDeleted += 1;
     }
 
     let groupsLeft = 0;
     for (const groupId of this.repository.listActiveMemberGroups(ownerUid)) {
-      this.repository.deleteSharesByAuthorInGroup(groupId, ownerUid);
+      // T17.12 §75 — desativar o Social encerra as participações, e o conteúdo `GROUP` ligado a
+      // elas termina junto. É a mesma regra da saída (§43): a participação era o consentimento.
+      this.purgeMemberFootprint(groupId, ownerUid, now);
       this.repository.deleteMembership(groupId, ownerUid);
       groupsLeft += 1;
     }
@@ -946,6 +975,37 @@ export class SocialGroupService {
       throw SocialGroupErrors.notFound();
     }
     return { group, membership };
+  }
+
+  /**
+   * Tudo o que uma pessoa deixa para trás **naquele** Squad (T17.12 §43/§44/§71/§143/§144).
+   *
+   * Três coisas, e cada uma cobre um lado do mesmo fim de participação:
+   *
+   * ```text
+   * as conversas nos posts que ela trouxe   ← porque o compartilhamento vai embora junto (§70/§71)
+   * os próprios compartilhamentos dela      ← T17.11 §62/§63
+   * as reações e comentários dela aqui      ← porque a participação era o consentimento (§45)
+   * ```
+   *
+   * A primeira é a que faltava e a ordem dela importa: depois de apagar as arestas não há como
+   * saber quais eram. Sem ela, o comentário que **outra pessoa** deixou no post de quem saiu ficaria
+   * vivo e inalcançável — e voltaria à tona no dia em que a pessoa reentrasse e compartilhasse o
+   * mesmo check-in (§46/§143). "O compartilhamento acabou" precisa ter um efeito só, e não dois
+   * conforme o caminho que o desfez.
+   *
+   * Sempre dentro da transação de quem chama: metade disto aplicado é conteúdo visível de alguém
+   * que já não é membro.
+   */
+  private purgeMemberFootprint(groupId: string, memberUid: string, now: number): void {
+    for (const checkInId of this.repository.listSharedCheckInIdsByAuthorInGroup(
+      groupId,
+      memberUid,
+    )) {
+      this.interactions.purgeGroupInteractionsForShare(groupId, checkInId, now);
+    }
+    this.repository.deleteSharesByAuthorInGroup(groupId, memberUid);
+    this.interactions.purgeGroupInteractionsByActor(groupId, memberUid, now);
   }
 
   private respondToInvitation(
@@ -1014,12 +1074,21 @@ export class SocialGroupService {
   /**
    * As linhas do feed do grupo, pelo **mesmo** projetor do Feed de amigos (§50).
    *
-   * `canInteract` vem de `direct`, que a consulta já resolveu: o viewer alcança o autor por relação
-   * direta (é ele, ou é amigo dele). É isto que faz §73/§159 — o amigo que também é do Squad
-   * continua podendo reagir e comentar — e §70/§158 — quem só compartilha o grupo, não.
+   * ## O que a T17.12 mudou aqui
+   *
+   * `canInteract` era `direct` — o viewer precisava ser o autor ou amigo dele. Agora é `true` para
+   * toda linha (T17.12 §76): dentro do Squad, **participação ativa é a autorização**. Não é uma
+   * flexibilização: a consulta que produziu estas linhas já exigiu Squad ativo, compartilhamento
+   * explícito, participação do viewer e do autor, e ausência de bloqueio — as mesmas condições que
+   * o resolvedor de contexto revalida na hora de reagir ou comentar.
+   *
+   * E as contagens passam a ser as de `GROUP(groupId)` (§37/§63): 🔥3 aqui significa três pessoas
+   * **deste Squad**, e a reação que alguém deixou no Feed de amigos sobre o mesmo check-in não entra
+   * nesse número (§38/§64).
    */
   private projectFeedRows(
     viewerUid: string,
+    groupId: string,
     rows: readonly GroupFeedRow[],
   ): SocialGroupFeedItemDto[] {
     if (rows.length === 0) {
@@ -1039,10 +1108,10 @@ export class SocialGroupService {
         (row.authorUid === viewerUid ? (selfProfile?.displayName ?? '') : ''),
       caption: row.caption,
       publishedAt: row.publishedAt,
-      canInteract: row.direct === 1,
+      canInteract: true,
     }));
 
-    const projected = this.projector.project(viewerUid, projectable);
+    const projected = this.projector.project(viewerUid, projectable, { type: 'GROUP', groupId });
     return projected.map((checkIn, index) => ({
       checkIn,
       sharedToGroupAt: rows[index].sharedToGroupAt,

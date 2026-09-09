@@ -604,8 +604,46 @@ fun MainScreen() {
                     }
                 )
             }
-            composable(Screen.CheckInDetail.route) { backStackEntry ->
+            composable(
+                route = Screen.CheckInDetail.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("checkInId") {
+                        type = androidx.navigation.NavType.StringType
+                    },
+                    // T17.12 §35 — de onde a tela veio. `friend` por omissão: um deep link antigo,
+                    // ou qualquer caminho que não diga nada, é o Feed de amigos — que é o que
+                    // sempre foi, e nunca um Squad presumido.
+                    androidx.navigation.navArgument("context") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = Screen.CheckInDetail.CONTEXT_FRIEND
+                    },
+                    androidx.navigation.navArgument("groupId") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = ""
+                    },
+                    androidx.navigation.navArgument("groupName") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = ""
+                    }
+                )
+            ) { backStackEntry ->
                 val checkInId = backStackEntry.arguments?.getString("checkInId").orEmpty()
+                val groupId = backStackEntry.arguments?.getString("groupId").orEmpty()
+                // §69 — fail-closed: `group` sem `groupId` não vira um contexto de grupo pela
+                // metade, e também não é rebaixado em silêncio para um Squad qualquer. Ele volta a
+                // ser o Feed de amigos, que é a audiência que a rota sempre teve.
+                val interactionContext =
+                    if (backStackEntry.arguments?.getString("context") ==
+                        Screen.CheckInDetail.CONTEXT_GROUP && groupId.isNotBlank()
+                    ) {
+                        com.example.domain.social.InteractionContext.Group(groupId)
+                    } else {
+                        com.example.domain.social.InteractionContext.Friend
+                    }
+                val squadName = backStackEntry.arguments
+                    ?.getString("groupName")
+                    ?.takeIf { it.isNotBlank() && interactionContext is
+                        com.example.domain.social.InteractionContext.Group }
                 val detailViewModel: com.example.presentation.friends.CheckInDetailViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 // T17.11 §140 — "Compartilhar no Squad" mora no menu da própria publicação. A
@@ -616,6 +654,8 @@ fun MainScreen() {
                 com.example.presentation.friends.CheckInDetailScreen(
                     viewModel = detailViewModel,
                     checkInId = checkInId,
+                    interactionContext = interactionContext,
+                    squadName = squadName,
                     onNavigateBack = { navController.popBackStack() },
                     onOpenFriendProfile = { socialId, displayName ->
                         navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
@@ -646,8 +686,13 @@ fun MainScreen() {
                 com.example.presentation.friends.SquadDetailScreen(
                     viewModel = squadDetailViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onOpenCheckIn = { checkInId ->
-                        navController.navigate(Screen.CheckInDetail.createRoute(checkInId))
+                    // T17.12 §35 — o detalhe aberto daqui é a conversa **deste** Squad. Sem levar
+                    // a origem, os dois caminhos até a publicação seriam a mesma rota, e o que a
+                    // pessoa escrevesse dentro do squad nasceria no Feed de amigos.
+                    onOpenCheckIn = { checkInId, groupName ->
+                        navController.navigate(
+                            Screen.CheckInDetail.createGroupRoute(checkInId, groupId, groupName)
+                        )
                     }
                 )
             }

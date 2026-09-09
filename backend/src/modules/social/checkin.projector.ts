@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
 import { SocialMediaRepository } from './social-media.repository';
+import type { InteractionAudience } from './workout-checkin-context.resolver';
 import type { ReactionType, WorkoutCheckInDto } from './workout-checkin.contract';
 
 /**
@@ -10,9 +11,11 @@ import type { ReactionType, WorkoutCheckInDto } from './workout-checkin.contract
  * (`AccessibleCheckIn`) e o feed de Squad (`GroupFeedRow`) — os três produzem exatamente estes
  * campos, e é por isso que os três podem passar pelo mesmo projetor.
  *
- * [canInteract] não é um campo do banco: ele é o resultado da política de acesso (T17.11 §70/§78).
- * `true` quando o viewer alcança a publicação por relação **direta** — ele é o autor, ou é amigo
- * dele; `false` quando o único caminho até ela é um Squad compartilhado.
+ * [canInteract] não é um campo do banco: ele é o resultado da política de acesso, e desde a T17.12
+ * ele é resolvido **dentro de uma audiência** (§76). `true` quando o viewer pode reagir e comentar
+ * naquela audiência — no Feed de amigos porque alcança o autor por relação direta; no feed de um
+ * Squad porque é membro ativo dele, ainda que não haja amizade nenhuma. `false` sobra para um caso
+ * só: o detalhe aberto sem contexto por quem chega à publicação apenas por um Squad.
  */
 export interface ProjectableCheckIn {
   readonly checkInId: string;
@@ -54,14 +57,26 @@ export interface ProjectableCheckIn {
  * C, A bloqueou B, B lê o post de C — precisa que a participação de A não transpareça nem como
  * número, e um `COUNT(*)` sem viewer vazaria exatamente isso.
  *
- * ## E por que um item de Squad vem com interação zerada (T17.11 §70/§71/§144)
+ * ## As contagens são da **audiência** que está sendo lida (T17.12 §37/§38/§63/§64)
  *
- * Quando o único caminho até a publicação é um Squad, o viewer não pode reagir nem comentar, e
- * também não pode **listar** os comentários — `listComments` continua exigindo relação direta.
- * Devolver `commentCount: 7` para alguém que recebe `404` ao tentar abrir a lista seria um beco
- * sem saída na tela e, pior, uma contagem sobre uma conversa entre amigos do autor que este viewer
- * não faz parte. Um item de Squad carrega o que §69 lista — autor, quando publicou, legenda e
- * foto — e nada mais.
+ * O mesmo check-in pode estar no Feed de amigos e em vários Squads, e cada um desses lugares tem a
+ * própria conversa (§3). Por isso [project] recebe a audiência: um card lido no Squad X mostra 🔥3
+ * porque três pessoas reagiram **em X**, e a reação que alguém deixou no Feed de amigos não entra
+ * nesse número — nem no contrário (§38/§64).
+ *
+ * A audiência não é escolhida aqui: ela chega já resolvida por `WorkoutCheckInContextResolver` ou
+ * pela própria rota que está sendo servida (o feed de amigos é `FRIEND`; o feed do Squad X é
+ * `GROUP(X)`). Este projetor não decide autorização — ele só não tem como misturar duas audiências,
+ * porque recebe **uma**.
+ *
+ * ## Um item sem direito de interação vem zerado
+ *
+ * `canInteract: false` acontece em um caso só depois da T17.12: o detalhe de um check-in aberto
+ * **sem** contexto, alcançado apenas por um Squad (T17.11 §70). Ali não existe audiência definida —
+ * o servidor não tem como saber de qual Squad a tela está falando —, e devolver a contagem de uma
+ * audiência escolhida por sorteio seria pior do que não devolver nenhuma. Quando a tela informa o
+ * contexto (`?context=GROUP&groupId=X`), esse caso desaparece: o item vem com as contagens de X e
+ * com interação liberada para qualquer membro ativo (§76).
  */
 @Injectable()
 export class CheckInProjector {
@@ -70,7 +85,11 @@ export class CheckInProjector {
     private readonly interactions: CheckInInteractionRepository,
   ) {}
 
-  project(viewerUid: string, rows: readonly ProjectableCheckIn[]): WorkoutCheckInDto[] {
+  project(
+    viewerUid: string,
+    rows: readonly ProjectableCheckIn[],
+    audience: InteractionAudience,
+  ): WorkoutCheckInDto[] {
     if (rows.length === 0) {
       return [];
     }
@@ -94,17 +113,26 @@ export class CheckInProjector {
     const commentCounts = new Map<string, number>();
 
     if (interactableIds.length > 0) {
-      for (const row of this.interactions.countReactionsForCheckIns(viewerUid, interactableIds)) {
+      for (const row of this.interactions.countReactionsForCheckIns(
+        viewerUid,
+        interactableIds,
+        audience,
+      )) {
         const bucket = reactionTotals.get(row.checkInId) ?? {};
         bucket[row.type] = row.total;
         reactionTotals.set(row.checkInId, bucket);
       }
-      for (const [id, type] of this.interactions.findViewerReactions(viewerUid, interactableIds)) {
+      for (const [id, type] of this.interactions.findViewerReactions(
+        viewerUid,
+        interactableIds,
+        audience,
+      )) {
         viewerReactions.set(id, type);
       }
       for (const [id, count] of this.interactions.countCommentsForCheckIns(
         viewerUid,
         interactableIds,
+        audience,
       )) {
         commentCounts.set(id, count);
       }

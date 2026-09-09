@@ -53,6 +53,7 @@ import { WorkoutCheckInService } from './workout-checkin.service';
 import { WorkoutCheckInRepository } from './workout-checkin.repository';
 import { WorkoutCheckInRateLimiter } from './workout-checkin.rate-limit';
 import { WorkoutCheckInAccessPolicy } from './workout-checkin.access-policy';
+import { WorkoutCheckInContextResolver } from './workout-checkin-context.resolver';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
 import { SocialContentRateLimiter } from './social-content.rate-limit';
 import { SocialMediaController } from './social-media.controller';
@@ -192,6 +193,11 @@ import { CheckInProjector } from './checkin.projector';
     // acesso saiu de dentro da consulta do feed e virou um provider próprio, consumido por seis
     // superfícies: Feed, detalhe, mídia, reações, comentários e denúncia (§129/§130).
     WorkoutCheckInAccessPolicy,
+    // T17.12 §32 — o resolvedor de contexto é o único tradutor de "o que a tela propôs" para "a
+    // audiência que o servidor confirmou". Ele é provider, e não um método solto, porque as quatro
+    // superfícies de interação precisam da **mesma** resposta: reagir, remover reação, comentar e
+    // listar comentários.
+    WorkoutCheckInContextResolver,
     CheckInInteractionRepository,
     SocialContentRateLimiter,
     SocialMediaRepository,

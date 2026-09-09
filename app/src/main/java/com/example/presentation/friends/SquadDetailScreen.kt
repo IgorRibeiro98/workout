@@ -52,8 +52,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.social.Friend
+import com.example.domain.social.InteractionContext
+import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialGroupFeedItem
 import com.example.domain.social.SocialGroupMember
+import com.example.domain.social.interactionKey
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -98,7 +101,13 @@ internal fun relativeSharedAt(sharedToGroupAt: Long, now: Long): String =
 fun SquadDetailScreen(
     viewModel: SquadDetailViewModel,
     onNavigateBack: () -> Unit,
-    onOpenCheckIn: (checkInId: String) -> Unit = {},
+    /**
+     * Abre o detalhe da publicação **na conversa deste Squad** (T17.12 §35).
+     *
+     * O nome do squad viaja junto para a tela de detalhe poder dizer onde a conversa acontece
+     * (§63). Ele é texto, e não autorização: quem decide o que este usuário alcança é o servidor.
+     */
+    onOpenCheckIn: (checkInId: String, groupName: String) -> Unit = { _, _ -> },
     now: Long = System.currentTimeMillis()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -189,7 +198,10 @@ fun SquadDetailScreen(
                     uiState = uiState,
                     now = now,
                     onRetry = viewModel::refresh,
-                    onOpenCheckIn = onOpenCheckIn,
+                    onOpenCheckIn = { checkInId ->
+                        onOpenCheckIn(checkInId, uiState.detail?.name.orEmpty())
+                    },
+                    onReact = viewModel::toggleReaction,
                     onUnshare = viewModel::unshare,
                     onNeedPhoto = viewModel::loadPhoto,
                     onRemoveMember = viewModel::removeMember,
@@ -252,6 +264,7 @@ private fun SquadDetailBody(
     now: Long,
     onRetry: () -> Unit,
     onOpenCheckIn: (String) -> Unit,
+    onReact: (String, ReactionType) -> Unit,
     onUnshare: (String) -> Unit,
     onNeedPhoto: (String) -> Unit,
     onRemoveMember: (String) -> Unit,
@@ -302,8 +315,11 @@ private fun SquadDetailBody(
                 items = phase.feed,
                 photos = uiState.photos,
                 busyTargetId = uiState.busyTargetId,
+                pendingReactions = uiState.pendingReactions,
+                groupId = phase.detail.groupId,
                 now = now,
                 onOpenCheckIn = onOpenCheckIn,
+                onReact = onReact,
                 onUnshare = onUnshare,
                 onNeedPhoto = onNeedPhoto
             )
@@ -324,8 +340,12 @@ private fun SquadFeedList(
     items: List<SocialGroupFeedItem>,
     photos: Map<String, ImageBitmap>,
     busyTargetId: String?,
+    /** As reações em voo, com chave `(audiência, publicação)` (T17.12 §61). */
+    pendingReactions: Set<String>,
+    groupId: String,
     now: Long,
     onOpenCheckIn: (String) -> Unit,
+    onReact: (String, ReactionType) -> Unit,
     onUnshare: (String) -> Unit,
     onNeedPhoto: (String) -> Unit
 ) {
@@ -349,8 +369,13 @@ private fun SquadFeedList(
                 item = item,
                 photo = item.checkIn.media?.let { photos[it.mediaId] },
                 isBusy = busyTargetId == item.checkIn.checkInId,
+                isReacting = interactionKey(
+                    item.checkIn.checkInId,
+                    InteractionContext.Group(groupId)
+                ) in pendingReactions,
                 now = now,
                 onOpen = { onOpenCheckIn(item.checkIn.checkInId) },
+                onReact = { type -> onReact(item.checkIn.checkInId, type) },
                 onUnshare = { onUnshare(item.checkIn.checkInId) },
                 onNeedPhoto = onNeedPhoto
             )
@@ -366,24 +391,31 @@ private fun SquadFeedList(
  * Autor, "concluiu um treino", foto, legenda e **quando foi compartilhado aqui** (§85). Nada de
  * treino: nem exercício, nem carga, nem duração, nem horário da sessão (§75).
  *
- * ## Por que não há reação nem comentário aqui
+ * ## Reagir e comentar aqui é fazê-lo **neste Squad** (T17.12 §12/§14)
  *
- * `canInteract` vem do servidor (§70/§144). Quando ele é `false`, o único caminho do viewer até
- * esta publicação é o Squad — e a T17.11 não amplia a autorização de interação para relação
- * puramente de grupo, porque um mesmo check-in em dois Squads e no Feed de amigos teria uma
- * conversa com três audiências sobrepostas (§71). O card então não mostra as ações: elas seriam
- * botões que o servidor recusa (§72).
+ * Até a T17.11 este card não oferecia nada disso: a interação era do check-in, e não do lugar onde
+ * a conversa acontece, então um comentário escrito aqui apareceria no Feed de amigos e no outro
+ * Squad. Aquela fase escolheu leitura em vez de vazamento e deixou o acesso só-por-Squad como
+ * somente leitura (T17.11 §70/§71).
  *
- * Quando `canInteract` é `true` — o viewer é amigo do autor, ou é o próprio autor —, o toque abre o
- * detalhe, onde reagir e comentar continuam funcionando exatamente como na T17.9 (§73/§159).
+ * A T17.12 resolveu a causa — a interação pertence a uma audiência —, e o card volta a oferecer as
+ * ações: elas nascem em `GROUP(groupId)` e não tocam a reação que a pessoa deixou no Feed de
+ * amigos nem em outro Squad. O servidor passa a mandar `canInteract = true` para todo membro
+ * ativo (§39).
+ *
+ * `canInteract` continua vindo do servidor e continua sendo respeitado (§144/§72): esconder um
+ * botão nunca foi controle de acesso, mas oferecer uma ação que sempre falha é pior do que não
+ * oferecê-la. O toque no corpo do card abre o detalhe — a conversa deste Squad, e não outra.
  */
 @Composable
 private fun SquadFeedCard(
     item: SocialGroupFeedItem,
     photo: ImageBitmap?,
     isBusy: Boolean,
+    isReacting: Boolean,
     now: Long,
     onOpen: () -> Unit,
+    onReact: (ReactionType) -> Unit,
     onUnshare: () -> Unit,
     onNeedPhoto: (String) -> Unit
 ) {
@@ -464,6 +496,22 @@ private fun SquadFeedCard(
                 color = TextSecondary,
                 fontSize = 12.sp
             )
+
+            if (checkIn.canInteract) {
+                // A **mesma** barra do Feed de amigos (T17.12 §133): o que muda entre as duas
+                // telas é a audiência das ações, e não o desenho delas. Duas cópias divergiriam no
+                // dia em que um tipo de reação entrasse em uma e não na outra.
+                ReactionBar(
+                    reactions = checkIn.reactions,
+                    currentUserReaction = checkIn.currentUserReaction,
+                    isBusy = isReacting,
+                    onReact = onReact,
+                    commentCount = checkIn.commentCount,
+                    // A conversa mora no detalhe, como no Feed (T17.9 §118) — e o detalhe aberto
+                    // daqui é a conversa **deste** Squad.
+                    onOpenComments = onOpen
+                )
+            }
         }
     }
 }

@@ -548,8 +548,20 @@ describe('T17.11 — feed do Squad', () => {
 
   // =============================================================== §158/§159 interação
 
-  describe('interação: o Squad sozinho não autoriza (§70/§71/§72/§158/§159)', () => {
-    it('membro só de Squad vê, mas não reage nem comenta (§70/§158)', async () => {
+  /**
+   * O que a T17.12 mudou nesta seção.
+   *
+   * Na T17.11 o Squad sozinho **não** autorizava interação (§70 daquela fase), e estes testes
+   * provavam isso. O motivo não era desconfiança do grupo: era que o mesmo check-in pode estar no
+   * Feed de amigos e em vários Squads, e uma interação sem audiência vazaria de um para o outro.
+   *
+   * A T17.12 resolve o problema em vez de contorná-lo — a interação passou a pertencer a uma
+   * audiência explícita —, e por isso a regra caiu (T17.12 §76). O que estes testes provam agora é
+   * a regra nova, que é mais forte: dentro do Squad **a participação autoriza**, e a autorização
+   * vale só ali (§10/§77–§81).
+   */
+  describe('interação: a participação autoriza, e só naquela audiência (T17.12 §10/§76)', () => {
+    it('membro só de Squad reage e comenta — na audiência daquele Squad (§76/§133)', async () => {
       // C entra no Squad **sem** ser amiga de B: a única relação entre os dois é o grupo.
       await s.makeFriends(ACCOUNT_A, ACCOUNT_C);
       await s.addMember(ACCOUNT_A, groupId, ACCOUNT_C);
@@ -559,17 +571,28 @@ describe('T17.11 — feed do Squad', () => {
 
       const feed = await readFeed(ACCOUNT_C).expect(200);
       expect(feed.body.items).toHaveLength(1);
-      // §72 — a tela sabe que não deve oferecer, e o servidor recusa de qualquer forma.
-      expect(feed.body.items[0].checkIn.canInteract).toBe(false);
+      expect(feed.body.items[0].checkIn.canInteract).toBe(true);
 
-      // §82 — o detalhe abre (o acesso veio do Squad)...
-      const detail = await request(s.server())
-        .get(`/v1/social/workout-checkins/${checkInId}`)
+      const context = { type: 'GROUP', groupId };
+
+      await request(s.server())
+        .put(`/v1/social/workout-checkins/${checkInId}/reaction`)
         .set(auth(ACCOUNT_C))
+        .send({ type: 'FIRE', context })
         .expect(200);
-      expect(detail.body.canInteract).toBe(false);
+      await request(s.server())
+        .post(`/v1/social/workout-checkins/${checkInId}/comments`)
+        .set(auth(ACCOUNT_C))
+        .send({ body: 'boa!', context })
+        .expect(201);
 
-      // ...e as mutações são recusadas.
+      const after = await readFeed(ACCOUNT_C).expect(200);
+      expect(after.body.items[0].checkIn.reactions).toEqual({ FIRE: 1 });
+      expect(after.body.items[0].checkIn.currentUserReaction).toBe('FIRE');
+      expect(after.body.items[0].checkIn.commentCount).toBe(1);
+
+      // §10 — e **só** ali. A mesma pessoa, no mesmo check-in, sem contexto (ou seja, no Feed de
+      // amigos) continua sendo alguém sem relação nenhuma com B.
       await request(s.server())
         .put(`/v1/social/workout-checkins/${checkInId}/reaction`)
         .set(auth(ACCOUNT_C))
@@ -577,74 +600,94 @@ describe('T17.11 — feed do Squad', () => {
         .expect(404)
         .expect((res) => expect(res.body.error.code).toBe('CHECKIN_NOT_FOUND'));
       await request(s.server())
-        .post(`/v1/social/workout-checkins/${checkInId}/comments`)
-        .set(auth(ACCOUNT_C))
-        .send({ body: 'boa!' })
-        .expect(404);
-      await request(s.server())
         .get(`/v1/social/workout-checkins/${checkInId}/comments`)
         .set(auth(ACCOUNT_C))
         .expect(404);
     });
 
-    it('o amigo que também é do squad continua interagindo (§73/§159)', async () => {
+    it('o amigo que também é do squad interage nas duas audiências, separadamente (§11/§13)', async () => {
       const checkInId = await publish(ACCOUNT_A, { caption: 'de A' });
       await share(ACCOUNT_A, checkInId).expect(201);
 
       const feed = await readFeed(ACCOUNT_B).expect(200);
       expect(feed.body.items[0].checkIn.canInteract).toBe(true);
 
+      // No Feed de amigos: 🔥. No Squad: 💪. São interações independentes (§11/§13/§139).
       await request(s.server())
         .put(`/v1/social/workout-checkins/${checkInId}/reaction`)
         .set(auth(ACCOUNT_B))
         .send({ type: 'FIRE' })
         .expect(200);
       await request(s.server())
+        .put(`/v1/social/workout-checkins/${checkInId}/reaction`)
+        .set(auth(ACCOUNT_B))
+        .send({ type: 'MUSCLE', context: { type: 'GROUP', groupId } })
+        .expect(200);
+      await request(s.server())
         .post(`/v1/social/workout-checkins/${checkInId}/comments`)
         .set(auth(ACCOUNT_B))
-        .send({ body: 'boa!' })
+        .send({ body: 'boa!', context: { type: 'GROUP', groupId } })
         .expect(201);
 
-      // §159 — a autorização veio da Friendship, e é ela que aparece no card.
-      const after = await readFeed(ACCOUNT_B).expect(200);
-      expect(after.body.items[0].checkIn.reactions).toEqual({ FIRE: 1 });
-      expect(after.body.items[0].checkIn.commentCount).toBe(1);
+      const inGroup = await readFeed(ACCOUNT_B).expect(200);
+      expect(inGroup.body.items[0].checkIn.reactions).toEqual({ MUSCLE: 1 });
+      expect(inGroup.body.items[0].checkIn.currentUserReaction).toBe('MUSCLE');
+      expect(inGroup.body.items[0].checkIn.commentCount).toBe(1);
+
+      const friendFeed = await request(s.server())
+        .get('/v1/social/feed')
+        .set(auth(ACCOUNT_B))
+        .expect(200);
+      const card = friendFeed.body.items.find(
+        (item: { checkInId: string }) => item.checkInId === checkInId,
+      );
+      // §38/§64 — o Feed de amigos conta só o que aconteceu nele.
+      expect(card.reactions).toEqual({ FIRE: 1 });
+      expect(card.currentUserReaction).toBe('FIRE');
+      expect(card.commentCount).toBe(0);
     });
 
-    it('o card de quem só tem o Squad não carrega a conversa dos amigos do autor (§71)', async () => {
+    it('a conversa dos amigos do autor não aparece no card do Squad (§22/§64)', async () => {
       await s.makeFriends(ACCOUNT_A, ACCOUNT_C);
       await s.addMember(ACCOUNT_A, groupId, ACCOUNT_C);
 
       const checkInId = await publish(ACCOUNT_A, { caption: 'de A' });
       await share(ACCOUNT_A, checkInId).expect(201);
+      // Um comentário no Feed de amigos — sem contexto, portanto audiência FRIEND.
       await request(s.server())
         .post(`/v1/social/workout-checkins/${checkInId}/comments`)
         .set(auth(ACCOUNT_B))
         .send({ body: 'boa, Alice!' })
         .expect(201);
 
-      // B é amiga de A e vê a conversa.
-      const feedB = await readFeed(ACCOUNT_B).expect(200);
-      expect(feedB.body.items[0].checkIn.commentCount).toBe(1);
+      // No Feed de amigos ele existe.
+      const friendFeed = await request(s.server())
+        .get('/v1/social/feed')
+        .set(auth(ACCOUNT_B))
+        .expect(200);
+      expect(
+        friendFeed.body.items.find((item: { checkInId: string }) => item.checkInId === checkInId)
+          .commentCount,
+      ).toBe(1);
 
-      // C também é amiga de A — ela veria. O caso de §71 é quem **só** tem o Squad, e para provar
-      // isso o autor precisa ser alguém de quem C não é amiga: B.
-      const fromB = await publish(ACCOUNT_B, { caption: 'de B' });
-      await share(ACCOUNT_B, fromB).expect(201);
-      await request(s.server())
-        .post(`/v1/social/workout-checkins/${fromB}/comments`)
-        .set(auth(ACCOUNT_A))
-        .send({ body: 'boa, Bruno!' })
-        .expect(201);
+      // No Squad, não: nem para C, nem para a própria B que o escreveu (§22).
+      for (const account of [ACCOUNT_B, ACCOUNT_C]) {
+        const feed = await readFeed(account).expect(200);
+        const card = feed.body.items.find(
+          (i: { checkIn: { checkInId: string } }) => i.checkIn.checkInId === checkInId,
+        );
+        expect(card.checkIn.commentCount).toBe(0);
+        expect(card.checkIn.reactions).toEqual({});
+        expect(card.checkIn.currentUserReaction).toBeNull();
+      }
 
-      const feedC = await readFeed(ACCOUNT_C).expect(200);
-      const cardFromB = feedC.body.items.find(
-        (i: { checkIn: { checkInId: string } }) => i.checkIn.checkInId === fromB,
-      );
-      expect(cardFromB.checkIn.canInteract).toBe(false);
-      expect(cardFromB.checkIn.commentCount).toBe(0);
-      expect(cardFromB.checkIn.reactions).toEqual({});
-      expect(cardFromB.checkIn.currentUserReaction).toBeNull();
+      // E a lista de comentários daquele Squad também não o traz (§137).
+      const groupComments = await request(s.server())
+        .get(`/v1/social/workout-checkins/${checkInId}/comments`)
+        .query({ context: 'GROUP', groupId })
+        .set(auth(ACCOUNT_C))
+        .expect(200);
+      expect(groupComments.body.items).toEqual([]);
     });
   });
 
