@@ -113,6 +113,23 @@ fun NotificationPreferencesScreen(
                         CircularProgressIndicator(color = Lime400)
                     }
                 }
+                is NotificationPreferencesUiState.SignedOut -> {
+                    // Sem conta ativa não há preferência de ninguém para mostrar (T17.10 §103).
+                    // A tela diz isso em vez de manter na tela o que era da conta anterior.
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = stringResource(R.string.notification_preferences_signed_out),
+                            color = TextSecondary,
+                            fontSize = 15.sp
+                        )
+                    }
+                }
                 is NotificationPreferencesUiState.Error -> {
                     Column(
                         modifier = Modifier

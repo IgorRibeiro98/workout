@@ -54,9 +54,14 @@ export class BlockService {
       this.blockRepo.deleteBlock(blockerUid, target.ownerUid);
     }
 
+    // T17.10 §120 — `socialId` é identidade pública de outra pessoa, e a regra de log do social
+    // (§13.8/§13.9) o proíbe junto com uid completo, e-mail, `displayName` e `friendCode`. Aqui
+    // ele estava saindo inteiro. O prefixo de uid do alvo correlaciona o mesmo evento no suporte
+    // sem registrar o identificador com que essa pessoa é encontrável.
     this.logger.info('social.block.removed', {
       blockerUidPrefix: blockerUid.slice(0, 6),
-      targetSocialId: blockedSocialId,
+      blockedUidPrefix: target ? target.ownerUid.slice(0, 6) : null,
+      targetResolved: target !== null,
     });
 
     return {

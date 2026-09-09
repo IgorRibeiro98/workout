@@ -36,6 +36,12 @@ export const AUTH_UNAVAILABLE_CODE = 'AUTH_UNAVAILABLE';
 export const API_RATE_LIMITED_CODE = 'API_RATE_LIMITED';
 
 /**
+ * A única superfície que uma conta com tombstone ainda alcança: consultar e reexecutar a própria
+ * exclusão. Tudo o mais responde `403 ACCOUNT_DELETED`.
+ */
+export const ACCOUNT_ROUTE_BASE = '/v1/account';
+
+/**
  * Teto geral por conta, para **qualquer** rota autenticada (T16.8 §84).
  *
  * Deliberadamente alto: ele não substitui os limites específicos do sync e do backup, que são bem
@@ -124,10 +130,14 @@ export class BearerAuthGuard implements CanActivate {
       });
     }
 
-    // Se a conta já foi excluída, rejeita qualquer operação exceto rotas sob /v1/account
-    const isAccountRoute =
-      request.originalUrl?.includes('/v1/account') || request.url?.includes('/v1/account');
-    if (!isAccountRoute && this.isTombstoned(principal.uid)) {
+    // Se a conta já foi excluída, rejeita qualquer operação exceto rotas sob /v1/account.
+    //
+    // A comparação é sobre o **caminho**, e não sobre a URL inteira (T17.10 §85/§118). Um
+    // `includes` sobre `originalUrl` casava com a query string: `GET /v1/social/me?x=/v1/account`
+    // era tratado como rota de conta, o tombstone deixava de ser verificado, e uma conta excluída
+    // reativava o perfil e voltava a escrever. O caminho é a única parte da URL que o roteador
+    // usa para decidir qual controller responde — é ele que precisa decidir isto também.
+    if (!isAccountRoutePath(request) && this.isTombstoned(principal.uid)) {
       this.logger.warn('auth.account_deleted', { requestId, uidPrefix: uidPrefix(principal.uid) });
       throw new HttpException(
         { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
@@ -162,6 +172,32 @@ export class BearerAuthGuard implements CanActivate {
       return false;
     }
   }
+}
+
+/**
+ * O caminho da requisição, sem query string e sem fragmento.
+ *
+ * `originalUrl` carrega `?a=b`; `url` também. Comparar a URL inteira contra um prefixo de rota
+ * deixa a decisão nas mãos de quem escreve a query string.
+ */
+export function requestPath(rawUrl: string | undefined): string {
+  if (!rawUrl) {
+    return '';
+  }
+  const queryStart = rawUrl.search(/[?#]/);
+  return queryStart === -1 ? rawUrl : rawUrl.slice(0, queryStart);
+}
+
+/**
+ * A requisição endereça `/v1/account` ou algo abaixo dela?
+ *
+ * Prefixo de **segmento**: `/v1/account` e `/v1/account/deletion-status` casam; um futuro
+ * `/v1/accounts` ou `/v1/account-recovery` não — o que impede que uma rota nova herde por acidente
+ * a isenção do tombstone.
+ */
+export function isAccountRoutePath(request: { originalUrl?: string; url?: string }): boolean {
+  const path = requestPath(request.originalUrl ?? request.url);
+  return path === ACCOUNT_ROUTE_BASE || path.startsWith(`${ACCOUNT_ROUTE_BASE}/`);
 }
 
 /**

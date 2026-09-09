@@ -1,6 +1,7 @@
 package com.example.presentation.friends
 
 import com.example.data.social.PushDeviceRegistrationDto
+import com.example.domain.auth.FakeAuthGateway
 import com.example.domain.social.SocialNotificationGateway
 import com.example.domain.social.SocialNotificationPreferences
 import kotlinx.coroutines.Dispatchers
@@ -19,11 +20,16 @@ import org.junit.Test
 class NotificationPreferencesViewModelTest {
 
     private lateinit var fakeGateway: FakeSocialNotificationGateway
+    private lateinit var auth: FakeAuthGateway
 
     @Before
     fun setUp() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         fakeGateway = FakeSocialNotificationGateway()
+        // A ViewModel passou a ter escopo de conta (T17.10 §103): sem conta ativa ela não carrega
+        // preferência nenhuma. A troca de conta em si é exercitada em
+        // `NotificationPreferencesAccountScopeTest`, que precisa de Robolectric.
+        auth = FakeAuthGateway(initialAccount = FakeAuthGateway.DEFAULT_ACCOUNT)
     }
 
     @After
@@ -43,7 +49,7 @@ class NotificationPreferencesViewModelTest {
         )
         fakeGateway.preferences = defaultPrefs
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
 
         val state = viewModel.uiState.value
         assertTrue(state is NotificationPreferencesUiState.Loaded)
@@ -57,7 +63,7 @@ class NotificationPreferencesViewModelTest {
     fun `falha ao carregar coloca estado Error`() {
         fakeGateway.getPreferencesError = IllegalStateException("Falha de rede")
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
 
         val state = viewModel.uiState.value
         assertTrue(state is NotificationPreferencesUiState.Error)
@@ -77,7 +83,7 @@ class NotificationPreferencesViewModelTest {
         )
         fakeGateway.preferences = initialPrefs
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.togglePushEnabled(false)
 
         val state = viewModel.uiState.value
@@ -100,7 +106,7 @@ class NotificationPreferencesViewModelTest {
         )
         fakeGateway.preferences = initialPrefs
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.toggleFriendRequestReceived(false)
 
         val state = viewModel.uiState.value
@@ -113,7 +119,7 @@ class NotificationPreferencesViewModelTest {
     @Test
     fun `toggleFriendRequestAccepted atualiza com sucesso`() {
         fakeGateway.preferences = SocialNotificationPreferences(pushEnabled = true)
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.toggleFriendRequestAccepted(false)
 
         val state = viewModel.uiState.value as NotificationPreferencesUiState.Loaded
@@ -123,7 +129,7 @@ class NotificationPreferencesViewModelTest {
     @Test
     fun `toggleChallengeInvitationReceived atualiza com sucesso`() {
         fakeGateway.preferences = SocialNotificationPreferences(pushEnabled = true)
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.toggleChallengeInvitationReceived(false)
 
         val state = viewModel.uiState.value as NotificationPreferencesUiState.Loaded
@@ -133,7 +139,7 @@ class NotificationPreferencesViewModelTest {
     @Test
     fun `toggleChallengeStartingSoon atualiza com sucesso`() {
         fakeGateway.preferences = SocialNotificationPreferences(pushEnabled = true)
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.toggleChallengeStartingSoon(false)
 
         val state = viewModel.uiState.value as NotificationPreferencesUiState.Loaded
@@ -143,7 +149,7 @@ class NotificationPreferencesViewModelTest {
     @Test
     fun `toggleChallengeEnded atualiza com sucesso`() {
         fakeGateway.preferences = SocialNotificationPreferences(pushEnabled = true)
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.toggleChallengeEnded(false)
 
         val state = viewModel.uiState.value as NotificationPreferencesUiState.Loaded
@@ -155,7 +161,7 @@ class NotificationPreferencesViewModelTest {
         val initialPrefs = SocialNotificationPreferences(pushEnabled = true)
         fakeGateway.preferences = initialPrefs
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         fakeGateway.updatePreferencesError = IllegalStateException("Erro ao salvar")
 
         viewModel.togglePushEnabled(false)
@@ -173,7 +179,7 @@ class NotificationPreferencesViewModelTest {
         val initialPrefs = SocialNotificationPreferences(pushEnabled = false)
         fakeGateway.preferences = initialPrefs
 
-        val viewModel = NotificationPreferencesViewModel(fakeGateway)
+        val viewModel = NotificationPreferencesViewModel(fakeGateway, auth)
         viewModel.onPermissionDenied("Permissão negada pelo usuário")
 
         val state = viewModel.uiState.value
@@ -191,6 +197,7 @@ class NotificationPreferencesViewModelTest {
         var callbackCalled = false
         val viewModel = NotificationPreferencesViewModel(
             gateway = fakeGateway,
+            authGateway = auth,
             onPushEnabled = { callbackCalled = true }
         )
 
@@ -200,6 +207,7 @@ class NotificationPreferencesViewModelTest {
         assertTrue(state.preferences.pushEnabled)
         assertTrue(callbackCalled)
     }
+
 
     private class FakeSocialNotificationGateway : SocialNotificationGateway {
         var preferences = SocialNotificationPreferences(pushEnabled = true)

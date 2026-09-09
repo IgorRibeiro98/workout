@@ -366,9 +366,12 @@ class MainViewModelFactory(
         if (modelClass.isAssignableFrom(com.example.presentation.friends.NotificationPreferencesViewModel::class.java)) {
             val gateway = socialNotificationGateway
                 ?: throw IllegalStateException("SocialNotificationGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.friends.NotificationPreferencesViewModel(
                 gateway = gateway,
+                authGateway = auth,
                 onPushEnabled = { pushRegistrationCoordinator?.reconcile("push_enabled") }
             ) as T
         }

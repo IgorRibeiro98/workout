@@ -43,14 +43,24 @@
 		}
 	}
 
-	# Teto de corpo no proxy, um pouco acima do teto do backend (4 MiB para backup).
+	# Teto de corpo no proxy, sempre **acima** do maior teto do backend.
 	#
 	# A folga é deliberada: o backend precisa **ver** o corpo grande demais para responder
-	# `BACKUP_TOO_LARGE`, que é um erro que o app entende. Se o Caddy cortasse antes, o cliente
-	# receberia um 413 genérico do proxy e perderia o código — e a lógica do teto passaria a viver
-	# em dois lugares que envelhecem separados (§89).
+	# `BACKUP_TOO_LARGE` ou `MEDIA_TOO_LARGE`, que são erros que o app entende. Se o Caddy cortasse
+	# antes, o cliente receberia um 413 genérico do proxy e perderia o código — e a lógica do teto
+	# passaria a viver em dois lugares que envelhecem separados (§89).
+	#
+	# São **dois** tetos no backend, e o proxy precisa acomodar o maior (T17.10 §93/§94):
+	#
+	#   JSON   (backup / sync / social)          4 MiB   — MAX_BACKUP_REQUEST_BODY_BYTES
+	#   imagem (POST /v1/social/checkin-media)  10 MiB   — SOCIAL_MEDIA_MAX_UPLOAD_BYTES
+	#
+	# O valor era 5MB, de quando só existia o teto de JSON. Depois da T17.9 ele passou a cortar
+	# foto legítima entre 5 MB e 10 MiB **antes** do backend, com um 413 genérico — o defeito
+	# exato que este bloco existe para evitar, agora vindo de dentro. Elevar
+	# `SOCIAL_MEDIA_MAX_UPLOAD_BYTES` no ambiente exige elevar este número junto.
 	request_body {
-		max_size 5MB
+		max_size 12MB
 	}
 
 	log {

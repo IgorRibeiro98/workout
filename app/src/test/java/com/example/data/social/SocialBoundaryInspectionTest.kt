@@ -60,7 +60,27 @@ class SocialBoundaryInspectionTest {
         // `WorkoutCheckInPublisher`, que é justamente o objeto autorizado a olhar os dois lados —
         // e ele mora em `data/repository`, fora do pacote social.
         "app/src/main/java/com/example/presentation/friends/SocialFeedViewModel.kt",
-        "app/src/main/java/com/example/presentation/friends/SocialFeedScreen.kt"
+        "app/src/main/java/com/example/presentation/friends/SocialFeedScreen.kt",
+        // T17.4 — atividade e ranking dos amigos. Projeção efêmera: nada em Room, nada na Outbox.
+        "app/src/main/java/com/example/presentation/friends/SocialActivityViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/SocialActivityUiState.kt",
+        "app/src/main/java/com/example/presentation/friends/ActivityScreen.kt",
+        // T17.5 — preferências de notificação. O escopo de push vive em `com.example.service`, e
+        // não aqui: a tela só lê e grava preferência pelo gateway.
+        "app/src/main/java/com/example/presentation/friends/NotificationPreferencesViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/NotificationPreferencesScreen.kt",
+        // T17.7 — compartilhamento de treino. A ViewModel coordena com o `WorkoutShareImporter`,
+        // que é o objeto autorizado a escrever no Room — e ele mora em `data/repository`, fora
+        // do pacote social, como o `WorkoutCheckInPublisher` da T17.8.
+        "app/src/main/java/com/example/presentation/friends/SharedWorkoutsViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/SharedWorkoutsScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/ShareWorkoutDialog.kt",
+        // T17.9 — o check-in rico. Estas entraram na lista na T17.10 (§103/§105/§120): elas eram
+        // as superfícies mais novas do social e as únicas fora da varredura estrutural, que é
+        // exatamente a combinação que a auditoria existe para desfazer.
+        "app/src/main/java/com/example/presentation/friends/CheckInDetailViewModel.kt",
+        "app/src/main/java/com/example/presentation/friends/CheckInDetailScreen.kt",
+        "app/src/main/java/com/example/presentation/friends/ShareCheckInSection.kt"
     )
 
     private fun socialSources() =

@@ -44,10 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.data.local.TemplateExerciseWithDetails
-import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.repository.SnapshotBuildResult
-import com.example.data.repository.WorkoutShareSnapshotBuilder
 import com.example.domain.social.Friend
 import com.example.domain.social.FriendGateway
 import com.example.domain.social.FriendOutcome
@@ -62,19 +59,27 @@ import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/**
+ * O diálogo de compartilhar treino (T17.7).
+ *
+ * Ele recebe o snapshot **já construído**, e não o `WorkoutTemplateEntity` com a lista de
+ * exercícios (T17.10 §105). A diferença não é estética: a fronteira do social é não conhecer Room,
+ * DAO nem entidade local, e uma tela social que segura a entidade de treino é o ponto exato em que
+ * um campo privado — carga, nota, número de máquina — passa a estar ao alcance de quem for
+ * escrever a próxima linha aqui. Quem monta o snapshot é o `WorkoutShareSnapshotBuilder`, chamado
+ * de onde a entidade legitimamente mora (`presentation/workouts`), e é lá que a política de
+ * exercício CUSTOM é aplicada fail-closed.
+ *
+ * O que chega aqui é o que vai para o servidor, e nada mais.
+ */
 @Composable
 fun ShareWorkoutDialog(
-    template: WorkoutTemplateEntity,
-    exercises: List<TemplateExerciseWithDetails>,
+    buildResult: SnapshotBuildResult,
     friendGateway: FriendGateway,
     shareGateway: WorkoutShareGateway,
     onDismiss: () -> Unit,
     onShareSuccess: () -> Unit
 ) {
-    val buildResult = remember(template, exercises) {
-        WorkoutShareSnapshotBuilder().buildSnapshot(template, exercises)
-    }
-
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),

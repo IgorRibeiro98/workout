@@ -129,4 +129,5 @@
     <string name="notification_workout_share_received_title">Novo treino compartilhado</string>
     <string name="notification_workout_share_received_body">Um amigo compartilhou um treino com você no Spark.</string>
     <string name="notification_permission_denied_message">Permissão de notificações não concedida nas configurações do aparelho.</string>
+    <string name="notification_preferences_signed_out">Entre na Conta Spark para ajustar as notificações sociais.</string>
 </resources>

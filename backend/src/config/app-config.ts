@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path';
-import { envSchema, SparkEnv } from './env.schema';
+import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
 export class ConfigValidationError extends Error {
   constructor(readonly issues: string[]) {
@@ -250,6 +250,17 @@ export class AppConfig {
     if (this.isProduction && !this.socialMediaRootIsExplicit) {
       missing.push(
         'NODE_ENV=production exige SOCIAL_MEDIA_ROOT apontando para um volume persistente',
+      );
+    }
+    // T17.10 §136/§137 — a chave do tombstone não pode ser a de desenvolvimento em produção.
+    //
+    // Ela é o que liga o tombstone ao uid: subir com o default e trocá-lo depois faria **todas**
+    // as exclusões já feitas deixarem de casar — conta excluída voltando a passar pelo guard, e a
+    // reconciliação de DR deixando de reconhecê-la. Um default inseguro aqui é ressurreição
+    // silenciosa esperando uma troca de configuração.
+    if (this.isProduction && this.accountDeletionHmacKey === DEVELOPMENT_DELETION_HMAC_KEY) {
+      missing.push(
+        'NODE_ENV=production exige ACCOUNT_DELETION_HMAC_KEY própria (o default é de desenvolvimento)',
       );
     }
     return missing;

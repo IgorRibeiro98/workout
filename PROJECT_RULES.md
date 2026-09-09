@@ -1097,6 +1097,59 @@ canal em que o bloqueio deixa de proteger.
   "com.example.presentation.friends.SocialFeed*"`. As duas são offline e usam dublê de
   autenticação.
 
+## 13.16 Fechamento do Social: o que a auditoria travou (T17.10)
+
+A T17.10 não acrescentou funcionalidade. Ela auditou T17.0–T17.9 como um sistema só e corrigiu o
+que encontrou. As regras abaixo são as que **não existiam explicitamente** antes dela — cada uma
+nasceu de um defeito real, e cada uma tem teste.
+
+- **O tombstone é verificado sobre o caminho, nunca sobre a URL.** O guard isentava a rota de
+  conta com um `includes('/v1/account')` sobre `originalUrl` — que carrega a query string. Uma
+  conta excluída voltava a **escrever** com `?x=/v1/account` em qualquer rota: reativava o perfil,
+  publicava, comentava. A comparação agora é de caminho e por segmento, e `/v1/accounts` ou
+  `/v1/account-recovery` não herdam a isenção.
+- **A chave de tombstone é obrigatória em produção.** `ACCOUNT_DELETION_HMAC_KEY` tinha default no
+  repositório e `missingRequirements()` não a exigia. Duas falhas ao mesmo tempo: com a chave
+  conhecida, qualquer pessoa com o banco confirma um uid; e **trocá-la depois** faz todos os
+  tombstones existentes deixarem de casar — conta excluída voltando a passar pelo guard, e a
+  reconciliação de DR deixando de reconhecê-la. Produção com o default de desenvolvimento **não
+  sobe**. Ela nunca deve ser rotacionada sem plano de migração.
+- **Migration aplicada não muda de conteúdo.** O runner recusava um arquivo renomeado e aceitava
+  um arquivo **editado**. Agora `schema_migrations` guarda o SHA-256 do texto, e uma edição
+  retroativa derruba o startup. Banco anterior à coluna é adotado no primeiro arranque (não há como
+  saber retroativamente o que foi aplicado) e protegido a partir dali.
+- **Uma varredura que não varre passa vazia.** Toda suíte que percorre superfícies precisa afirmar
+  que **exercitou** cada uma. Um caminho errado numa lista de rotas deixou o ranking fora da
+  varredura de privacidade sem nada falhar. O mesmo vale para a inspeção estrutural do Android: as
+  telas da T17.4, T17.5, T17.7 e T17.9 estavam fora da lista, e a lista é o teste.
+- **Tela social não segura entidade de Room.** `ShareWorkoutDialog` recebia `WorkoutTemplateEntity`
+  e a lista de exercícios. O snapshot passou a ser montado de onde a entidade legitimamente mora, e
+  o diálogo recebe só o resultado portável — a fronteira do social é não conhecer Room, e uma tela
+  social com a entidade de treino na mão é onde um campo privado entra sem que ninguém decida.
+- **Toda ViewModel social tem escopo de conta.** Limpar vem **antes** de a requisição da conta nova
+  sair, e toda resposta confere o `uid` de origem antes de tocar no estado.
+  `NotificationPreferencesViewModel` era a única sem nenhuma das duas coisas.
+- **Estado técnico de instalação não entra no backup do Android.** Token FCM, `socialId` registrado,
+  InstanceID e sessão do Firebase Auth saem do Auto Backup **e** da transferência de aparelho. Dois
+  aparelhos anunciando o mesmo token ao backend é notificação entregue no lugar errado; estado de
+  instalação se reconquista no primeiro registro, nunca se restaura.
+- **O teto do proxy fica acima do maior teto do backend.** São dois tetos — JSON (4 MiB) e imagem
+  (10 MiB) — e o Caddy estava em 5 MB, de quando só existia o primeiro. Ele cortava foto legítima
+  antes do backend, com 413 genérico, em vez de deixar o servidor responder `MEDIA_TOO_LARGE`.
+- **O volume de mídia entra nas checagens de disco.** Ele é o que **cresce**, e em produção costuma
+  ser uma partição separada. Vigiar só o diretório do banco deixava a partição das fotos sem alarme.
+- **Log não carrega `socialId`.** A regra já valia desde a T17.0; `social.block.removed` a violava.
+  Prefixo de uid correlaciona no suporte sem registrar o identificador com que a pessoa é
+  encontrável.
+- **Identificador vindo do cliente tem forma declarada.** `canonicalExerciseId` só exigia "string
+  não vazia": com 30 exercícios e 4 MiB de JSON, era um canal de texto livre que o servidor
+  guardava e devolvia. A política de exercício CUSTOM continua fail-closed **no aparelho** — o
+  servidor não conhece o catálogo e valida a forma, não a existência.
+- **O que a auditoria confirmou e não mudou:** a autoridade continua dividida (treino local-first,
+  social server-authoritative), o bloqueio é aplicado no servidor e por viewer inclusive nas
+  contagens, o Feed é bounded em linhas **e** em consultas, o EXIF/GPS não sobrevive ao re-encode,
+  o original nunca toca o disco, e excluir a conta não toca o Room.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

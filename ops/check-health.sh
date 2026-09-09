@@ -107,6 +107,43 @@ else
   problem "o diretório de dados não existe: ${SPARK_DATA_DIR}"
 fi
 
+# --- disco da mídia social (T17.9 / T17.10 §92) -----------------------------------------------
+#
+# A mídia mora num diretório próprio, e em produção ela costuma ser um **volume separado** — é o
+# que `.env.example` recomenda, e é o que faz `restic` deduplicar as fotos entre snapshots sem
+# arrastar o banco junto. Vigiar só `$SPARK_DATA_DIR` deixava justamente a partição que **cresce**
+# fora da checagem: o banco é kilobytes por conta, e as fotos são megabytes.
+#
+# Quando as duas apontam para o mesmo sistema de arquivos, a checagem acima já respondeu; repetir
+# só produziria um alarme duplicado. `df --output=source` é o que decide.
+if [ -d "$SPARK_MEDIA_DIR" ]; then
+  MEDIA_SOURCE="$(df --output=source "$SPARK_MEDIA_DIR" | tail -1 | tr -d ' ')"
+  DATA_SOURCE=""
+  [ -d "$SPARK_DATA_DIR" ] && DATA_SOURCE="$(df --output=source "$SPARK_DATA_DIR" | tail -1 | tr -d ' ')"
+
+  MEDIA_BYTES="$(du -sh "$SPARK_MEDIA_DIR" 2> /dev/null | cut -f1)"
+  MEDIA_FILES="$(find "$SPARK_MEDIA_DIR" -type f 2> /dev/null | wc -l | tr -d ' ')"
+  note "mídia social: ${MEDIA_FILES:-0} arquivo(s), ${MEDIA_BYTES:-0} em ${SPARK_MEDIA_DIR}"
+
+  if [ "$MEDIA_SOURCE" != "$DATA_SOURCE" ]; then
+    MEDIA_USED_PERCENT="$(df --output=pcent "$SPARK_MEDIA_DIR" | tail -1 | tr -dc '0-9')"
+    MEDIA_AVAILABLE="$(df -h --output=avail "$SPARK_MEDIA_DIR" | tail -1 | tr -d ' ')"
+    note "disco da mídia: ${MEDIA_USED_PERCENT}% usado, ${MEDIA_AVAILABLE} livre"
+    if [ "$MEDIA_USED_PERCENT" -ge "$DISK_FAIL_PERCENT" ]; then
+      # Disco de mídia cheio **não** derruba o treino nem o sync: o upload falha de forma
+      # controlada e a publicação para, com a decisão de volta para o usuário (T17.9). Ainda assim
+      # é um problema operacional — o Feed para de aceitar foto até alguém agir.
+      problem "disco da mídia em ${MEDIA_USED_PERCENT}% (limite ${DISK_FAIL_PERCENT}%) — ver RUNBOOK, 'disco cheio'"
+    elif [ "$MEDIA_USED_PERCENT" -ge "$DISK_WARN_PERCENT" ]; then
+      note "ATENÇÃO: disco da mídia em ${MEDIA_USED_PERCENT}%"
+    fi
+  fi
+else
+  # Ausência não é falha: um servidor que nunca recebeu foto não tem o diretório, e o backend o
+  # cria na primeira escrita.
+  note "diretório de mídia ainda não existe: ${SPARK_MEDIA_DIR}"
+fi
+
 # --- modelo de permissão (T16.8.1 §3) --------------------------------------------------------
 #
 # O acesso ao banco é por **grupo compartilhado**, não por uid coincidente: `/opt/spark/data`

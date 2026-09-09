@@ -185,6 +185,19 @@ export class AccountDeletionRepository {
     db.prepare(`DELETE FROM account_deletion_jobs WHERE id = ?`).run(id);
   }
 
+  /**
+   * Encerra o job pendente **daquele uid**, qualquer que seja o `id` dele (T17.10 §83).
+   *
+   * `insertJob` tem `ON CONFLICT (firebase_uid) DO NOTHING`: numa segunda tentativa de exclusão o
+   * serviço gera um `jobId` novo que nunca chega a ser inserido, e apagar por esse id não removia
+   * nada. O job da primeira tentativa ficava para sempre, e `deletion-status` respondia
+   * `DELETION_PENDING` para uma conta já apagada no Firebase. A chave estável aqui é o uid.
+   */
+  deleteJobByFirebaseUid(firebaseUid: string): void {
+    const db = this.sqlite.connection;
+    db.prepare(`DELETE FROM account_deletion_jobs WHERE firebase_uid = ?`).run(firebaseUid);
+  }
+
   incrementJobAttempt(id: string, error: string, nextAttemptAt: number): void {
     const db = this.sqlite.connection;
     db.prepare(

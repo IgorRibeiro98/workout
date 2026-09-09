@@ -27,6 +27,15 @@ const MAX_SNAPSHOT_BYTES = 64 * 1024;
 const MAX_PENDING_SHARES = 10;
 const MAX_DAILY_SHARES = 20;
 
+/**
+ * A forma de um `canonicalExerciseId` (T17.10 §99).
+ *
+ * Uma allowlist, e não uma blocklist: o catálogo produz slugs (`supino-reto-barra`), e 128
+ * caracteres cobrem com folga o maior deles (47 hoje). Qualquer outra coisa é recusada antes de
+ * virar linha no banco.
+ */
+const CANONICAL_EXERCISE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
 @Injectable()
 export class WorkoutShareService {
   constructor(
@@ -458,7 +467,20 @@ export class WorkoutShareService {
     }
 
     snapshot.exercises.forEach((ex, idx) => {
-      if (!ex.canonicalExerciseId || typeof ex.canonicalExerciseId !== 'string') {
+      // T17.10 §99 — o identificador canônico precisa **parecer** um identificador canônico.
+      //
+      // Antes, `typeof string` e "não vazio" eram tudo: com 30 exercícios e o teto global de 4 MiB
+      // de JSON, o campo era um canal de texto livre de megabytes que o servidor guardava e
+      // devolvia. Nenhum id do catálogo passa de 47 caracteres e todos são slugs; 128 e uma
+      // allowlist de forma deixam folga larga para o catálogo crescer e recusam o resto.
+      //
+      // Isto **não** é a política de exercício CUSTOM (§59), que continua sendo fail-closed no
+      // aparelho (`WorkoutShareSnapshotBuilder`): o servidor não conhece o catálogo e não pode
+      // decidir se um slug existe. O que ele pode garantir é a forma — e é o que faz aqui.
+      if (
+        typeof ex.canonicalExerciseId !== 'string' ||
+        !CANONICAL_EXERCISE_ID_PATTERN.test(ex.canonicalExerciseId)
+      ) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
           message: `Exercício [${idx}] sem canonicalExerciseId válido.`,

@@ -21,6 +21,14 @@ const booleanFlag = (defaultValue: boolean) =>
  * inicialização parcialmente funcional: uma configuração obrigatória inválida derruba o processo
  * no startup (fail fast), antes de o servidor HTTP aceitar qualquer requisição.
  */
+/**
+ * O valor de desenvolvimento da chave HMAC de exclusão de conta.
+ *
+ * Exportado para que `AppConfig` possa recusá-lo em produção — e para que o teste possa afirmar
+ * essa recusa sem repetir a string.
+ */
+export const DEVELOPMENT_DELETION_HMAC_KEY = 'spark-dev-deletion-hmac-key-not-for-production';
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -248,11 +256,24 @@ export const envSchema = z.object({
   // --- Hardening social e exclusão de conta (T17.6) -------------------------------------
 
   /**
-   * Chave secreta HMAC para cálculo irreversível dos tombstones de exclusão de conta.
-   * Em produção, precisa ser configurada com chave segura.
-   * Em dev/test, fallback seguro para testes locais.
+   * Chave HMAC dos tombstones de exclusão de conta (T17.6, endurecida na T17.10 §136/§137).
+   *
+   * O default abaixo é **de desenvolvimento**, e o nome dele diz isso. Ele existe para que teste e
+   * `npm run start:dev` funcionem sem configuração; produção é obrigada a substituí-lo, e
+   * `AppConfig.missingRequirements()` derruba o startup se não substituir.
+   *
+   * Duas razões, e a segunda é a que dói:
+   *
+   * 1. o tombstone guarda `HMAC(uid)` justamente para que a tabela não revele quais contas
+   *    existiram. Com uma chave que está no repositório, qualquer pessoa confirma um uid
+   *    conhecido — a propriedade que separa HMAC de hash simples é o segredo da chave;
+   * 2. a chave é o que liga o tombstone ao uid. Subir em produção com o default e trocá-lo
+   *    depois faria **todos** os tombstones existentes deixarem de casar: contas excluídas
+   *    voltariam a passar pelo guard e a reconciliação de DR pararia de reconhecê-las. É
+   *    ressurreição silenciosa, e o momento em que ela acontece é uma troca de configuração
+   *    aparentemente inofensiva.
    */
-  ACCOUNT_DELETION_HMAC_KEY: z.string().min(16).default('spark-test-deletion-hmac-key-32chars!'),
+  ACCOUNT_DELETION_HMAC_KEY: z.string().min(16).default(DEVELOPMENT_DELETION_HMAC_KEY),
 
   /** Caminho do arquivo append-only de tombstones de deleção para DR (anti-ressurreição). */
   DELETION_TOMBSTONES_FILE_PATH: z.string().min(1).default('/data/deletion_tombstones.tsv'),

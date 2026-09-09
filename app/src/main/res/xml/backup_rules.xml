@@ -1,13 +1,29 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Regras de Auto Backup (Android 11 e anteriores) — T17.10 §106.
+
+  O padrão do Android é "faz backup de tudo", e o padrão do template do Android Studio era não
+  dizer nada — o que **é** o padrão. Isso levava o escopo de push para o Google Drive da pessoa e
+  para a transferência de aparelho: o token FCM e o `socialId` da conta que registrou este
+  aparelho. Nenhum dos dois é dado do usuário; os dois são **estado técnico desta instalação**.
+
+  O que um token FCM restaurado em outro aparelho produz é concreto: duas instalações declarando o
+  mesmo token, o backend entregando a notificação de uma conta ao aparelho de outra pessoa, e o
+  `socialId` de quem fez o backup viajando junto. Estado de instalação não se restaura — ele se
+  reconquista no primeiro registro (`PushRegistrationCoordinator`), que é barato e sempre correto.
+
+  O que **continua** no backup, de propósito: o banco Room (o treino é do usuário) e as
+  preferências de app. O Spark tem backup próprio de nuvem para o treino, mas o Auto Backup do
+  Android não conflita com ele — os dois são cópias do mesmo dado do dono.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Escopo de push: token FCM + socialId registrado (T17.5). Estado de instalação. -->
+    <exclude domain="file" path="datastore/social_push_scope.preferences_pb" />
+
+    <!-- Token/InstanceID do Firebase Messaging. Mesma razão: identifica **este** aparelho. -->
+    <exclude domain="sharedpref" path="com.google.android.gms.appid.xml" />
+    <exclude domain="file" path="PersistedInstallation" />
+
+    <!-- Sessão do Firebase Auth. Credencial não se restaura: quem troca de aparelho faz login. -->
+    <exclude domain="sharedpref" path="com.google.firebase.auth.api.Store.xml" />
 </full-backup-content>

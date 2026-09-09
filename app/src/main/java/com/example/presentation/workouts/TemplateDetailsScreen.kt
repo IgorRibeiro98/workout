@@ -577,9 +577,14 @@ fun TemplateDetailsScreen(
 
     if (showShareDialog && template != null) {
         val app = context.applicationContext as com.example.MainApplication
+        // O snapshot é montado **aqui**, onde a entidade de treino legitimamente vive. O diálogo
+        // social recebe só o resultado portável — ver `ShareWorkoutDialog` (T17.10 §105).
+        val snapshotResult = remember(template, rawExercises) {
+            com.example.data.repository.WorkoutShareSnapshotBuilder()
+                .buildSnapshot(template!!, rawExercises)
+        }
         ShareWorkoutDialog(
-            template = template!!,
-            exercises = rawExercises,
+            buildResult = snapshotResult,
             friendGateway = app.friendGateway,
             shareGateway = app.workoutShareGateway,
             onDismiss = { showShareDialog = false },

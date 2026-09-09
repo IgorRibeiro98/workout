@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppConfig, ConfigValidationError } from '../src/config/app-config';
+import { DEVELOPMENT_DELETION_HMAC_KEY } from '../src/config/env.schema';
 import { configFor, createTempDb, sqliteFor, MIGRATIONS_DIR, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
@@ -95,10 +96,39 @@ describe('Configuração de produção', () => {
       ...base,
       NODE_ENV: 'production',
       SOCIAL_MEDIA_ROOT: '/media',
+      // Produção também exige a chave própria de tombstone (T17.10 §136) — sem ela a lista de
+      // pendências não fica vazia, e é isso que o teste abaixo cobre.
+      ACCOUNT_DELETION_HMAC_KEY: 'chave-de-producao-de-teste-com-tamanho-suficiente',
     });
     expect(configured.socialMediaRoot).toBe('/media');
     expect(configured.socialMediaRootIsExplicit).toBe(true);
     expect(configured.missingRequirements()).toEqual([]);
+  });
+
+  it('produção com a chave de tombstone de desenvolvimento é falha de startup (T17.10 §136/§137)', () => {
+    // A chave liga o tombstone ao uid. Subir com o default do repositório significa duas coisas
+    // ruins ao mesmo tempo: qualquer pessoa com o código confirma um uid conhecido a partir da
+    // tabela, e trocá-la depois faz **todas** as exclusões já feitas deixarem de casar — conta
+    // excluída voltando a passar pelo guard, e a reconciliação de DR deixando de reconhecê-la.
+    const withDefault = AppConfig.fromEnv({
+      ...base,
+      NODE_ENV: 'production',
+      SOCIAL_MEDIA_ROOT: '/media',
+    });
+    expect(withDefault.accountDeletionHmacKey).toBe(DEVELOPMENT_DELETION_HMAC_KEY);
+    expect(withDefault.missingRequirements().join()).toContain('ACCOUNT_DELETION_HMAC_KEY');
+
+    const withOwnKey = AppConfig.fromEnv({
+      ...base,
+      NODE_ENV: 'production',
+      SOCIAL_MEDIA_ROOT: '/media',
+      ACCOUNT_DELETION_HMAC_KEY: 'uma-chave-longa-o-suficiente-de-producao',
+    });
+    expect(withOwnKey.missingRequirements()).toEqual([]);
+
+    // Fora de produção o default continua servindo: teste e `start:dev` sobem sem configuração.
+    const development = AppConfig.fromEnv({ ...base, DATABASE_PATH: '/tmp/spark/spark.db' });
+    expect(development.missingRequirements()).toEqual([]);
   });
 
   it('fora de produção a raiz de mídia é derivada, e o processo sobe sem configuração', () => {

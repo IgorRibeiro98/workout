@@ -77,7 +77,7 @@ export class AccountDeletionService {
       if (this.authVerifier.deleteUser) {
         await this.authVerifier.deleteUser(uid);
       }
-      this.repo.deleteJob(jobId);
+      this.repo.deleteJobByFirebaseUid(uid);
       this.logger.info('account.deletion.completed', {
         uidPrefix: uid.slice(0, 6),
       });
