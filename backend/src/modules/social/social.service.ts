@@ -3,6 +3,7 @@ import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { SqliteService } from '../../database/sqlite.service';
 import { ChallengeRepository } from './challenge.repository';
+import { SocialGroupService } from './social-group.service';
 import { NotificationService } from './notification.service';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
@@ -77,6 +78,15 @@ export class SocialService {
      * privacidade ou identidade.
      */
     private readonly challenges: ChallengeRepository,
+    /**
+     * Os Squads, alcançados **só** por [disable] (T17.11 §96–§99).
+     *
+     * A dependência tem uma direção só, como a dos desafios: o social sabe que desativar precisa
+     * resolver os grupos. O contrário não existe — nada em `SocialGroupService` altera perfil,
+     * privacidade ou identidade; ele **lê** o perfil pelo `SocialRepository`, que é o mesmo dado
+     * sem o caso de uso em volta.
+     */
+    private readonly groups: SocialGroupService,
     /** A conexão, para que desativar e sair dos desafios sejam uma transação só (§119). */
     private readonly sqlite: SqliteService,
     @Inject(CLOCK) private readonly clock: Clock,
@@ -247,6 +257,20 @@ export class SocialService {
 
     const now = this.clock.now();
 
+    // T17.11 §98/§99 — a recusa vem **antes** da transação, e é deliberada.
+    //
+    // Ser dono de um Squad com outras pessoas é o único caso em que desativar o Social não pode
+    // ser resolvido pelo servidor sozinho. A alternativa seria escolher um novo dono, e qualquer
+    // ordenação que fizesse isso entregaria um grupo de gente real a alguém que não pediu. Recusar
+    // é mais explícito e mais seguro: a pessoa transfere a posse para quem ela escolher, ou exclui
+    // o Squad, e só então desativa.
+    //
+    // A resposta carrega uma **contagem**, e nunca dados de membro (§99).
+    const pendingGroups = this.groups.countGroupsRequiringOwnerAction(principal.uid);
+    if (pendingGroups > 0) {
+      throw SocialErrors.groupOwnershipRequiresAction(pendingGroups);
+    }
+
     // T17.3 §119 — desativar o Social e sair dos desafios acontecem **juntos**, ou não acontecem.
     //
     // Fora de uma transação, uma falha entre as duas escritas deixaria o pior estado possível:
@@ -255,18 +279,25 @@ export class SocialService {
     // pessoas, e nenhuma delas se corrige sozinha.
     //
     // A amizade continua intocada (T17.1): desativar suspende, não desfaz.
-    const challengeEffect = this.sqlite.connection.transaction(() => {
+    // T17.11 §96/§97 — os Squads entram na **mesma** transação, pelo mesmo motivo dos desafios:
+    // fora dela, uma falha entre as escritas deixaria um perfil desativado com a pessoa ainda
+    // aparecendo no feed de um grupo, ou um grupo resolvido com o perfil ainda ativo. As duas são
+    // visíveis para **outras** pessoas, e nenhuma se corrige sozinha.
+    const effect = this.sqlite.connection.transaction(() => {
       this.repository.updateStatus(principal.uid, 'DISABLED', now);
       this.notificationService?.onSocialDisable(principal.uid);
-      return this.challenges.applySocialDisable(principal.uid, now);
+      const challengeEffect = this.challenges.applySocialDisable(principal.uid, now);
+      const groupEffect = this.groups.applySocialDisable(principal.uid, now);
+      return { ...challengeEffect, ...groupEffect };
     })();
 
     this.logger.info('social.disabled', {
       requestId,
       uidPrefix: uidPrefix(principal.uid),
-      // Contagens, e nunca identificadores (§128/§129). É o suficiente para investigar "sumi de um
-      // desafio" sem registrar de quais desafios a pessoa participava.
-      ...challengeEffect,
+      // Contagens, e nunca identificadores (§128/§129; T17.11 §124). É o suficiente para
+      // investigar "sumi de um desafio" ou "sumi de um squad" sem registrar de quais a pessoa
+      // participava.
+      ...effect,
     });
     return { profile: toOwnerProfile(this.reload(principal, account)) };
   }

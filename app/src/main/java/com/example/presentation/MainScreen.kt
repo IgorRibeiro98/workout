@@ -106,7 +106,8 @@ fun MainScreen() {
         workoutCheckInGateway = app.workoutCheckInGateway,
         workoutCheckInPublisher = app.workoutCheckInPublisher,
         socialMediaCache = app.socialMediaCache,
-        checkInPhotoSource = app.checkInPhotoSource
+        checkInPhotoSource = app.checkInPhotoSource,
+        socialGroupGateway = app.socialGroupGateway
     )
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
@@ -173,6 +174,8 @@ fun MainScreen() {
         Screen.SharedWorkouts.route to Screen.Today.route,
         Screen.SocialFeed.route to Screen.Today.route,
         Screen.CheckInDetail.route to Screen.Today.route,
+        Screen.Squads.route to Screen.Today.route,
+        Screen.SquadDetail.route to Screen.Today.route,
         Screen.Missions.route to Screen.Today.route,
         Screen.AiCoach.route to Screen.Today.route,
         Screen.GenerateWorkout.route to Screen.Today.route,
@@ -211,6 +214,11 @@ fun MainScreen() {
             }
             com.example.service.SocialNotificationChannels.DESTINATION_SHARED_WORKOUTS -> {
                 navController.navigate(Screen.SharedWorkouts.route)
+            }
+            // T17.11 §93 — o convite abre a lista de Squads, onde os convites ficam no topo. Nunca
+            // o detalhe do grupo: quem ainda não aceitou não é membro dele.
+            com.example.service.SocialNotificationChannels.DESTINATION_SQUADS -> {
+                navController.navigate(Screen.Squads.route)
             }
         }
         com.example.MainActivity.clearNotificationNavTarget()
@@ -443,6 +451,9 @@ fun MainScreen() {
                     onNavigateToSharedWorkouts = {
                         navController.navigate(Screen.SharedWorkouts.route)
                     },
+                    onNavigateToSquads = {
+                        navController.navigate(Screen.Squads.route)
+                    },
                     onNavigateToSocialFeed = {
                         navController.navigate(Screen.SocialFeed.route)
                     },
@@ -597,12 +608,46 @@ fun MainScreen() {
                 val checkInId = backStackEntry.arguments?.getString("checkInId").orEmpty()
                 val detailViewModel: com.example.presentation.friends.CheckInDetailViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // T17.11 §140 — "Compartilhar no Squad" mora no menu da própria publicação. A
+                // ViewModel do seletor é separada porque a pergunta que ela faz — "em quais dos
+                // meus squads este check-in já está?" — não é do detalhe nem da lista de squads.
+                val shareToSquadViewModel: com.example.presentation.friends.ShareToSquadViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.friends.CheckInDetailScreen(
                     viewModel = detailViewModel,
                     checkInId = checkInId,
                     onNavigateBack = { navController.popBackStack() },
                     onOpenFriendProfile = { socialId, displayName ->
                         navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
+                    },
+                    shareToSquadViewModel = shareToSquadViewModel
+                )
+            }
+            composable(Screen.Squads.route) {
+                val squadsViewModel: com.example.presentation.friends.SquadsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.friends.SquadsScreen(
+                    viewModel = squadsViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenSquad = { groupId ->
+                        navController.navigate(Screen.SquadDetail.createRoute(groupId))
+                    }
+                )
+            }
+            composable(Screen.SquadDetail.route) { backStackEntry ->
+                val groupId = backStackEntry.arguments?.getString("groupId").orEmpty()
+                // A ViewModel do detalhe recebe o `groupId` na construção porque ele é a
+                // identidade dela: um `open(groupId)` posterior abriria espaço para a tela pedir
+                // um squad e receber outro depois de uma navegação rápida.
+                val squadDetailViewModel: com.example.presentation.friends.SquadDetailViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(
+                        factory = factory.squadDetailFactory(groupId)
+                    )
+                com.example.presentation.friends.SquadDetailScreen(
+                    viewModel = squadDetailViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenCheckIn = { checkInId ->
+                        navController.navigate(Screen.CheckInDetail.createRoute(checkInId))
                     }
                 )
             }

@@ -110,7 +110,48 @@ export class AccountDeletionRepository {
       db.prepare(`DELETE FROM social_checkin_media WHERE owner_uid = ?`).run(ownerUid);
       db.prepare(`DELETE FROM social_workout_checkins WHERE author_uid = ?`).run(ownerUid);
 
-      // 11. Perfil Social raiz
+      // 11. Squads (T17.11 §100/§101/§102).
+      //
+      // ## Dono: o Squad inteiro sai
+      //
+      // §101 explica por quê: a exclusão de conta precisa ser **determinística** e não pode
+      // depender da escolha de um terceiro. Transferir a posse em silêncio entregaria um grupo de
+      // pessoas reais a alguém que não pediu por ele — e escolher **quem** exigiria uma ordenação
+      // arbitrária, exatamente o que §98 recusa na desativação do Social.
+      //
+      // Diferente da desativação, aqui não há como recusar (§100): a exclusão de conta nunca é
+      // bloqueada. Por isso a política é outra — lá a pessoa resolve, aqui o Squad vai junto.
+      //
+      // ## O que isso **não** apaga (§102)
+      //
+      // Nada de outro usuário além do vínculo de grupo. Os `WorkoutCheckIn`, as `WorkoutSession`,
+      // os `WorkoutTemplate` e as fotos de B e C continuam intactos: o `ON DELETE CASCADE` de
+      // `social_groups` alcança participações, convites e arestas de compartilhamento, e para em
+      // `social_group_checkin_shares` — que é uma aresta, e não uma publicação.
+      db.prepare(
+        `DELETE FROM social_group_checkin_shares
+          WHERE group_id IN (SELECT id FROM social_groups WHERE owner_uid = ?)`,
+      ).run(ownerUid);
+      db.prepare(
+        `DELETE FROM social_group_memberships
+          WHERE group_id IN (SELECT id FROM social_groups WHERE owner_uid = ?)`,
+      ).run(ownerUid);
+      db.prepare(
+        `DELETE FROM social_group_invitations
+          WHERE group_id IN (SELECT id FROM social_groups WHERE owner_uid = ?)`,
+      ).run(ownerUid);
+      db.prepare(`DELETE FROM social_groups WHERE owner_uid = ?`).run(ownerUid);
+
+      // Participante em Squads de **outras** pessoas: só o vínculo sai, e o Squad sobrevive
+      // (§100 — "Account Deletion do member preserva Squad"). Os compartilhamentos desta conta
+      // naqueles grupos saem junto, pelo mesmo motivo de `leave` (§62/§63).
+      db.prepare(`DELETE FROM social_group_checkin_shares WHERE author_uid = ?`).run(ownerUid);
+      db.prepare(`DELETE FROM social_group_memberships WHERE member_uid = ?`).run(ownerUid);
+      db.prepare(
+        `DELETE FROM social_group_invitations WHERE sender_uid = ? OR recipient_uid = ?`,
+      ).run(ownerUid, ownerUid);
+
+      // 12. Perfil Social raiz
       db.prepare(`DELETE FROM social_profiles WHERE owner_uid = ?`).run(ownerUid);
     });
 

@@ -74,6 +74,7 @@ fun SocialSection(
     /** T17.7 — Treinos compartilhados entre amigos */
     onOpenSharedWorkouts: () -> Unit = {},
     onOpenSocialFeed: () -> Unit = {},
+    onOpenSquads: () -> Unit = {},
     onShowFriendCode: () -> Unit = {},
     onActivate: () -> Unit,
     onDisplayNameChange: (String) -> Unit,
@@ -150,6 +151,7 @@ fun SocialSection(
                         onOpenBlockedUsers = onOpenBlockedUsers,
                         onOpenSharedWorkouts = onOpenSharedWorkouts,
                         onOpenSocialFeed = onOpenSocialFeed,
+                        onOpenSquads = onOpenSquads,
                         onShowFriendCode = onShowFriendCode,
                         enabled = true,
                         onEditName = onEditName,
@@ -173,6 +175,7 @@ fun SocialSection(
                             onOpenBlockedUsers = onOpenBlockedUsers,
                             onOpenSharedWorkouts = onOpenSharedWorkouts,
                         onOpenSocialFeed = onOpenSocialFeed,
+                        onOpenSquads = onOpenSquads,
                             onShowFriendCode = onShowFriendCode,
                             enabled = false,
                             onEditName = {},
@@ -201,6 +204,7 @@ fun SocialSection(
                                 onOpenBlockedUsers = onOpenBlockedUsers,
                                 onOpenSharedWorkouts = onOpenSharedWorkouts,
                         onOpenSocialFeed = onOpenSocialFeed,
+                        onOpenSquads = onOpenSquads,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -235,6 +239,7 @@ fun SocialSection(
                                 onOpenBlockedUsers = onOpenBlockedUsers,
                                 onOpenSharedWorkouts = onOpenSharedWorkouts,
                         onOpenSocialFeed = onOpenSocialFeed,
+                        onOpenSquads = onOpenSquads,
                                 onShowFriendCode = onShowFriendCode,
                                 enabled = false,
                                 onEditName = {},
@@ -291,6 +296,7 @@ private fun ActiveProfile(
     onOpenBlockedUsers: () -> Unit = {},
     onOpenSharedWorkouts: () -> Unit = {},
     onOpenSocialFeed: () -> Unit = {},
+    onOpenSquads: () -> Unit = {},
     onShowFriendCode: () -> Unit,
     enabled: Boolean,
     onEditName: () -> Unit,
@@ -391,6 +397,7 @@ private fun ActiveProfile(
                 onOpenBlockedUsers = onOpenBlockedUsers,
                 onOpenSharedWorkouts = onOpenSharedWorkouts,
                 onOpenSocialFeed = onOpenSocialFeed,
+                onOpenSquads = onOpenSquads,
                 onShowFriendCode = onShowFriendCode
             )
         }
@@ -432,6 +439,7 @@ private fun FriendsEntryPoints(
     onOpenBlockedUsers: () -> Unit = {},
     onOpenSharedWorkouts: () -> Unit = {},
     onOpenSocialFeed: () -> Unit = {},
+    onOpenSquads: () -> Unit = {},
     onShowFriendCode: () -> Unit
 ) {
     val summary = buildString {
@@ -495,6 +503,10 @@ private fun FriendsEntryPoints(
     // bottom navigation (§83): a barra inferior é do núcleo do produto, e o social continua sendo
     // opcional. Um item permanente apareceria vazio para quem nunca ativou.
     Secondary(text = "Feed", onClick = onOpenSocialFeed, enabled = enabled)
+
+    // T17.11 §131 — Squads. Pelo mesmo motivo do Feed: dentro da área Social do Perfil, e **sem**
+    // item novo de bottom navigation. Um grupo privado não é caminho do núcleo do produto.
+    Secondary(text = "Squads", onClick = onOpenSquads, enabled = enabled)
 }
 
 @Composable

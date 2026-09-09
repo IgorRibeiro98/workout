@@ -62,6 +62,11 @@ import { SocialMediaProcessor } from './social-media.processor';
 import { SocialMediaCleaner } from './social-media.cleaner';
 import { LocalSocialMediaStore, SOCIAL_MEDIA_STORE } from './social-media.store';
 import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
+import { SocialGroupController } from './social-group.controller';
+import { SocialGroupService } from './social-group.service';
+import { SocialGroupRepository } from './social-group.repository';
+import { SocialGroupRateLimiter } from './social-group.rate-limit';
+import { CheckInProjector } from './checkin.projector';
 
 /**
  * Módulo do domínio social (T17.0).
@@ -133,6 +138,7 @@ import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
     WorkoutShareController,
     WorkoutCheckInController,
     SocialMediaController,
+    SocialGroupController,
   ],
   providers: [
     SocialService,
@@ -193,6 +199,17 @@ import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
     SocialMediaService,
     SocialMediaCleaner,
     { provide: SOCIAL_MEDIA_STORE, useClass: LocalSocialMediaStore },
+    // T17.11 — Squads privados e feed de grupo. Eles reusam `FriendshipRepository` (a amizade é
+    // quem pode ser convidado), `BlockRepository` (o bloqueio continua soberano),
+    // `WorkoutCheckInRepository` (o feed do Squad é o **mesmo** check-in) e o
+    // `WorkoutCheckInAccessPolicy`, que ganhou o terceiro caminho de acesso — SELF, FRIEND, GROUP.
+    //
+    // `CheckInProjector` nasceu aqui por necessidade: a montagem do card passou a ter duas
+    // superfícies, e duas cópias divergiriam no primeiro campo novo (§50).
+    CheckInProjector,
+    SocialGroupRepository,
+    SocialGroupService,
+    SocialGroupRateLimiter,
   ],
   exports: [
     SocialAccessPolicy,
@@ -206,6 +223,8 @@ import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
     // `ON DELETE CASCADE` do SQLite leva a metadata e não alcança o sistema de arquivos.
     SocialMediaRepository,
     SOCIAL_MEDIA_STORE,
+    // A exclusão de conta e o bloqueio precisam alcançar o contexto de grupo (T17.11 §100/§105).
+    SocialGroupRepository,
   ],
 })
 export class SocialModule implements NestModule {

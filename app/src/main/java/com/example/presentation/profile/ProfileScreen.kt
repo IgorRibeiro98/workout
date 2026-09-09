@@ -74,7 +74,9 @@ fun ProfileScreen(
     /** T17.7 — Treinos compartilhados */
     onNavigateToSharedWorkouts: () -> Unit = {},
     /** T17.8 — Feed de check-ins, dentro da área Social. */
-    onNavigateToSocialFeed: () -> Unit = {}
+    onNavigateToSocialFeed: () -> Unit = {},
+    /** T17.11 §131 — Squads, dentro da área Social do Perfil. */
+    onNavigateToSquads: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val explanationState by viewModel.explanationState.collectAsState()
@@ -171,6 +173,7 @@ fun ProfileScreen(
         onOpenBlockedUsers = onNavigateToBlockedUsers,
         onOpenSharedWorkouts = onNavigateToSharedWorkouts,
         onOpenSocialFeed = onNavigateToSocialFeed,
+        onOpenSquads = onNavigateToSquads,
         onDeleteAccount = { accountViewModel?.deleteAccount() }
     )
 
@@ -248,7 +251,9 @@ private fun ProfileScreenContent(
     onOpenNotificationPreferences: () -> Unit = {},
     onOpenBlockedUsers: () -> Unit = {},
     onOpenSharedWorkouts: () -> Unit = {},
-    onOpenSocialFeed: () -> Unit = {}
+    onOpenSocialFeed: () -> Unit = {},
+    /** T17.11 §131 — Squads, dentro da área Social. */
+    onOpenSquads: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
     // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
@@ -400,6 +405,7 @@ private fun ProfileScreenContent(
                     onOpenBlockedUsers = onOpenBlockedUsers,
                     onOpenSharedWorkouts = onOpenSharedWorkouts,
                     onOpenSocialFeed = onOpenSocialFeed,
+                    onOpenSquads = onOpenSquads,
                     onShowFriendCode = { isFriendCodeVisible = true },
                     uiState = socialState,
                     onActivate = onSocialActivate,

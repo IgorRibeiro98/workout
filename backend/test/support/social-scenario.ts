@@ -63,6 +63,14 @@ export interface SocialScenario {
   readonly temp: TempDb;
   readonly mediaRoot: string;
   readonly tombstonesFile: string;
+  /**
+   * O verificador de token, exposto para que um teste possa registrar contas **além** de A/B/C.
+   *
+   * A T17.11 precisa disso: um Squad tem 20 vagas (§11), e provar que o vigésimo primeiro é
+   * recusado exige vinte e uma pessoas. Registrar contas sob demanda é melhor do que declarar
+   * vinte constantes que só um arquivo usa.
+   */
+  readonly verifier: FakeAuthTokenVerifier;
 
   server(): ReturnType<INestApplication['getHttpServer']>;
   auth(token: string): string;
@@ -83,6 +91,20 @@ export interface SocialScenario {
     extra?: Record<string, unknown>,
   ): Promise<string>;
   uploadPhoto(account: AuditAccount, sessionSyncId: string, bytes: Buffer): Promise<string>;
+
+  // ---------------------------------------------------------------- T17.11 (Squads)
+
+  /** Registra e ativa uma conta extra, para cenários que precisam de mais que A/B/C. */
+  extraAccount(index: number): AuditAccount;
+
+  /** Cria um Squad e devolve o `groupId`. */
+  createGroup(account: AuditAccount, name?: string): Promise<string>;
+
+  /** Convida `recipient` para `groupId` e devolve o `invitationId`. */
+  invite(owner: AuditAccount, groupId: string, recipient: AuditAccount): Promise<string>;
+
+  /** O caminho inteiro: amizade, convite e aceite. Devolve o `groupId`. */
+  addMember(owner: AuditAccount, groupId: string, member: AuditAccount): Promise<void>;
 
   close(): Promise<void>;
 }
@@ -124,6 +146,7 @@ export async function createSocialScenario(options: ScenarioOptions = {}): Promi
     temp,
     mediaRoot,
     tombstonesFile,
+    verifier,
     server,
     auth,
 
@@ -229,6 +252,46 @@ export async function createSocialScenario(options: ScenarioOptions = {}): Promi
         .send(bytes)
         .expect(201);
       return res.body.mediaId as string;
+    },
+
+    // ---------------------------------------------------------------- T17.11 (Squads)
+
+    extraAccount(index: number): AuditAccount {
+      const account: AuditAccount = {
+        token: `audit-token-extra-${index}`,
+        uid: `audit-uid-extra-${index}`,
+        email: `extra${index}@example.com`,
+        name: `Extra ${index}`,
+      };
+      verifier.accept(account.token, { uid: account.uid, email: account.email });
+      return account;
+    },
+
+    async createGroup(account: AuditAccount, name = 'Os Monstros'): Promise<string> {
+      const res = await request(server())
+        .post('/v1/social/groups')
+        .set('Authorization', auth(account.token))
+        .send({ name, clientRequestId: uuid() })
+        .expect(201);
+      return res.body.groupId as string;
+    },
+
+    async invite(owner: AuditAccount, groupId: string, recipient: AuditAccount): Promise<string> {
+      const socialId = await scenario.socialIdOf(recipient);
+      const res = await request(server())
+        .post(`/v1/social/groups/${groupId}/invitations`)
+        .set('Authorization', auth(owner.token))
+        .send({ socialId, clientRequestId: uuid() })
+        .expect(201);
+      return res.body.invitationId as string;
+    },
+
+    async addMember(owner: AuditAccount, groupId: string, member: AuditAccount): Promise<void> {
+      const invitationId = await scenario.invite(owner, groupId, member);
+      await request(server())
+        .post(`/v1/social/group-invitations/${invitationId}/accept`)
+        .set('Authorization', auth(member.token))
+        .expect(200);
     },
 
     async close(): Promise<void> {

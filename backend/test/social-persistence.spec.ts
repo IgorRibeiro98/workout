@@ -10,6 +10,15 @@ import {
 } from '../src/modules/social/social.repository';
 import { SocialService } from '../src/modules/social/social.service';
 import { ChallengeRepository } from '../src/modules/social/challenge.repository';
+import { BlockRepository } from '../src/modules/social/block.repository';
+import { CheckInProjector } from '../src/modules/social/checkin.projector';
+import { CheckInInteractionRepository } from '../src/modules/social/checkin-interaction.repository';
+import { FriendshipRepository } from '../src/modules/social/friendship.repository';
+import { SocialGroupRateLimiter } from '../src/modules/social/social-group.rate-limit';
+import { SocialGroupRepository } from '../src/modules/social/social-group.repository';
+import { SocialGroupService } from '../src/modules/social/social-group.service';
+import { SocialMediaRepository } from '../src/modules/social/social-media.repository';
+import { WorkoutCheckInRepository } from '../src/modules/social/workout-checkin.repository';
 import { SystemClock } from '../src/common/clock';
 import * as identity from '../src/modules/social/social.identity';
 import { FRIEND_CODE_MAX_GENERATION_ATTEMPTS } from '../src/modules/social/social.limits';
@@ -70,10 +79,10 @@ describe('Persistência do domínio social', () => {
       // Agora a T17.0.
       const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
 
-      // A T17.0 é a `0007`, e a série vai até a `0018` da T17.9. Todas são aditivas, e o que este
-      // teste afirma é sobre a T16: nada do que ela gravou muda quando o social sobe.
+      // A T17.0 é a `0007`, e a série vai até a `0019` da T17.11. Todas são aditivas, e o que
+      // este teste afirma é sobre a T16: nada do que ela gravou muda quando o social sobe.
       expect(applied.map((migration) => migration.version)).toEqual([
-        7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+        7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
       ]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'social_foundation',
@@ -88,6 +97,7 @@ describe('Persistência do domínio social', () => {
         'social_checkin_content',
         'social_checkin_reactions_comments',
         'social_reports_ugc',
+        'social_groups',
       ]);
       expect(db.prepare('SELECT * FROM backup_snapshots').all()).toEqual(beforeBackup);
       expect(db.prepare('SELECT * FROM sync_entities').all()).toEqual(beforeEntity);
@@ -310,9 +320,13 @@ describe('Persistência do domínio social', () => {
  * O `SocialService` montado à mão, com as dependências que a T17.3 acrescentou.
  *
  * `ChallengeRepository` e `SqliteService` entraram porque desativar o Social precisa encerrar a
- * participação em desafios **na mesma transação** (T17.3 §119). Estes testes exercitam ativação e
- * colisão de `friendCode`, que não tocam em desafio nenhum — as dependências existem aqui só para
- * o serviço poder ser construído, e o relógio é o real porque nenhum destes casos depende dele.
+ * participação em desafios **na mesma transação** (T17.3 §119). `SocialGroupService` entrou pela
+ * mesma razão na T17.11 (§96–§99): desativar precisa resolver os Squads na mesma transação, e
+ * recusar quando a posse exige decisão do usuário.
+ *
+ * Estes testes exercitam ativação e colisão de `friendCode`, que não tocam em desafio nem em Squad
+ * nenhum — as dependências existem aqui só para o serviço poder ser construído, e o relógio é o
+ * real porque nenhum destes casos depende dele.
  */
 function socialServiceFor(
   sqlite: SqliteService,
@@ -322,8 +336,28 @@ function socialServiceFor(
   return new SocialService(
     repository,
     new ChallengeRepository(sqlite),
+    groupServiceFor(sqlite, repository),
     sqlite,
     new SystemClock(),
     new SparkLogger(configFor(databasePath)),
+  );
+}
+
+/** O `SocialGroupService` montado à mão, com as dependências reais sobre a mesma conexão. */
+function groupServiceFor(sqlite: SqliteService, repository: SocialRepository): SocialGroupService {
+  const logger = new SparkLogger(configFor(':memory:'));
+  return new SocialGroupService(
+    new SocialGroupRepository(sqlite),
+    repository,
+    new FriendshipRepository(sqlite),
+    new BlockRepository(sqlite),
+    new WorkoutCheckInRepository(sqlite),
+    new CheckInProjector(
+      new SocialMediaRepository(sqlite),
+      new CheckInInteractionRepository(sqlite),
+    ),
+    new SocialGroupRateLimiter(),
+    new SystemClock(),
+    logger,
   );
 }

@@ -167,6 +167,13 @@ export const SOCIAL_ERROR_CODES = {
   INVALID_ACTIVITY_TIMEZONE: 'INVALID_ACTIVITY_TIMEZONE',
   /** Atividade indisponível para exibição (T17.4). */
   ACTIVITY_NOT_AVAILABLE: 'ACTIVITY_NOT_AVAILABLE',
+  /**
+   * `disable` recusado porque a conta é dona de Squads com outras pessoas (T17.11 §98/§99).
+   *
+   * A mensagem carrega **quantos** Squads precisam de ação, e nunca quem está neles. O caminho de
+   * saída é do usuário: transferir a posse para alguém que ele escolha, ou excluir o Squad.
+   */
+  GROUP_OWNERSHIP_REQUIRES_ACTION: 'GROUP_OWNERSHIP_REQUIRES_ACTION',
 } as const;
 
 export type SocialErrorCode = (typeof SOCIAL_ERROR_CODES)[keyof typeof SOCIAL_ERROR_CODES];

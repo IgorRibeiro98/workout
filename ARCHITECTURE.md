@@ -1675,7 +1675,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-08): T17.0 a T17.9 implementadas.**
+> **Status (verificado em 2026-09-09): T17.0 a T17.11 implementadas.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1719,6 +1719,27 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > passou a ter alvo (`USER`/`CHECKIN`/`COMMENT`), resolvido no servidor. Continuam fora: vídeo, GIF
 > animado, múltiplas fotos, feed público, mention, hashtag, link clicável, edição de publicação e
 > push de reação ou comentário.
+>
+> **T17.10** — auditoria final do Social. Nenhuma funcionalidade nova: T17.0–T17.9 auditadas como
+> um sistema só, com correção dos defeitos que a revisão por fase não pegaria (tombstone por
+> caminho, chave HMAC obrigatória em produção, checksum de migration, varreduras que não varriam,
+> escopo de conta em toda ViewModel social, teto do proxy acima do teto do backend).
+>
+> **T17.11** — **Social V2: Squads privados**. Grupos pequenos formados por convite, com feed
+> privado onde os membros trazem **explicitamente** check-ins que já publicaram. Não existe busca,
+> listagem pública, link de convite, QR nem código de entrada: conhecer o `groupId` não concede
+> nada, e quem não é membro recebe o mesmo `404` de "não existe". O feed do Squad é o **mesmo**
+> `WorkoutCheckIn` lido por outra audiência — `social_group_checkin_shares` é uma aresta, e não um
+> post. Papéis `OWNER`/`MEMBER` com **exatamente um** dono garantido por índice único parcial;
+> convite só do dono e só para amigo direto ativo, revalidado no envio **e** no aceite; bloqueio
+> corta visibilidade sem destruir participação; relação puramente de grupo é **read-only** (reagir e
+> comentar continuam exigindo relação direta). `WorkoutCheckInAccessPolicy` passou a responder
+> `self ∨ amizade ∨ Squad`, e a mídia usa literalmente o mesmo predicado. Um push
+> (`GROUP_INVITATION_RECEIVED`, data-only, sem nome de Squad). Migration `0019_social_groups.sql`,
+> dezessete rotas sob `/v1/social`, e a área de Squads dentro do Social do Perfil.
+> **Continuam fora:** chat, DM, post de texto, enquete, comentário/reação específicos de Squad,
+> desafio ou ranking de Squad, template/programa compartilhado para Squad, evento, agenda, presença
+> online, grupo público, descoberta e denúncia de grupo.
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),
@@ -1727,7 +1748,8 @@ Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-
 [`docs/architecture/social-activity-ranking.md`](docs/architecture/social-activity-ranking.md) (T17.4) e
 [`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5) e
 [`docs/architecture/social-domain.md` §11–§13](docs/architecture/social-domain.md) (T17.6, T17.7 e
-T17.8);
+T17.8) e
+[`docs/architecture/social-groups.md`](docs/architecture/social-groups.md) (T17.11);
 contrato em [`contracts/social/v1/README.md`](contracts/social/v1/README.md).
 
 ### As duas autoridades

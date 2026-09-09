@@ -214,6 +214,50 @@ export class NotificationService {
     );
   }
 
+  /**
+   * O convite para um Squad — o **único** push da T17.11 (§90/§95).
+   *
+   * ## Por que ele não recebe um `Database`, ao contrário dos vizinhos
+   *
+   * Os métodos acima nasceram na T17.5 recebendo a conexão para participar da transação de quem
+   * chama. Com `better-sqlite3` há **uma** conexão no processo (ADR-0001), e ela é a mesma que
+   * `NotificationRepository` já usa: chamar de dentro de um `db.transaction(...)` do repositório de
+   * Squads já enfileira o evento na mesma transação, sem que o handle precise atravessar três
+   * camadas. É o que `workout-share.service.ts` faz desde a T17.7.
+   *
+   * O efeito é o que §90 exige: o convite e o aviso nascem juntos, ou nenhum dos dois nasce. Um
+   * aviso sem convite é o pior dos dois estados — ele leva alguém a abrir o app para procurar algo
+   * que não existe.
+   *
+   * ## O `dedupeKey` é o convite, e não a tentativa (§162)
+   *
+   * Um retry do mesmo convite não gera um segundo evento: o `ON CONFLICT(dedupe_key) DO NOTHING`
+   * do repositório é o que garante "um convite novo → um push", inclusive quando o cliente repete
+   * a requisição.
+   *
+   * O `expiresAt` do evento é o **do convite**: um aviso que chegasse depois do prazo convidaria a
+   * abrir uma tela que já não tem o que mostrar.
+   */
+  enqueueGroupInvitationReceived(input: {
+    invitationId: string;
+    recipientUid: string;
+    expiresAt: number;
+  }): void {
+    const now = this.clock.now();
+    this.repository.createEvent(
+      {
+        id: randomUUID(),
+        recipientUid: input.recipientUid,
+        type: 'GROUP_INVITATION_RECEIVED',
+        entityId: input.invitationId,
+        dedupeKey: `group-invitation-received:${input.invitationId}:${input.recipientUid}`,
+        deliverAfter: now,
+        expiresAt: input.expiresAt,
+      },
+      now,
+    );
+  }
+
   cancelChallengeEvents(challengeId: string): void {
     this.repository.cancelEventsForEntity(challengeId, [
       'CHALLENGE_STARTING_SOON',

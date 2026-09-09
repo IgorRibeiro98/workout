@@ -662,11 +662,12 @@ describe('T17.8 — Check-ins de treino e Feed Social', () => {
       const feed = await readFeed(TOKEN_B).expect(200);
       const [item] = feed.body.items;
 
-      // A T17.9 acrescentou cinco campos ao **mesmo** DTO (§58). A lista continua fechada: o que
-      // este teste protege não é o número, é que nada de treino e nada de identidade privada
-      // entrem por um campo novo.
+      // A T17.9 acrescentou cinco campos ao **mesmo** DTO (§58), e a T17.11 acrescentou um
+      // (`canInteract`, §70/§72). A lista continua fechada: o que este teste protege não é o
+      // número, é que nada de treino e nada de identidade privada entrem por um campo novo.
       expect(Object.keys(item).sort()).toEqual([
         'author',
+        'canInteract',
         'caption',
         'checkInId',
         'commentCount',
@@ -677,6 +678,8 @@ describe('T17.8 — Check-ins de treino e Feed Social', () => {
         'reactions',
         'type',
       ]);
+      // No Feed de amigos ele é sempre `true`: a relação direta é a própria condição de aparecer.
+      expect(item.canInteract).toBe(true);
       // Uma publicação da T17.8 continua válida: sem legenda, sem foto, sem reação, sem
       // comentário — e nenhum backfill inventou nada (§6/§60).
       expect(item.caption).toBeNull();

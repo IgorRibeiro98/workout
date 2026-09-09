@@ -118,9 +118,17 @@ fun CheckInDetailScreen(
     checkInId: String,
     onNavigateBack: () -> Unit,
     onOpenFriendProfile: (socialId: String, displayName: String) -> Unit,
-    now: Long = System.currentTimeMillis()
+    now: Long = System.currentTimeMillis(),
+    /**
+     * O seletor de Squad (T17.11 §140).
+     *
+     * Opcional: um build sem Spark Backend não tem Squads (§116), e a tela continua completa sem
+     * ele — o item de menu simplesmente não aparece.
+     */
+    shareToSquadViewModel: ShareToSquadViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var sharingToSquad by remember { mutableStateOf(false) }
 
     LaunchedEffect(checkInId) { viewModel.open(checkInId) }
 
@@ -193,9 +201,18 @@ fun CheckInDetailScreen(
                     onSendComment = viewModel::sendComment,
                     onDeleteComment = viewModel::deleteComment,
                     onReport = viewModel::report,
-                    onOpenFriendProfile = onOpenFriendProfile
+                    onOpenFriendProfile = onOpenFriendProfile,
+                    onShareToSquad = shareToSquadViewModel?.let { { sharingToSquad = true } }
                 )
             }
+        }
+
+        if (sharingToSquad && shareToSquadViewModel != null) {
+            ShareToSquadDialog(
+                viewModel = shareToSquadViewModel,
+                checkInId = checkInId,
+                onDismiss = { sharingToSquad = false }
+            )
         }
 
         uiState.notice?.let { notice ->
@@ -224,7 +241,9 @@ private fun DetailBody(
     onSendComment: () -> Unit,
     onDeleteComment: (String) -> Unit,
     onReport: (SocialReportTarget, String, String) -> Unit,
-    onOpenFriendProfile: (String, String) -> Unit
+    onOpenFriendProfile: (String, String) -> Unit,
+    /** `null` quando o compartilhamento em Squad não está disponível (T17.11 §116/§140). */
+    onShareToSquad: (() -> Unit)?
 ) {
     var reportingTarget by remember { mutableStateOf<Pair<SocialReportTarget, String>?>(null) }
 
@@ -246,7 +265,8 @@ private fun DetailBody(
                     onOpenFriendProfile = {
                         onOpenFriendProfile(checkIn.author.socialId, checkIn.author.displayName)
                     },
-                    onReport = { reportingTarget = SocialReportTarget.CHECKIN to checkIn.checkInId }
+                    onReport = { reportingTarget = SocialReportTarget.CHECKIN to checkIn.checkInId },
+                    onShareToSquad = onShareToSquad
                 )
             }
 
@@ -304,7 +324,8 @@ private fun DetailHeader(
     isReacting: Boolean,
     onReact: (ReactionType) -> Unit,
     onOpenFriendProfile: () -> Unit,
-    onReport: () -> Unit
+    onReport: () -> Unit,
+    onShareToSquad: (() -> Unit)?
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -326,6 +347,29 @@ private fun DetailHeader(
                     color = TextSecondary,
                     fontSize = 12.sp
                 )
+            }
+
+            // T17.11 §140 — a publicação **própria** ganha "Compartilhar no Squad". Ela não tem
+            // "Ver perfil" nem "Denunciar": os dois são sobre outra pessoa.
+            if (checkIn.isCurrentUser && onShareToSquad != null) {
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Ações da publicação",
+                            tint = TextSecondary
+                        )
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Compartilhar no Squad", color = TextPrimary) },
+                            onClick = {
+                                menuOpen = false
+                                onShareToSquad()
+                            }
+                        )
+                    }
+                }
             }
 
             if (!checkIn.isCurrentUser) {

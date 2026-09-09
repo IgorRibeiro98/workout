@@ -122,6 +122,28 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
         fun createRoute(checkInId: String) = "check_in/$checkInId"
     }
 
+    /**
+     * Squads privados (T17.11 §131).
+     *
+     * Dentro da área Social do Perfil, e **sem** item novo de bottom navigation: a barra inferior
+     * é do núcleo do produto — treinar, histórico, evolução.
+     *
+     * Nenhum identificador entra na rota. A lista é sempre a do próprio usuário: quem aparece nela
+     * é derivado no servidor a partir do token, e não existe busca de Squad (§4/§5).
+     */
+    object Squads : Screen("squads", R.string.nav_profile, Icons.Default.Person)
+
+    /**
+     * O detalhe de um Squad (T17.11 §135).
+     *
+     * A rota carrega só o `groupId` — um identificador opaco do servidor que **não concede acesso**
+     * (§59): quem não é membro recebe o mesmo `404` de "não existe". Nenhum dado de treino, nenhum
+     * `socialId` e nenhum uid entram em rota de navegação.
+     */
+    object SquadDetail : Screen("squad/{groupId}", R.string.nav_profile, Icons.Default.Person) {
+        fun createRoute(groupId: String) = "squad/$groupId"
+    }
+
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
         fun createRoute(sessionId: Long) = "summary/$sessionId"

@@ -21,6 +21,20 @@ export const NOTIFICATION_TYPES = [
   'CHALLENGE_STARTING_SOON',
   'CHALLENGE_ENDED',
   'WORKOUT_SHARE_RECEIVED',
+  /**
+   * O convite para um Squad (T17.11 §90).
+   *
+   * A **única** categoria que a T17.11 acrescenta. Não existe push para "entrou", "saiu", "foi
+   * removido", "posse transferida", "check-in compartilhado" nem "Squad excluído" (§95): nenhuma
+   * delas convida a decidir nada, e um Squad de 20 pessoas que notificasse cada movimento viraria
+   * um chat com outro nome.
+   *
+   * O payload continua sendo o mesmo de sempre (§91): `v`, `eventId`, `type`, `recipientSocialId` e
+   * `entityId = invitationId`. **Nunca** o nome do Squad, o nome de quem convidou nem os nomes dos
+   * membros — quem quiser saber abre o app e pergunta ao servidor, que é o desenho de push
+   * best-effort da T17.5.
+   */
+  'GROUP_INVITATION_RECEIVED',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -66,6 +80,8 @@ export interface NotificationPreferencesDto {
   readonly challengeStartingSoon: boolean;
   readonly challengeEnded: boolean;
   readonly workoutShareReceived: boolean;
+  /** T17.11 §94 — o convite para um Squad, sob o interruptor mestre `pushEnabled`. */
+  readonly groupInvitationReceived: boolean;
   readonly updatedAt: number;
 }
 
@@ -77,6 +93,7 @@ export interface UpdateNotificationPreferencesRequest {
   readonly challengeStartingSoon?: boolean;
   readonly challengeEnded?: boolean;
   readonly workoutShareReceived?: boolean;
+  readonly groupInvitationReceived?: boolean;
 }
 
 export interface RegisterPushDeviceRequest {

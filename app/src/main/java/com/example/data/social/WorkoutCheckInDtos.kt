@@ -76,7 +76,16 @@ internal data class WorkoutCheckInDto(
     val reactions: Map<String, Int> = emptyMap(),
     val currentUserReaction: String? = null,
     val commentCount: Int = 0,
-    val isCurrentUser: Boolean = false
+    val isCurrentUser: Boolean = false,
+    /**
+     * Se **este** usuário pode reagir e comentar (T17.11 §70/§72/§144).
+     *
+     * O default é `true` de propósito: um servidor anterior à T17.11 não envia o campo, e toda
+     * publicação que ele devolve chega por relação direta — no Feed de amigos a amizade é a própria
+     * condição de aparecer. Um default `false` faria um app novo esconder as ações de interação
+     * contra um servidor antigo, que é uma regressão silenciosa e difícil de rastrear.
+     */
+    val canInteract: Boolean = true
 ) {
     /** `null` quando a resposta não descreve um check-in íntegro — o gateway trata como recusa. */
     fun toDomainOrNull(): WorkoutCheckIn? {
@@ -92,7 +101,8 @@ internal data class WorkoutCheckInDto(
             }.toMap(),
             currentUserReaction = ReactionType.fromWire(currentUserReaction),
             commentCount = commentCount,
-            isCurrentUser = isCurrentUser
+            isCurrentUser = isCurrentUser,
+            canInteract = canInteract
         )
     }
 }

@@ -95,8 +95,52 @@ class MainViewModelFactory(
     // T17.9 — foto do check-in. Os dois são opcionais pela mesma razão dos anteriores: um build
     // sem backend configurado monta a árvore de ViewModels inteira sem eles.
     private val socialMediaCache: com.example.data.media.SocialMediaCache? = null,
-    private val checkInPhotoSource: com.example.data.media.CheckInPhotoSource? = null
+    private val checkInPhotoSource: com.example.data.media.CheckInPhotoSource? = null,
+    /**
+     * Squads privados (T17.11). `null` remove a área de Squads inteira, e nada mais muda — treinar,
+     * consultar histórico e usar o Feed de amigos seguem idênticos (§116).
+     */
+    private val socialGroupGateway: com.example.domain.social.SocialGroupGateway? = null
 ) : ViewModelProvider.Factory {
+
+    /**
+     * A fábrica do detalhe de um Squad (T17.11 §135).
+     *
+     * Ela existe separada porque o `groupId` é a **identidade** daquela ViewModel, e não um
+     * parâmetro de método: um `open(groupId)` posterior abriria espaço para a tela pedir um squad e
+     * receber outro depois de uma navegação rápida, e o `viewModel()` do Compose reaproveitaria a
+     * instância errada.
+     *
+     * Uma fábrica aninhada, e não um construtor de cópia desta: copiar trinta dependências à mão é
+     * o desenho em que a trigésima primeira é esquecida no dia em que alguém a acrescenta, e a
+     * falha aparece como uma tela que some sem erro.
+     */
+    fun squadDetailFactory(groupId: String): ViewModelProvider.Factory =
+        object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                require(
+                    modelClass.isAssignableFrom(
+                        com.example.presentation.friends.SquadDetailViewModel::class.java
+                    )
+                ) { "squadDetailFactory only builds SquadDetailViewModel" }
+
+                val groups = socialGroupGateway
+                    ?: throw IllegalStateException("SocialGroupGateway not provided")
+                val auth = authGateway
+                    ?: throw IllegalStateException("AuthGateway not provided")
+                @Suppress("UNCHECKED_CAST")
+                return com.example.presentation.friends.SquadDetailViewModel(
+                    groupId = groupId,
+                    gateway = groups,
+                    authGateway = auth,
+                    // O seletor de convite lê a lista de amigos (§137). O servidor revalida a
+                    // amizade no envio e no aceite: filtrar aqui é conveniência, nunca autorização.
+                    friends = friendGateway,
+                    mediaCache = socialMediaCache
+                ) as T
+            }
+        }
+
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(EvolutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
@@ -300,6 +344,31 @@ class MainViewModelFactory(
                 gateway = checkIns,
                 authGateway = auth,
                 mediaCache = socialMediaCache
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.SquadsViewModel::class.java)) {
+            val groups = socialGroupGateway
+                ?: throw IllegalStateException("SocialGroupGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.SquadsViewModel(
+                gateway = groups,
+                authGateway = auth
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(
+                com.example.presentation.friends.ShareToSquadViewModel::class.java
+            )
+        ) {
+            val groups = socialGroupGateway
+                ?: throw IllegalStateException("SocialGroupGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.ShareToSquadViewModel(
+                gateway = groups,
+                authGateway = auth
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.friends.WorkoutCheckInViewModel::class.java)) {

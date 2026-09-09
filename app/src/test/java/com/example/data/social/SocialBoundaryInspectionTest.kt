@@ -323,6 +323,8 @@ class SocialBoundaryInspectionTest {
                 "FriendshipContract.kt",
                 "ReportContract.kt",
                 "SocialContract.kt",
+                // T17.11 — Squads privados. Os caminhos moram aqui, e em mais nenhum lugar.
+                "SocialGroupContract.kt",
                 "SocialNotificationContract.kt",
                 "SocialProfileContract.kt",
                 // T17.8 — check-ins de treino e Feed. `WorkoutShareContract.kt` (T17.7) entra na

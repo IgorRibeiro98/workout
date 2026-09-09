@@ -128,6 +128,16 @@
     <string name="notification_challenge_ended_body">O desafio foi finalizado. Confira o placar final!</string>
     <string name="notification_workout_share_received_title">Novo treino compartilhado</string>
     <string name="notification_workout_share_received_body">Um amigo compartilhou um treino com você no Spark.</string>
+
+    <!--
+      T17.11 §92 — o convite para um Squad.
+
+      Genérico de propósito: o push é data-only e não carrega o nome do Squad, o de quem convidou
+      nem os dos membros (§91). Um texto que os citasse exigiria que eles viajassem no payload, e é
+      exatamente isso que a T17.11 não faz.
+    -->
+    <string name="notification_group_invitation_received_title">Convite para Squad</string>
+    <string name="notification_group_invitation_received_body">Você recebeu um convite para participar de um Squad.</string>
     <string name="notification_permission_denied_message">Permissão de notificações não concedida nas configurações do aparelho.</string>
     <string name="notification_preferences_signed_out">Entre na Conta Spark para ajustar as notificações sociais.</string>
 </resources>

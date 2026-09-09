@@ -116,4 +116,18 @@ export const SocialErrors = {
   /** Atividade não disponível para exibição (T17.4). */
   activityNotAvailable: (reason: string) =>
     socialException(HttpStatus.NOT_FOUND, SOCIAL_ERROR_CODES.ACTIVITY_NOT_AVAILABLE, reason),
+
+  /**
+   * Desativar o Social exige resolver a posse de Squads primeiro (T17.11 §98/§99).
+   *
+   * `409` porque o pedido está bem formado e a conta tem direito a ele — o que falta é uma decisão
+   * que só o usuário pode tomar. A mensagem carrega a **contagem**, e nenhum dado de membro: quem
+   * está naqueles Squads não é assunto desta resposta.
+   */
+  groupOwnershipRequiresAction: (groupCount: number) =>
+    socialException(
+      HttpStatus.CONFLICT,
+      SOCIAL_ERROR_CODES.GROUP_OWNERSHIP_REQUIRES_ACTION,
+      `transfira a posse ou exclua ${groupCount} squad(s) antes de desativar o social`,
+    ),
 };

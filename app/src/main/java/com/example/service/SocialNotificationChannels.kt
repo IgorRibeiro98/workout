@@ -27,6 +27,14 @@ object SocialNotificationChannels {
     const val DESTINATION_CHALLENGE_DETAIL = "challenge_detail"
     const val DESTINATION_SHARED_WORKOUTS = "shared_workouts"
 
+    /**
+     * T17.11 §93 — o convite abre a **lista de convites**, e nunca o detalhe do Squad.
+     *
+     * Quem ainda não aceitou não é membro, e o detalhe responderia `404` (§59). Abrir a lista é o
+     * único destino em que a pessoa consegue fazer o que o aviso pede: decidir.
+     */
+    const val DESTINATION_SQUADS = "squads"
+
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager

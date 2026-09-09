@@ -157,7 +157,28 @@ export class BlockRepository {
              OR (sender_uid = ? AND recipient_uid = ?))`,
       ).run(now, blockerUid, blockedUid, blockedUid, blockerUid);
 
-      // 6. Cancela notificações de outbox pendentes para ambos
+      // 6. Convites de Squad pendentes entre o par (T17.11 §105).
+      //
+      // Cancelados, e **não** apagados: a linha continua sendo a prova de que aquele identificador
+      // existiu, e um push que já estava na fila para ele passa a ser irrelevante na revalidação do
+      // dispatcher (§106).
+      //
+      // O que este bloco deliberadamente **não** faz é mexer em `social_group_memberships`
+      // (T17.11 §33/§152): bloqueio é mais forte que participação na **visibilidade**, e não na
+      // composição do grupo. Destruir a participação de alguém contaria a todos os outros 18
+      // membros que houve um bloqueio entre duas pessoas — e daria a qualquer um o poder de
+      // expulsar outro de um Squad sem ser dono dele. O que o bloqueio faz é cortar a visibilidade
+      // entre o par, e isso é decidido a cada leitura por `groupShareVisibleSql` e pela projeção
+      // da lista de membros.
+      db.prepare(
+        `UPDATE social_group_invitations
+         SET status = 'CANCELLED', responded_at = ?
+         WHERE status = 'PENDING'
+           AND ((sender_uid = ? AND recipient_uid = ?)
+             OR (sender_uid = ? AND recipient_uid = ?))`,
+      ).run(now, blockerUid, blockedUid, blockedUid, blockerUid);
+
+      // 7. Cancela notificações de outbox pendentes para ambos
       db.prepare(
         `UPDATE social_notification_events
          SET status = 'CANCELLED', completed_at = ?

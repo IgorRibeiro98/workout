@@ -409,6 +409,18 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Squads privados e feed de grupo (T17.11).
+     *
+     * Sobre o **mesmo** cliente autenticado dos demais gateways sociais: um transporte, um
+     * interceptor, um lugar montando `Authorization: Bearer`. Sem endereço de backend configurado
+     * o cliente responde `NotConfigured`, e a área de Squads some da tela — todo o núcleo de treino
+     * continua funcionando offline (§116).
+     */
+    val socialGroupGateway: com.example.domain.social.SocialGroupGateway by lazy {
+        com.example.data.social.SparkSocialGroupGateway(sparkBackendClient)
+    }
+
+    /**
      * O cache de fotos do Feed (T17.9 §56/§57).
      *
      * Em memória, com escopo de conta, e trocado **antes** de qualquer requisição da conta nova

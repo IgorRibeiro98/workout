@@ -91,10 +91,10 @@ describe('Persistência do grafo social', () => {
       // Da `0009` (T17.2) à `0018` (T17.9), todas sobem junto e são igualmente aditivas: criam
       // `social_progress_settings`, tabelas de desafio, configurações de atividade/ranking,
       // notificações push, bloqueio/denúncia, compartilhamento de treino, os check-ins sociais e —
-      // na T17.9 — legenda, mídia, reações, comentários e o alvo das denúncias. Nenhuma delas toca
-      // em perfil, amizade ou em qualquer coisa da T16.
+      // na T17.9 — legenda, mídia, reações, comentários e o alvo das denúncias; e na T17.11, os
+      // Squads. Nenhuma delas toca em perfil, amizade ou em qualquer coisa da T16.
       expect(applied.map((migration) => migration.version)).toEqual([
-        8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+        8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
       ]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'friend_graph',
@@ -108,6 +108,7 @@ describe('Persistência do grafo social', () => {
         'social_checkin_content',
         'social_checkin_reactions_comments',
         'social_reports_ugc',
+        'social_groups',
       ]);
       expect(db.prepare('SELECT * FROM social_profiles').all()).toEqual(beforeProfiles);
       expect(db.prepare('SELECT * FROM social_privacy_settings').all()).toEqual(

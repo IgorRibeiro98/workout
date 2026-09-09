@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
-import { VIEWER_SCOPE_CTE } from './workout-checkin.access-policy';
+import { VIEWER_SCOPE_CTE, groupShareVisibleSql } from './workout-checkin.access-policy';
 
 /** Uma mídia como ela mora no banco (T17.9 §40). Metadata; os bytes vivem no `SocialMediaStore`. */
 export interface StoredCheckInMedia {
@@ -225,6 +225,17 @@ export class SocialMediaRepository {
    * `status = 'ATTACHED'` exclui `PENDING` de propósito: mídia que ainda não foi publicada não é
    * servível para ninguém, nem para o próprio dono por esta rota. Ela existe apenas como candidata
    * a anexo, e servi-la seria dar ao endpoint uma segunda função.
+   *
+   * ## O que a T17.11 acrescentou (§79/§80/§81)
+   *
+   * Um segundo caminho de leitura: a foto de um check-in trazido para um Squad precisa ser
+   * visível para os membros daquele Squad — senão o card do feed de grupo teria legenda e um
+   * retângulo cinza. O caminho é o **mesmo** predicado de `groupShareVisibleSql`, e não uma
+   * segunda regra escrita aqui (§77).
+   *
+   * O que **não** mudou: o `mediaId` continua não concedendo nada (§80). Quem não é membro de
+   * nenhum Squad onde o check-in foi compartilhado, e não é amigo do autor, recebe `404` — e o
+   * par bloqueado também (§81), porque o bloqueio está dentro do predicado, e não ao lado dele.
    */
   findViewableStorageKey(
     viewerUid: string,
@@ -238,7 +249,6 @@ export class SocialMediaRepository {
                 m.byte_size   AS byteSize
            FROM social_checkin_media m
            JOIN social_workout_checkins c ON c.id = m.attached_checkin_id
-           JOIN eligible_authors ea       ON ea.uid = c.author_uid
            JOIN social_profiles p         ON p.owner_uid = c.author_uid
           WHERE m.id = :mediaId
             AND m.status = 'ATTACHED'
@@ -246,6 +256,14 @@ export class SocialMediaRepository {
             AND p.status = 'ACTIVE'
             AND EXISTS (SELECT 1 FROM social_profiles vp
                          WHERE vp.owner_uid = :viewer AND vp.status = 'ACTIVE')
+            AND (
+              -- T17.11 §76/§79 — os dois caminhos, com a mesma definicao que o detalhe do
+              -- check-in usa. A juncao com eligible_authors virou um EXISTS porque ela passou a
+              -- ser uma das alternativas e nao mais a unica: como JOIN, ela eliminaria a linha
+              -- antes de o caminho de Squad chegar a ser avaliado.
+              EXISTS (SELECT 1 FROM eligible_authors ea WHERE ea.uid = c.author_uid)
+              OR ${groupShareVisibleSql('c.id', 'c.author_uid')}
+            )
           LIMIT 1`,
       )
       .get({ viewer: viewerUid, mediaId }) as

@@ -109,7 +109,11 @@ class WorkoutCheckInPrivacyInspectionTest {
                 "reactions",
                 "currentUserReaction",
                 "commentCount",
-                "isCurrentUser"
+                "isCurrentUser",
+                // T17.11 §70 — se **este** viewer pode reagir e comentar. Booleano derivado da
+                // política de acesso do servidor: não carrega identidade nem dado de treino, e é
+                // o que mantém "membro só de Squad não interage" visível para a tela.
+                "canInteract"
             ),
             declared
         )

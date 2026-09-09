@@ -44,7 +44,22 @@ data class WorkoutCheckIn(
     /** Comentários **visíveis para este viewer** (T17.9 §92). Nunca a contagem global. */
     val commentCount: Int = 0,
     /** `true` quando a publicação é do próprio usuário. Decidido pelo servidor, não pela tela. */
-    val isCurrentUser: Boolean = false
+    val isCurrentUser: Boolean = false,
+    /**
+     * Se **este** usuário pode reagir e comentar nesta publicação (T17.11 §70/§72/§144).
+     *
+     * `true` quando ele alcança a publicação por relação direta — é o autor, ou é amigo dele.
+     * `false` quando o único caminho até ela é um Squad compartilhado: a T17.11 **não** amplia a
+     * autorização de interação para relação puramente de grupo, porque um mesmo check-in em dois
+     * Squads e no Feed de amigos passaria a ter uma conversa com três audiências sobrepostas —
+     * e resolver isso exige comentários cientes de audiência, que aquela fase não introduz em
+     * silêncio (§71).
+     *
+     * A tela usa o booleano para não desenhar o que não funciona; o servidor recusa de qualquer
+     * forma, porque esconder um botão nunca foi controle de acesso (§72). Toda publicação do Feed
+     * de amigos vem com `true`.
+     */
+    val canInteract: Boolean = true
 ) {
     /** O total de reações que este viewer enxerga. Derivado, nunca enviado pelo servidor. */
     val totalReactions: Int get() = reactions.values.sum()

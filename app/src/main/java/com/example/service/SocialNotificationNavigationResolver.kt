@@ -17,6 +17,15 @@ sealed interface NotificationNavDestination {
     data object Challenges : NotificationNavDestination
     data class ChallengeDetail(val challengeId: String) : NotificationNavDestination
     data object SharedWorkouts : NotificationNavDestination
+
+    /**
+     * A lista de Squads, com os convites no topo (T17.11 §93).
+     *
+     * Deliberadamente **não** existe um `SquadDetail(groupId)` aqui: o push do convite carrega o
+     * `invitationId`, e não o `groupId` (§91) — e mesmo se carregasse, quem ainda não aceitou não
+     * é membro e receberia `404` no detalhe (§59).
+     */
+    data object Squads : NotificationNavDestination
 }
 
 object SocialNotificationNavigationResolver {
@@ -28,6 +37,7 @@ object SocialNotificationNavigationResolver {
             SocialNotificationType.CHALLENGE_STARTING_SOON -> NotificationNavDestination.ChallengeDetail(entityId)
             SocialNotificationType.CHALLENGE_ENDED -> NotificationNavDestination.ChallengeDetail(entityId)
             SocialNotificationType.WORKOUT_SHARE_RECEIVED -> NotificationNavDestination.SharedWorkouts
+            SocialNotificationType.GROUP_INVITATION_RECEIVED -> NotificationNavDestination.Squads
         }
     }
 }

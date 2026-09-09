@@ -107,6 +107,12 @@ export function validateUpdateNotificationPreferences(
     'challengeInvitationReceived',
     'challengeStartingSoon',
     'challengeEnded',
+    // A categoria da T17.7 estava no DTO e no banco desde então, mas nunca chegou a esta lista:
+    // o servidor recusava `workoutShareReceived` como "campo não reconhecido", e a preferência era
+    // legível e não-escrevível. Corrigido junto da T17.11 porque a lista é a mesma.
+    'workoutShareReceived',
+    // T17.11 §94 — o convite para um Squad.
+    'groupInvitationReceived',
   ]);
 
   for (const key of Object.keys(record)) {
@@ -133,5 +139,7 @@ export function validateUpdateNotificationPreferences(
     challengeInvitationReceived: record.challengeInvitationReceived as boolean | undefined,
     challengeStartingSoon: record.challengeStartingSoon as boolean | undefined,
     challengeEnded: record.challengeEnded as boolean | undefined,
+    workoutShareReceived: record.workoutShareReceived as boolean | undefined,
+    groupInvitationReceived: record.groupInvitationReceived as boolean | undefined,
   };
 }

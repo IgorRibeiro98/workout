@@ -151,6 +151,14 @@ class SparkFirebaseMessagingService : FirebaseMessagingService() {
                 getString(R.string.notification_workout_share_received_title),
                 getString(R.string.notification_workout_share_received_body)
             )
+            // T17.11 §92 — o texto é **local**, e genérico de propósito: o push não carrega o nome
+            // do Squad nem o de quem convidou (§91), e inventá-los aqui seria impossível. Quem
+            // quiser saber abre o app, que é o desenho de push best-effort da T17.5.
+            SocialNotificationType.GROUP_INVITATION_RECEIVED -> Triple(
+                SocialNotificationChannels.CHANNEL_SOCIAL_REQUESTS,
+                getString(R.string.notification_group_invitation_received_title),
+                getString(R.string.notification_group_invitation_received_body)
+            )
         }
 
         val pendingIntent = SocialNotificationChannels.buildPendingIntent(

@@ -1150,6 +1150,68 @@ nasceu de um defeito real, e cada uma tem teste.
   contagens, o Feed é bounded em linhas **e** em consultas, o EXIF/GPS não sobrevive ao re-encode,
   o original nunca toca o disco, e excluir a conta não toca o Room.
 
+## 13.17 Squads privados e feed de grupo (T17.11)
+
+A T17.11 abre o Social V2: pequenos grupos privados, formados por convite, com um feed onde os
+membros trazem **explicitamente** check-ins que já publicaram. As regras abaixo são as invariantes
+da fase — cada uma tem teste, e cada uma existe porque a alternativa produz um defeito nomeável.
+
+- **Um Squad é privado, e a privacidade é estrutural.** Não existe busca, listagem pública, link de
+  convite, QR ou código de entrada. Uma pessoa conhece um Squad porque está dentro dele ou porque
+  recebeu um convite, e não há terceira porta. Conhecer o `groupId` não concede nada: quem não é
+  membro recebe o mesmo `404` de "não existe", em toda superfície do grupo.
+- **A T17.11 não cria um segundo modelo de publicação.** O feed do Squad é o **mesmo**
+  `WorkoutCheckIn` da T17.8/T17.9 lido por outra audiência. `social_group_checkin_shares` é uma
+  **aresta**, e não um post: excluir o Squad, sair dele ou desfazer o compartilhamento apagam a
+  aresta e nunca a publicação. A montagem do card virou um provider (`CheckInProjector`) justamente
+  porque passou a ter duas superfícies — duas cópias divergiriam no primeiro campo novo.
+- **Nada entra sozinho.** Publicar um check-in não o coloca em Squad nenhum, e entrar num Squad não
+  traz check-ins antigos de ninguém. Só o **autor** traz o próprio check-in, por um toque, com
+  confirmação. O teto é 5 Squads por check-in.
+- **Participação e amizade são consentimentos diferentes, nos dois sentidos.** A amizade é
+  revalidada no **convite** e no **aceite**, porque é ali que ela é a autorização; depois disso a
+  participação é um consentimento próprio, e desfazer a amizade não remove ninguém. O inverso
+  também vale: estar no mesmo Squad não cria amizade e não concede perfil de amigo.
+- **Bloqueio continua soberano, e não destrói participação.** Ele corta a visibilidade entre o par —
+  no feed, na mídia, na lista de membros — e mantém as duas participações de pé. Destruí-las
+  contaria a todos os outros membros que houve um bloqueio, e daria a qualquer um o poder de
+  expulsar outro de um grupo que não é dele. Na lista de membros o par bloqueado vira uma entrada
+  **opaca** com `membershipId` e nenhuma identidade: é o que permite ao dono administrar o grupo sem
+  receber o `socialId` de quem o bloqueou. A contagem de membros não muda — ela não é identidade.
+- **Exatamente um `OWNER`, e a garantia é do banco.** Um índice único parcial sobre
+  `(group_id) WHERE role = 'OWNER'` torna zero ou dois donos **irrepresentáveis**, em vez de
+  improváveis: a transferência de posse é duas escritas, e uma transação que falhasse no meio
+  deixaria um estado visível para outras pessoas que não se corrige sozinho.
+- **Relação puramente de grupo é read-only nesta fase.** Reagir e comentar continuam exigindo
+  relação direta (autor ou amigo). Um mesmo check-in em dois Squads e no Feed de amigos passaria a
+  ter uma conversa com três audiências sobrepostas, e resolver isso exige comentários cientes de
+  audiência — que a T17.11 não introduz em silêncio. O DTO carrega `canInteract`, decidido no
+  servidor; a tela usa o booleano para não desenhar o que não funciona, e o servidor recusa de
+  qualquer forma.
+- **A mídia ganhou o terceiro caminho, com a mesma definição.** `WorkoutCheckInAccessPolicy`
+  responde `self ∨ amizade direta ∨ Squad compartilhado`, sempre sob perfil ativo e ¬bloqueio, e o
+  predicado de Squad é exportado como **texto** para que o feed, o detalhe e os bytes da foto usem
+  literalmente a mesma regra. O `mediaId` continua não concedendo nada.
+- **Desativar o Social pode recusar; excluir a conta nunca.** Ser dono de um Squad com outras
+  pessoas bloqueia a desativação com `GROUP_OWNERSHIP_REQUIRES_ACTION` e uma **contagem** — nunca
+  dados de membro. A alternativa seria escolher um novo dono por ordenação arbitrária, que é
+  entregar um grupo de gente real a quem não pediu. Na exclusão de conta não há como recusar, e por
+  isso a política é outra: o Squad do dono excluído vai junto, sem substituto silencioso, e os
+  check-ins, treinos e templates dos outros membros continuam intactos.
+- **Um push, e só um.** `GROUP_INVITATION_RECEIVED`, data-only, com `entityId = invitationId`.
+  Nunca o nome do Squad, o de quem convidou ou o dos membros. Não existe push para "entrou", "saiu",
+  "foi removido", "posse transferida", "check-in compartilhado" nem "Squad excluído": um grupo de 20
+  pessoas que notificasse cada movimento seria um chat com outro nome. O deep link abre a **lista de
+  convites**, e nunca o detalhe do grupo — quem ainda não aceitou não é membro dele.
+- **Nada de Squad mora no Room.** Sem entidade, sem DAO, sem Outbox, e Squad **não** é
+  `sync_entity` da T16. Cache de memória com escopo de conta, trocado antes de a requisição da conta
+  nova sair. Sem backend configurado, a área de Squads some — e todo o núcleo de treino continua
+  funcionando offline.
+- **O rate limit fica acima do limite de domínio, não igual a ele.** Criar Squad tem teto de domínio
+  de 5 e teto de requisição de 10/min de propósito: iguais, o sexto pedido devolveria `429` em vez
+  de `GROUP_OWNED_LIMIT_REACHED` — uma mensagem que não explica nada e que some sozinha depois de um
+  minuto, ensinando a pessoa a tentar de novo em vez de a entender o limite.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

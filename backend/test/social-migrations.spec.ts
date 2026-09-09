@@ -43,6 +43,10 @@ const SOCIAL_TABLES = [
   'social_checkin_media',
   'social_checkin_reactions',
   'social_checkin_comments',
+  'social_groups',
+  'social_group_memberships',
+  'social_group_invitations',
+  'social_group_checkin_shares',
 ] as const;
 
 /** Aplica as migrations até `upTo` inclusive, num diretório temporário só com esses arquivos. */

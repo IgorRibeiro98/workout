@@ -9,6 +9,7 @@ import {
 } from './canonical-training.source';
 import { SocialRepository } from './social.repository';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
+import { CheckInProjector } from './checkin.projector';
 import { SocialContentRateLimiter } from './social-content.rate-limit';
 import { SocialMediaService } from './social-media.service';
 import { SocialMediaRepository } from './social-media.repository';
@@ -87,6 +88,11 @@ export class WorkoutCheckInService {
     // segunda cópia da autorização que §130 chama de bloqueante.
     private readonly interactions: CheckInInteractionRepository,
     private readonly mediaRepository: SocialMediaRepository,
+    // T17.11 §50 — a montagem do card saiu daqui e virou um provider. Ela passou a ter **duas**
+    // superfícies: o Feed de amigos e o feed de um Squad. Um card montado por dois caminhos
+    // divergiria no próximo campo novo, e "não existe um segundo Feed authority" deixaria de ser
+    // verdade sem que ninguém percebesse.
+    private readonly projector: CheckInProjector,
     private readonly media: SocialMediaService,
     private readonly accessPolicy: WorkoutCheckInAccessPolicy,
     private readonly contentRateLimiter: SocialContentRateLimiter,
@@ -261,11 +267,28 @@ export class WorkoutCheckInService {
    */
   getCheckIn(callerUid: string, checkInId: string): WorkoutCheckInDto {
     this.requireActiveProfile(callerUid);
-    const visible = this.accessPolicy.findVisibleCheckIn(callerUid, checkInId);
-    if (!visible) {
+    // T17.11 §82 — a leitura do detalhe passou a aceitar o contexto de Squad: quem abre um card do
+    // feed de um grupo precisa poder ver a publicação inteira. Quem decide **como** ele chegou até
+    // aqui é a política, e não a rota (§83) — não existe parâmetro de contexto, e não haveria o
+    // que ganhar com um: o servidor calcula os dois caminhos de qualquer forma.
+    //
+    // `canInteract` é o que sai daí, e é o que mantém §70: reagir, comentar e listar comentários
+    // continuam exigindo `findVisibleCheckIn` (relação direta), e nenhuma dessas rotas mudou.
+    const accessible = this.accessPolicy.findAccessibleCheckIn(callerUid, checkInId);
+    if (!accessible) {
       throw WorkoutCheckInErrors.checkInNotFound();
     }
-    return this.enrich(callerUid, [visible as FeedRow])[0];
+    return this.projector.project(callerUid, [
+      {
+        checkInId: accessible.checkInId,
+        authorUid: accessible.authorUid,
+        authorSocialId: accessible.authorSocialId,
+        authorDisplayName: accessible.authorDisplayName,
+        caption: accessible.caption,
+        publishedAt: accessible.publishedAt,
+        canInteract: accessible.canInteract,
+      },
+    ])[0];
   }
 
   // ================================================================== reações (§61–§73)
@@ -565,62 +588,30 @@ export class WorkoutCheckInService {
   }
 
   /**
-   * O enriquecimento de uma **página** do Feed (T17.9 §58/§131/§132).
+   * O enriquecimento de uma **página** do Feed de amigos (T17.9 §58/§131/§132).
    *
-   * ## Por que quatro consultas, e não vinte e uma
+   * Desde a T17.11 ele delega ao [CheckInProjector] (§50). O código era idêntico ao que o feed de
+   * um Squad precisaria, e duas cópias é o desenho em que, no dia de um campo novo, uma superfície
+   * o ganha e a outra não — que é exatamente o "segundo Feed authority" que a T17.11 proíbe.
    *
-   * A tentação é resolver cada card sozinho: para cada check-in, buscar a foto, contar as reações,
-   * descobrir a do viewer e contar os comentários. Um feed de 20 itens viraria 80 consultas, e o
-   * custo cresceria com o tamanho da página — que é exatamente o N+1 que §131 proíbe.
-   *
-   * Aqui a página inteira vai junto em cada agregação: uma consulta de mídia, uma de contagem de
-   * reações, uma da reação do viewer e uma de contagem de comentários. Quatro, independentemente
-   * de a página ter 1 ou 50 itens.
-   *
-   * ## As contagens são **do viewer**, não do post (§69/§92)
-   *
-   * `countReactionsForCheckIns` e `countCommentsForCheckIns` recebem o `viewerUid` e filtram por
-   * ele. Não existe caminho aqui que produza um número global: o cenário de §69 — A reage ao post
-   * de C, A bloqueou B, B lê o post de C — precisa que a participação de A não transpareça nem
-   * como número, e um `COUNT(*)` sem viewer vazaria exatamente isso.
+   * `canInteract: true` para toda linha, e não é uma simplificação: no Feed de amigos a relação
+   * direta é a **própria condição de aparecer** — a CTE `eligible_authors` só admite o próprio
+   * viewer e os amigos atuais dele. Um item deste feed que não autorizasse interação seria uma
+   * contradição com a consulta que o produziu.
    */
   private enrich(viewerUid: string, rows: readonly FeedRow[]): WorkoutCheckInDto[] {
-    if (rows.length === 0) {
-      return [];
-    }
-    const ids = rows.map((row) => row.checkInId);
-
-    const media = new Map(
-      this.mediaRepository
-        .findAttachedForCheckIns(ids)
-        .map((item) => [
-          item.checkInId,
-          { mediaId: item.mediaId, width: item.width, height: item.height },
-        ]),
+    return this.projector.project(
+      viewerUid,
+      rows.map((row) => ({
+        checkInId: row.checkInId,
+        authorUid: row.authorUid,
+        authorSocialId: row.authorSocialId,
+        authorDisplayName: row.authorDisplayName,
+        caption: row.caption,
+        publishedAt: row.publishedAt,
+        canInteract: true,
+      })),
     );
-
-    const reactionTotals = new Map<string, Record<string, number>>();
-    for (const row of this.interactions.countReactionsForCheckIns(viewerUid, ids)) {
-      const bucket = reactionTotals.get(row.checkInId) ?? {};
-      bucket[row.type] = row.total;
-      reactionTotals.set(row.checkInId, bucket);
-    }
-
-    const viewerReactions = this.interactions.findViewerReactions(viewerUid, ids);
-    const commentCounts = this.interactions.countCommentsForCheckIns(viewerUid, ids);
-
-    return rows.map((row) => ({
-      type: 'WORKOUT_CHECK_IN' as const,
-      checkInId: row.checkInId,
-      author: { socialId: row.authorSocialId, displayName: row.authorDisplayName },
-      publishedAt: row.publishedAt,
-      caption: row.caption,
-      media: media.get(row.checkInId) ?? null,
-      reactions: reactionTotals.get(row.checkInId) ?? {},
-      currentUserReaction: viewerReactions.get(row.checkInId) ?? null,
-      commentCount: commentCounts.get(row.checkInId) ?? 0,
-      isCurrentUser: row.authorUid === viewerUid,
-    }));
   }
 
   /**
@@ -656,6 +647,8 @@ export class WorkoutCheckInService {
       currentUserReaction: null,
       commentCount: 0,
       isCurrentUser: true,
+      // O autor sempre pode interagir com a própria publicação.
+      canInteract: true,
     };
   }
 

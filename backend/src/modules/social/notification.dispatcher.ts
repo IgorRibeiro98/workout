@@ -452,6 +452,50 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         return { relevant: true };
       }
 
+      case 'GROUP_INVITATION_RECEIVED': {
+        // T17.11 §106 — a revalidação que decide se este push ainda faz sentido no instante do
+        // envio. O convite pode ter sido recusado, cancelado, aceito ou expirado desde que entrou
+        // na fila, e o Squad pode ter sido excluído. Nenhum desses estados justifica acordar o
+        // aparelho de alguém para um convite que já não existe.
+        const row = this.db
+          .prepare(
+            `SELECT i.status AS inv_status, i.expires_at, i.sender_uid, g.status AS group_status
+               FROM social_group_invitations i
+               JOIN social_groups g ON g.id = i.group_id
+              WHERE i.id = ?`,
+          )
+          .get(event.entityId) as
+          | { inv_status: string; expires_at: number; sender_uid: string; group_status: string }
+          | undefined;
+
+        if (
+          !row ||
+          row.inv_status !== 'PENDING' ||
+          row.group_status !== 'ACTIVE' ||
+          now >= row.expires_at
+        ) {
+          return { relevant: false, reason: 'INVITATION_NO_LONGER_VALID' };
+        }
+
+        // §106 — bloqueio superveniente **suprime** o push. Na prática o bloqueio já cancelou o
+        // convite (§105), e esta verificação é a que cobre a corrida entre as duas escritas: um
+        // evento que já estava sendo despachado não pode entregar o aviso depois do bloqueio.
+        const blocked = this.db
+          .prepare(
+            `SELECT 1 FROM social_blocks
+             WHERE (blocker_uid = ? AND blocked_uid = ?)
+                OR (blocker_uid = ? AND blocked_uid = ?)
+             LIMIT 1`,
+          )
+          .get(row.sender_uid, event.recipientUid, event.recipientUid, row.sender_uid);
+
+        if (blocked) {
+          return { relevant: false, reason: 'BLOCKED' };
+        }
+
+        return { relevant: true };
+      }
+
       default:
         return { relevant: false, reason: 'UNKNOWN_TYPE' };
     }
@@ -473,6 +517,8 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         return prefs.challengeEnded;
       case 'WORKOUT_SHARE_RECEIVED':
         return prefs.workoutShareReceived;
+      case 'GROUP_INVITATION_RECEIVED':
+        return prefs.groupInvitationReceived;
     }
   }
 

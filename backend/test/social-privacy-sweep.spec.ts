@@ -379,6 +379,9 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
     expect(Object.keys(item).sort()).toEqual(
       [
         'author',
+        // T17.11 §70 — se **este** viewer pode reagir e comentar. Booleano derivado da política de
+        // acesso; não carrega identidade nem dado de treino.
+        'canInteract',
         'caption',
         'checkInId',
         'commentCount',
