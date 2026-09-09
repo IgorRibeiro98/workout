@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
@@ -94,23 +94,58 @@ export class SocialMediaService {
   async upload(command: UploadMediaCommand): Promise<UploadedMediaDto> {
     const { ownerUid, requestId, sessionSyncId, clientUploadId, bytes } = command;
 
-    if (!this.rateLimiter.tryAcquireUpload(ownerUid)) {
-      throw WorkoutCheckInErrors.rateLimited();
-    }
+    // Autorização primeiro, e o replay não a pula (T17.13.1 §35): uma conta sem perfil social
+    // ativo não recebe de volta a foto que enviou quando ainda tinha.
     this.requireActiveProfile(ownerUid);
+
+    // §39/§41 — a impressão digital da **requisição**, dos bytes como chegaram.
+    //
+    // Calculada antes de qualquer processamento e antes do limitador. SHA-256 sobre alguns
+    // megabytes é irrelevante perto de decodificar uma imagem, e é justamente por ser barata que
+    // ela pode responder à pergunta da idempotência sem pagar o custo do pipeline.
+    //
+    // §42 — ela **não** é o `contentHash`. Aquele é o hash do WebP gravado e responde "é a mesma
+    // imagem armazenada?"; este responde "é a mesma requisição?". Duas entradas diferentes podem
+    // convergir para a mesma saída depois da sanitização (um JPEG e um PNG visualmente idênticos),
+    // e como *requisições* elas continuam sendo duas.
+    const inputContentHash = createHash('sha256').update(bytes).digest('hex');
 
     // §36 — retry do mesmo upload converge no **mesmo** `mediaId`, sem duplicar arquivo.
     //
-    // A conferência do conteúdo é por hash da representação sanitizada: reusar o
-    // `clientUploadId` para uma imagem diferente descreve um cliente confuso, e atender seria
-    // concordar com a confusão. Mas o hash só existe depois de processar — então a igualdade de
-    // sessão é conferida aqui, e a de conteúdo logo abaixo.
+    // ## Antes do limitador, de propósito (T17.13.1 §34/§43)
+    //
+    // A ordem era a inversa, e transformava um retry legítimo em `429`: o primeiro upload
+    // consumia a janela, a resposta se perdia na rede, e a retentativa — que não grava nada — era
+    // recusada por um limite que existe para conter upload novo. O cliente ficava com uma foto
+    // enviada e nenhum `mediaId` para anexar.
     const existing = this.repository.findByOwnerAndUpload(ownerUid, clientUploadId);
     if (existing && existing.status !== 'DELETED') {
+      // §70 — outra sessão com a mesma chave: `404`, e não a mídia da sessão original. Distinguir
+      // "existe, mas é de outra sessão" de "não existe" devolveria a informação de que aquele
+      // `clientUploadId` foi usado.
       if (existing.sourceSessionSyncId !== sessionSyncId) {
         throw WorkoutCheckInErrors.mediaNotFound();
       }
+
+      // §40 — a mesma chave com bytes diferentes **não** é o mesmo upload.
+      //
+      // Este era o defeito: o servidor devolvia `200` com o `mediaId` da foto anterior, e a pessoa
+      // publicava o check-in com a imagem errada acreditando ter enviado a nova.
+      //
+      // Uma linha legada (anterior à migration 0023) não tem impressão digital, e não há como
+      // calculá-la — os bytes originais não existem mais, e §62 proíbe reprocessar mídia
+      // histórica. Para ela a conferência degrada para a da T17.9 (mesma sessão ⇒ devolve), que é
+      // o contrato que aquelas linhas sempre tiveram. A janela fecha sozinha: mídia `PENDING`
+      // expira por TTL, e um `clientUploadId` só é reusado dentro da mesma tentativa de publicação.
+      if (existing.inputContentHash !== null && existing.inputContentHash !== inputContentHash) {
+        throw WorkoutCheckInErrors.mediaUploadConflict();
+      }
+
       return this.toDto(existing);
+    }
+
+    if (!this.rateLimiter.tryAcquireUpload(ownerUid)) {
+      throw WorkoutCheckInErrors.rateLimited();
     }
 
     if (bytes.length === 0) {
@@ -173,6 +208,7 @@ export class SocialMediaService {
       width: processed.width,
       height: processed.height,
       contentHash,
+      inputContentHash,
       status: 'PENDING',
       createdAt: now,
       expiresAt: now + MEDIA_PENDING_TTL_MS,

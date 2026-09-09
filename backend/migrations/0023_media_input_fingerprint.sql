@@ -1,0 +1,66 @@
+-- T17.13.1 §39–§42 — a impressão digital da **requisição** de upload
+--
+-- ## O defeito que esta coluna corrige
+--
+-- O contrato de idempotência da mídia (T17.9 §36) dizia:
+--
+--   "A conferência do conteúdo é por hash da representação sanitizada: reusar o `clientUploadId`
+--    para uma imagem diferente descreve um cliente confuso, e atender seria concordar com a
+--    confusão."
+--
+-- O comentário descrevia a intenção; o código nunca fez a conferência. `upload()` encontrava a
+-- linha por `(owner_uid, client_upload_id)`, comparava **só a sessão**, e devolvia a mídia antiga.
+-- O mesmo `clientUploadId` com bytes diferentes recebia `200` e o `mediaId` da foto anterior — e a
+-- pessoa acabava publicando um check-in com a foto errada, acreditando ter enviado a nova. É o
+-- blocker de §85.
+--
+-- A razão de o código não fazer o que o comentário prometia está no `content_hash` existente: ele
+-- é o hash da imagem **depois** do processamento, e só existe depois de decodificar, redimensionar
+-- e reencodar — que é a operação cara que a ordem de validações da T17.9 evita fazer antes de
+-- saber se a requisição é legítima. Comparar por ele exigiria processar toda retentativa, ou seja,
+-- exigiria pagar o custo justamente no caminho que existe para não pagá-lo.
+--
+-- ## Duas perguntas diferentes, dois hashes (§42)
+--
+-- ```text
+-- input_content_hash   SHA-256 dos bytes que CHEGARAM     →  "é a mesma requisição?"
+-- content_hash         SHA-256 do WebP que foi GRAVADO    →  "é a mesma imagem armazenada?"
+-- ```
+--
+-- Elas não são intercambiáveis, e a diferença tem consequência nos dois sentidos:
+--
+--   - **entradas diferentes podem produzir saídas iguais.** Um JPEG e um PNG visualmente idênticos,
+--     ou o mesmo original salvo por dois aplicativos, convergem para o mesmo WebP depois da
+--     sanitização. Pelo `content_hash` seriam "a mesma coisa"; como *requisições*, são duas;
+--   - **a mesma entrada sempre produz a mesma saída,** então o `input_content_hash` nunca acusa
+--     conflito onde não há.
+--
+-- Idempotência é sobre a requisição, e não sobre o pixel: o que o cliente reenvia é o corpo que
+-- ele guardou, byte a byte. Por isso a escolha é a opção A de §41 — persistir o hash da entrada,
+-- calculado **antes** do processamento. Ele é barato (SHA-256 sobre alguns megabytes é irrelevante
+-- perto de decodificar uma imagem) e responde exatamente a pergunta certa.
+--
+-- `content_hash` continua onde está, com o papel que sempre teve: integridade da representação
+-- armazenada (T17.9 §37). Nenhuma das duas é autorização.
+--
+-- ## Aditiva, e nulável de propósito (§62)
+--
+-- `ALTER TABLE ADD COLUMN`, sem rebuild: não há `CHECK` a alterar e nenhuma linha muda.
+--
+-- A coluna é **nulável** porque as linhas anteriores a esta migration não têm como recebê-la. O
+-- hash da entrada só pode ser calculado a partir dos bytes originais, e os bytes originais não
+-- existem mais — o servidor guarda a saída sanitizada, e é isso que §14 da T17.9 quer. Preencher
+-- retroativamente exigiria reprocessar ou inventar valor, e §62 proíbe os dois: nenhuma mídia
+-- histórica é reprocessada, reencodada ou destruída por esta fase.
+--
+-- O comportamento de replay para uma linha legada está documentado em `social-media.service.ts`:
+-- sem impressão digital gravada não há o que comparar, e a conferência degrada para a da T17.9
+-- (mesma sessão ⇒ devolve a mídia existente). É o contrato que aquelas linhas sempre tiveram, ele
+-- não fica pior do que era, e a janela fecha sozinha — mídia `PENDING` expira por TTL, e um
+-- `clientUploadId` só é reusado dentro da mesma tentativa de publicação.
+
+ALTER TABLE social_checkin_media ADD COLUMN input_content_hash TEXT;
+
+-- Sem índice: a coluna nunca é critério de busca. Ela é lida **depois** de a linha ter sido
+-- encontrada por `(owner_uid, client_upload_id)`, que já tem índice único desde a 0016, e só para
+-- comparar. Um índice aqui custaria escrita em todo upload sem servir a nenhuma consulta.

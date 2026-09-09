@@ -376,7 +376,7 @@ Ciclo de DR:
 
 ```text
 A existe, com conteúdo social e mídia
-   ↓  backup (restic: spark.db + $SPARK_MEDIA_DIR + tombstones)
+   ↓  backup (restic: spark.db + $SPARK_MEDIA_DIR + deletion_tombstones.tsv)
 A exclui a conta            →  linhas apagadas, arquivos apagados, tombstone gravado
    ↓  restore de um snapshot ANTERIOR  →  linhas e arquivos de A ressuscitam fisicamente
    ↓  reconciliação de tombstones      →  purga banco E arquivos de novo
@@ -384,7 +384,44 @@ A não ressuscita
 ```
 
 O arquivo de tombstones é append-only e **precisa** estar no backup: sem ele, um restore antigo não
-sabe quais contas já haviam sido excluídas.
+sabe quais contas já haviam sido excluídas. Desde a T17.13.1 ele entra no snapshot do
+`ops/backup.sh`, e o manifesto registra quantas linhas foram capturadas.
+
+### O que a T17.13.1 endureceu
+
+**A exclusão é uma transação.** Tombstone, job e purge das tabelas account-scoped entram no mesmo
+`BEGIN`/`COMMIT`. Antes eram três operações independentes, e uma falha no meio do purge deixava a
+conta bloqueada para sempre sobre dados apagados pela metade — um estado que nada no sistema sabia
+interpretar. A mídia continua **fora** da transação: as chaves são lidas antes, os arquivos saem
+depois do commit, e I/O de disco nunca segura o SQLite.
+
+**O ledger deixou de ser best-effort.** A escrita era um `appendFileSync` dentro de um `catch {}`
+vazio, e a exclusão respondia `DELETED` mesmo quando o arquivo não recebia nada — disco cheio ou
+volume somente-leitura produziam conta apagada, pessoa avisada de que terminou, e nenhum registro
+capaz de impedir o próximo restore de trazê-la de volta. Agora a escrita é `append` + `fsync`, a
+falha propaga, e a resposta é `DELETION_PENDING`.
+
+Depois do commit do purge **os dados nunca voltam** — nem por falha de arquivo, nem do Firebase. O
+que fica pendente é a *declaração* de término, e o que falta tem nome no banco:
+
+```text
+account_deletion_jobs.phase
+├── LEDGER_PENDING     purge committed; falta gravar o ledger de DR
+└── FIREBASE_PENDING   ledger no disco; falta apagar o usuário no Firebase Auth
+```
+
+O estado sobrevive a restart porque é uma linha do SQLite, e o `AccountDeletionReconciler` avança as
+fases com backoff. Não existe fase terminal: terminar é sair da tabela.
+
+**A reconciliação virou um comando.** `dist/cli/reconcile-account-deletions.js` é o único caminho —
+não há reconciliação no startup nem gatilho no readiness —, e `ops/restore.sh --install` o executa
+antes de declarar a restauração completa. Ledger ausente ou malformado **falha fechado**: nunca
+"zero exclusões", porque as duas leituras não apagam nada e uma delas ressuscita contas.
+
+**O guard falha fechado.** Não conseguir avaliar o tombstone responde `503 ACCOUNT_STATE_UNAVAILABLE`.
+Antes, um banco fechado ou um `SELECT` com erro devolviam `false` — que ali significa *conta ativa*.
+
+Ver [`../runbooks/account-deletion-dr.md`](../runbooks/account-deletion-dr.md).
 
 ## 12. Operação
 

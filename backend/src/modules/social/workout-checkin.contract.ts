@@ -309,6 +309,14 @@ export const WORKOUT_CHECKIN_ERRORS = {
    * perguntou o que existe na conta dos outros.
    */
   MEDIA_NOT_FOUND: 'MEDIA_NOT_FOUND',
+  /**
+   * O mesmo `clientUploadId`, na mesma sessão, com **outra** imagem (T17.13.1 §40).
+   *
+   * Distinto de `MEDIA_NOT_FOUND` de propósito: aqui a mídia existe e é desta conta e desta
+   * sessão — o que diverge é o conteúdo. O cliente precisa saber que a chave foi queimada por
+   * outro upload, e não tentar de novo com os mesmos parâmetros.
+   */
+  MEDIA_UPLOAD_CONFLICT: 'MEDIA_UPLOAD_CONFLICT',
   /** Reação com tipo fora do enum fechado (§62). */
   INVALID_REACTION: 'INVALID_REACTION',
   /** O comentário não existe, ou quem pediu não pode vê-lo/apagá-lo (§95). */

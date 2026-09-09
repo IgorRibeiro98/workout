@@ -75,7 +75,8 @@ A senha do repositório:
 | --- | --- |
 | `spark.db` (snapshot consistente e verificado) | Service account do Firebase |
 | `$SPARK_MEDIA_DIR` — as fotos dos check-ins (T17.9) | Chave do Gemini |
-| `manifest.json`: versão do schema, imagem do backend, tamanho, horário, host, contagem e bytes de mídia | Senha do restic, chaves TLS, chave SSH |
+| `deletion_tombstones.tsv` — o ledger anti-ressurreição (T17.13.1) | `ACCOUNT_DELETION_HMAC_KEY` |
+| `manifest.json`: versão do schema, imagem do backend, tamanho, horário, host, contagem e bytes de mídia, linhas do ledger | Senha do restic, chaves TLS, chave SSH |
 
 Segredo nenhum entra no banco (§35) e, portanto, nenhum entra no backup. Eles vivem fora dele por
 construção: a credencial do Admin é um **caminho** montado somente-leitura, e a do Gemini é
@@ -102,6 +103,23 @@ as fotos são imutáveis depois de escritas, então o backup de amanhã não ree
 
 Um servidor que ainda não recebeu foto nenhuma não tem o diretório, e isso **não é erro**: o backup
 registra um aviso e segue com o banco.
+
+### O ledger de exclusões entra desde a T17.13.1
+
+`deletion_tombstones.tsv` é o que impede uma conta excluída de voltar à vida quando um backup
+anterior à exclusão é restaurado — ele é a única memória da exclusão que sobrevive à substituição do
+arquivo do banco. Ele vive **ao lado** de `spark.db`, em `$SPARK_DATA_DIR`, e por isso não estava
+sendo capturado: o snapshot leva só o `VACUUM INTO` do banco.
+
+Uma perda total da VPS deixava o operador com o banco e a mídia de volta e **nenhum** registro de
+quem já tinha sido excluído. E como a reconciliação pós-restore falha fechada quando o ledger não
+existe, a ausência dele no backup transformaria toda recuperação de desastre num bloqueio
+permanente. O `backup.sh` copia o arquivo para dentro da área de trabalho antes do `restic backup`,
+e o manifesto registra `deletionLedgerRows`.
+
+A chave HMAC **não** entra no backup: ela é segredo de runtime, vive em
+`$SPARK_SECRETS_DIR/backend.env` e precisa ser guardada com o mesmo cuidado — um backup restaurado
+sem ela é um ledger que não casa com nada.
 
 ## Agendamento e retenção
 
@@ -212,9 +230,25 @@ restaurar só o SQLite deixa `/health/ready` respondendo e cada card com foto se
 anterior é preservada em `/opt/spark/media.pre-restore-<timestamp>` pelo mesmo motivo do banco — se
 a restauração for a errada, o que existia ainda está lá.
 
-E, depois de restaurar um snapshot **anterior** a uma exclusão de conta, rode a reconciliação de
-tombstones antes de considerar o servidor recuperado: ela purga o banco **e** os arquivos da conta
-excluída. Ver [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
+E a reconciliação anti-ressurreição **já roda dentro do `--install`** desde a T17.13.1: o script
+instala o ledger de exclusões (unido ao que houver no disco), executa
+`node dist/cli/reconcile-account-deletions.js` sobre o banco recém-instalado e só então declara a
+restauração completa. Uma falha ali falha o `--install` inteiro.
+
+Isso importa porque restaurar um snapshot **anterior** a uma exclusão de conta traz a conta de
+volta — linhas e arquivos. A reconciliação purga os dois de novo. Antes, o script apenas imprimia
+"rode a reconciliação depois", e o comando que ele mandava rodar não existia.
+
+Duas consequências operacionais:
+
+- o `--install` exige `ACCOUNT_DELETION_HMAC_KEY` (do ambiente ou de
+  `$SPARK_SECRETS_DIR/backend.env`). É ela que liga um hash do ledger a um uid do banco; com a
+  chave errada a reconciliação não encontra nada e **reporta sucesso**;
+- se o ledger não existir nem no snapshot nem no disco, o `--install` **para**. Isso é
+  deliberado: sem ele não há como saber quais contas já foram excluídas, e prosseguir as devolveria
+  ao ar.
+
+Ver [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
 `--install` grava o banco com modo `660` no **grupo compartilhado** do diretório de dados, e não
 com `chown 1000:1000` — que era o que ele fazia até a T16.8.1 e que estava errado duas vezes:

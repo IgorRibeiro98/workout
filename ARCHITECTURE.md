@@ -1675,7 +1675,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 
 ## 18. Domínio social (T17)
 
-> **Status (verificado em 2026-09-09): T17.0 a T17.12 implementadas.**
+> **Status (verificado em 2026-09-09): T17.0 a T17.13.1 implementadas — T17 fechado.**
 > **T17.0** — identidade social (`socialId`, `friendCode`, `displayName`), estados
 > `NOT_ENABLED`/`ACTIVE`/`DISABLED`, privacidade, seis rotas sob `/v1/social`, migration
 > `0007_social_foundation.sql`, gateway e seção de Perfil no Android.
@@ -1758,6 +1758,33 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > `0020_social_interaction_audience.sql` (rebuild em 12 passos, backfill de todo o histórico como
 > `FRIEND`). **Continuam fora:** push de reação/comentário, XP, Activity, ranking, contador de não
 > lidos, realtime, thread, menção — e nada disso mora no Room ou no Outbox.
+>
+> **T17.13.1** — **fechamento pós-auditoria**. Nenhuma funcionalidade social nova; sete correções de
+> integridade encontradas por auditoria independente depois da T17.13.
+> **Exclusão de conta atômica:** tombstone, job e purge das tabelas account-scoped passam a ser uma
+> transação SQLite única — uma falha no meio faz `ROLLBACK` de tudo, em vez de deixar a conta
+> bloqueada sobre dados apagados pela metade. A mídia continua fora da transação (chaves lidas
+> antes, arquivos apagados depois do commit).
+> **Ledger de DR durável:** `deletion_tombstones.tsv` deixa de ser `appendFileSync` dentro de um
+> `catch {}` vazio — a escrita é `append` + `fsync`, a falha propaga, e a exclusão responde
+> `DELETION_PENDING` em vez de `DELETED` sem o registro anti-ressurreição. O que falta tem nome
+> durável em `account_deletion_jobs.phase` (`LEDGER_PENDING` → `FIREBASE_PENDING`) e sobrevive a
+> restart. O arquivo passa a entrar no backup.
+> **Reconciliação com comando real:** `dist/cli/reconcile-account-deletions.js`, chamado por
+> `ops/restore.sh --install` antes de a restauração ser declarada completa. Ledger ausente ou
+> malformado **falha fechado**. O inventário de colunas de uid saiu de 7 para 35 origens, é
+> declarado num só lugar e um teste o confronta com o schema real.
+> **Auth guard fail-closed:** não conseguir avaliar o tombstone responde `503`, e não "conta ativa".
+> **Convite de Squad expira de verdade:** `EXPIRED` passa a ser gravado (migration `0022`) — como
+> estado derivado ele não liberava a vaga do índice único parcial de pendentes, e um convite vencido
+> travava o par (Squad, pessoa) para sempre.
+> **Idempotência padronizada:** a conferência de chave vem antes do rate limit (um retry legítimo
+> deixa de virar `429`) e passa a comparar o payload canônico — nome do Squad, destinatário do
+> convite e **bytes da imagem** (migration `0023`, `input_content_hash`). Reusar a chave com conteúdo
+> diferente é `409`, e nunca o resultado antigo.
+> **WorkoutShare:** o share e o evento de notificação nascem na mesma transação, e as transições de
+> estado viraram CAS (`WHERE id = ? AND status = ?`). O FCM continua fora da transação.
+> Detalhes em [`docs/runbooks/account-deletion-dr.md`](docs/runbooks/account-deletion-dr.md).
 
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),

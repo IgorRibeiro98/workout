@@ -1272,6 +1272,60 @@ restrição caiu.
   comentários por publicação atravessa as audiências de propósito: contá-lo por audiência daria a
   quem quisesse floodar um multiplicador pelo número de Squads em que o post está.
 
+## 13.19 Integridade da exclusão de conta e da recuperação de desastre (T17.13.1)
+
+Fechamento pós-auditoria do Social. Nenhuma funcionalidade nova; sete regras que passam a valer.
+
+- **Exclusão de conta é uma transação.** Tombstone, job e purge das tabelas account-scoped entram no
+  mesmo `BEGIN`/`COMMIT`. Um `DELETE` que falhe no meio faz `ROLLBACK` de tudo. Não existe estado
+  "conta bloqueada com dados pela metade" — ele não seria visível para ninguém e nada saberia
+  interpretá-lo. **A mídia fica fora da transação**: as chaves são lidas antes, os arquivos saem
+  depois do commit, e I/O de sistema de arquivos nunca segura o SQLite.
+- **Depois do commit do purge, os dados nunca voltam.** Falha de arquivo, de ledger ou do Firebase
+  não desfazem a exclusão. O que elas adiam é a *declaração* de término.
+- **O registro anti-ressurreição é obrigatório, e a falha dele é visível.** `deletion_tombstones.tsv`
+  é escrito com `append` + `fsync`; se a escrita falhar, a resposta é `DELETION_PENDING` — nunca
+  `DELETED`. Dizer que terminou sem esse registro é prometer o que o servidor não pode cumprir: é
+  exatamente o restore seguinte que traria a conta de volta. O que falta tem nome durável em
+  `account_deletion_jobs.phase` e sobrevive a restart, porque é uma linha do SQLite.
+- **Recuperação de desastre não termina em lembrete.** A reconciliação é um comando
+  (`dist/cli/reconcile-account-deletions.js`) e **uma** autoridade — não há reconciliação no startup
+  nem gatilho no readiness. `ops/restore.sh --install` o executa antes de declarar a restauração
+  completa. Ledger ausente ou malformado **falha fechado**: nunca "nenhuma conta excluída", porque
+  as duas leituras não apagam nada e uma delas ressuscita contas.
+- **O inventário de colunas de uid é declarado, e um teste o defende.** Ele vive em
+  `account-uid-inventory.ts` e é confrontado com o schema real do SQLite. Uma tabela nova com coluna
+  de uid não passa em silêncio: ela reprova o teste até alguém declarar a política — reconciliar, ou
+  justificar por que não. O sufixo `_uid` é a heurística que **encontra**, nunca a que decide.
+- **Verificação de estado de conta falha fechada.** Não conseguir avaliar o tombstone responde
+  `503`, e não "conta ativa". `false` naquele ponto significa "pode entrar", e devolver isso quando
+  a consulta falhou é declarar ativa uma conta que pode estar excluída — justamente durante o
+  incidente em que ninguém está olhando.
+- **Estado derivado do relógio não substitui estado gravado quando o banco precisa dele.** `EXPIRED`
+  de convite de Squad era derivado na leitura, e um índice único parcial em `WHERE status =
+  'PENDING'` não consulta o relógio: o convite vencido segurava a vaga do par para sempre. Derivar é
+  suficiente para *exibir*; o que participa de índice, quota ou unicidade precisa ser **gravado**.
+- **Idempotência é sobre a intenção, não sobre a chave.** A conferência acontece depois da
+  autorização e **antes** do rate limit — um retry legítimo não pode virar `429` por uma janela que
+  a primeira tentativa consumiu. Ela compara o payload canônico: mesma chave com payload diferente é
+  `409`, e nunca o resultado antigo. Devolver o resultado antigo faz o cliente acreditar que fez o
+  que pediu agora. Replay **não** pula autorização: perfil ativo, posse e participação são
+  revalidados sempre.
+- **Idempotência de upload compara a entrada, não a saída.** `input_content_hash` é o SHA-256 dos
+  bytes que chegaram e responde "é a mesma requisição?"; `content_hash` é o da imagem sanitizada e
+  responde "é a mesma imagem armazenada?". Duas entradas diferentes podem convergir para a mesma
+  saída depois do processamento, e como requisições continuam sendo duas. Registros anteriores à
+  coluna não são reprocessados para preenchê-la.
+- **Um efeito durável obrigatório entra na transação de quem o exige.** `workout_shares` e o evento
+  de notificação nascem juntos: uma oferta sem o aviso que a torna visível é pior que nenhuma
+  oferta, porque é silenciosa. O envio ao FCM continua fora — uma chamada de rede dentro de um
+  `BEGIN` seguraria o banco pelo timeout do provedor.
+- **Transição de estado é condicional ao estado esperado.** `UPDATE ... WHERE id = ? AND status = ?`,
+  conferindo `changes`. Ler, decidir em memória e escrever deixa uma requisição inteira de janela, e
+  duas transições incompatíveis simultâneas ambas passam. Quem perde a corrida **relê** e responde a
+  partir do estado real. Isso não é uma segunda máquina de estados: a tabela continua sendo a
+  autoridade.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

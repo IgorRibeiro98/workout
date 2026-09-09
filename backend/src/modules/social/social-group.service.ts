@@ -120,16 +120,36 @@ export class SocialGroupService {
     requestId: string,
     request: CreateSocialGroupRequest,
   ): SocialGroupSummaryDto {
-    if (!this.rateLimiter.tryAcquireCreate(callerUid)) {
-      throw SocialGroupErrors.rateLimited();
-    }
+    // A autorização vem **antes** de tudo, e o replay não a pula (T17.13.1 §35): uma conta sem
+    // perfil social ativo não recebe de volta o Squad que criou quando ainda tinha.
     this.requireActiveProfile(callerUid);
 
     // §146 — dois toques em "Criar Squad" produzem um Squad. Devolver o existente é o que faz o
     // retry de resposta perdida convergir em vez de deixar um grupo fantasma na lista.
+    //
+    // ## Antes do rate limit, de propósito (T17.13.1 §34/§43)
+    //
+    // A ordem era a inversa, e ela transformava um retry legítimo em `429`: a primeira tentativa
+    // consumia a janela, a resposta se perdia na rede, e o retry — que não cria nada — era
+    // recusado por um limite que existe para conter criação. O cliente ficava sem saber se o Squad
+    // existe, e a única saída era esperar a janela virar.
+    //
+    // Replay não é mutação: ele não consome quota. O que protege esta rota de abuso é que um
+    // `clientRequestId` novo **não** encontra nada aqui e cai no limitador logo abaixo.
     const existing = this.repository.findGroupByClientRequest(callerUid, request.clientRequestId);
     if (existing && existing.status === 'ACTIVE') {
+      // §36 — a mesma chave com outro nome **não** é a mesma intenção. Devolver o Squad antigo
+      // faria o cliente acreditar que criou um grupo chamado como ele acabou de pedir.
+      if (existing.name !== request.name) {
+        throw SocialGroupErrors.idempotencyConflict(
+          'este clientRequestId já criou um squad com outro nome',
+        );
+      }
       return this.summaryOf(existing, 'OWNER');
+    }
+
+    if (!this.rateLimiter.tryAcquireCreate(callerUid)) {
+      throw SocialGroupErrors.rateLimited();
     }
 
     if (this.repository.countOwnedActiveGroups(callerUid) >= SOCIAL_GROUP_MAX_OWNED) {
@@ -266,27 +286,25 @@ export class SocialGroupService {
     groupId: string,
     request: CreateGroupInvitationRequest,
   ): SocialGroupInvitationDto {
-    if (!this.rateLimiter.tryAcquireInvite(callerUid)) {
-      throw SocialGroupErrors.rateLimited();
-    }
+    // Autorização primeiro, e o replay não a pula (T17.13.1 §35): perfil ativo, participação no
+    // Squad e papel de dono são revalidados **antes** de qualquer devolução idempotente. Quem
+    // deixou de ser dono não recebe de volta o convite que enviou quando era.
     this.requireActiveProfile(callerUid);
     const { group, membership } = this.requireMembership(callerUid, groupId);
     if (membership.role !== 'OWNER') {
       throw SocialGroupErrors.forbidden('apenas o dono do squad pode convidar');
     }
 
-    // §146 — a mesma intenção produz o mesmo convite.
-    const byRequest = this.repository.findInvitationByClientRequest(
-      groupId,
-      request.clientRequestId,
-    );
-    if (byRequest) {
-      return this.invitationDtoOf(byRequest, group, callerUid);
-    }
+    // T17.13.1 §28 — antes de qualquer leitura de `PENDING`. Sem isto, o convite vencido ainda
+    // ocupa a vaga única do par e é devolvido abaixo como se fosse bom (§29).
+    this.sweepExpiredInvitations();
 
     const target = this.friendships.findProfileBySocialId(request.socialId);
     // §23/§24/§26 — inexistente, desativado, não-amigo, bloqueado e o próprio requisitante: a mesma
     // resposta para os cinco. Distinguir transformaria a rota num verificador de `socialId`.
+    //
+    // Resolvido **antes** da conferência de idempotência (T17.13.1 §37): sem saber quem é o alvo
+    // desta tentativa não há como decidir se o retry é o mesmo convite ou outro.
     if (
       !target ||
       target.status !== 'ACTIVE' ||
@@ -295,6 +313,29 @@ export class SocialGroupService {
       this.blocks.isBlockedBidirectional(callerUid, target.ownerUid)
     ) {
       throw SocialGroupErrors.inviteNotAllowed();
+    }
+
+    // §146 — a mesma intenção produz o mesmo convite. A intenção aqui é o par
+    // (`clientRequestId`, destinatário): a chave sozinha não a descreve.
+    const byRequest = this.repository.findInvitationByClientRequest(
+      groupId,
+      request.clientRequestId,
+    );
+    if (byRequest) {
+      // §37 — devolver o convite de B quando o retry agora nomeia C diria ao cliente que C foi
+      // convidado. Ninguém foi.
+      if (byRequest.recipientUid !== target.ownerUid) {
+        throw SocialGroupErrors.idempotencyConflict(
+          'este clientRequestId já convidou outra pessoa para este squad',
+        );
+      }
+      return this.invitationDtoOf(byRequest, group, callerUid);
+    }
+
+    // O limitador vem depois do replay (§34/§43): reenviar o mesmo convite não é convidar de novo,
+    // e não pode gastar a janela que existe para conter convites novos.
+    if (!this.rateLimiter.tryAcquireInvite(callerUid)) {
+      throw SocialGroupErrors.rateLimited();
     }
 
     if (this.repository.findActiveMembership(groupId, target.ownerUid)) {
@@ -347,9 +388,38 @@ export class SocialGroupService {
     return this.invitationDtoOf(invitation, group, callerUid);
   }
 
+  /**
+   * Marca no banco todo convite pendente que já venceu (T17.13.1 §27/§28).
+   *
+   * ## Por que existe, e por que é chamada em poucos lugares
+   *
+   * A expiração precisa estar **gravada** para que o índice único parcial de pendentes libere a
+   * vaga do par (Squad, destinatário) e para que a quota pare de contá-la. Um convite vencido que
+   * continua `PENDING` no banco é um beco sem saída: ninguém aceita, e ninguém reconvida.
+   *
+   * Ela roda antes das operações sensíveis a `PENDING` — convidar, listar e responder — e não num
+   * `setInterval`. §28 permite uma varredura periódica; ela não é necessária aqui porque nenhuma
+   * decisão depende de o convite ter sido marcado *antes* de alguém olhar: se ninguém tocou
+   * naquele Squad, o estado vencido não afeta nada, e no instante em que alguém toca, esta chamada
+   * já corrigiu. Uma varredura de fundo custaria um processo acordando para escrever no banco sem
+   * que nada dependesse disso.
+   *
+   * §28 também pede para não espalhar `now >= expiresAt` pelos serviços: esta é a única escrita da
+   * regra, e é ela que os demais caminhos consultam pelo `status`.
+   */
+  private sweepExpiredInvitations(): void {
+    const changed = this.repository.expirePendingInvitations(this.clock.now());
+    if (changed > 0) {
+      // Sem push (§32): expirar não é um acontecimento que alguém precise ver, e notificar todo
+      // convite ignorado seria ruído. Só o log operacional.
+      this.logger.info('social.group.invitation.expired', { count: changed });
+    }
+  }
+
   /** `GET /v1/social/groups/invitations` (§138/§139). Só os pendentes, e só os do próprio viewer. */
   listInvitations(callerUid: string): SocialGroupInvitationListDto {
     this.requireActiveProfile(callerUid);
+    this.sweepExpiredInvitations();
     const now = this.clock.now();
     const rows = this.repository.listInvitationsForRecipient(
       callerUid,
@@ -410,8 +480,13 @@ export class SocialGroupService {
     }
     this.requireActiveProfile(callerUid);
 
+    this.sweepExpiredInvitations();
+
     const invitation = this.repository.findInvitation(invitationId);
     const now = this.clock.now();
+    // A comparação com `expiresAt` continua aqui de propósito, junto com o `status`: a varredura
+    // acima já marcou o vencido, e esta linha é a defesa que não depende de ela ter rodado. Custa
+    // uma comparação numa linha já carregada, e cobre o caso em que a marcação falhou.
     if (
       !invitation ||
       invitation.recipientUid !== callerUid ||
@@ -1018,6 +1093,10 @@ export class SocialGroupService {
       throw SocialGroupErrors.rateLimited();
     }
     this.requireActiveProfile(callerUid);
+    // §28 — `resolveInvitation` escreve condicionalmente em `PENDING`; a varredura antes dela é o
+    // que faz recusar ou cancelar um convite já vencido convergir para `EXPIRED` em vez de
+    // sobrescrever o vencimento com uma resposta que ninguém deu.
+    this.sweepExpiredInvitations();
 
     const invitation = this.repository.findInvitation(invitationId);
     const authorized =
@@ -1062,6 +1141,10 @@ export class SocialGroupService {
       memberCount: this.repository.countMembers(group.id),
       inviterSocialId: inviter?.profile.socialId ?? null,
       inviterDisplayName: inviter?.profile.displayName ?? null,
+      // Desde a T17.13.1 `EXPIRED` é um estado gravado, e o caminho normal é `invitation.status`
+      // já vir com ele. A derivação continua como rede de segurança para a janela entre o
+      // vencimento e a próxima varredura — nunca o contrário: um convite marcado `EXPIRED` no
+      // banco jamais volta a ser exibido como pendente.
       status:
         this.clock.now() >= invitation.expiresAt && invitation.status === 'PENDING'
           ? 'EXPIRED'

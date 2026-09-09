@@ -24,13 +24,19 @@ export interface StoredGroupMembership {
   readonly joinedAt: number;
 }
 
-/** Um convite, como ele mora no banco (§19). `EXPIRED` é derivado na leitura (§21). */
+/**
+ * Um convite, como ele mora no banco (§19).
+ *
+ * `EXPIRED` é **gravado** desde a T17.13.1 (migration 0022). Até a T17.11 ele era derivado na
+ * leitura, e a derivação não alcançava o índice único parcial de pendentes — o convite vencido
+ * segurava a vaga do par (Squad, destinatário) para sempre. Ver [expirePendingInvitations].
+ */
 export interface StoredGroupInvitation {
   readonly id: string;
   readonly groupId: string;
   readonly senderUid: string;
   readonly recipientUid: string;
-  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED';
+  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED';
   readonly createdAt: number;
   readonly expiresAt: number;
   readonly respondedAt: number | null;
@@ -67,7 +73,7 @@ export interface GroupInvitationRow {
   readonly inviterSocialId: string;
   readonly inviterDisplayName: string;
   readonly inviterUid: string;
-  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED';
+  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED';
   readonly createdAt: number;
   readonly expiresAt: number;
   /** `1` quando existe bloqueio entre o viewer e quem convidou (§139). */
@@ -117,7 +123,7 @@ interface InvitationRow {
   readonly group_id: string;
   readonly sender_uid: string;
   readonly recipient_uid: string;
-  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED';
+  readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED';
   readonly created_at: number;
   readonly expires_at: number;
   readonly responded_at: number | null;
@@ -528,6 +534,35 @@ export class SocialGroupRepository {
       )
       .get(groupId, recipientUid) as InvitationRow | undefined;
     return row ? toInvitation(row) : null;
+  }
+
+  /**
+   * Marca como `EXPIRED` todo convite pendente cujo prazo já passou (T17.13.1 §27).
+   *
+   * ```sql
+   * UPDATE social_group_invitations SET status = 'EXPIRED'
+   *  WHERE status = 'PENDING' AND expires_at <= :now
+   * ```
+   *
+   * ## Por que a expiração precisa ser gravada
+   *
+   * Porque o índice que garante "um convite pendente por (Squad, destinatário)" é parcial em
+   * `WHERE status = 'PENDING'`, e um índice não consulta o relógio. Enquanto a linha vencida
+   * continuar `PENDING`, ela ocupa a vaga daquele par — e a pessoa não pode ser reconvidada nem
+   * aceitar o que já venceu.
+   *
+   * `responded_at` **não** é preenchido: expirar não é responder, e é essa coluna que distingue
+   * "recusou" de "deixou vencer".
+   *
+   * Devolve quantas linhas mudaram, para o log e para o teste.
+   */
+  expirePendingInvitations(now: number): number {
+    return this.sqlite.connection
+      .prepare(
+        `UPDATE social_group_invitations SET status = 'EXPIRED'
+          WHERE status = 'PENDING' AND expires_at <= ?`,
+      )
+      .run(now).changes;
   }
 
   countPendingInvitations(groupId: string): number {

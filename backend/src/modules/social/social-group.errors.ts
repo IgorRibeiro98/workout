@@ -190,6 +190,15 @@ export const SocialGroupErrors = {
       `um check-in pode ser compartilhado em no máximo ${max} squads`,
     ),
 
+  /**
+   * O `clientRequestId` já foi usado com outro payload (T17.13.1 §36/§37).
+   *
+   * A `reason` descreve a **forma** do conflito e nunca o valor divergente: dizer qual nome ou
+   * qual destinatário estava no registro original devolveria conteúdo que o retry não trouxe.
+   */
+  idempotencyConflict: (reason: string) =>
+    groupException(HttpStatus.CONFLICT, SOCIAL_GROUP_ERRORS.IDEMPOTENCY_CONFLICT, reason),
+
   rateLimited: () =>
     groupException(
       HttpStatus.TOO_MANY_REQUESTS,

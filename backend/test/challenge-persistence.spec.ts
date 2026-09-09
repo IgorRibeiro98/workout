@@ -102,7 +102,7 @@ describe('Persistência dos desafios', () => {
       const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
 
       expect(applied.map((migration) => migration.version)).toEqual([
-        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
       ]);
       expect(applied.map((migration) => migration.name)).toEqual([
         'social_challenges',
@@ -116,6 +116,9 @@ describe('Persistência dos desafios', () => {
         'social_reports_ugc',
         'social_groups',
         'social_interaction_audience',
+        'account_deletion_phase',
+        'group_invitation_expired',
+        'media_input_fingerprint',
       ]);
 
       // Nada do que existia mudou (§132). `social_id`, `friend_code`, as amizades e os quatro

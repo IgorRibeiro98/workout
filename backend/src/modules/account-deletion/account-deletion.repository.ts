@@ -1,5 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { SqliteService } from '../../database/sqlite.service';
+import { allAccountUidsQuery } from './account-uid-inventory';
+
+/**
+ * As fases duráveis de uma exclusão em andamento (T17.13.1 §11, migration 0021).
+ *
+ * Um job **existe** enquanto a exclusão não terminou, e a fase diz o que ainda falta. Não há fase
+ * terminal: terminar é sair da tabela.
+ */
+export type AccountDeletionPhase = 'LEDGER_PENDING' | 'FIREBASE_PENDING';
 
 export interface StoredDeletionJob {
   readonly id: string;
@@ -9,6 +18,7 @@ export interface StoredDeletionJob {
   readonly last_error: string | null;
   readonly next_attempt_at: number;
   readonly created_at: number;
+  readonly phase: AccountDeletionPhase;
 }
 
 @Injectable()
@@ -16,12 +26,34 @@ export class AccountDeletionRepository {
   constructor(private readonly sqlite: SqliteService) {}
 
   /**
-   * Executa a transação atômica de purge de todas as tabelas account-scoped do SQLite.
-   * Não apaga dados privados de outros usuários (B, C).
+   * Purga todas as tabelas account-scoped do SQLite. Não apaga dados privados de outros
+   * usuários (B, C).
+   *
+   * Envolve [purgeStatements] na própria transação. É o ponto de entrada da **reconciliação de
+   * DR**, que não cria tombstone nem job no mesmo passo; a exclusão interativa usa
+   * [beginAccountDeletion], que executa os mesmos `DELETE` dentro de uma transação maior.
    */
   purgeAccountData(ownerUid: string): void {
     const db = this.sqlite.connection;
-    const tx = db.transaction(() => {
+    db.transaction(() => {
+      this.purgeStatements(ownerUid);
+    })();
+  }
+
+  /**
+   * Os `DELETE` do purge, **sem** transação própria (T17.13.1 §5).
+   *
+   * Separado de [purgeAccountData] para que [beginAccountDeletion] possa colocar o purge, o
+   * tombstone e o job na **mesma** transação. Antes, os três eram três operações independentes: um
+   * erro no meio do purge deixava o tombstone e o job já committed sobre um banco cujos dados
+   * tinham sido apagados pela metade — uma conta permanentemente bloqueada, com dados residuais
+   * espalhados por tabelas que ninguém mais enumeraria, e nenhum caminho de recuperação.
+   *
+   * Nunca chame este método fora de uma transação.
+   */
+  private purgeStatements(ownerUid: string): void {
+    const db = this.sqlite.connection;
+    {
       // 1. Sync
       db.prepare(`DELETE FROM sync_entities WHERE owner_uid = ?`).run(ownerUid);
       db.prepare(`DELETE FROM sync_changes WHERE owner_uid = ?`).run(ownerUid);
@@ -78,6 +110,20 @@ export class AccountDeletionRepository {
         `DELETE FROM challenge_invitations WHERE inviter_uid = ? OR recipient_uid = ?`,
       ).run(ownerUid, ownerUid);
       db.prepare(`DELETE FROM challenge_creation_requests WHERE owner_uid = ?`).run(ownerUid);
+      // Os desafios que **esta conta criou** (T17.13.1 §22).
+      //
+      // Faltava, e o cascade de `social_profiles` escondia a falta: numa exclusão comum o passo 12
+      // apaga o perfil e leva os desafios junto. Na **reconciliação de DR sobre um restore
+      // parcial** não há perfil para cascatear — o rastro que sobreviveu foi só a linha em
+      // `challenges` —, e ela ficava de pé, com participantes reais, sob um criador que não
+      // existe mais. `foreign_key_check` acusava a órfã depois, e a reconciliação reprovava o
+      // restore inteiro por causa dela.
+      //
+      // A política não muda: excluir a conta sempre levou o desafio criado por ela (é o que o
+      // cascade fazia). O `ON DELETE CASCADE` de `challenges` alcança participações, convites e
+      // pedidos de criação daquele desafio — inclusive os de terceiros, que é o mesmo que
+      // acontece com um Squad cujo dono sai (§101 da T17.11).
+      db.prepare(`DELETE FROM challenges WHERE creator_uid = ?`).run(ownerUid);
 
       // 9. Workout Shares (T17.7)
       db.prepare(`DELETE FROM workout_shares WHERE sender_uid = ? OR recipient_uid = ?`).run(
@@ -153,9 +199,68 @@ export class AccountDeletionRepository {
 
       // 12. Perfil Social raiz
       db.prepare(`DELETE FROM social_profiles WHERE owner_uid = ?`).run(ownerUid);
-    });
+    }
+  }
 
-    tx();
+  /**
+   * O início da exclusão de conta, como **uma** decisão durável (T17.13.1 §5).
+   *
+   * ```text
+   * BEGIN
+   *   tombstone   (a conta deixa de autenticar)
+   *   job         (LEDGER_PENDING — o que ainda falta terminar)
+   *   purge       (os dados saem das tabelas account-scoped)
+   * COMMIT
+   * ```
+   *
+   * ## Por que os três precisam ser um só
+   *
+   * Porque cada par deixa um estado que ninguém sabe interpretar quando quebra no meio:
+   *
+   * - tombstone sem purge → conta bloqueada para sempre, dados intactos no servidor. A pessoa
+   *   pediu exclusão, recebeu bloqueio, e os dados continuam lá;
+   * - purge sem tombstone → dados apagados e a conta continua autenticando. Ela volta a escrever
+   *   sobre um banco vazio, e a exclusão nunca aconteceu do ponto de vista do guard;
+   * - purge parcial → o pior dos três, porque não é visível: metade das tabelas limpas, metade
+   *   não, e nada no sistema sabe que aquele estado existe.
+   *
+   * `better-sqlite3` executa a função inteira dentro de `BEGIN`/`COMMIT` e faz `ROLLBACK`
+   * automático se qualquer `run()` lançar. O `SAVEPOINT` aninhado não é usado aqui de propósito:
+   * [purgeStatements] não abre transação própria justamente para que este `ROLLBACK` alcance tudo.
+   *
+   * ## O que ela **não** faz
+   *
+   * Não toca em arquivo. As chaves de mídia são lidas antes (§6) e os bytes são apagados depois do
+   * `COMMIT`: segurar uma transação SQLite durante I/O de disco bloquearia escritores por todo o
+   * tempo do `unlink`, e uma falha de sistema de arquivos desfaria um purge que já está correto.
+   *
+   * O `ON CONFLICT` das duas inserções torna a operação repetível: uma segunda tentativa de
+   * exclusão da mesma conta converge em vez de falhar por chave duplicada (§64, "double delete").
+   */
+  beginAccountDeletion(input: {
+    readonly firebaseUid: string;
+    readonly uidHash: string;
+    readonly tombstoneId: string;
+    readonly jobId: string;
+    readonly now: number;
+  }): void {
+    const db = this.sqlite.connection;
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO account_deletion_tombstones (id, uid_hash, deleted_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (uid_hash) DO UPDATE SET deleted_at = excluded.deleted_at`,
+      ).run(input.tombstoneId, input.uidHash, input.now);
+
+      db.prepare(
+        `INSERT INTO account_deletion_jobs
+           (id, firebase_uid, uid_hash, attempts, next_attempt_at, created_at, phase)
+         VALUES (?, ?, ?, 0, ?, ?, 'LEDGER_PENDING')
+         ON CONFLICT (firebase_uid) DO NOTHING`,
+      ).run(input.jobId, input.firebaseUid, input.uidHash, input.now, input.now);
+
+      this.purgeStatements(input.firebaseUid);
+    })();
   }
 
   /**
@@ -204,13 +309,40 @@ export class AccountDeletionRepository {
     const db = this.sqlite.connection;
     return db
       .prepare(
-        `SELECT id, firebase_uid, uid_hash, attempts, last_error, next_attempt_at, created_at
+        `SELECT id, firebase_uid, uid_hash, attempts, last_error, next_attempt_at, created_at, phase
          FROM account_deletion_jobs
          WHERE next_attempt_at <= ?
          ORDER BY next_attempt_at ASC
          LIMIT ?`,
       )
       .all(now, limit) as StoredDeletionJob[];
+  }
+
+  /**
+   * Avança a fase de um job e zera o backoff (T17.13.1 §11).
+   *
+   * Chamado quando o ledger de DR foi persistido com sucesso: o próximo passo (Firebase) pode ser
+   * tentado imediatamente, e não depois do backoff que a falha anterior agendou.
+   *
+   * `attempts` **não** é zerado: ele é a contagem de tentativas desta exclusão, e é o que o
+   * operador lê para saber se uma conta está presa há muito tempo.
+   */
+  updateJobPhase(id: string, phase: AccountDeletionPhase, nextAttemptAt: number): void {
+    const db = this.sqlite.connection;
+    db.prepare(
+      `UPDATE account_deletion_jobs SET phase = ?, last_error = NULL, next_attempt_at = ? WHERE id = ?`,
+    ).run(phase, nextAttemptAt, id);
+  }
+
+  /** O job pendente daquele uid, ou `undefined`. A fase dele é o que ainda falta terminar. */
+  findJobByFirebaseUid(firebaseUid: string): StoredDeletionJob | undefined {
+    const db = this.sqlite.connection;
+    return db
+      .prepare(
+        `SELECT id, firebase_uid, uid_hash, attempts, last_error, next_attempt_at, created_at, phase
+         FROM account_deletion_jobs WHERE firebase_uid = ? LIMIT 1`,
+      )
+      .get(firebaseUid) as StoredDeletionJob | undefined;
   }
 
   hasPendingJob(firebaseUid: string): boolean {
@@ -249,45 +381,30 @@ export class AccountDeletionRepository {
   }
 
   /**
-   * Coleta todos os owner_uids conhecidos atualmente no banco para reconciliação anti-ressurreição.
+   * Todo uid de conta presente no banco, para a reconciliação anti-ressurreição.
    *
    * ## Por que a lista é redundante de propósito (T17.13 §51)
    *
    * Num snapshot **consistente** bastaria `social_profiles`: toda tabela social referencia
-   * `social_profiles(owner_uid)`, e uma conta que tem qualquer linha social tem também o perfil.
-   * As outras origens existem porque um restore não é garantidamente consistente — um snapshot
-   * copiado com o processo escrevendo, um `.dump` parcial, uma cópia de arquivo sem checkpoint do
-   * WAL — e nesse caso a conta precisa ser encontrada por **qualquer** rastro que tenha
-   * sobrevivido. É defesa em profundidade, e o custo é uma varredura a mais numa rotina que roda
-   * uma vez por restore.
+   * `social_profiles(owner_uid)` com `ON DELETE CASCADE`, e uma conta que tem qualquer linha social
+   * tem também o perfil. As outras origens existem porque um restore não é garantidamente
+   * consistente — um snapshot copiado com o processo escrevendo, um `.dump` parcial, uma cópia de
+   * arquivo sem checkpoint do WAL — e nesse caso a conta precisa ser encontrada por **qualquer**
+   * rastro que tenha sobrevivido.
    *
-   * `social_groups` e `social_group_memberships` entram pela mesma razão que
-   * `social_workout_checkins` já entrava, e a ausência delas era uma lacuna: um Squad que
-   * sobrevivesse a um restore parcial sem o perfil do dono não seria enumerado, e a reconciliação
-   * passaria por ele sem apagá-lo — deixando de pé um grupo de pessoas reais cujo dono já não
-   * existe. Ele não seria **legível** (a política exige perfil `ACTIVE` do outro lado), mas ficaria
-   * ocupando identidade e vaga, e §51 pede explicitamente que os domínios da T17.11/T17.12 estejam
-   * no reconciliador.
+   * ## O que mudou na T17.13.1 (§22/§23)
+   *
+   * A lista tinha sete origens, de vinte e nove. Um restore parcial que trouxesse de volta apenas
+   * um comentário, uma reação, um convite de Squad, um compartilhamento de treino, um dispositivo
+   * de push, um pedido de amizade, uma participação em desafio — ou o próprio `challenges` criado
+   * pela conta — passava pela reconciliação sem ser visto. O rastro sobrevivia, e com ele a conta.
+   *
+   * As colunas agora vêm de `account-uid-inventory.ts`, que é a lista **declarada** e o que o teste
+   * de §24 confronta com o schema real. Uma tabela nova com coluna de uid não entra em silêncio.
    */
   listAllOwnerUidsInDatabase(): string[] {
     const db = this.sqlite.connection;
-    const rows = db
-      .prepare(
-        `SELECT DISTINCT owner_uid FROM social_profiles
-         UNION
-         SELECT DISTINCT owner_uid FROM sync_entities
-         UNION
-         SELECT DISTINCT owner_uid FROM backup_snapshots
-         UNION
-         SELECT DISTINCT author_uid AS owner_uid FROM social_workout_checkins
-         UNION
-         SELECT DISTINCT owner_uid FROM social_groups
-         UNION
-         SELECT DISTINCT member_uid AS owner_uid FROM social_group_memberships
-         UNION
-         SELECT DISTINCT uid AS owner_uid FROM ai_usage_daily`,
-      )
-      .all() as Array<{ owner_uid: string }>;
+    const rows = db.prepare(allAccountUidsQuery()).all() as Array<{ owner_uid: string }>;
     return rows.map((r) => r.owner_uid);
   }
 }

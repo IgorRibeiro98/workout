@@ -106,6 +106,20 @@ export const WorkoutCheckInErrors = {
     ),
 
   /** Mesmo `clientRequestId`, outra sessão (§32). */
+  /**
+   * O mesmo `clientUploadId` voltou com bytes diferentes (T17.13.1 §40).
+   *
+   * `409`, e não `200` com a mídia antiga: devolver a foto anterior faria a pessoa publicar um
+   * check-in com a imagem errada, convencida de ter enviado a nova. A mensagem descreve a forma do
+   * conflito e nunca o conteúdo de nenhuma das duas imagens.
+   */
+  mediaUploadConflict: () =>
+    checkInException(
+      HttpStatus.CONFLICT,
+      WORKOUT_CHECKIN_ERRORS.MEDIA_UPLOAD_CONFLICT,
+      'este clientUploadId já foi usado para enviar outra imagem',
+    ),
+
   requestConflict: () =>
     checkInException(
       HttpStatus.CONFLICT,

@@ -35,6 +35,17 @@ set -euo pipefail
 
 : "${SPARK_IMAGE:?SPARK_IMAGE é obrigatório}"
 
+# A chave HMAC dos tombstones de exclusão de conta (T17.13.1 §4).
+#
+# A imagem declara `ENV NODE_ENV=production`, e produção exige uma chave própria (T17.10 §136).
+# Sem ela, os **quatro** containers deste teste morreriam no startup por esse motivo — e os dois
+# controles negativos (§3 "sem group_add" e §4 "credencial ilegível") passariam sem provar nada:
+# eles verificam que o container **não** está rodando, e um container que não sobe por falta de
+# chave satisfaz essa condição pelo motivo errado. É esse falso verde que esta variável impede.
+#
+# Sintética e não secreta: o nome diz o que ela é, e nada aqui a distingue de um valor de teste.
+: "${SPARK_ACCOUNT_DELETION_HMAC_KEY:=ci-only-account-deletion-hmac-not-for-production}"
+
 # Deliberadamente diferentes de 1000 (o uid do `node` na imagem) e um do outro.
 OPERATOR_UID=1234
 OPERATOR_GID=1234
@@ -125,6 +136,7 @@ docker run -d --name "${PREFIX}-backend" \
   -v "${VOLUME}:/srv" \
   -e DATABASE_PATH=/srv/data/spark.db \
   -e NODE_ENV=production \
+  -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   -e REQUIRE_FIREBASE_ADMIN=true \
   -e GOOGLE_APPLICATION_CREDENTIALS=/srv/secrets/firebase-admin.json \
@@ -175,6 +187,7 @@ docker run -d --name "${PREFIX}-sem-grupo" \
   -v "${VOLUME}:/srv" \
   -e DATABASE_PATH=/srv/data/spark.db \
   -e NODE_ENV=production \
+  -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   "$SPARK_IMAGE" > /dev/null 2>&1 || true
 sleep 6
@@ -195,6 +208,7 @@ docker run -d --name "${PREFIX}-segredo-600" \
   -v "${VOLUME}:/srv" \
   -e DATABASE_PATH=/srv/data/spark.db \
   -e NODE_ENV=production \
+  -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   -e REQUIRE_FIREBASE_ADMIN=true \
   -e GOOGLE_APPLICATION_CREDENTIALS=/srv/secrets/firebase-admin.json \

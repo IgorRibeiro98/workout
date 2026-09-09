@@ -13,7 +13,7 @@ com permissão `600`.
 | `lib.sh` | Funções compartilhadas: configuração, log, `flock`, acesso ao SQLite, indireção do restic. Não roda sozinho. |
 | `snapshot.sh` | Snapshot **consistente** do SQLite com o banco ativo (`VACUUM INTO`) + `integrity_check` + `foreign_key_check`. Imprime o caminho em stdout. |
 | `backup.sh` | `snapshot.sh` → manifesto → restic (criptografado, off-site) → retenção → estado. Diário e antes de cada deploy. |
-| `restore.sh` | Restaura do off-site (ou de um arquivo), **verifica**, e só com `--install` troca o banco de produção. |
+| `restore.sh` | Restaura do off-site (ou de um arquivo), **verifica**, e só com `--install` troca o banco de produção — instalando também o ledger de exclusões e rodando a reconciliação anti-ressurreição antes de declarar a restauração completa (T17.13.1). |
 | `verify-backup.sh` | Ensaio de restauração: restaura, verifica e **sobe o backend real sobre a cópia** exigindo `/health/ready`. Não toca em produção. |
 | `check-health.sh` | Saúde do backend (**por dentro do container**: produção não publica porta), acessibilidade do banco, permissões, disco e idade do último backup. Sai ≠ 0 quando algo está errado. O health público é separado e opcional (`SPARK_PUBLIC_HEALTH_URL`). |
 | `deploy.sh` | Backup pré-deploy → build com tag do commit → `up` → health **interno** → rollback se falhar. |
@@ -31,6 +31,12 @@ com permissão `600`.
 - **Falha é ruidosa.** Código de saída ≠ 0, mensagem em stderr e estado gravado em disco. Backup
   que falha em silêncio é pior que não ter backup: ele dá confiança.
 - **`shellcheck` é gate de CI** (`.github/workflows/backend.yml`).
+- **Restauração não termina em lembrete.** `restore.sh --install` executa
+  `node dist/cli/reconcile-account-deletions.js` sobre o banco recém-instalado, e uma falha ali
+  falha o `--install` inteiro. Antes da T17.13.1 o script imprimia "rode a reconciliação depois" e
+  apontava para um runbook que descrevia um comando que não existia — na prática, restaurar um
+  snapshot anterior a uma exclusão devolvia a conta excluída ao ar. Ver
+  [`docs/runbooks/account-deletion-dr.md`](../docs/runbooks/account-deletion-dr.md).
 
 ## Uso local, sem VPS
 

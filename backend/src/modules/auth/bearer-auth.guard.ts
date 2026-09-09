@@ -36,6 +36,15 @@ export const AUTH_UNAVAILABLE_CODE = 'AUTH_UNAVAILABLE';
 export const API_RATE_LIMITED_CODE = 'API_RATE_LIMITED';
 
 /**
+ * O estado da conta não pôde ser avaliado (T17.13.1 §19).
+ *
+ * Separado de `AUTH_UNAVAILABLE`: lá o token não pôde ser verificado, aqui ele foi verificado e o
+ * que falhou foi a consulta ao tombstone. As duas viram 503, e distingui-las é o que permite ao
+ * operador saber se o problema é o Firebase ou o banco local.
+ */
+export const ACCOUNT_STATE_UNAVAILABLE_CODE = 'ACCOUNT_STATE_UNAVAILABLE';
+
+/**
  * A única superfície que uma conta com tombstone ainda alcança: consultar e reexecutar a própria
  * exclusão. Tudo o mais responde `403 ACCOUNT_DELETED`.
  */
@@ -137,12 +146,42 @@ export class BearerAuthGuard implements CanActivate {
     // era tratado como rota de conta, o tombstone deixava de ser verificado, e uma conta excluída
     // reativava o perfil e voltava a escrever. O caminho é a única parte da URL que o roteador
     // usa para decidir qual controller responde — é ele que precisa decidir isto também.
-    if (!isAccountRoutePath(request) && this.isTombstoned(principal.uid)) {
-      this.logger.warn('auth.account_deleted', { requestId, uidPrefix: uidPrefix(principal.uid) });
-      throw new HttpException(
-        { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
-        HttpStatus.FORBIDDEN,
-      );
+    if (!isAccountRoutePath(request)) {
+      let deleted: boolean;
+      try {
+        deleted = this.isTombstoned(principal.uid);
+      } catch (error) {
+        // T17.13.1 §19 — não dá para avaliar o tombstone ⇒ 503, e nunca "não foi excluída".
+        //
+        // Antes, um banco fechado ou um `SELECT` que lançasse devolviam `false`, e `false` aqui
+        // significa **conta ativa**: uma conta excluída voltava a atravessar o guard e a escrever
+        // no servidor exatamente no momento em que ele estava com problema. A falha era silenciosa
+        // nos dois sentidos — nada no log dizia que a verificação não tinha acontecido, e o
+        // atacante com um token de conta excluída não precisava fazer nada além de esperar.
+        //
+        // Fail-closed custa 503 numa janela de indisponibilidade que já é degradada de qualquer
+        // forma. Fail-open custa a garantia inteira.
+        this.logger.error('auth.tombstone.unavailable', {
+          requestId,
+          uidPrefix: uidPrefix(principal.uid),
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+        });
+        throw new ServiceUnavailableException({
+          code: ACCOUNT_STATE_UNAVAILABLE_CODE,
+          message: 'Account state is temporarily unavailable',
+        });
+      }
+
+      if (deleted) {
+        this.logger.warn('auth.account_deleted', {
+          requestId,
+          uidPrefix: uidPrefix(principal.uid),
+        });
+        throw new HttpException(
+          { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
+          HttpStatus.FORBIDDEN,
+        );
+      }
     }
 
     if (!this.limiter.tryAcquire(principal.uid)) {
@@ -158,19 +197,27 @@ export class BearerAuthGuard implements CanActivate {
     return true;
   }
 
+  /**
+   * A conta tem tombstone?
+   *
+   * **Lança** quando não é possível responder (T17.13.1 §19). Não existe valor de retorno para
+   * "não sei": `false` significa conta ativa, e devolver isso quando a consulta falhou é o mesmo
+   * que declarar ativa uma conta que pode estar excluída. Quem chama transforma a exceção em 503.
+   *
+   * O `SqliteService` é `@Optional()` porque nem toda montagem de teste do guard tem banco. A
+   * ausência dele é **configuração**, e não indisponibilidade: uma montagem sem banco não tem
+   * tabela de tombstones, e nenhuma conta pode ter sido excluída nela.
+   */
   private isTombstoned(uid: string): boolean {
-    if (!this.sqlite || !this.sqlite.isOpen) return false;
-    try {
-      const hash = createHmac('sha256', this.config.accountDeletionHmacKey)
-        .update(uid)
-        .digest('hex');
-      const row = this.sqlite.connection
-        .prepare(`SELECT 1 FROM account_deletion_tombstones WHERE uid_hash = ? LIMIT 1`)
-        .get(hash);
-      return row !== undefined;
-    } catch {
-      return false;
+    if (!this.sqlite) return false;
+    if (!this.sqlite.isOpen) {
+      throw new Error('a conexão SQLite não está aberta');
     }
+    const hash = createHmac('sha256', this.config.accountDeletionHmacKey).update(uid).digest('hex');
+    const row = this.sqlite.connection
+      .prepare(`SELECT 1 FROM account_deletion_tombstones WHERE uid_hash = ? LIMIT 1`)
+      .get(hash);
+    return row !== undefined;
   }
 }
 

@@ -60,17 +60,22 @@ export const SOCIAL_GROUP_ROLES = ['OWNER', 'MEMBER'] as const;
 export type SocialGroupRole = (typeof SOCIAL_GROUP_ROLES)[number];
 
 /**
- * O estado de um convite (§21).
+ * O estado de um convite (§21, revisto na T17.13.1 §26/§27).
  *
- * Quatro são gravados; `EXPIRED` é **derivado** na leitura, a partir de `expiresAt`:
+ * Os cinco são **gravados** desde a migration 0022:
  *
  * ```text
- * PENDING + now >= expiresAt   ──▶ EXPIRED
+ * PENDING + now >= expires_at   ──▶ EXPIRED   (gravado antes de toda operação sensível a PENDING)
  * ```
  *
- * Derivar em vez de gravar é o que faz "aceitar depois do prazo" ser **impossível** em vez de
- * "improvável": não depende de um processo ter passado por ali antes do toque. É o mesmo desenho
- * do convite de desafio da T17.3.
+ * A T17.11 derivava `EXPIRED` na leitura, e a intenção era boa: não depender de um processo ter
+ * passado por ali antes do toque. O que ela não alcançava era o **banco**. O índice
+ * `idx_social_group_invitations_pending` é único e parcial em `WHERE status = 'PENDING'`, e um
+ * índice não consulta o relógio: o convite vencido continuava ocupando a vaga única do par (Squad,
+ * destinatário) e contando na quota. Ninguém conseguia aceitá-lo, e ninguém conseguia reconvidar.
+ *
+ * A comparação com `expiresAt` continua no caminho de aceite, como rede de segurança — nunca como
+ * a única defesa.
  */
 export const SOCIAL_GROUP_INVITATION_STATUSES = [
   'PENDING',
@@ -305,6 +310,15 @@ export const SOCIAL_GROUP_ERRORS = {
   CHECKIN_NOT_FOUND: 'CHECKIN_NOT_FOUND',
   /** O check-in já está em Squads demais (§68). */
   GROUP_SHARE_LIMIT_REACHED: 'GROUP_SHARE_LIMIT_REACHED',
+  /**
+   * O mesmo `clientRequestId` voltou com um payload diferente (T17.13.1 §33–§37).
+   *
+   * Idempotência é "a mesma intenção produz o mesmo resultado", e não "esta chave devolve o que
+   * quer que tenha sido criado com ela". Um retry que muda o nome do Squad, ou que muda quem é
+   * convidado, **não** é a mesma intenção: devolver o resultado antigo faria o cliente acreditar
+   * que criou um Squad com o nome novo, ou que convidou C quando quem foi convidado foi B.
+   */
+  IDEMPOTENCY_CONFLICT: 'IDEMPOTENCY_CONFLICT',
   RATE_LIMITED: 'RATE_LIMITED',
   SOCIAL_UNAVAILABLE: 'SOCIAL_UNAVAILABLE',
 } as const;

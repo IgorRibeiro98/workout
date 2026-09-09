@@ -132,19 +132,85 @@ export class WorkoutShareRepository {
     return row;
   }
 
-  updateStatus(
+  /**
+   * Uma transição de estado **condicional** ao estado esperado (T17.13.1 §50/§51).
+   *
+   * ```sql
+   * UPDATE workout_shares SET status = :to, <campo> = :ts
+   *  WHERE id = :id AND status = :from
+   * ```
+   *
+   * ## Por que o `AND status = :from` importa
+   *
+   * A versão anterior escrevia `WHERE id = ?` e nada mais. Quem chamava lia a linha, conferia o
+   * estado em memória, decidia, e só então escrevia — e entre a leitura e a escrita cabe outra
+   * requisição inteira. Duas transições incompatíveis simultâneas **ambas** passavam, e a última a
+   * escrever ganhava:
+   *
+   *   - aceitar e cancelar ao mesmo tempo: o remetente cancela, o destinatário aceita, e o
+   *     resultado depende de qual `UPDATE` chegou por último. O aceite podia sobrescrever um
+   *     cancelamento já respondido com sucesso ao remetente — e o destinatário levava para casa um
+   *     treino que o dono retirou;
+   *   - expirar e aceitar: a auto-expiração de uma listagem concorrente podia apagar um `ACCEPTED`
+   *     recém-gravado, deixando `EXPIRED` uma oferta que a pessoa já importou;
+   *   - concluir importação duas vezes: as duas escritas passavam, e `imported_at` virava o
+   *     carimbo da segunda.
+   *
+   * Com a condição no `WHERE`, o SQLite decide — e ele decide uma vez só. `changes` diz quem
+   * ganhou: `true` para quem transicionou, `false` para quem chegou depois. Quem perdeu **relê** e
+   * responde a partir do estado real, em vez de assumir que escreveu.
+   *
+   * ## O que isto não é (§53)
+   *
+   * Não é uma segunda máquina de estados. A tabela continua sendo a autoridade, os estados válidos
+   * continuam declarados no `CHECK` da migration 0014, e as regras de quem pode fazer o quê
+   * continuam no serviço. Isto é só a escrita, feita de forma que não possa perder uma corrida.
+   */
+  transitionStatus(
     shareId: string,
+    fromStatus: WorkoutShareStatus,
     newStatus: WorkoutShareStatus,
     timestampField: 'accepted_at' | 'imported_at' | 'declined_at' | 'cancelled_at',
     timestamp: number,
-  ): void {
-    this.db
+  ): boolean {
+    const result = this.db
       .prepare(
         `UPDATE workout_shares
          SET status = ?, ${timestampField} = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = ?`,
       )
-      .run(newStatus, timestamp, shareId);
+      .run(newStatus, timestamp, shareId, fromStatus);
+    return result.changes > 0;
+  }
+
+  /**
+   * O compartilhamento e o evento de notificação, numa transação só (T17.13.1 §45–§47).
+   *
+   * ## Por que os dois precisam ser uma decisão só
+   *
+   * O evento em `social_notification_events` é o **outbox** do push: ele é o que faz o destinatário
+   * saber que a oferta existe. As duas escritas eram sequenciais e independentes, e uma falha entre
+   * elas deixava um dos dois estados órfãos:
+   *
+   *   - share sem evento: a oferta existe no banco, ninguém é avisado, e ela expira em trinta dias
+   *     sem que o destinatário jamais tenha sabido dela. É o pior dos dois, porque é **silencioso**
+   *     — nada no sistema indica que faltou avisar;
+   *   - evento sem share: o push chega, a pessoa abre o app e não encontra nada.
+   *
+   * Aqui os dois entram ou nenhum entra. `better-sqlite3` faz `ROLLBACK` automático se qualquer
+   * `run()` lançar, e as duas escritas usam a **mesma conexão** — há uma só neste processo.
+   *
+   * ## O FCM continua fora (§46)
+   *
+   * Esta transação grava a *intenção* de notificar, e não a notificação. A entrega é do
+   * `NotificationDispatcher`, que lê o outbox depois, fora de qualquer transação: uma chamada de
+   * rede dentro de um `BEGIN` seguraria o banco pelo tempo do timeout do Firebase.
+   */
+  insertShareWithNotification(share: StoredWorkoutShare, enqueueEvent: () => void): void {
+    this.db.transaction(() => {
+      this.insertShare(share);
+      enqueueEvent();
+    })();
   }
 
   /**

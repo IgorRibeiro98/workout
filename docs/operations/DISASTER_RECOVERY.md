@@ -82,10 +82,16 @@ Em `/opt/spark/secrets`, com permissão `600` (ver [SECURITY.md](./SECURITY.md))
 
 ```text
 firebase-admin.json     do gerenciador de segredos, ou gerada de novo no console do Firebase
-backend.env             GEMINI_API_KEY
+backend.env             GEMINI_API_KEY + ACCOUNT_DELETION_HMAC_KEY
 restic-password         do gerenciador de segredos / cópia física
 backup.env              RESTIC_REPOSITORY + credencial do storage
 ```
+
+**`ACCOUNT_DELETION_HMAC_KEY` é tão insubstituível quanto a senha do restic.** Ela é o que liga cada
+linha do ledger de exclusões a um uid do banco. Sem ela o servidor não sobe em produção (é
+exigência de startup), e a reconciliação pós-restore roda **sem encontrar nada e reportando
+sucesso** — devolvendo ao ar todas as contas que haviam sido excluídas. Ela não está no backup, por
+construção: é segredo de runtime.
 
 ### 3. Recuperar o repositório e a imagem
 
@@ -107,6 +113,12 @@ ops/restore.sh --to /tmp/dr --install            # instala em /opt/spark/data
 
 `--install` só age depois de `integrity_check` e `foreign_key_check` passarem, e preserva qualquer
 banco que já exista no destino. Ele recusa rodar com o backend de pé.
+
+Ele também **instala o ledger de exclusões e roda a reconciliação anti-ressurreição** antes de
+declarar a restauração completa (T17.13.1). Numa recuperação a partir do zero o ledger vem do
+próprio snapshot; se ele não estiver nem lá nem no disco, o `--install` **para** — sem ele não há
+como saber quais contas já foram excluídas, e prosseguir as devolveria ao ar. Ver
+[../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
 ### 5. Subir
 
@@ -165,6 +177,18 @@ No app, com uma **conta de teste** (§111):
 [ ] um conflito existente ainda pode ser lido
 ```
 
+E o portão anti-ressurreição, no servidor (T17.13.1):
+
+```bash
+# A reconciliação já rodou dentro do --install. Confira que ela encontrou o ledger:
+sort -u /opt/spark/data/deletion_tombstones.tsv | wc -l
+sqlite3 /opt/spark/data/spark.db "SELECT COUNT(*) FROM account_deletion_tombstones;"
+```
+
+A tabela precisa cobrir todas as contas do ledger. Se o número de tombstones for **zero** com um
+ledger não vazio, a reconciliação rodou com a chave HMAC errada — pare e volte ao passo 2 antes de
+apontar o DNS: o servidor está servindo contas que deveriam estar excluídas.
+
 Nada destrutivo nessa validação: não apague backup, não force restore, não resolva conflito real.
 
 ### 8. Retomar o backup
@@ -191,6 +215,9 @@ sync_changes         o change log
 sync_mutations       o ledger de idempotência
 ai_usage_daily       contagem de uso do Coach, sem conteúdo
 ```
+
+E, ao lado do banco, o ledger de exclusões (`deletion_tombstones.tsv`) — que não é dado de usuário,
+e sim a lista de quem **não** pode voltar.
 
 O treino de cada pessoa continua no aparelho dela. Quem perdeu o **aparelho** usa o restore da
 T16.5, dentro do app.

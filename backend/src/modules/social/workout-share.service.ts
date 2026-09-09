@@ -180,21 +180,29 @@ export class WorkoutShareService {
       expires_at: expiresAt,
     };
 
-    this.repository.insertShare(stored);
-
-    // 11. Enfileiramento de notificação transacional outbox (T17.5)
-    this.notificationRepository.createEvent(
-      {
-        id: randomUUID(),
-        recipientUid,
-        type: 'WORKOUT_SHARE_RECEIVED',
-        entityId: shareId,
-        dedupeKey: `workout_share:${shareId}`,
-        deliverAfter: now,
-        expiresAt,
-      },
-      now,
-    );
+    // 11. O share e o evento de notificação, numa transação só (T17.13.1 §45–§47).
+    //
+    // Eram duas escritas independentes, e uma falha entre elas deixava a oferta no banco sem nada
+    // que avisasse o destinatário — em silêncio, expirando em trinta dias sem que ele jamais
+    // soubesse. O FCM continua fora daqui: isto grava a **intenção** de notificar, e a entrega é do
+    // dispatcher, depois, fora de qualquer transação (§46).
+    //
+    // O `dedupeKey` é o que garante §48: um replay que chegasse a este ponto não criaria um segundo
+    // evento — mas ele não chega, porque a idempotência acima já devolveu o share existente.
+    this.repository.insertShareWithNotification(stored, () => {
+      this.notificationRepository.createEvent(
+        {
+          id: randomUUID(),
+          recipientUid,
+          type: 'WORKOUT_SHARE_RECEIVED',
+          entityId: shareId,
+          dedupeKey: `workout_share:${shareId}`,
+          deliverAfter: now,
+          expiresAt,
+        },
+        now,
+      );
+    });
 
     this.logger.info('social.workout_share.created', {
       shareId,
@@ -254,8 +262,14 @@ export class WorkoutShareService {
     // Auto-expira se necessário
     let currentStatus = share.status;
     if (currentStatus === 'PENDING' && now >= share.expires_at) {
-      this.repository.updateStatus(shareId, 'EXPIRED', 'cancelled_at', now);
-      currentStatus = 'EXPIRED';
+      // §52 — condicional em `PENDING`. Uma leitura concorrente que expire não pode sobrescrever
+      // um `ACCEPTED` que outra requisição acabou de gravar; se a transição não acontece, o estado
+      // real é relido e é ele que a resposta reporta.
+      if (this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now)) {
+        currentStatus = 'EXPIRED';
+      } else {
+        currentStatus = this.repository.findById(shareId)?.status ?? currentStatus;
+      }
     }
 
     const snapshot = JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
@@ -298,7 +312,7 @@ export class WorkoutShareService {
     }
 
     if (now >= share.expires_at) {
-      this.repository.updateStatus(shareId, 'EXPIRED', 'cancelled_at', now);
+      this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now);
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
         message: 'Oferta de treino expirada.',
@@ -307,14 +321,26 @@ export class WorkoutShareService {
 
     // Amizade ainda ativa?
     if (!this.repository.isFriendshipActive(share.sender_uid, recipientUid)) {
-      this.repository.updateStatus(shareId, 'CANCELLED', 'cancelled_at', now);
+      this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now);
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
         message: 'A amizade não está mais ativa.',
       });
     }
 
-    this.repository.updateStatus(shareId, 'ACCEPTED', 'accepted_at', now);
+    // §50/§52 — `PENDING → ACCEPTED`, condicional. Quem perde a corrida relê e responde a partir
+    // do estado real: se o vencedor foi outro aceite do mesmo destinatário, o desfecho é o mesmo
+    // e a resposta é idempotente; se foi um cancelamento ou uma expiração, a oferta acabou.
+    if (!this.repository.transitionStatus(shareId, 'PENDING', 'ACCEPTED', 'accepted_at', now)) {
+      const current = this.repository.findById(shareId);
+      if (current && (current.status === 'ACCEPTED' || current.status === 'IMPORTED')) {
+        return JSON.parse(current.snapshot_json) as WorkoutTemplateShareSnapshotV1;
+      }
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
+        message: 'Oferta de treino não está mais disponível.',
+      });
+    }
     this.logger.info('social.workout_share.accepted', { shareId });
 
     return JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
@@ -342,7 +368,18 @@ export class WorkoutShareService {
       });
     }
 
-    this.repository.updateStatus(shareId, 'IMPORTED', 'imported_at', now);
+    // §50/§52 — `ACCEPTED → IMPORTED`. Duas conclusões simultâneas produziam duas escritas, e
+    // `imported_at` acabava sendo o carimbo da segunda. Agora só uma transiciona; a outra relê e
+    // converge, porque o desfecho pretendido é o mesmo.
+    if (!this.repository.transitionStatus(shareId, 'ACCEPTED', 'IMPORTED', 'imported_at', now)) {
+      if (this.repository.findById(shareId)?.status === 'IMPORTED') {
+        return { success: true };
+      }
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
+        message: 'Oferta de treino precisa ser aceita antes de concluir importação.',
+      });
+    }
     this.logger.info('social.workout_share.imported', { shareId });
 
     return { success: true };
@@ -370,7 +407,17 @@ export class WorkoutShareService {
       });
     }
 
-    this.repository.updateStatus(shareId, 'DECLINED', 'declined_at', now);
+    // §50/§52 — `PENDING → DECLINED`. Recusar e aceitar ao mesmo tempo: só uma vence, e quem
+    // perde vê o estado que ganhou.
+    if (!this.repository.transitionStatus(shareId, 'PENDING', 'DECLINED', 'declined_at', now)) {
+      if (this.repository.findById(shareId)?.status === 'DECLINED') {
+        return { success: true };
+      }
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
+        message: 'Oferta de treino não está mais pendente.',
+      });
+    }
     this.logger.info('social.workout_share.declined', { shareId });
 
     return { success: true };
@@ -398,7 +445,17 @@ export class WorkoutShareService {
       });
     }
 
-    this.repository.updateStatus(shareId, 'CANCELLED', 'cancelled_at', now);
+    // §50/§52 — `PENDING → CANCELLED`. Cancelar e aceitar ao mesmo tempo: uma só vence, e o
+    // remetente nunca recebe "cancelado" para uma oferta que o destinatário já levou.
+    if (!this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now)) {
+      if (this.repository.findById(shareId)?.status === 'CANCELLED') {
+        return { success: true };
+      }
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
+        message: 'Não é possível cancelar uma oferta que não esteja pendente.',
+      });
+    }
     this.logger.info('social.workout_share.cancelled', { shareId });
 
     return { success: true };

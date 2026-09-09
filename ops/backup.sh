@@ -165,6 +165,29 @@ SNAPSHOT="${WORK_DIR}/${DB_FILENAME}"
 "${SCRIPT_DIR}/snapshot.sh" "$SNAPSHOT" > /dev/null
 SIZE_BYTES="$(stat -c %s "$SNAPSHOT")"
 
+# O ledger anti-ressurreição entra no mesmo snapshot (T17.13.1 §8/§14).
+#
+# Sem ele, uma perda total da VPS deixaria o operador com o banco e a mídia de volta e **nenhuma**
+# memória de quais contas já tinham sido excluídas — e a reconciliação pós-restore, que é o que
+# impede a ressurreição, não teria contra o que reconciliar. Como ela falha fechada quando o ledger
+# não existe (§17), a ausência dele no backup transformaria toda recuperação de desastre em um
+# bloqueio permanente. Um arquivo de texto de alguns kilobytes é o preço de não ter esse problema.
+#
+# `cp` para dentro de `$WORK_DIR`, e não um caminho a mais no `restic backup`: o ledger é lido
+# continuamente pelo backend e copiá-lo primeiro dá um arquivo estável ao restic. Ele é
+# append-only, então a cópia pode perder uma exclusão feita durante o próprio backup — que a
+# execução seguinte captura, e que o tombstone do banco cobre nesse intervalo.
+TOMBSTONES_ROWS=0
+if [ -f "$SPARK_TOMBSTONES_FILE" ]; then
+  cp "$SPARK_TOMBSTONES_FILE" "${WORK_DIR}/${TOMBSTONES_FILENAME}"
+  TOMBSTONES_ROWS="$( wc -l < "${WORK_DIR}/${TOMBSTONES_FILENAME}" | tr -d ' ' )"
+  log "ledger de exclusões incluído: ${TOMBSTONES_ROWS} registro(s)"
+else
+  # Um servidor onde ninguém excluiu conta ainda não tem o arquivo, e isso não é erro. O restore
+  # distingue os dois casos pelo manifesto.
+  log "aviso: ${SPARK_TOMBSTONES_FILE} não existe; nenhuma exclusão de conta foi registrada ainda"
+fi
+
 # --- 2. manifesto -------------------------------------------------------------------------
 #
 # O que acompanha o banco (§34): versão do schema, imagem que estava no ar, tamanho e horário. É
@@ -204,6 +227,7 @@ cat > "${WORK_DIR}/manifest.json" <<JSON
   "mediaDir": "${SPARK_MEDIA_DIR}",
   "mediaFiles": ${MEDIA_FILES:-0},
   "mediaBytes": ${MEDIA_BYTES:-0},
+  "deletionLedgerRows": ${TOMBSTONES_ROWS:-0},
   "host": "$(hostname)"
 }
 JSON

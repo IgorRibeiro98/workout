@@ -39,6 +39,32 @@ on:
       - 'ops/**'
       - '.github/workflows/backend.yml'
 
+# A chave HMAC dos tombstones de exclusão de conta, para os jobs que rodam o backend em
+# `NODE_ENV=production` (T17.13.1 §4).
+#
+# ## Por que ela precisa existir aqui
+#
+# `AppConfig.missingRequirements()` recusa subir em produção com o default de desenvolvimento
+# (T17.10 §136/§137), e a imagem declara `ENV NODE_ENV=production`. Isso significa que **todo**
+# container deste workflow é produção — o smoke, a topologia e o ensaio de backup — e os três
+# passaram a morrer no startup assim que aquele portão entrou. O workflow ficou vermelho nos três
+# caminhos operacionais sem que uma linha de código de produto estivesse errada.
+#
+# ## Por que não é um segredo
+#
+# Ela é sintética, determinística e versionada de propósito. Um `secrets.*` aqui teria o efeito
+# oposto do pretendido: faria um fork legítimo falhar sem explicação e daria a este workflow uma
+# credencial que ele não precisa ter. O nome diz o que ela é — qualquer um que a encontre num
+# `.env` de servidor sabe imediatamente que aquele servidor está mal configurado.
+#
+# ## O que ela **não** faz
+#
+# Ela não enfraquece o portão. O passo "produção recusa subir com a chave de desenvolvimento" no
+# job `docker` roda um container **sem** ela e exige a falha: se alguém trocar a validação por um
+# bypass, ou rebaixar `NODE_ENV` para passar o CI, aquele passo fica vermelho.
+env:
+  SPARK_CI_ACCOUNT_DELETION_HMAC_KEY: ci-only-account-deletion-hmac-not-for-production
+
 jobs:
   verify:
     name: lint + test + build
@@ -109,7 +135,9 @@ jobs:
           docker volume create spark-ci-data
           docker volume create spark-ci-media
           docker run -d --name spark-ci -p 127.0.0.1:8080:8080 \
-            -v spark-ci-data:/data -v spark-ci-media:/media spark-backend:ci
+            -v spark-ci-data:/data -v spark-ci-media:/media \
+            -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
+            spark-backend:ci
 
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/health/live > /dev/null 2>&1; then break; fi
@@ -163,7 +191,9 @@ jobs:
 
           docker rm -f spark-ci
           docker run -d --name spark-ci-2 -p 127.0.0.1:8080:8080 \
-            -v spark-ci-data:/data -v spark-ci-media:/media spark-backend:ci
+            -v spark-ci-data:/data -v spark-ci-media:/media \
+            -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
+            spark-backend:ci
 
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/health/ready > /dev/null 2>&1; then break; fi
@@ -193,13 +223,32 @@ jobs:
 
           # A raiz de mídia é obrigatória em produção (T17.9 §28): um container sem ela precisa
           # **falhar no startup**, e não subir escrevendo em disco efêmero.
+          #
+          # A chave sintética entra aqui de propósito: sem ela o container morreria pela **outra**
+          # exigência de produção, e este passo passaria sem provar nada sobre a mídia.
           if docker run --rm -e NODE_ENV=production -e DATABASE_PATH=/data/spark.db \
+               -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
                -e SOCIAL_MEDIA_ROOT= spark-backend:ci > /tmp/nomedia.log 2>&1; then
             echo "o backend subiu sem SOCIAL_MEDIA_ROOT em produção"; cat /tmp/nomedia.log; exit 1
           fi
           grep -q 'SOCIAL_MEDIA_ROOT' /tmp/nomedia.log || {
             echo "a falha não citou SOCIAL_MEDIA_ROOT"; cat /tmp/nomedia.log; exit 1; }
-          echo "produção recusa subir sem SOCIAL_MEDIA_ROOT" 
+          echo "produção recusa subir sem SOCIAL_MEDIA_ROOT"
+
+          # O portão simétrico (T17.13.1 §77): a chave HMAC do tombstone é **obrigatória** em
+          # produção, e o CI ter uma chave sintética não pode ser o mesmo que o portão não existir.
+          #
+          # Este é o passo que impede a correção proibida. Se alguém "resolver" o vermelho do
+          # workflow enfraquecendo `missingRequirements()`, rebaixando `NODE_ENV` ou dando um
+          # default de produção à chave, é aqui que aparece — o container sobe, e o job falha.
+          if docker run --rm -e NODE_ENV=production -e DATABASE_PATH=/data/spark.db \
+               -e SOCIAL_MEDIA_ROOT=/media spark-backend:ci > /tmp/nohmac.log 2>&1; then
+            echo "o backend subiu em produção com a chave HMAC de desenvolvimento"
+            cat /tmp/nohmac.log; exit 1
+          fi
+          grep -q 'ACCOUNT_DELETION_HMAC_KEY' /tmp/nohmac.log || {
+            echo "a falha não citou ACCOUNT_DELETION_HMAC_KEY"; cat /tmp/nohmac.log; exit 1; }
+          echo "produção recusa subir com a chave HMAC de desenvolvimento"
 
           # T16.5/T16.6/T16.7 — o schema do restore, o do sync incremental e o do tombstone.
           #
@@ -248,6 +297,42 @@ jobs:
           if [ "$status" != "401" ]; then
             echo "rota /v1/sync/push deveria exigir autenticação; respondeu $status"; exit 1
           fi
+
+          # O comando operacional de DR, exercitado no **artefato construído** (T17.13.1 §14/§65).
+          #
+          # O teste do Jest chama `runReconciliation()` — a mesma função — mas não prova que o
+          # arquivo existe em `dist/`, que o `require.main` guarda o auto-run, nem que os códigos de
+          # saída chegam ao shell. É isso que o operador e o `ops/restore.sh --install` dependem.
+          #
+          # Ledger ausente precisa **falhar fechado**: tratar a ausência como "nenhuma conta
+          # excluída" é o que devolveria ao ar contas já apagadas depois de um restore.
+          if docker exec spark-ci-2 sh -c \
+               'DELETION_TOMBSTONES_FILE_PATH=/data/ausente.tsv node dist/cli/reconcile-account-deletions.js' \
+               > /tmp/dr-ausente.log 2>&1; then
+            echo "a reconciliação passou sem ledger — ela precisa falhar fechada"
+            cat /tmp/dr-ausente.log; exit 1
+          fi
+          grep -q 'ledger de exclusões não existe' /tmp/dr-ausente.log || {
+            echo "falhou por outro motivo"; cat /tmp/dr-ausente.log; exit 1; }
+          echo "reconciliação de DR falha fechada sem ledger"
+
+          # Uma linha malformada também é falha, e não uma linha ignorada em silêncio.
+          if docker exec spark-ci-2 sh -c \
+               'printf "naoehumhash\t123\n" > /data/ruim.tsv &&
+                DELETION_TOMBSTONES_FILE_PATH=/data/ruim.tsv node dist/cli/reconcile-account-deletions.js' \
+               > /tmp/dr-ruim.log 2>&1; then
+            echo "a reconciliação aceitou um ledger malformado"; cat /tmp/dr-ruim.log; exit 1
+          fi
+          grep -q 'malformada' /tmp/dr-ruim.log || {
+            echo "falhou por outro motivo"; cat /tmp/dr-ruim.log; exit 1; }
+          echo "reconciliação de DR recusa ledger malformado"
+
+          # E o caminho feliz: ledger válido, reconciliação e os dois PRAGMAs de integridade.
+          docker exec spark-ci-2 sh -c \
+            'printf "" > /data/deletion_tombstones.tsv && node dist/cli/reconcile-account-deletions.js' \
+            | grep -q 'foreign_key_check e integrity_check ok' || {
+              echo "a reconciliação não validou a integridade"; exit 1; }
+          echo "reconciliação de DR roda e valida integridade"
 
           docker rm -f spark-ci-2
           docker volume rm spark-ci-data spark-ci-media
@@ -448,6 +533,18 @@ jobs:
           # 640 no grupo compartilhado, e não 600 do dono: legível pelo container, e não pela
           # máquina inteira.
           test "$(stat -c %a "$WORK/secrets/firebase-admin.json")" = "640"
+
+          # A chave HMAC do tombstone entra pelo **mesmo canal da produção real**: o
+          # `backend.env` do diretório de segredos, declarado como `env_file` em
+          # `docker-compose.prod.yml`. Não há sobreposição de compose nem variável extra no
+          # serviço — o que sobe continua sendo a definição de produção, sem alteração.
+          #
+          # É por isso que este passo é mais forte do que um `-e` no `docker run`: ele exercita o
+          # caminho que o operador da VPS usa, e um `env_file` quebrado apareceria aqui.
+          cat > "$WORK/secrets/backend.env" <<'ENVEOF'
+          ACCOUNT_DELETION_HMAC_KEY=ci-only-account-deletion-hmac-not-for-production
+          ENVEOF
+          chmod 640 "$WORK/secrets/backend.env"
 
           cp backend/Caddyfile.prod backend/Caddyfile
           cat > backend/.env <<EOF
@@ -700,6 +797,7 @@ jobs:
             --group-add "$(stat -c %g "$SPARK_DATA_DIR")" \
             -v "$SPARK_DATA_DIR:/data" -v "$SPARK_MEDIA_DIR:/media" \
             -e DATABASE_PATH=/data/spark.db -e SOCIAL_MEDIA_ROOT=/media -e NODE_ENV=production \
+            -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:local
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8080/health/ready 2>/dev/null | grep -q '"status":"ok"' && break

@@ -34,6 +34,19 @@ FROM_MEDIA=""
 PORT="${SPARK_DRILL_PORT:-18080}"
 CONTAINER="spark-restore-drill-$$"
 
+# A chave HMAC dos tombstones, para o container do ensaio (T17.13.1 §4).
+#
+# O ensaio sobe o backend em `NODE_ENV=production` de propósito — é a configuração real que
+# precisa abrir o banco restaurado — e produção exige uma chave própria (T17.10 §136). Sem ela o
+# container não subiria, e o ensaio acusaria "o backend não ficou ready sobre o banco restaurado":
+# um backup perfeitamente válido reprovado por um erro de configuração do próprio ensaio.
+#
+# O default é **sintético e do ensaio**, e nunca de produção. Ele não precisa casar com a chave
+# real: nada aqui calcula ou compara tombstone — o que se verifica é que o banco abre, as
+# migrations aplicam e o `/health/ready` responde. O operador que quiser exercitar o ensaio com a
+# chave real da VPS exporta `SPARK_ACCOUNT_DELETION_HMAC_KEY` antes de chamar este script.
+: "${SPARK_ACCOUNT_DELETION_HMAC_KEY:=drill-only-account-deletion-hmac-not-for-production}"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --snapshot)   SNAPSHOT="${2:?}"; shift 2 ;;
@@ -127,6 +140,7 @@ docker run -d --name "$CONTAINER" \
   -e DATABASE_PATH="/data/${DB_FILENAME}" \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e NODE_ENV=production \
+  -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   "$SPARK_IMAGE" > /dev/null
 

@@ -14,6 +14,17 @@ export interface StoredCheckInMedia {
   readonly width: number;
   readonly height: number;
   readonly contentHash: string;
+  /**
+   * SHA-256 dos bytes **como chegaram**, antes de qualquer processamento (T17.13.1 §39–§42).
+   *
+   * É a impressão digital da *requisição*, e responde "este retry é o mesmo upload?". Não confundir
+   * com [contentHash], que é o hash do WebP **gravado** e responde "é a mesma imagem armazenada?".
+   *
+   * `null` nas linhas anteriores à migration 0023: os bytes originais já não existem, e §62 proíbe
+   * reprocessar mídia histórica para preenchê-la. Ver o tratamento de replay legado em
+   * `social-media.service.ts`.
+   */
+  readonly inputContentHash: string | null;
   readonly status: 'PENDING' | 'ATTACHED' | 'DELETED';
   readonly createdAt: number;
   readonly expiresAt: number | null;
@@ -40,6 +51,7 @@ interface MediaRow {
   readonly width: number;
   readonly height: number;
   readonly content_hash: string;
+  readonly input_content_hash: string | null;
   readonly status: 'PENDING' | 'ATTACHED' | 'DELETED';
   readonly created_at: number;
   readonly expires_at: number | null;
@@ -57,6 +69,7 @@ const SELECT_COLUMNS = `id,
        width,
        height,
        content_hash,
+       input_content_hash,
        status,
        created_at,
        expires_at,
@@ -75,6 +88,7 @@ function toDomain(row: MediaRow): StoredCheckInMedia {
     width: row.width,
     height: row.height,
     contentHash: row.content_hash,
+    inputContentHash: row.input_content_hash,
     status: row.status,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -92,9 +106,9 @@ export class SocialMediaRepository {
       .prepare(
         `INSERT INTO social_checkin_media (
            id, owner_uid, source_session_sync_id, client_upload_id, storage_key, mime_type,
-           byte_size, width, height, content_hash, status, created_at, expires_at,
-           attached_checkin_id, deleted_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           byte_size, width, height, content_hash, input_content_hash, status, created_at,
+           expires_at, attached_checkin_id, deleted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         item.id,
@@ -107,6 +121,7 @@ export class SocialMediaRepository {
         item.width,
         item.height,
         item.contentHash,
+        item.inputContentHash,
         item.status,
         item.createdAt,
         item.expiresAt,

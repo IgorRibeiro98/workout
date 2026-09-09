@@ -60,6 +60,7 @@ chmod 700 "$TARGET_DIR" 2> /dev/null || true
 
 RESTORED_DB=""
 RESTORED_MEDIA=""
+RESTORED_LEDGER=""
 
 if [ -n "$FROM_FILE" ]; then
   # Caminho sem off-site: usado pelo ensaio local e pelo CI, onde não há — e não deve haver —
@@ -85,6 +86,15 @@ else
   [ -n "$RESTORED_DB" ] || fail "o snapshot não contém ${DB_FILENAME}"
   MANIFEST="$(find "$TARGET_DIR" -name manifest.json -type f | head -1)"
   [ -n "$MANIFEST" ] && log "manifesto: $(tr -d '\n ' < "$MANIFEST")"
+
+  # O ledger anti-ressurreição (T17.13.1 §14). Um snapshot anterior a esta fase, ou de um servidor
+  # onde ninguém nunca excluiu conta, não o contém — e isso é diferente de "o arquivo sumiu".
+  RESTORED_LEDGER="$(find "$TARGET_DIR" -name "$TOMBSTONES_FILENAME" -type f | head -1)"
+  if [ -n "$RESTORED_LEDGER" ]; then
+    log "ledger de exclusões no snapshot: $(wc -l < "$RESTORED_LEDGER" | tr -d ' ') registro(s)"
+  else
+    log "aviso: o snapshot não contém ${TOMBSTONES_FILENAME}"
+  fi
 
   # A mídia (T17.9 §138). O restic reconstrói a árvore de caminhos original, então o diretório
   # aparece em `$TARGET_DIR` sob o caminho absoluto que ele tinha na VPS. Procuramos pelo
@@ -208,5 +218,69 @@ else
   log "aviso: nenhuma mídia restaurada; ${SPARK_MEDIA_DIR} permanece como está"
 fi
 
-log "banco e mídia instalados. Suba o backend e confira /health/ready."
-log "Antes de declarar o Feed recuperado: rode a reconciliação de tombstones (§139) — ver docs/runbooks/account-deletion-dr.md."
+# --- ledger anti-ressurreição (T17.13.1 §14/§15) ---------------------------------------------
+#
+# ## União, e nunca substituição
+#
+# O ledger do snapshot é **mais antigo** que o do disco. Numa restauração em que a máquina
+# sobreviveu (banco corrompido, migration ruim, restauração para um ponto anterior), o arquivo
+# local conhece exclusões que o snapshot não conhece, e sobrescrevê-lo apagaria exatamente os
+# registros que impedem aquelas contas de voltar.
+#
+# Por isso os dois são unidos, e a união é feita por concatenação: o leitor consome os hashes como
+# conjunto (§13), então um hash repetido não custa nada e reconciliá-lo duas vezes é a mesma
+# operação. É esse detalhe do formato que torna a união trivialmente correta.
+if [ -n "$RESTORED_LEDGER" ]; then
+  if [ -f "$SPARK_TOMBSTONES_FILE" ]; then
+    cat "$RESTORED_LEDGER" >> "$SPARK_TOMBSTONES_FILE"
+    log "ledger de exclusões unido ao local ($(wc -l < "$SPARK_TOMBSTONES_FILE" | tr -d ' ') registro(s) no total)"
+  else
+    install -m 660 -g "$DATA_GID" "$RESTORED_LEDGER" "$SPARK_TOMBSTONES_FILE"
+    log "ledger de exclusões instalado ($(wc -l < "$SPARK_TOMBSTONES_FILE" | tr -d ' ') registro(s))"
+  fi
+elif [ ! -f "$SPARK_TOMBSTONES_FILE" ]; then
+  # Nem no snapshot, nem no disco. A reconciliação abaixo **falha fechada** (§17), e é isso que se
+  # quer: sem o ledger não há como saber quem já foi excluído, e subir assim é o cenário que
+  # ressuscita contas. O operador precisa recuperar o arquivo antes de continuar.
+  fail "não há ledger de exclusões (nem no snapshot, nem em ${SPARK_TOMBSTONES_FILE}).
+  Sem ele não é possível garantir que contas já excluídas não voltem ao ar com esta restauração.
+  Recupere ${TOMBSTONES_FILENAME} de outro backup e rode de novo.
+  Ver docs/runbooks/account-deletion-dr.md."
+fi
+
+# --- reconciliação anti-ressurreição (T17.13.1 §14/§15) --------------------------------------
+#
+# ## Por que ela roda **aqui**, e não num lembrete
+#
+# Até esta fase, este script terminava imprimindo "rode a reconciliação depois" e apontando para o
+# runbook — que descrevia um comando que não existia. Na prática, uma restauração de um snapshot
+# anterior a uma exclusão devolvia a conta excluída ao ar, e a única defesa era a memória de quem
+# estava de plantão.
+#
+# Agora a restauração **não está completa** antes disto. O comando é o mesmo que o runbook manda
+# rodar (`dist/cli/reconcile-account-deletions.js`), roda sobre o banco recém-instalado, e uma
+# falha aqui falha o `--install` inteiro: ledger ausente, ledger malformado, chave HMAC errada ou
+# `foreign_key_check` violado impedem que esta restauração seja declarada boa.
+#
+# ## A chave HMAC
+#
+# É ela que liga um hash do ledger a um uid do banco: rodar com a chave errada encontra zero
+# correspondências e **reporta sucesso**. Ela precisa ser a mesma do backend em produção, e vem do
+# mesmo lugar de onde o compose a lê — o `backend.env` do diretório de segredos.
+log "reconciliando tombstones de exclusão sobre o banco restaurado"
+
+RECONCILE_ENV=()
+if [ -n "${SPARK_ACCOUNT_DELETION_HMAC_KEY:-}" ]; then
+  RECONCILE_ENV=(-e "ACCOUNT_DELETION_HMAC_KEY=${SPARK_ACCOUNT_DELETION_HMAC_KEY}")
+elif [ -f "${SPARK_SECRETS_DIR}/backend.env" ]; then
+  RECONCILE_ENV=(--env-file "${SPARK_SECRETS_DIR}/backend.env")
+else
+  fail "não foi possível localizar ACCOUNT_DELETION_HMAC_KEY (nem no ambiente, nem em ${SPARK_SECRETS_DIR}/backend.env).
+  A reconciliação sem a chave certa não encontra nada e reporta sucesso — o pior desfecho possível.
+  Ver docs/runbooks/account-deletion-dr.md."
+fi
+
+docker run --rm   --group-add "$DATA_GID"   -v "${SPARK_DATA_DIR}:/data"   -v "${SPARK_MEDIA_DIR}:/media"   -e NODE_ENV=production   -e "DATABASE_PATH=/data/${DB_FILENAME}"   -e SOCIAL_MEDIA_ROOT=/media   -e "DELETION_TOMBSTONES_FILE_PATH=/data/${TOMBSTONES_FILENAME}"   "${RECONCILE_ENV[@]}"   --entrypoint node   "$SPARK_IMAGE" dist/cli/reconcile-account-deletions.js   || fail "a reconciliação de exclusões falhou; a restauração NÃO está completa (ver docs/runbooks/account-deletion-dr.md)"
+
+log "restauração completa: banco, mídia e ledger instalados, e a reconciliação passou."
+log "Suba o backend e confira /health/ready."

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../database/database.module';
 import { AuthModule } from '../auth/auth.module';
 import { AccountDeletionRepository } from './account-deletion.repository';
+import { DeletionTombstoneLedger } from './deletion-tombstone.ledger';
 import { AccountDeletionService } from './account-deletion.service';
 import { AccountDeletionReconciler } from './account-deletion.reconciler';
 import { AccountDeletionController } from './account-deletion.controller';
@@ -18,7 +19,12 @@ import { SocialModule } from '../social/social.module';
 @Module({
   imports: [DatabaseModule, AuthModule, SocialModule],
   controllers: [AccountDeletionController],
-  providers: [AccountDeletionRepository, AccountDeletionService, AccountDeletionReconciler],
-  exports: [AccountDeletionService, AccountDeletionRepository],
+  providers: [
+    AccountDeletionRepository,
+    DeletionTombstoneLedger,
+    AccountDeletionService,
+    AccountDeletionReconciler,
+  ],
+  exports: [AccountDeletionService, AccountDeletionRepository, DeletionTombstoneLedger],
 })
 export class AccountDeletionModule {}

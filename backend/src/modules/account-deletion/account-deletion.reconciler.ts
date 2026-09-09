@@ -1,8 +1,9 @@
-import { Inject, Injectable, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import { CLOCK, type Clock } from '../../common/clock';
-import { AUTH_TOKEN_VERIFIER, type AuthTokenVerifier } from '../auth/auth-token-verifier';
+import { Inject } from '@nestjs/common';
 import { AccountDeletionRepository } from './account-deletion.repository';
+import { AccountDeletionService } from './account-deletion.service';
 
 const RECONCILER_INTERVAL_MS = 60_000;
 const MAX_BACKOFF_MS = 3_600_000;
@@ -14,7 +15,12 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
 
   constructor(
     private readonly repo: AccountDeletionRepository,
-    @Inject(AUTH_TOKEN_VERIFIER) private readonly authVerifier: AuthTokenVerifier,
+    // T17.13.1 §11 — a sequência de passos pendentes de uma exclusão tem **um** dono
+    // (`AccountDeletionService.advanceJob`). Este reconciliador contribui com o que é dele: a
+    // varredura periódica e o backoff. Ele não sabe o que é "ledger" nem o que é "Firebase" —
+    // duplicar essa ordem aqui faria as duas cópias divergirem, e a divergência é uma conta presa
+    // numa fase que só um dos dois caminhos destrava.
+    private readonly service: AccountDeletionService,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
   ) {}
@@ -45,10 +51,7 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
 
       for (const job of dueJobs) {
         try {
-          if (this.authVerifier.deleteUser) {
-            await this.authVerifier.deleteUser(job.firebase_uid);
-          }
-          this.repo.deleteJob(job.id);
+          await this.service.advanceJob(job, now);
           this.logger.info('account.deletion.job.completed', {
             jobId: job.id,
             attempts: job.attempts + 1,
@@ -63,6 +66,10 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
           this.repo.incrementJobAttempt(job.id, errorMessage, nextAttemptAt);
           this.logger.warn('account.deletion.job.retry_scheduled', {
             jobId: job.id,
+            // A fase relida do banco, e não a do `job` em memória: `advanceJob` pode ter
+            // persistido o ledger e falhado só no passo seguinte, e é a fase **nova** que diz o
+            // que o retry vai tentar.
+            phase: this.repo.findJobByFirebaseUid(job.firebase_uid)?.phase ?? job.phase,
             attempt,
             nextAttemptInSec: Math.round(backoff / 1000),
           });

@@ -404,13 +404,23 @@ e Solicitações no Android). O desenho completo dela vive em
 
 ### 11.3 Exclusão de Conta Server-Authoritative (`DELETE /v1/account`)
 - **Expurgo Cascata Completo**:
-  Remove registros em todas as tabelas vinculadas ao `uid` do usuário: `social_profiles`, `social_privacy_settings`, `friendships`, `friend_requests`, `challenge_participants`, `challenges` (órfãos), `social_activity_events`, `social_blocks`, `social_reports`, `device_installations`, `notification_outbox`, `backup_snapshots`, `sync_changes`.
+  Remove registros em todas as tabelas vinculadas ao `uid` do usuário. A lista canônica de colunas
+  que carregam um uid de conta vive em `src/modules/account-deletion/account-uid-inventory.ts` (35
+  colunas), e um teste a confronta com o schema real do SQLite — uma tabela nova com coluna de uid
+  não passa sem política declarada. Desde a T17.13.1 o expurgo, o tombstone e o job de exclusão
+  pertencem à **mesma transação**: uma falha no meio faz `ROLLBACK` de tudo.
 - **Tombstones Criptográficos (HMAC-SHA256)**:
   Gera um hash HMAC com salt e segredo do servidor (`account_deletion_tombstones`) para impedir ressurreição ou reutilização da identidade, interceptando qualquer chamada subsequente no `BearerAuthGuard` com HTTP 403 `ACCOUNT_DELETED`.
 - **Fila Assíncrona de Exclusão no Firebase Auth (`account_deletion_jobs`)**:
   Se a chamada ao Firebase Admin Auth (`deleteUser(uid)`) falhar por indisponibilidade transitória do serviço, um job de retentativa com backoff exponencial garante a exclusão final no provider.
 - **Disaster Recovery Append-Only Log (`deletion_tombstones.tsv`)**:
-  Cada exclusão registra um evento no arquivo de tombstones para recuperação de desastres, auditável e com ferramenta de reconciliação de integridade (`reconcileTombstones`).
+  Cada exclusão registra um evento no arquivo de tombstones para recuperação de desastres. Desde a
+  T17.13.1 a escrita é durável (`append` + `fsync`) e **obrigatória**: uma falha nela deixa a
+  exclusão em `DELETION_PENDING`, com a conta já bloqueada, em vez de responder `DELETED` sem o
+  registro anti-ressurreição. O arquivo entra no snapshot do `ops/backup.sh`, e a reconciliação
+  pós-restore é um comando operacional (`dist/cli/reconcile-account-deletions.js`) que
+  `ops/restore.sh --install` executa antes de declarar a restauração completa. Ver
+  [`../runbooks/account-deletion-dr.md`](../runbooks/account-deletion-dr.md).
 
 ### 11.4 Preservação Local-First (Android)
 - **Princípio Inviolável**: O banco de dados local do Room (sessões de treino, templates, histórico de exercícios, medidas corporais, recordes pessoais) **pertence ao dispositivo e nunca é apagado** durante a exclusão de conta na nuvem.

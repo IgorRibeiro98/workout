@@ -22,6 +22,22 @@ SPARK_DATA_DIR="${SPARK_DATA_DIR:-/opt/spark/data}"
 # banco no mesmo caminho, e a restauração perderia a distinção entre "o banco está íntegro" e "os
 # arquivos vieram junto". Duas coisas com ciclos de vida diferentes, dois caminhos.
 SPARK_MEDIA_DIR="${SPARK_MEDIA_DIR:-/opt/spark/media}"
+# O ledger anti-ressurreição de exclusões de conta (T17.13.1 §8/§14).
+#
+# Ele vive **ao lado** do banco, em `$SPARK_DATA_DIR`, e não dentro dele — de propósito: numa
+# restauração o arquivo do banco é substituído por uma cópia anterior, e com ela voltariam as
+# contas já excluídas, inclusive a tabela `account_deletion_tombstones` da versão restaurada. O
+# único registro que sobrevive à troca é este arquivo.
+#
+# O caminho precisa ser o mesmo que o backend usa (`DELETION_TOMBSTONES_FILE_PATH`, que dentro do
+# container é `/data/deletion_tombstones.tsv`). Se um deploy mudar aquele, mude este junto.
+SPARK_TOMBSTONES_FILE="${SPARK_TOMBSTONES_FILE:-${SPARK_DATA_DIR}/deletion_tombstones.tsv}"
+# Diretório de segredos da VPS — o mesmo default de `docker-compose.prod.yml`. É de lá que a
+# reconciliação pós-restore lê `ACCOUNT_DELETION_HMAC_KEY`, pelo mesmo `backend.env` que o compose
+# entrega ao serviço: uma chave só, um lugar só.
+SPARK_SECRETS_DIR="${SPARK_SECRETS_DIR:-/opt/spark/secrets}"
+# Nome do ledger dentro do snapshot. Fixo: é o que `ops/restore.sh` procura na árvore restaurada.
+TOMBSTONES_FILENAME="${TOMBSTONES_FILENAME:-deletion_tombstones.tsv}"
 # Área de trabalho do backup: snapshot temporário + manifesto, antes de irem para o off-site.
 SPARK_STAGING_DIR="${SPARK_STAGING_DIR:-/opt/spark/backups}"
 # Estado operacional legível por máquina (idade do último backup, por exemplo).

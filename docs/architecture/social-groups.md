@@ -85,12 +85,29 @@ check-in apaga a aresta. O inverso não existe, e é o ponto da fase.
                                │                                        │
                                ├── DECLINED (destinatário)              ├── LEAVE (o próprio)
                                ├── CANCELLED (remetente, ou bloqueio)   └── REMOVE (só o OWNER)
-                               └── EXPIRED  (derivado de expires_at)
+                               └── EXPIRED  (gravado quando expires_at vence)
 ```
 
-`EXPIRED` é **derivado** na leitura, e não gravado — como o convite de desafio da T17.3. Gravá-lo
-exigiria um processo passando por ali antes do toque, e o modo de falhar seria um convite aceito
-depois do prazo.
+`EXPIRED` é **gravado** desde a T17.13.1 (migration `0022`). A T17.11 o derivava na leitura, e a
+intenção era boa — não depender de um processo ter passado por ali antes do toque —, mas a
+derivação não alcança o banco:
+
+```text
+idx_social_group_invitations_pending  UNIQUE (group_id, recipient_uid) WHERE status = 'PENDING'
+```
+
+Um índice não consulta o relógio. O convite vencido continuava `PENDING` na coluna, ocupando a vaga
+única daquele par (Squad, destinatário) e contando na quota de convites pendentes — um beco sem
+saída em que ninguém consegue aceitar e ninguém consegue reconvidar.
+
+`SocialGroupService.sweepExpiredInvitations()` grava a expiração antes de cada operação sensível a
+`PENDING` — convidar, listar, aceitar, recusar e cancelar. Não há varredura de fundo: nenhuma
+decisão depende de o convite ter sido marcado *antes* de alguém olhar, e no instante em que alguém
+olha a marcação já aconteceu. A comparação `now >= expiresAt` continua no caminho de aceite como
+rede de segurança, e nunca como a única defesa.
+
+Expirar é silencioso: não gera push, e não existe tipo de notificação para isso — avisar sobre todo
+convite ignorado seria ruído.
 
 O aceite revalida **sete** coisas, porque sete podem ter mudado desde o envio: o convite é meu, está
 pendente, não expirou, o Squad está ativo, meu perfil está ativo, o Squad tem vaga, e — a que merece
