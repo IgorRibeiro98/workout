@@ -236,7 +236,7 @@ describe('Projeção de progresso social', () => {
       ...overrides,
     });
 
-    it('pergunta à fonte pelo dono, e devolve exatamente o que ela respondeu', () => {
+    it('pergunta à fonte pelo dono, e devolve exatamente o que ela respondeu', async () => {
       const seen: string[] = [];
       const projector = new SocialProgressProjector(
         fakeSource({
@@ -251,7 +251,7 @@ describe('Projeção de progresso social', () => {
         }),
       );
 
-      const projection = projector.project(UID_A, 'America/Sao_Paulo', 1_700_000_000_000);
+      const projection = await projector.project(UID_A, 'America/Sao_Paulo', 1_700_000_000_000);
 
       expect(projection.level).toEqual(available(14));
       expect(projection.weeklyWorkoutCount).toEqual(available(3));

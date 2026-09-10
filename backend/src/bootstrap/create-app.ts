@@ -4,14 +4,14 @@ import { AppModule } from '../app.module';
 import { AllExceptionsFilter } from '../common/all-exceptions.filter';
 import { SparkLogger } from '../common/logger';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
-import { SqliteService } from '../database/sqlite.service';
+import { PostgresService } from '../database/postgres.service';
 import { MAX_BACKUP_REQUEST_BODY_BYTES } from '../modules/backup/backup.limits';
 import type { RequestWithRawBody } from '../common/raw-body';
 
 export interface CreatedApp {
   readonly app: INestApplication;
   readonly config: AppConfig;
-  readonly sqlite: SqliteService;
+  readonly postgres: PostgresService;
   readonly logger: SparkLogger;
 }
 
@@ -38,7 +38,7 @@ export async function createApp(config: AppConfig): Promise<CreatedApp> {
  * token, na T16.1) monte a aplicação pelo `@nestjs/testing` e ainda assim receba exatamente esta
  * configuração, em vez de uma reimplementação que envelhece em paralelo.
  */
-export function configureApp(app: INestApplication, config: AppConfig): CreatedApp {
+export async function configureApp(app: INestApplication, config: AppConfig): Promise<CreatedApp> {
   // Nada de anunciar o framework para quem não precisa saber.
   app.getHttpAdapter().getInstance().disable('x-powered-by');
 
@@ -63,8 +63,8 @@ export function configureApp(app: INestApplication, config: AppConfig): CreatedA
   };
   withBodyParser.useBodyParser?.('json', {
     limit: MAX_BACKUP_REQUEST_BODY_BYTES,
-    verify: (req, _res, buf) => {
-      (req as RequestWithRawBody).rawBody = buf.toString('utf8');
+    verify: (_req, _res, buf) => {
+      (_req as RequestWithRawBody).rawBody = buf.toString('utf8');
     },
   });
 
@@ -76,14 +76,14 @@ export function configureApp(app: INestApplication, config: AppConfig): CreatedA
     defaultVersion: '1',
   });
 
-  const sqlite = app.get(SqliteService);
-  sqlite.initialize();
+  const postgres = app.get(PostgresService);
+  await postgres.initialize();
 
   const logger = app.get(SparkLogger);
   app.useGlobalFilters(new AllExceptionsFilter(app.get<AppConfig>(APP_CONFIG), logger));
 
-  // Fecha o SQLite em SIGTERM/SIGINT antes de o processo sair.
+  // Fecha o PostgreSQL em SIGTERM/SIGINT antes de o processo sair.
   app.enableShutdownHooks();
 
-  return { app, config, sqlite, logger };
+  return { app, config, postgres, logger };
 }

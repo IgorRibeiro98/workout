@@ -199,7 +199,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
 
       expect(res.status).toBe(201);
 
-      const devices = repository.findActiveDevicesForRecipient(UID_A);
+      const devices = await repository.findActiveDevicesForRecipient(UID_A);
       expect(devices).toHaveLength(1);
       expect(devices[0].fcmToken).toBe('token-novo');
     });
@@ -215,8 +215,8 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
         fcmToken: 'token-compartilhado',
       });
 
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
-      expect(repository.findActiveDevicesForRecipient(UID_B)).toHaveLength(0);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
+      expect(await repository.findActiveDevicesForRecipient(UID_B)).toHaveLength(0);
 
       // Alice faz logout, Bob faz login no mesmo celular com mesmo token X
       await registerDevice(TOKEN_B, {
@@ -226,9 +226,9 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       });
 
       // Token pertence agora atomicamente a Bob, e nunca a ambos simultaneamente
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
-      expect(repository.findActiveDevicesForRecipient(UID_B)).toHaveLength(1);
-      expect(repository.findActiveDevicesForRecipient(UID_B)[0].fcmToken).toBe(
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
+      expect(await repository.findActiveDevicesForRecipient(UID_B)).toHaveLength(1);
+      expect((await repository.findActiveDevicesForRecipient(UID_B))[0].fcmToken).toBe(
         'token-compartilhado',
       );
     });
@@ -242,12 +242,12 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
         fcmToken: 'token-1',
       });
 
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
 
       const res = await unregisterDevice(TOKEN_A, 'dev-1');
       expect(res.status).toBe(204);
 
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
     });
 
     it('não permite unregister de aparelho pertencente a outra conta (T17.5 §189)', async () => {
@@ -265,7 +265,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       expect(res.status).toBe(204);
 
       // O aparelho de Alice continua intacto
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
     });
   });
 
@@ -342,7 +342,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       const res = await sendFriendRequest(TOKEN_A, b.body.profile.socialId);
       expect(res.status).toBe(200);
 
-      const events = repository.findDueEvents(clock.now(), 10);
+      const events = await repository.findDueEvents(clock.now(), 10);
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('FRIEND_REQUEST_RECEIVED');
       expect(events[0].recipientUid).toBe(UID_B);
@@ -356,7 +356,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       await sendFriendRequest(TOKEN_A, b.body.profile.socialId);
       await sendFriendRequest(TOKEN_A, b.body.profile.socialId); // retry
 
-      const events = repository.findDueEvents(clock.now(), 10);
+      const events = await repository.findDueEvents(clock.now(), 10);
       expect(events).toHaveLength(1);
     });
 
@@ -371,7 +371,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       expect(res.status).toBe(200);
       expect(res.body.result).toBe('FRIENDSHIP_CREATED');
 
-      const events = repository.findDueEvents(clock.now(), 10);
+      const events = await repository.findDueEvents(clock.now(), 10);
       const acceptedEvents = events.filter((e) => e.type === 'FRIEND_REQUEST_ACCEPTED');
       expect(acceptedEvents).toHaveLength(2);
       expect(acceptedEvents.some((e) => e.recipientUid === UID_A)).toBe(true);
@@ -386,7 +386,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       const res = await acceptFriendRequest(TOKEN_B, sent.body.request.requestId);
       expect(res.status).toBe(200);
 
-      const events = repository.findDueEvents(clock.now(), 10);
+      const events = await repository.findDueEvents(clock.now(), 10);
       const accepted = events.find((e) => e.type === 'FRIEND_REQUEST_ACCEPTED');
       expect(accepted).toBeDefined();
       expect(accepted?.recipientUid).toBe(UID_A);
@@ -407,13 +407,13 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       const endsAtExclusive = saoPauloInstant('2026-09-21T00:00:00');
 
       // Convite é imediatamente due para Bob
-      const currentEvents = repository.findDueEvents(clock.now(), 50);
+      const currentEvents = await repository.findDueEvents(clock.now(), 50);
       const inviteEvent = currentEvents.find((e) => e.type === 'CHALLENGE_INVITATION_RECEIVED');
       expect(inviteEvent).toBeDefined();
       expect(inviteEvent?.recipientUid).toBe(UID_B);
 
       // STARTING_SOON é due pouco antes do início
-      const startEvents = repository.findDueEvents(startsAt - 3600 * 1000, 50);
+      const startEvents = await repository.findDueEvents(startsAt - 3600 * 1000, 50);
       const startEvent = startEvents.find(
         (e) =>
           e.type === 'CHALLENGE_STARTING_SOON' &&
@@ -423,7 +423,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       expect(startEvent).toBeDefined();
 
       // ENDED é due após encerramento
-      const endEvents = repository.findDueEvents(endsAtExclusive + 3600 * 1000, 50);
+      const endEvents = await repository.findDueEvents(endsAtExclusive + 3600 * 1000, 50);
       const endEvent = endEvents.find(
         (e) =>
           e.type === 'CHALLENGE_ENDED' && e.recipientUid === UID_A && e.entityId === challengeId,
@@ -450,7 +450,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
 
       // Eventos programados do desafio foram cancelados
       const startsAt = created.body.challenge.startsAt;
-      const due = repository.findDueEvents(startsAt + 1000, 50);
+      const due = await repository.findDueEvents(startsAt + 1000, 50);
       const startingSoon = due.filter(
         (e) => e.entityId === challengeId && e.type === 'CHALLENGE_STARTING_SOON',
       );
@@ -613,7 +613,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       await dispatcher.runDispatchCycle();
 
       // Dispositivo foi desativado no banco
-      const activeDevices = repository.findActiveDevicesForRecipient(UID_B);
+      const activeDevices = await repository.findActiveDevicesForRecipient(UID_B);
       expect(activeDevices).toHaveLength(0);
     });
 
@@ -662,8 +662,8 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
         fcmToken: 'fcm-alice',
       });
 
-      expect(repository.getPreferences(UID_A).pushEnabled).toBe(true);
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
+      expect((await repository.getPreferences(UID_A)).pushEnabled).toBe(true);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(1);
 
       // Desativa o Social
       const res = await request(server())
@@ -672,8 +672,8 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       expect(res.status).toBe(200);
 
       // push desativado e dispositivos desabilitados
-      expect(repository.getPreferences(UID_A).pushEnabled).toBe(false);
-      expect(repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
+      expect((await repository.getPreferences(UID_A)).pushEnabled).toBe(false);
+      expect(await repository.findActiveDevicesForRecipient(UID_A)).toHaveLength(0);
     });
 
     it('eventos expirados são marcados como EXPIRED na varredura e não chegam ao gateway (T17.5.1 Problema 6)', async () => {
@@ -689,7 +689,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
 
       // Cria um evento que expira em 1 hora
       const now = clock.now();
-      repository.createEvent(
+      await repository.createEvent(
         {
           id: 'event-to-expire',
           recipientUid: UID_A,

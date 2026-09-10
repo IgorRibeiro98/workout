@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import type { ReportReason, ReportTargetType } from './report.contract';
 
 @Injectable()
 export class ReportRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
 
   /**
    * Salva nova denúncia (T17.6, com alvo desde a T17.9 §101/§103).
@@ -13,7 +13,7 @@ export class ReportRepository {
    * um valor vindo do cliente. Para `USER` ele é o dono do `socialId`; para `CHECKIN` e `COMMENT`,
    * o autor do conteúdo.
    */
-  createReport(
+  async createReport(
     id: string,
     reporterUid: string,
     reportedUid: string,
@@ -21,25 +21,23 @@ export class ReportRepository {
     targetType: ReportTargetType,
     targetId: string,
     now: number,
-  ): void {
-    const db = this.sqlite.connection;
-    db.prepare(
+  ): Promise<void> {
+    await this.db.query(
       `INSERT INTO social_reports
          (id, reporter_uid, reported_uid, reason, status, created_at, target_type, target_id)
-       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?)`,
-    ).run(id, reporterUid, reportedUid, reason, now, targetType, targetId);
+       VALUES ($1, $2, $3, $4, 'PENDING', $5, $6, $7)`,
+      [id, reporterUid, reportedUid, reason, now, targetType, targetId],
+    );
   }
 
   /** Conta denúncias feitas pelo reporter desde um timestamp. */
-  countReportsByReporterSince(reporterUid: string, sinceMs: number): number {
-    const db = this.sqlite.connection;
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS total FROM social_reports
-         WHERE reporter_uid = ? AND created_at >= ?`,
-      )
-      .get(reporterUid, sinceMs) as { total: number };
-    return row.total;
+  async countReportsByReporterSince(reporterUid: string, sinceMs: number): Promise<number> {
+    const res = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM social_reports
+       WHERE reporter_uid = $1 AND created_at >= $2`,
+      [reporterUid, sinceMs],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 
   /**
@@ -50,69 +48,61 @@ export class ReportRepository {
    * anti-duplicata existe para o toque duplo e o retry de resposta perdida, não para limitar
    * quantas coisas de alguém podem ser reportadas.
    */
-  hasRecentReport(
+  async hasRecentReport(
     reporterUid: string,
     targetType: ReportTargetType,
     targetId: string,
     reason: ReportReason,
     sinceMs: number,
-  ): boolean {
-    const db = this.sqlite.connection;
-    const row = db
-      .prepare(
-        `SELECT 1 FROM social_reports
-         WHERE reporter_uid = ? AND target_type = ? AND target_id = ? AND reason = ?
-           AND created_at >= ?
-         LIMIT 1`,
-      )
-      .get(reporterUid, targetType, targetId, reason, sinceMs);
-    return row !== undefined;
+  ): Promise<boolean> {
+    const res = await this.db.query(
+      `SELECT 1 FROM social_reports
+       WHERE reporter_uid = $1 AND target_type = $2 AND target_id = $3 AND reason = $4
+         AND created_at >= $5
+       LIMIT 1`,
+      [reporterUid, targetType, targetId, reason, sinceMs],
+    );
+    return res.rows.length > 0;
   }
 
   /** Verifica se existe contexto social legítimo entre os dois usuários (amigos, request, desafio compartilhado). */
-  hasLegitimateContext(uidA: string, uidB: string): boolean {
-    const db = this.sqlite.connection;
-
+  async hasLegitimateContext(uidA: string, uidB: string): Promise<boolean> {
     // 1. Amigos
-    const friendship = db
-      .prepare(
-        `SELECT 1 FROM friendships
-         WHERE (user_a_uid = ? AND user_b_uid = ?) OR (user_a_uid = ? AND user_b_uid = ?)
-         LIMIT 1`,
-      )
-      .get(uidA, uidB, uidB, uidA);
-    if (friendship) return true;
+    const friendship = await this.db.query(
+      `SELECT 1 FROM friendships
+       WHERE (user_a_uid = $1 AND user_b_uid = $2) OR (user_a_uid = $3 AND user_b_uid = $4)
+       LIMIT 1`,
+      [uidA, uidB, uidB, uidA],
+    );
+    if (friendship.rows.length > 0) return true;
 
     // 2. Pedido de amizade pendente
-    const request = db
-      .prepare(
-        `SELECT 1 FROM friend_requests
-         WHERE status = 'PENDING'
-           AND ((requester_uid = ? AND recipient_uid = ?) OR (requester_uid = ? AND recipient_uid = ?))
-         LIMIT 1`,
-      )
-      .get(uidA, uidB, uidB, uidA);
-    if (request) return true;
+    const request = await this.db.query(
+      `SELECT 1 FROM friend_requests
+       WHERE status = 'PENDING'
+         AND ((requester_uid = $1 AND recipient_uid = $2) OR (requester_uid = $3 AND recipient_uid = $4))
+       LIMIT 1`,
+      [uidA, uidB, uidB, uidA],
+    );
+    if (request.rows.length > 0) return true;
 
     // 3. Desafio compartilhado (onde ambos participam)
-    const sharedChallenge = db
-      .prepare(
-        `SELECT 1 FROM challenge_participants p1
-         JOIN challenge_participants p2 ON p1.challenge_id = p2.challenge_id
-         WHERE p1.participant_uid = ? AND p2.participant_uid = ?
-         LIMIT 1`,
-      )
-      .get(uidA, uidB);
-    if (sharedChallenge) return true;
+    const sharedChallenge = await this.db.query(
+      `SELECT 1 FROM challenge_participants p1
+       JOIN challenge_participants p2 ON p1.challenge_id = p2.challenge_id
+       WHERE p1.participant_uid = $1 AND p2.participant_uid = $2
+       LIMIT 1`,
+      [uidA, uidB],
+    );
+    if (sharedChallenge.rows.length > 0) return true;
 
     // 4. Convite de desafio recente entre eles
-    const challengeInvite = db
-      .prepare(
-        `SELECT 1 FROM challenge_invitations
-         WHERE (inviter_uid = ? AND recipient_uid = ?) OR (inviter_uid = ? AND recipient_uid = ?)
-         LIMIT 1`,
-      )
-      .get(uidA, uidB, uidB, uidA);
-    return challengeInvite !== undefined;
+    const challengeInvite = await this.db.query(
+      `SELECT 1 FROM challenge_invitations
+       WHERE (inviter_uid = $1 AND recipient_uid = $2) OR (inviter_uid = $3 AND recipient_uid = $4)
+       LIMIT 1`,
+      [uidA, uidB, uidB, uidA],
+    );
+    return challengeInvite.rows.length > 0;
   }
 }

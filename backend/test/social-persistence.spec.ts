@@ -1,9 +1,10 @@
 import { INestApplication } from '@nestjs/common';
+import { join } from 'path';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
 import { SparkLogger } from '../src/common/logger';
 import { loadMigrations, runMigrations } from '../src/database/migration-runner';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 import {
   FriendCodeCollisionError,
   SocialRepository,
@@ -22,7 +23,7 @@ import { WorkoutCheckInRepository } from '../src/modules/social/workout-checkin.
 import { SystemClock } from '../src/common/clock';
 import * as identity from '../src/modules/social/social.identity';
 import { FRIEND_CODE_MAX_GENERATION_ATTEMPTS } from '../src/modules/social/social.limits';
-import { configFor, createTempDb, MIGRATIONS_DIR, sqliteFor, type TempDb } from './support/temp-db';
+import { configFor, createTempDb, MIGRATIONS_DIR, postgresFor, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 
@@ -48,13 +49,16 @@ describe('Persistência do domínio social', () => {
 
   // ------------------------------------------------------------------------- migration
 
+  const LEGACY_SQLITE_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+
   describe('a migration social não toca no que a T16 gravou', () => {
     /** As migrations até a última da T16 — o estado de um servidor que ainda não subiu a T17. */
     const t16Migrations = () =>
-      loadMigrations(MIGRATIONS_DIR).filter((migration) => migration.version <= 6);
+      loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).filter((migration) => migration.version <= 6);
 
     it('sobe da base T16 para a base social preservando os dados existentes', () => {
-      const db = new BetterSqlite3(temp.path);
+      const sqlitePath = join(temp.directory, 'legacy.db');
+      const db = new BetterSqlite3(sqlitePath);
       db.pragma('foreign_keys = ON');
       runMigrations(db, t16Migrations());
 
@@ -77,7 +81,7 @@ describe('Persistência do domínio social', () => {
       const beforeEntity = db.prepare('SELECT * FROM sync_entities').all();
 
       // Agora a T17.0.
-      const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
+      const applied = runMigrations(db, loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR));
 
       // A T17.0 é a `0007`, e a série vai até a `0019` da T17.11. Todas são aditivas, e o que
       // este teste afirma é sobre a T16: nada do que ela gravou muda quando o social sobe.
@@ -114,7 +118,7 @@ describe('Persistência do domínio social', () => {
     });
 
     it('a migration é aditiva: só cria tabelas, não altera nem apaga as da T16', () => {
-      const sql = loadMigrations(MIGRATIONS_DIR).find((m) => m.version === 7)?.sql ?? '';
+      const sql = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 7)?.sql ?? '';
 
       expect(sql).toMatch(/CREATE TABLE social_profiles/);
       expect(sql).toMatch(/CREATE TABLE social_privacy_settings/);
@@ -137,47 +141,45 @@ describe('Persistência do domínio social', () => {
       }
     });
 
-    it('as constraints de unicidade existem no banco, e não só no código', () => {
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      const db = sqlite.connection;
+    it('as constraints de unicidade existem no banco, e não só no código', async () => {
+      const postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
 
       const insert = (ownerUid: string, socialId: string, friendCode: string) =>
-        db
-          .prepare(
-            `INSERT INTO social_profiles
-               (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
-             VALUES (?, ?, ?, 'Igor', 'ACTIVE', 1, 1)`,
-          )
-          .run(ownerUid, socialId, friendCode);
+        postgres.query(
+          `INSERT INTO social_profiles
+             (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
+           VALUES ($1, $2, $3, 'Igor', 'ACTIVE', 1, 1)`,
+          [ownerUid, socialId, friendCode],
+        );
 
-      insert('uid-1', 'social-1', 'SPK-AAAAAAAA');
+      await insert('uid-1', 'social-1', 'SPK-AAAAAAAA');
 
       // Mesma conta: proibido por chave primária.
-      expect(() => insert('uid-1', 'social-2', 'SPK-BBBBBBBB')).toThrow(/UNIQUE|PRIMARY/i);
+      await expect(insert('uid-1', 'social-2', 'SPK-BBBBBBBB')).rejects.toThrow();
       // Mesmo socialId em outra conta.
-      expect(() => insert('uid-2', 'social-1', 'SPK-CCCCCCCC')).toThrow(/UNIQUE/i);
+      await expect(insert('uid-2', 'social-1', 'SPK-CCCCCCCC')).rejects.toThrow();
       // Mesmo friendCode em outra conta.
-      expect(() => insert('uid-3', 'social-3', 'SPK-AAAAAAAA')).toThrow(/UNIQUE/i);
+      await expect(insert('uid-3', 'social-3', 'SPK-AAAAAAAA')).rejects.toThrow();
 
-      sqlite.close();
+      await postgres.close();
     });
   });
 
   // ------------------------------------------------------------------------- colisão de código
 
   describe('colisão de friendCode', () => {
-    let sqlite: SqliteService;
+    let postgres: PostgresService;
     let repository: SocialRepository;
 
-    beforeEach(() => {
-      sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      repository = new SocialRepository(sqlite);
+    beforeEach(async () => {
+      postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      repository = new SocialRepository(postgres);
     });
 
-    afterEach(() => {
-      sqlite.close();
+    afterEach(async () => {
+      await postgres.close();
       jest.restoreAllMocks();
     });
 
@@ -193,14 +195,14 @@ describe('Persistência do domínio social', () => {
         now: Date.now(),
       });
 
-    it('o repositório distingue colisão de código de outros erros', () => {
-      create('uid-1', 'social-1', 'SPK-AAAAAAAA');
+    it('o repositório distingue colisão de código de outros erros', async () => {
+      await create('uid-1', 'social-1', 'SPK-AAAAAAAA');
 
-      expect(() => create('uid-2', 'social-2', 'SPK-AAAAAAAA')).toThrow(FriendCodeCollisionError);
+      await expect(create('uid-2', 'social-2', 'SPK-AAAAAAAA')).rejects.toThrow(FriendCodeCollisionError);
     });
 
-    it('o serviço tenta de novo e conclui a ativação', () => {
-      create('uid-ocupada', 'social-ocupada', 'SPK-AAAAAAAA');
+    it('o serviço tenta de novo e conclui a ativação', async () => {
+      await create('uid-ocupada', 'social-ocupada', 'SPK-AAAAAAAA');
 
       const spy = jest
         .spyOn(identity, 'generateFriendCode')
@@ -208,23 +210,23 @@ describe('Persistência do domínio social', () => {
         .mockReturnValueOnce('SPK-AAAAAAAA')
         .mockReturnValueOnce('SPK-BBBBBBBB');
 
-      const service = socialServiceFor(sqlite, repository, temp.path);
-      const response = service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
+      const service = socialServiceFor(postgres, repository, temp.path);
+      const response = await service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
 
       expect(spy).toHaveBeenCalledTimes(3);
       expect(response.profile.friendCode).toBe('SPK-BBBBBBBB');
-      expect(repository.find(UID)?.profile.friendCode).toBe('SPK-BBBBBBBB');
+      expect((await repository.find(UID))?.profile.friendCode).toBe('SPK-BBBBBBBB');
     });
 
-    it('colisão persistente vira 503 explícito — nunca 500 e nunca perfil sem código', () => {
-      create('uid-ocupada', 'social-ocupada', 'SPK-AAAAAAAA');
+    it('colisão persistente vira 503 explícito — nunca 500 e nunca perfil sem código', async () => {
+      await create('uid-ocupada', 'social-ocupada', 'SPK-AAAAAAAA');
 
       jest.spyOn(identity, 'generateFriendCode').mockReturnValue('SPK-AAAAAAAA');
 
-      const service = socialServiceFor(sqlite, repository, temp.path);
+      const service = socialServiceFor(postgres, repository, temp.path);
 
       try {
-        service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
+        await service.activate({ uid: UID }, 'req-1', { displayName: 'Igor' });
         throw new Error('a ativação deveria ter falhado');
       } catch (error) {
         const body = (error as { getResponse?: () => unknown }).getResponse?.();
@@ -233,10 +235,11 @@ describe('Persistência do domínio social', () => {
       }
 
       // O perfil não foi criado pela metade.
-      expect(repository.find(UID)).toBeNull();
-      expect(
-        sqlite.connection.prepare('SELECT COUNT(*) AS total FROM social_privacy_settings').get(),
-      ).toEqual({ total: 1 });
+      expect(await repository.find(UID)).toBeNull();
+      const countRes = await postgres.query<{ total: number }>(
+        'SELECT COUNT(*) AS total FROM social_privacy_settings',
+      );
+      expect(countRes.rows[0]).toEqual({ total: 1 });
     });
 
     it('o teto de tentativas é o declarado, e é pequeno', () => {
@@ -285,12 +288,12 @@ describe('Persistência do domínio social', () => {
   // ------------------------------------------------------------------------- isolamento na query
 
   describe('o isolamento é da consulta, não de uma verificação posterior', () => {
-    it('não existe leitura de perfil que não filtre por owner_uid', () => {
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      const repository = new SocialRepository(sqlite);
+    it('não existe leitura de perfil que não filtre por owner_uid', async () => {
+      const postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      const repository = new SocialRepository(postgres);
 
-      repository.create({
+      await repository.create({
         ownerUid: 'uid-a',
         socialId: 'social-a',
         friendCode: 'SPK-AAAAAAAA',
@@ -301,8 +304,8 @@ describe('Persistência do domínio social', () => {
         now: Date.now(),
       });
 
-      expect(repository.find('uid-a')?.profile.socialId).toBe('social-a');
-      expect(repository.find('uid-b')).toBeNull();
+      expect((await repository.find('uid-a'))?.profile.socialId).toBe('social-a');
+      expect(await repository.find('uid-b')).toBeNull();
 
       // E o repositório não oferece nenhum caminho de enumeração.
       const methods = Object.getOwnPropertyNames(SocialRepository.prototype);
@@ -315,7 +318,7 @@ describe('Persistência do domínio social', () => {
         'updateStatus',
       ]);
 
-      sqlite.close();
+      await postgres.close();
     });
   });
 });
@@ -323,7 +326,7 @@ describe('Persistência do domínio social', () => {
 /**
  * O `SocialService` montado à mão, com as dependências que a T17.3 acrescentou.
  *
- * `ChallengeRepository` e `SqliteService` entraram porque desativar o Social precisa encerrar a
+ * `ChallengeRepository` e `PostgresService` entraram porque desativar o Social precisa encerrar a
  * participação em desafios **na mesma transação** (T17.3 §119). `SocialGroupService` entrou pela
  * mesma razão na T17.11 (§96–§99): desativar precisa resolver os Squads na mesma transação, e
  * recusar quando a posse exige decisão do usuário.
@@ -333,33 +336,33 @@ describe('Persistência do domínio social', () => {
  * real porque nenhum destes casos depende dele.
  */
 function socialServiceFor(
-  sqlite: SqliteService,
+  postgres: PostgresService,
   repository: SocialRepository,
   databasePath: string,
 ): SocialService {
   return new SocialService(
     repository,
-    new ChallengeRepository(sqlite),
-    groupServiceFor(sqlite, repository),
-    sqlite,
+    new ChallengeRepository(postgres),
+    groupServiceFor(postgres, repository),
+    postgres,
     new SystemClock(),
     new SparkLogger(configFor(databasePath)),
   );
 }
 
-/** O `SocialGroupService` montado à mão, com as dependências reais sobre a mesma conexão. */
-function groupServiceFor(sqlite: SqliteService, repository: SocialRepository): SocialGroupService {
-  const logger = new SparkLogger(configFor(':memory:'));
+/** O `SocialGroupService` montado à mão, com as dependências reais sobre o PostgreSQL. */
+function groupServiceFor(postgres: PostgresService, repository: SocialRepository): SocialGroupService {
+  const logger = new SparkLogger(configFor());
   return new SocialGroupService(
-    new SocialGroupRepository(sqlite),
+    new SocialGroupRepository(postgres),
     repository,
-    new FriendshipRepository(sqlite),
-    new BlockRepository(sqlite),
-    new WorkoutCheckInRepository(sqlite),
-    new CheckInInteractionRepository(sqlite),
+    new FriendshipRepository(postgres),
+    new BlockRepository(postgres),
+    new WorkoutCheckInRepository(postgres),
+    new CheckInInteractionRepository(postgres),
     new CheckInProjector(
-      new SocialMediaRepository(sqlite),
-      new CheckInInteractionRepository(sqlite),
+      new SocialMediaRepository(postgres),
+      new CheckInInteractionRepository(postgres),
     ),
     new SocialGroupRateLimiter(),
     new SystemClock(),

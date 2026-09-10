@@ -49,7 +49,10 @@ export class SyncController {
   @UseGuards(BearerAuthGuard)
   @Post('push')
   @HttpCode(HttpStatus.OK)
-  push(@Principal() principal: AuthenticatedPrincipal, @Req() request: Request): SyncPushResponse {
+  async push(
+    @Principal() principal: AuthenticatedPrincipal,
+    @Req() request: Request,
+  ): Promise<SyncPushResponse> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
     const rawBody = (request as RequestWithRawBody).rawBody;
     if (rawBody === undefined) {
@@ -69,12 +72,12 @@ export class SyncController {
   @UseGuards(BearerAuthGuard)
   @Get('pull')
   @HttpCode(HttpStatus.OK)
-  pull(
+  async pull(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
-  ): SyncPullResponse {
+  ): Promise<SyncPullResponse> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
     return this.service.pull(principal, requestId, cursor, limit);
   }
@@ -97,12 +100,12 @@ export class SyncController {
   @UseGuards(BearerAuthGuard)
   @Get('entities/:entityType/:entitySyncId')
   @HttpCode(HttpStatus.OK)
-  entityState(
+  async entityState(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('entityType') entityType: string,
     @Param('entitySyncId') entitySyncId: string,
-  ): SyncEntityStateResponse {
+  ): Promise<SyncEntityStateResponse> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
     return this.service.entityState(principal, requestId, entityType, entitySyncId);
   }

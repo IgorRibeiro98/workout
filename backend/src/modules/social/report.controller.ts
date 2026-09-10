@@ -17,16 +17,16 @@ export class ReportController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  createReport(
+  async createReport(
     @Principal() principal: AuthenticatedPrincipal,
     @Body() body: CreateReportRequestDto,
     @Req() req: Request,
-  ): CreateReportResponseDto {
+  ): Promise<CreateReportResponseDto> {
     assertBodyWithinLimit((req as RequestWithRawBody).rawBody);
     // §103 — o corpo **não** pode carregar `reportedUid`. Recusar por nome, e não ignorar em
     // silêncio: um cliente que o envia acredita que ele decide quem é denunciado, e atender o
     // resto da requisição seria concordar em parte com essa crença.
     rejectClientResolvedReportFields(body as unknown);
-    return this.reportService.createReport(principal.uid, body);
+    return await this.reportService.createReport(principal.uid, body);
   }
 }

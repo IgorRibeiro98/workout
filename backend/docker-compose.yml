@@ -1,13 +1,27 @@
-# Spark Backend — composição local (T16.0).
+# Spark Backend — composição local (PostgreSQL / T18.0).
 #
-# `docker compose up -d` sobe a fundação inteira: um processo backend e um SQLite persistente.
-# Não há Postgres, Redis, fila, proxy gerenciado nem qualquer serviço pago: a arquitetura-alvo é
-# uma VPS com Docker Compose, e é isso que esta composição representa.
-#
-# O Caddy da produção futura não está aqui de propósito — ele precisa de domínio real para emitir
-# certificado, e a T16.0 não provisiona domínio. Veja `Caddyfile.example`.
+# `docker compose up -d` sobe a fundação inteira: PostgreSQL e um processo backend.
+# A persistência do PostgreSQL vive no volume nomeado `spark-pgdata`.
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: spark-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spark
+      POSTGRES_PASSWORD: spark
+      POSTGRES_DB: spark_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - spark-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spark -d spark_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -15,46 +29,22 @@ services:
     image: spark-backend:0.1.0
     container_name: spark-backend
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 8080
-      # Dentro do container o banco vive no volume montado, nunca na camada de escrita do container.
-      DATABASE_PATH: /data/spark.db
-      # A mídia social (T17.9 §26). `NODE_ENV: production` neste arquivo torna a variável
-      # obrigatória — é o mesmo portão da produção real, e é bom que a composição local o
-      # exercite: um desenvolvedor que a esqueça descobre aqui, e não na VPS.
+      DATABASE_URL: postgresql://spark:spark@postgres:5432/spark_dev
       SOCIAL_MEDIA_ROOT: /media
       LOG_LEVEL: info
-      SQLITE_BUSY_TIMEOUT_MS: 5000
       SHUTDOWN_TIMEOUT_MS: 10000
-      # Firebase Admin (T16.1). Descomente junto com a montagem abaixo quando a credencial
-      # existir na máquina. É um CAMINHO: a chave privada nunca vive neste arquivo, que é
-      # versionado. Ver docs/FIREBASE_AUTH_SETUP.md.
-      # GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/spark-firebase-admin.json
-      #
-      # Coach IA (T16.2). A credencial do Gemini é SERVER-ONLY e nunca entra neste arquivo, que é
-      # versionado: ela vem do ambiente da VPS (por exemplo, um `.env` fora do Git ou o gerenciador
-      # de segredos do host). Sem ela, /v1/ai/coach responde 503 e o núcleo do Spark segue intacto.
-      # GEMINI_API_KEY: ${GEMINI_API_KEY}
-      #
-      # Proteção de custo — os defaults do código já são conservadores; ajuste conforme o uso real.
-      # AI_MAX_REQUESTS_PER_USER_DAY: 50
-      # AI_MAX_REQUESTS_GLOBAL_DAY: 500
     ports:
-      # Só no loopback do host: em produção quem publica na internet é o Caddy, não este serviço.
       - "127.0.0.1:8080:8080"
     volumes:
-      - spark-data:/data
       - spark-media:/media
-      # A service account entra por montagem somente-leitura, a partir de um arquivo que existe
-      # só na VPS e nunca no Git nem na imagem:
-      # - /etc/spark/firebase-admin.json:/run/secrets/spark-firebase-admin.json:ro
-    # Dá tempo ao graceful shutdown antes de o Docker mandar SIGKILL.
     stop_grace_period: 15s
 
 volumes:
-  # Volume nomeado: `docker compose down` e a recriação do container preservam o banco.
-  # Só `docker compose down -v` apaga — e isso é destrutivo por definição.
-  spark-data:
-  # O mesmo para a mídia social (T17.9 §26): as fotos não podem viver na camada efêmera.
+  spark-pgdata:
   spark-media:

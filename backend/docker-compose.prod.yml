@@ -81,7 +81,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8080
-      DATABASE_PATH: /data/spark.db
+      DATABASE_URL: "${DATABASE_URL:?defina DATABASE_URL no .env}"
+      DATABASE_URL_DIRECT: "${DATABASE_URL_DIRECT:-}"
       # T17.9 §26/§28 — a mídia social vive em volume persistente, e o caminho é **obrigatório**
       # em produção: `AppConfig.missingRequirements()` derruba o startup se ele faltar. Um default
       # silencioso apontaria para a camada efêmera do container, e a foto de todo mundo sumiria no
@@ -91,9 +92,6 @@ services:
       # UTC para tudo o que é técnico (§124/§126). O sync não depende de relógio para causalidade,
       # mas log, certificado e nome de backup dependem de um horário que não mude duas vezes por ano.
       TZ: UTC
-      SQLITE_BUSY_TIMEOUT_MS: 5000
-      # A escolha da T16.8: durabilidade acima de latência. Ver `src/config/env.schema.ts`.
-      SQLITE_SYNCHRONOUS: FULL
       SHUTDOWN_TIMEOUT_MS: 10000
       HTTP_REQUEST_TIMEOUT_MS: 120000
       HTTP_KEEP_ALIVE_TIMEOUT_MS: 65000

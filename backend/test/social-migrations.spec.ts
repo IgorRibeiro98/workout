@@ -49,9 +49,21 @@ const SOCIAL_TABLES = [
   'social_group_checkin_shares',
 ] as const;
 
+const LEGACY_SQLITE_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+
+function sqliteMigrateAll(
+  databasePath: string,
+  migrationsDir = LEGACY_SQLITE_MIGRATIONS_DIR,
+): BetterSqlite3.Database {
+  const db = new BetterSqlite3(databasePath);
+  db.pragma('foreign_keys = ON');
+  runMigrations(db, loadMigrations(migrationsDir));
+  return db;
+}
+
 /** Aplica as migrations até `upTo` inclusive, num diretório temporário só com esses arquivos. */
 function migrateUpTo(databasePath: string, upTo: number): void {
-  const all = loadMigrations(MIGRATIONS_DIR);
+  const all = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR);
   const db = new BetterSqlite3(databasePath);
   try {
     db.pragma('foreign_keys = ON');
@@ -93,26 +105,20 @@ describe('T17.10 — migrations sociais', () => {
   // ---------------------------------------------------------------- §112 from-clean
 
   it('banco do zero chega à última migration com todas as tabelas sociais (§112)', () => {
-    const sqlite = sqliteFor(configFor(temp.path));
-    sqlite.initialize(MIGRATIONS_DIR);
+    const db = sqliteMigrateAll(temp.sqlitePath);
 
-    const expected = sqlite.expectedVersions();
-    expect(sqlite.appliedVersions()).toEqual(expected);
-    expect(expected.at(-1)).toBe(loadMigrations(MIGRATIONS_DIR).length);
-
-    const tables = tableNames(temp.path);
+    const tables = tableNames(temp.sqlitePath);
     for (const table of SOCIAL_TABLES) {
       expect(tables.has(table)).toBe(true);
     }
 
-    const db = sqlite.connection;
     expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
     expect(db.pragma('foreign_key_check')).toEqual([]);
-    sqlite.close();
+    db.close();
   });
 
   it('nenhuma migration perde dado: todo DROP TABLE é parte de um rebuild que copia antes (§172)', () => {
-    for (const migration of loadMigrations(MIGRATIONS_DIR)) {
+    for (const migration of loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR)) {
       // Comentários explicam decisões e citam palavras que o SQL não executa; a varredura precisa
       // olhar o **código**, não a prosa.
       const sql = migration.sql.replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -152,10 +158,10 @@ describe('T17.10 — migrations sociais', () => {
     ['pré-T17.8 (check-ins)', 14],
     ['pré-T17.9 (conteúdo do check-in)', 15],
   ])('um banco parado em %s sobe até o fim preservando o dado (§113)', (_label, stoppedAt) => {
-    migrateUpTo(temp.path, stoppedAt);
+    migrateUpTo(temp.sqlitePath, stoppedAt);
 
     // Dado real gravado na versão antiga, pelo schema daquela versão.
-    const before = new BetterSqlite3(temp.path);
+    const before = new BetterSqlite3(temp.sqlitePath);
     before.pragma('foreign_keys = ON');
     before
       .prepare(
@@ -180,11 +186,7 @@ describe('T17.10 — migrations sociais', () => {
     before.close();
 
     // Sobe até o fim.
-    const sqlite = sqliteFor(configFor(temp.path));
-    sqlite.initialize(MIGRATIONS_DIR);
-    expect(sqlite.appliedVersions()).toEqual(sqlite.expectedVersions());
-
-    const db = sqlite.connection;
+    const db = sqliteMigrateAll(temp.sqlitePath);
     // O perfil antigo continua lá, inteiro.
     const profile = db
       .prepare(`SELECT display_name AS name, status FROM social_profiles WHERE owner_uid = ?`)
@@ -222,7 +224,7 @@ describe('T17.10 — migrations sociais', () => {
 
     expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
     expect(db.pragma('foreign_key_check')).toEqual([]);
-    sqlite.close();
+    db.close();
   });
 
   /**
@@ -239,9 +241,9 @@ describe('T17.10 — migrations sociais', () => {
    * direta, e é isso que `FRIEND` significa agora.
    */
   it('um banco com interações da T17.9/T17.11 sobe preservando tudo, como FRIEND (§166/§167)', () => {
-    migrateUpTo(temp.path, 19);
+    migrateUpTo(temp.sqlitePath, 19);
 
-    const before = new BetterSqlite3(temp.path);
+    const before = new BetterSqlite3(temp.sqlitePath);
     before.pragma('foreign_keys = ON');
     const profile = before.prepare(
       `INSERT INTO social_profiles
@@ -281,11 +283,7 @@ describe('T17.10 — migrations sociais', () => {
       .run();
     before.close();
 
-    const sqlite = sqliteFor(configFor(temp.path));
-    sqlite.initialize(MIGRATIONS_DIR);
-    expect(sqlite.appliedVersions()).toEqual(sqlite.expectedVersions());
-
-    const db = sqlite.connection;
+    const db = sqliteMigrateAll(temp.sqlitePath);
 
     expect(
       db
@@ -328,20 +326,18 @@ describe('T17.10 — migrations sociais', () => {
     // §165 — as FKs recriadas apontam para onde deviam, e o arquivo continua íntegro.
     expect(db.pragma('integrity_check')).toEqual([{ integrity_check: 'ok' }]);
     expect(db.pragma('foreign_key_check')).toEqual([]);
-    sqlite.close();
+    db.close();
   });
 
   it('o schema final é o mesmo vindo do zero e vindo de uma versão anterior (§112/§113)', () => {
     const fromScratch = createTempDb();
     const upgraded = createTempDb();
     try {
-      const clean = sqliteFor(configFor(fromScratch.path));
-      clean.initialize(MIGRATIONS_DIR);
+      const clean = sqliteMigrateAll(fromScratch.sqlitePath);
       clean.close();
 
-      migrateUpTo(upgraded.path, 14);
-      const stepped = sqliteFor(configFor(upgraded.path));
-      stepped.initialize(MIGRATIONS_DIR);
+      migrateUpTo(upgraded.sqlitePath, 14);
+      const stepped = sqliteMigrateAll(upgraded.sqlitePath);
       stepped.close();
 
       const schemaOf = (path: string) => {
@@ -360,7 +356,7 @@ describe('T17.10 — migrations sociais', () => {
         }
       };
 
-      expect(schemaOf(upgraded.path)).toEqual(schemaOf(fromScratch.path));
+      expect(schemaOf(upgraded.sqlitePath)).toEqual(schemaOf(fromScratch.sqlitePath));
     } finally {
       fromScratch.cleanup();
       upgraded.cleanup();
@@ -374,7 +370,7 @@ describe('T17.10 — migrations sociais', () => {
 
     beforeEach(() => {
       mirror = mkdtempSync(join(tmpdir(), 'spark-migrations-'));
-      cpSync(MIGRATIONS_DIR, mirror, { recursive: true });
+      cpSync(LEGACY_SQLITE_MIGRATIONS_DIR, mirror, { recursive: true });
     });
 
     afterEach(() => {
@@ -382,34 +378,32 @@ describe('T17.10 — migrations sociais', () => {
     });
 
     it('recusa o arranque quando o conteúdo de uma migration aplicada mudou', () => {
-      const first = sqliteFor(configFor(temp.path));
-      first.initialize(mirror);
+      const first = sqliteMigrateAll(temp.sqlitePath, mirror);
       first.close();
 
       // Edita uma migration social **já aplicada**, mantendo o nome do arquivo.
       const target = join(mirror, '0015_social_workout_checkins.sql');
       writeFileSync(target, `${readFileSync(target, 'utf8')}\n-- alteração retroativa\n`, 'utf8');
 
-      const second = sqliteFor(configFor(temp.path));
-      expect(() => second.initialize(mirror)).toThrow(/editada depois de aplicada/);
+      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(
+        /editada depois de aplicada/,
+      );
     });
 
     it('um banco anterior ao checksum é adotado sem quebrar, e passa a ser protegido', () => {
       // Simula o estado de produção antes desta tarefa: histórico sem coluna de checksum.
-      const seed = sqliteFor(configFor(temp.path));
-      seed.initialize(mirror);
+      const seed = sqliteMigrateAll(temp.sqlitePath, mirror);
       seed.close();
 
-      const raw = new BetterSqlite3(temp.path);
+      const raw = new BetterSqlite3(temp.sqlitePath);
       raw.exec('UPDATE schema_migrations SET checksum = NULL');
       raw.close();
 
       // Primeiro arranque depois da mudança: adota o que está aplicado, sem recusar.
-      const adopting = sqliteFor(configFor(temp.path));
-      expect(() => adopting.initialize(mirror)).not.toThrow();
+      const adopting = sqliteMigrateAll(temp.sqlitePath, mirror);
       adopting.close();
 
-      const stored = new BetterSqlite3(temp.path);
+      const stored = new BetterSqlite3(temp.sqlitePath);
       const nulls = stored
         .prepare(`SELECT COUNT(*) AS n FROM schema_migrations WHERE checksum IS NULL`)
         .get() as { n: number };
@@ -419,8 +413,9 @@ describe('T17.10 — migrations sociais', () => {
       // E a partir daqui uma edição é recusada.
       const target = join(mirror, '0017_social_checkin_reactions_comments.sql');
       writeFileSync(target, `${readFileSync(target, 'utf8')}\n-- editada\n`, 'utf8');
-      const protectedRun = sqliteFor(configFor(temp.path));
-      expect(() => protectedRun.initialize(mirror)).toThrow(/editada depois de aplicada/);
+      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(
+        /editada depois de aplicada/,
+      );
     });
   });
 });

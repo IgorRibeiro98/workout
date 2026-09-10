@@ -91,14 +91,14 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   }
 
   private async collectExpiredAndDeleted(): Promise<number> {
-    const due = this.repository.findCollectable(this.clock.now(), MEDIA_CLEANUP_BATCH);
+    const due = await this.repository.findCollectable(this.clock.now(), MEDIA_CLEANUP_BATCH);
     let removed = 0;
 
     for (const item of due) {
       // O arquivo primeiro, a linha depois: a ordem inversa deixaria um arquivo sem metadata, que
       // é o órfão que a segunda varredura teria de recolher — trabalho a mais para nada.
       await this.store.remove(item.storageKey).catch(() => undefined);
-      this.repository.deleteRow(item.id);
+      await this.repository.deleteRow(item.id);
       removed += 1;
     }
 
@@ -119,7 +119,7 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
    * as duas leituras pareceria órfão — e seria apagado logo depois de a pessoa publicá-lo.
    */
   private async collectOrphans(): Promise<number> {
-    const known = this.repository.allStorageKeys();
+    const known = await this.repository.allStorageKeys();
     const onDisk = await this.store.listKeys();
 
     let removed = 0;

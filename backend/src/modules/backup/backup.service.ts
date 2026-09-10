@@ -61,17 +61,17 @@ export class BackupService {
    * [created] distingue `201` de `200`: um reenvio depois de resposta perdida não é um backup novo,
    * e dizer que é confundiria o cliente sobre quantos snapshots existem.
    */
-  create(
+  async create(
     principal: AuthenticatedPrincipal,
     requestId: string,
     rawBody: string,
-  ): { created: boolean; metadata: BackupMetadataResponse } {
+  ): Promise<{ created: boolean; metadata: BackupMetadataResponse }> {
     this.assertWithinWriteLimit(principal.uid);
 
     const startedAt = Date.now();
     const snapshot = validateBackupRequest(rawBody);
 
-    const existing = this.repository.findByClientBackupId(principal.uid, snapshot.clientBackupId);
+    const existing = await this.repository.findByClientBackupId(principal.uid, snapshot.clientBackupId);
     if (existing) {
       if (existing.payloadHash !== snapshot.payloadHash) {
         // Mesma tentativa, conteúdo outro. Aceitar apagaria em silêncio o que a primeira
@@ -92,7 +92,7 @@ export class BackupService {
       return { created: false, metadata: metadataOf(existing) };
     }
 
-    const stored = this.repository.insert(principal.uid, snapshot, Date.now());
+    const stored = await this.repository.insert(principal.uid, snapshot, Date.now());
 
     this.logger.info('backup.created', {
       requestId,
@@ -104,15 +104,15 @@ export class BackupService {
       durationMs: Date.now() - startedAt,
     });
 
-    this.pruneAfterCommit(principal.uid, requestId);
+    await this.pruneAfterCommit(principal.uid, requestId);
 
     return { created: true, metadata: metadataOf(stored) };
   }
 
   /** A metadata do backup mais recente da conta autenticada. Nunca de outra. */
-  latest(principal: AuthenticatedPrincipal): BackupMetadataResponse {
+  async latest(principal: AuthenticatedPrincipal): Promise<BackupMetadataResponse> {
     this.assertWithinReadLimit(principal.uid);
-    const latest = this.repository.findLatest(principal.uid);
+    const latest = await this.repository.findLatest(principal.uid);
     if (!latest) {
       throw BackupErrors.notFound();
     }
@@ -126,9 +126,10 @@ export class BackupService {
    * lista vazia (`200`), não `404`: "você ainda não tem backup" é um estado normal da tela, e não
    * um erro a tratar.
    */
-  list(principal: AuthenticatedPrincipal): BackupListResponse {
+  async list(principal: AuthenticatedPrincipal): Promise<BackupListResponse> {
     this.assertWithinReadLimit(principal.uid);
-    return { items: this.repository.listFor(principal.uid).map(metadataOf) };
+    const list = await this.repository.listFor(principal.uid);
+    return { items: list.map(metadataOf) };
   }
 
   /**
@@ -137,9 +138,9 @@ export class BackupService {
    * O `backupId` de outra conta responde exatamente como um inexistente: `404`. Distinguir os dois
    * transformaria este endpoint em um oráculo de "este backup existe em alguma conta".
    */
-  metadata(principal: AuthenticatedPrincipal, backupId: string): BackupMetadataResponse {
+  async metadata(principal: AuthenticatedPrincipal, backupId: string): Promise<BackupMetadataResponse> {
     this.assertWithinReadLimit(principal.uid);
-    const stored = this.repository.findByBackupId(principal.uid, backupId);
+    const stored = await this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
       throw BackupErrors.notFound();
     }
@@ -148,20 +149,10 @@ export class BackupService {
 
   /**
    * O documento canônico do snapshot, verbatim, para o restore.
-   *
-   * ## O que este método não faz
-   *
-   * Não marca, não consome, não move e não apaga nada: baixar um backup é leitura pura, e o
-   * snapshot continua imutável e disponível enquanto a retenção o mantiver. Restaurar não gasta o
-   * backup.
-   *
-   * Devolve o texto **exato** que produziu [BackupMetadataResponse.payloadHash]. O Android
-   * recalcula o SHA-256 sobre o que recebeu e compara com a metadata; qualquer diferença — no
-   * caminho, no servidor ou no disco — vira recusa lá, antes de qualquer escrita local.
    */
-  content(principal: AuthenticatedPrincipal, requestId: string, backupId: string): string {
+  async content(principal: AuthenticatedPrincipal, requestId: string, backupId: string): Promise<string> {
     this.assertWithinReadLimit(principal.uid);
-    const stored = this.repository.findByBackupId(principal.uid, backupId);
+    const stored = await this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
       // Metadata de log: quem pediu e o quê. Nunca o conteúdo, nunca o `backupId` de outra conta
       // resolvido para um dono.
@@ -172,7 +163,7 @@ export class BackupService {
       throw BackupErrors.notFound();
     }
 
-    const payload = this.repository.findPayload(principal.uid, backupId);
+    const payload = await this.repository.findPayload(principal.uid, backupId);
     if (payload === null) {
       this.logger.warn('backup.content.unavailable', {
         requestId,
@@ -194,15 +185,11 @@ export class BackupService {
 
   /**
    * A retenção, **depois** do commit do backup novo.
-   *
-   * Separada da transação de escrita de propósito: se a limpeza falhar, o backup recém-criado
-   * continua válido e o problema vira "limpeza pendente", não "usuário sem backup". A ordem
-   * inversa — apagar antes de gravar — é a que produz perda de dado.
    */
-  private pruneAfterCommit(ownerUid: string, requestId: string): void {
+  private async pruneAfterCommit(ownerUid: string, requestId: string): Promise<void> {
     const keep = this.config.backupRetentionCount;
     try {
-      const removed = this.repository.pruneOlderThan(ownerUid, keep);
+      const removed = await this.repository.pruneOlderThan(ownerUid, keep);
       if (removed > 0) {
         this.logger.info('backup.retention.pruned', {
           requestId,

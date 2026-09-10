@@ -48,3 +48,18 @@ export const MAX_CHECKIN_REQUEST_BODY_BYTES = 2 * 1024;
  * formato de identificador opaco sem virar um campo de texto livre por acidente.
  */
 export const MAX_CHECKIN_IDENTIFIER_LENGTH = 100;
+
+export {
+  CHECKIN_CLOCK_SKEW_TOLERANCE_MS,
+  CHECKIN_WINDOW_MS,
+  FEED_DEFAULT_LIMIT,
+  FEED_MAX_LIMIT,
+  FEED_WINDOW_MS,
+  COMMENTS_DEFAULT_PAGE as COMMENTS_DEFAULT_LIMIT,
+  COMMENTS_MAX_PAGE as COMMENTS_MAX_LIMIT,
+} from './workout-checkin.contract';
+
+export {
+  COMMENT_FLOOD_WINDOW_MS,
+  MAX_COMMENTS_PER_CHECKIN_PER_WINDOW,
+} from './social-media.limits';

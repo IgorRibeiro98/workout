@@ -64,12 +64,24 @@ export class SocialProgressProjector {
    * corrente de ninguém: dois visitantes com relógios diferentes veriam semanas diferentes do
    * mesmo perfil.
    */
-  project(ownerUid: string, weekTimeZone: string | null, nowMs: number): SocialProgressProjection {
+  async project(
+    ownerUid: string,
+    weekTimeZone: string | null,
+    nowMs: number,
+  ): Promise<SocialProgressProjection> {
+    const [level, consistencyStreak, weeklyWorkoutCount, highlightedAchievementIds] =
+      await Promise.all([
+        this.source.getLevel(ownerUid),
+        this.source.getConsistencyStreak(ownerUid),
+        this.source.getWeeklyWorkoutCount(ownerUid, weekTimeZone, nowMs),
+        this.source.getEarnedAchievementIds(ownerUid),
+      ]);
+
     return {
-      level: this.source.getLevel(ownerUid),
-      consistencyStreak: this.source.getConsistencyStreak(ownerUid),
-      weeklyWorkoutCount: this.source.getWeeklyWorkoutCount(ownerUid, weekTimeZone, nowMs),
-      highlightedAchievementIds: this.source.getEarnedAchievementIds(ownerUid),
+      level,
+      consistencyStreak,
+      weeklyWorkoutCount,
+      highlightedAchievementIds,
     };
   }
 }

@@ -50,23 +50,21 @@ export interface ResolvedInteractionContext {
 export class WorkoutCheckInContextResolver {
   constructor(private readonly accessPolicy: WorkoutCheckInAccessPolicy) {}
 
-  resolve(
+  async resolve(
     viewerUid: string,
     checkInId: string,
     requested: InteractionContextRequest | undefined,
-  ): ResolvedInteractionContext {
+  ): Promise<ResolvedInteractionContext> {
     if (requested?.type === 'GROUP') {
-      // A validação de forma (groupId presente, FRIEND sem groupId) já aconteceu no validador —
-      // aqui chegamos só com um contexto bem formado. `groupId` é garantido presente pelo tipo.
       const groupId = requested.groupId as string;
-      const checkIn = this.accessPolicy.findGroupAccessibleCheckIn(viewerUid, checkInId, groupId);
+      const checkIn = await this.accessPolicy.findGroupAccessibleCheckIn(viewerUid, checkInId, groupId);
       if (!checkIn) {
         throw WorkoutCheckInErrors.checkInNotFound();
       }
       return { audience: { type: 'GROUP', groupId }, checkIn };
     }
 
-    const checkIn = this.accessPolicy.findVisibleCheckIn(viewerUid, checkInId);
+    const checkIn = await this.accessPolicy.findVisibleCheckIn(viewerUid, checkInId);
     if (!checkIn) {
       throw WorkoutCheckInErrors.checkInNotFound();
     }

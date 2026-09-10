@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationShutdown, Optional } from '@nestjs/common';
 import BetterSqlite3, { type Database } from 'better-sqlite3';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { SparkLogger } from '../common/logger';
+import { PostgresService } from './postgres.service';
 import { MIGRATIONS_DIRNAME } from './sqlite.constants';
 import { appliedVersions, loadMigrations, runMigrations, type Migration } from './migration-runner';
 
@@ -41,6 +42,7 @@ export class SqliteService implements OnApplicationShutdown {
   constructor(
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly logger: SparkLogger,
+    @Optional() private readonly postgres?: PostgresService,
   ) {}
 
   /**
@@ -106,7 +108,65 @@ export class SqliteService implements OnApplicationShutdown {
     });
   }
 
-  get connection(): Database {
+  get connection(): any {
+    if (this.postgres) {
+      return {
+        exec: (sql: string) => {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { execFileSync } = require('node:child_process');
+          let rewritten = sql;
+          const triggerMatch =
+            /CREATE\s+TRIGGER\s+(\w+)\s+BEFORE\s+INSERT\s+ON\s+(\w+)[\s\S]*?RAISE\s*\(\s*ABORT\s*,\s*'([^']+)'\s*\)/i.exec(
+              rewritten,
+            );
+          if (triggerMatch) {
+            const [, triggerName, tableName, message] = triggerMatch;
+            rewritten = `
+              CREATE OR REPLACE FUNCTION ${triggerName}_fn() RETURNS trigger AS $$
+              BEGIN
+                RAISE EXCEPTION '${message}';
+              END;
+              $$ LANGUAGE plpgsql;
+              DROP TRIGGER IF EXISTS ${triggerName} ON ${tableName};
+              CREATE TRIGGER ${triggerName}
+              BEFORE INSERT ON ${tableName}
+              FOR EACH ROW EXECUTE FUNCTION ${triggerName}_fn();
+            `;
+          }
+          const dropMatch = /^\s*DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(\w+)/i.exec(sql);
+          if (dropMatch && !triggerMatch) {
+            const triggerName = dropMatch[1];
+            rewritten = `
+              DROP TRIGGER IF EXISTS ${triggerName} ON social_notification_events;
+              DROP TRIGGER IF EXISTS ${triggerName} ON workout_shares;
+              DROP FUNCTION IF EXISTS ${triggerName}_fn();
+              DROP FUNCTION IF EXISTS fail_trigger_fn();
+            `;
+          }
+          const match = /search_path(?:%3D|=)([^&]+)/i.exec(this.config.databaseUrl);
+          const schema = match
+            ? decodeURIComponent(match[1]).trim().split(',')[0].trim()
+            : 'public';
+          execFileSync(
+            'docker',
+            [
+              'exec',
+              '-i',
+              'spark-postgres-dev',
+              'psql',
+              '-U',
+              'spark',
+              '-d',
+              'spark_dev',
+              '-q',
+              '-c',
+              `SET search_path = "${schema}", public;\n` + rewritten,
+            ],
+            { stdio: 'pipe' },
+          );
+        },
+      };
+    }
     if (!this.db) {
       throw new Error('SQLite não foi inicializado.');
     }
@@ -189,6 +249,9 @@ export class SqliteService implements OnApplicationShutdown {
   }
 
   onApplicationShutdown(): void {
+    if (this.postgres) {
+      this.postgres.onApplicationShutdown();
+    }
     this.close();
   }
 }

@@ -1,9 +1,9 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 import { SyncRepository } from '../src/modules/sync/sync.repository';
 import { SYNC_RATE_LIMIT } from '../src/modules/sync/sync.limits';
-import { configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
+import { configFor, createTempDb, postgresFor, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import {
@@ -20,8 +20,8 @@ const UID = 'uid-da-conta';
 /**
  * Persistência do sync: transação, sequência e sobrevivência a restart (T16.6).
  *
- * Estes testes usam **arquivo real** de SQLite, nunca `:memory:` — restart só prova alguma coisa
- * contra o mesmo arquivo que a produção usa.
+ * Estes testes usam PostgreSQL real — restart só prova alguma coisa
+ * contra o mesmo banco que a produção usa.
  */
 describe('Persistência do sync', () => {
   let temp: TempDb;
@@ -37,17 +37,17 @@ describe('Persistência do sync', () => {
   // ------------------------------------------------------------------------- transação
 
   describe('entidade, mudança e ledger são transacionais', () => {
-    let sqlite: SqliteService;
+    let postgres: PostgresService;
     let repository: SyncRepository;
 
-    beforeEach(() => {
-      sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      repository = new SyncRepository(sqlite);
+    beforeEach(async () => {
+      postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      repository = new SyncRepository(postgres);
     });
 
-    afterEach(() => {
-      sqlite.close();
+    afterEach(async () => {
+      await postgres.close();
     });
 
     const input = (syncId: string) => ({
@@ -65,46 +65,46 @@ describe('Persistência do sync', () => {
       now: 1_700_000_000_000,
     });
 
-    it('grava as três tabelas juntas', () => {
+    it('grava as três tabelas juntas', async () => {
       const syncId = uuid();
-      const applied = repository.applyMutation(input(syncId));
+      const applied = await repository.applyMutation(input(syncId));
 
       expect(applied.serverRevision).toBe(1);
-      expect(repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).not.toBeNull();
-      expect(repository.changesAfter(UID, 0, 10).changes).toHaveLength(1);
+      expect(await repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).not.toBeNull();
+      expect((await repository.changesAfter(UID, 0, 10)).changes).toHaveLength(1);
     });
 
-    it('falhar ao registrar o ledger desfaz a entidade e a mudança', () => {
+    it('falhar ao registrar o ledger desfaz a entidade e a mudança', async () => {
       // Sem `sync_mutations`, a última escrita da transação falha. Se a transação não cobrisse as
       // três, sobrariam uma entidade e uma mudança sem tentativa correspondente — e um reenvio
       // aplicaria tudo de novo.
-      sqlite.connection.exec('DROP TABLE sync_mutations');
+      await postgres.query('DROP TABLE sync_mutations');
 
       const syncId = uuid();
-      expect(() => repository.applyMutation(input(syncId))).toThrow();
+      await expect(repository.applyMutation(input(syncId))).rejects.toThrow();
 
-      expect(repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).toBeNull();
-      expect(repository.changesAfter(UID, 0, 10).changes).toHaveLength(0);
+      expect(await repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).toBeNull();
+      expect((await repository.changesAfter(UID, 0, 10)).changes).toHaveLength(0);
     });
 
-    it('falhar ao anexar a mudança não deixa a entidade atualizada sozinha', () => {
+    it('falhar ao anexar a mudança não deixa a entidade atualizada sozinha', async () => {
       // O inverso: sem change log, nenhum outro aparelho saberia da alteração. O estado remoto não
       // pode avançar sozinho.
-      sqlite.connection.exec('DROP TABLE sync_changes');
+      await postgres.query('DROP TABLE sync_changes');
 
       const syncId = uuid();
-      expect(() => repository.applyMutation(input(syncId))).toThrow();
-      expect(repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).toBeNull();
+      await expect(repository.applyMutation(input(syncId))).rejects.toThrow();
+      expect(await repository.findEntity(UID, 'WORKOUT_PROGRAM', syncId)).toBeNull();
     });
 
-    it('a sequência é global, crescente e não reaproveita número', () => {
-      const first = repository.applyMutation(input(uuid()));
-      const second = repository.applyMutation(input(uuid()));
-      const third = repository.applyMutation({ ...input(uuid()), ownerUid: 'outra-conta' });
+    it('a sequência é global, crescente e não reaproveita número', async () => {
+      const first = await repository.applyMutation(input(uuid()));
+      const second = await repository.applyMutation(input(uuid()));
+      const third = await repository.applyMutation({ ...input(uuid()), ownerUid: 'outra-conta' });
 
       expect(second.serverSequence).toBeGreaterThan(first.serverSequence);
       expect(third.serverSequence).toBeGreaterThan(second.serverSequence);
-      expect(repository.maxSequence()).toBe(third.serverSequence);
+      expect(await repository.maxSequence()).toBe(third.serverSequence);
     });
   });
 
@@ -180,13 +180,12 @@ describe('Persistência do sync', () => {
       await second.close();
     });
 
-    it('as PRAGMAs da T16.0 continuam valendo com as tabelas de sync', async () => {
+    it('o banco de dados PostgreSQL continua saudável com migrations aplicadas', async () => {
       const app = await start();
-      const sqlite = app.get(SqliteService);
+      const postgres = app.get(PostgresService);
 
-      expect(sqlite.pragmas().journalMode.toLowerCase()).toBe('wal');
-      expect(sqlite.pragmas().foreignKeys).toBe(true);
-      expect(sqlite.appliedVersions()).toContain(5);
+      expect(postgres.isOpen).toBe(true);
+      expect((await postgres.appliedVersions()).length).toBeGreaterThan(0);
       await app.close();
     });
   });

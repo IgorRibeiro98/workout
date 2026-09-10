@@ -20,8 +20,8 @@ export class BlockService {
   ) {}
 
   /** Bloqueia um usuário pelo seu socialId público. Operação idempotente. */
-  blockUser(blockerUid: string, blockedSocialId: string): BlockUserResponseDto {
-    const target = this.friendshipRepo.findProfileBySocialId(blockedSocialId);
+  async blockUser(blockerUid: string, blockedSocialId: string): Promise<BlockUserResponseDto> {
+    const target = await this.friendshipRepo.findProfileBySocialId(blockedSocialId);
     if (!target) {
       throw new NotFoundException('Perfil social não encontrado.');
     }
@@ -33,8 +33,8 @@ export class BlockService {
     const now = this.clock.now();
     const blockId = randomUUID();
 
-    this.blockRepo.createBlock(blockId, blockerUid, target.ownerUid, now);
-    this.blockRepo.cleanupSharedRelationsOnBlock(blockerUid, target.ownerUid, now);
+    await this.blockRepo.createBlock(blockId, blockerUid, target.ownerUid, now);
+    await this.blockRepo.cleanupSharedRelationsOnBlock(blockerUid, target.ownerUid, now);
 
     this.logger.info('social.block.created', {
       blockerUidPrefix: blockerUid.slice(0, 6),
@@ -48,16 +48,12 @@ export class BlockService {
   }
 
   /** Desbloqueia um usuário. Operação idempotente. Não restaura amizades ou desafios. */
-  unblockUser(blockerUid: string, blockedSocialId: string): UnblockUserResponseDto {
-    const target = this.friendshipRepo.findProfileBySocialId(blockedSocialId);
+  async unblockUser(blockerUid: string, blockedSocialId: string): Promise<UnblockUserResponseDto> {
+    const target = await this.friendshipRepo.findProfileBySocialId(blockedSocialId);
     if (target) {
-      this.blockRepo.deleteBlock(blockerUid, target.ownerUid);
+      await this.blockRepo.deleteBlock(blockerUid, target.ownerUid);
     }
 
-    // T17.10 §120 — `socialId` é identidade pública de outra pessoa, e a regra de log do social
-    // (§13.8/§13.9) o proíbe junto com uid completo, e-mail, `displayName` e `friendCode`. Aqui
-    // ele estava saindo inteiro. O prefixo de uid do alvo correlaciona o mesmo evento no suporte
-    // sem registrar o identificador com que essa pessoa é encontrável.
     this.logger.info('social.block.removed', {
       blockerUidPrefix: blockerUid.slice(0, 6),
       blockedUidPrefix: target ? target.ownerUid.slice(0, 6) : null,
@@ -71,18 +67,18 @@ export class BlockService {
   }
 
   /** Lista usuários bloqueados pelo chamador. */
-  listBlocked(blockerUid: string): ListBlockedUsersResponseDto {
-    const blockedUsers = this.blockRepo.listBlocked(blockerUid);
+  async listBlocked(blockerUid: string): Promise<ListBlockedUsersResponseDto> {
+    const blockedUsers = await this.blockRepo.listBlocked(blockerUid);
     return { blockedUsers };
   }
 
   /** Consulta rápida se existe bloqueio entre dois UIDs em qualquer direção. */
-  isBlocked(uidA: string, uidB: string): boolean {
-    return this.blockRepo.isBlockedBidirectional(uidA, uidB);
+  async isBlocked(uidA: string, uidB: string): Promise<boolean> {
+    return await this.blockRepo.isBlockedBidirectional(uidA, uidB);
   }
 
   /** Retorna conjunto de UIDs com restrição de bloqueio para o usuário. */
-  getBlockedUids(uid: string): Set<string> {
-    return this.blockRepo.findBlockedUidsBidirectional(uid);
+  async getBlockedUids(uid: string): Promise<Set<string>> {
+    return await this.blockRepo.findBlockedUidsBidirectional(uid);
   }
 }

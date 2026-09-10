@@ -90,14 +90,14 @@ export class ReportService {
    * Não pune, não bloqueia, não oculta conteúdo e não notifica ninguém — nem o denunciado, nem o
    * denunciante. Ela registra uma linha para revisão operacional.
    */
-  createReport(reporterUid: string, request: CreateReportRequestDto): CreateReportResponseDto {
+  async createReport(reporterUid: string, request: CreateReportRequestDto): Promise<CreateReportResponseDto> {
     const reason = request.reason;
     if (!REPORT_REASONS.includes(reason)) {
       throw new BadRequestException('Motivo de denúncia inválido.');
     }
 
     const { targetType, targetId } = normalizeTarget(request);
-    const resolved = this.resolveTarget(reporterUid, targetType, targetId);
+    const resolved = await this.resolveTarget(reporterUid, targetType, targetId);
 
     if (resolved.authorUid === reporterUid) {
       // §106 — não se denuncia o próprio conteúdo, nem a própria conta.
@@ -108,7 +108,7 @@ export class ReportService {
     const oneDayAgo = now - ONE_DAY_MS;
 
     // Rate limit por reporter (§175).
-    const dailyCount = this.reportRepo.countReportsByReporterSince(reporterUid, oneDayAgo);
+    const dailyCount = await this.reportRepo.countReportsByReporterSince(reporterUid, oneDayAgo);
     if (dailyCount >= MAX_DAILY_REPORTS) {
       throw new HttpException(
         {
@@ -121,7 +121,7 @@ export class ReportService {
 
     // Anti-duplicata por **alvo**: o toque duplo e o retry convergem, e denunciar dois
     // comentários diferentes da mesma pessoa continua sendo duas denúncias.
-    const isDuplicate = this.reportRepo.hasRecentReport(
+    const isDuplicate = await this.reportRepo.hasRecentReport(
       reporterUid,
       targetType,
       resolved.targetId,
@@ -136,7 +136,7 @@ export class ReportService {
     }
 
     const reportId = randomUUID();
-    this.reportRepo.createReport(
+    await this.reportRepo.createReport(
       reportId,
       reporterUid,
       resolved.authorUid,
@@ -167,21 +167,21 @@ export class ReportService {
    * Cada tipo tem a sua porta, e as três respondem a mesma coisa quando o alvo não existe ou não é
    * visível: uma recusa indistinguível. É o que impede a rota de virar um oráculo de existência.
    */
-  private resolveTarget(
+  private async resolveTarget(
     reporterUid: string,
     targetType: ReportTargetType,
     targetId: string,
-  ): { authorUid: string; targetId: string } {
+  ): Promise<{ authorUid: string; targetId: string }> {
     if (targetType === 'USER') {
       // O caminho da T17.6, preservado inteiro: alvo por `socialId`, com exigência de contexto
       // social legítimo (amizade, pedido pendente ou desafio compartilhado). Denunciar um
       // desconhecido continua não sendo possível.
-      const target = this.friendshipRepo.findProfileBySocialId(targetId);
+      const target = await this.friendshipRepo.findProfileBySocialId(targetId);
       if (!target) {
         throw new NotFoundException('Perfil do usuário denunciado não encontrado.');
       }
       if (target.ownerUid !== reporterUid) {
-        const hasContext = this.reportRepo.hasLegitimateContext(reporterUid, target.ownerUid);
+        const hasContext = await this.reportRepo.hasLegitimateContext(reporterUid, target.ownerUid);
         if (!hasContext) {
           throw new ForbiddenException(
             'Você só pode denunciar usuários com quem possui interação social legítima (amizade, pedido pendente ou desafio compartilhado).',
@@ -192,30 +192,14 @@ export class ReportService {
     }
 
     if (targetType === 'CHECKIN') {
-      // §104 — a regra é "quem enxerga pode denunciar", e desde a T17.12 enxergar inclui alcançar a
-      // publicação por um Squad (T17.12 §128). `findAccessibleCheckIn` é a mesma política que serve
-      // o detalhe e os bytes da foto: `self ∨ amizade ∨ Squad compartilhado`.
-      //
-      // Usar `findVisibleCheckIn` aqui deixaria um buraco que a T17.12 abriu: um membro de Squad
-      // passou a poder **comentar** naquela publicação, e ficaria sem o mecanismo sancionado para
-      // denunciá-la — justamente ele, que é quem a está vendo. Um post que o requisitante não
-      // alcança por caminho nenhum continua indistinguível de inexistente.
-      const visible = this.checkInAccess.findAccessibleCheckIn(reporterUid, targetId);
+      const visible = await this.checkInAccess.findAccessibleCheckIn(reporterUid, targetId);
       if (!visible) {
         throw WorkoutCheckInErrors.invalidReportTarget('publicação não encontrada');
       }
       return { authorUid: visible.authorUid, targetId };
     }
 
-    // COMMENT (§105; T17.12 §58/§59/§151) — duas condições: o post precisa ser visível **naquela
-    // audiência** e o comentário precisa estar entre os que este viewer enxerga ali. A segunda
-    // importa por causa do bloqueio de terceiro (§86) e, desde a T17.12, também por causa da
-    // audiência: um comentário de `GROUP(X)` só pode ser denunciado por quem consegue lê-lo em `X`.
-    //
-    // A audiência sai do **próprio comentário**, e nunca de um parâmetro: o denunciante informa um
-    // `commentId`, e o servidor deriva o contexto (§58). Conhecer o identificador continua não
-    // concedendo nada.
-    const comment = this.interactions.findComment(targetId);
+    const comment = await this.interactions.findComment(targetId);
     if (!comment || comment.deletedAt !== null) {
       throw WorkoutCheckInErrors.invalidReportTarget('comentário não encontrado');
     }
@@ -227,17 +211,17 @@ export class ReportService {
 
     const post =
       audience.type === 'GROUP'
-        ? this.checkInAccess.findGroupAccessibleCheckIn(
+        ? await this.checkInAccess.findGroupAccessibleCheckIn(
             reporterUid,
             comment.checkInId,
             audience.groupId,
           )
-        : this.checkInAccess.findVisibleCheckIn(reporterUid, comment.checkInId);
+        : await this.checkInAccess.findVisibleCheckIn(reporterUid, comment.checkInId);
     if (!post) {
       throw WorkoutCheckInErrors.invalidReportTarget('comentário não encontrado');
     }
 
-    const visibleComments = this.interactions.listComments(
+    const visibleComments = await this.interactions.listComments(
       reporterUid,
       comment.checkInId,
       audience,

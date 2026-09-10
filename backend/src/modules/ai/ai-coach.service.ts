@@ -104,13 +104,13 @@ export class AiCoachService {
 
     const utcDate = utcDateOf();
     try {
-      this.reserveQuota(uid, utcDate, requestType, requestId, clientRequestId);
+      await this.reserveQuota(uid, utcDate, requestType, requestId, clientRequestId);
 
       const result = await this.callProvider(request, requestId);
       const validated = this.validate(request, result.text);
 
       if (result.usage) {
-        this.usage.recordTokens(uid, utcDate, requestType, result.usage);
+        await this.usage.recordTokens(uid, utcDate, requestType, result.usage);
       }
 
       this.logger.info('ai.request.finished', {
@@ -159,10 +159,9 @@ export class AiCoachService {
 
     const parsed = aiCoachRequestSchema.safeParse(body);
     if (!parsed.success) {
-      // Só o caminho e a regra violada — nunca o valor recebido, que é dado do usuário.
       const issue = parsed.error.issues[0];
-      const path = issue.path.join('.') || '(raiz)';
-      throw AiCoachErrors.invalidRequest(`${path}: ${issue.message}`);
+      const message = issue ? `${issue.path.join('.')}: ${issue.message}` : 'requisição inválida';
+      throw AiCoachErrors.invalidRequest(message);
     }
 
     if (!isSupportedSchemaVersion(parsed.data.schemaVersion)) {
@@ -178,14 +177,14 @@ export class AiCoachService {
    * Incrementar **antes** da chamada é deliberado: uma chamada que falhou no provider pode já ter
    * custado. Se a tentativa não chega ao provider (quota estourada aqui), o incremento é desfeito.
    */
-  private reserveQuota(
+  private async reserveQuota(
     uid: string,
     utcDate: string,
     requestType: AiCoachRequestType,
     requestId: string,
     clientRequestId: string,
-  ): void {
-    const usage = this.usage.recordAttempt(uid, utcDate, requestType);
+  ): Promise<void> {
+    const usage = await this.usage.recordAttempt(uid, utcDate, requestType);
 
     const overUser = usage.userRequests > this.config.aiMaxRequestsPerUserDay;
     const overGlobal = usage.globalRequests > this.config.aiMaxRequestsGlobalDay;
@@ -193,7 +192,7 @@ export class AiCoachService {
       return;
     }
 
-    this.usage.releaseAttempt(uid, utcDate, requestType);
+    await this.usage.releaseAttempt(uid, utcDate, requestType);
     this.logger.warn('ai.quota.exceeded', {
       requestId,
       clientRequestId,

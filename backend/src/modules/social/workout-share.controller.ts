@@ -26,64 +26,64 @@ export class WorkoutShareController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(
+  async create(
     @Principal() principal: AuthenticatedPrincipal,
     @Body() body: CreateWorkoutShareRequest,
-  ): WorkoutShareDetailDto {
+  ): Promise<WorkoutShareDetailDto> {
     return this.service.createShare(principal.uid, body);
   }
 
   @Get('received')
-  listReceived(@Principal() principal: AuthenticatedPrincipal): WorkoutShareItemDto[] {
+  async listReceived(@Principal() principal: AuthenticatedPrincipal): Promise<WorkoutShareItemDto[]> {
     return this.service.listReceived(principal.uid);
   }
 
   @Get('sent')
-  listSent(@Principal() principal: AuthenticatedPrincipal): WorkoutShareItemDto[] {
+  async listSent(@Principal() principal: AuthenticatedPrincipal): Promise<WorkoutShareItemDto[]> {
     return this.service.listSent(principal.uid);
   }
 
   @Get(':shareId')
-  getDetail(
+  async getDetail(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): WorkoutShareDetailDto {
+  ): Promise<WorkoutShareDetailDto> {
     return this.service.getShareDetail(principal.uid, shareId);
   }
 
   @Post(':shareId/accept')
   @HttpCode(HttpStatus.OK)
-  accept(
+  async accept(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): WorkoutTemplateShareSnapshotV1 {
+  ): Promise<WorkoutTemplateShareSnapshotV1> {
     return this.service.acceptShare(principal.uid, shareId);
   }
 
   @Post(':shareId/complete-import')
   @HttpCode(HttpStatus.OK)
-  completeImport(
+  async completeImport(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): { success: boolean } {
+  ): Promise<{ success: boolean }> {
     return this.service.completeImport(principal.uid, shareId);
   }
 
   @Post(':shareId/decline')
   @HttpCode(HttpStatus.OK)
-  decline(
+  async decline(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): { success: boolean } {
+  ): Promise<{ success: boolean }> {
     return this.service.declineShare(principal.uid, shareId);
   }
 
   @Post(':shareId/cancel')
   @HttpCode(HttpStatus.OK)
-  cancel(
+  async cancel(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): { success: boolean } {
+  ): Promise<{ success: boolean }> {
     return this.service.cancelShare(principal.uid, shareId);
   }
 }

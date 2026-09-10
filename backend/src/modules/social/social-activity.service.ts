@@ -7,7 +7,7 @@ import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
 } from './canonical-training.source';
-import { FriendshipRepository } from './friendship.repository';
+import { FriendshipRepository, type FriendProfileRow } from './friendship.repository';
 import { SocialAccessPolicy } from './social.access-policy';
 import { SocialErrors } from './social.errors';
 import { SocialRepository } from './social.repository';
@@ -17,16 +17,6 @@ import { BlockService } from './block.service';
 
 /**
  * Serviço de projeção da atividade recente dos amigos (T17.4).
- *
- * ## Regras de privacidade e arquitetura
- * - Somente amigos mútuos diretos com perfil ACTIVE.
- * - Amigos precisam ter consentido explicitamente com `activitySharingEnabled = true`
- *   e possuir fuso horário IANA válido.
- * - Projeção agregada em memória a partir de `sync_entities`: nenhum payload, carga,
- *   exercício ou timestamp exato de treino é retornado no DTO.
- * - Deduplicação por amigo por dia civil (dias 0 a 13).
- * - Sem N+1: consulta em lote das sessões no SQLite.
- * - Leitura sem efeitos colaterais.
  */
 @Injectable()
 export class SocialActivityService {
@@ -41,8 +31,8 @@ export class SocialActivityService {
     @Optional() private readonly blockService?: BlockService,
   ) {}
 
-  getActivity(principal: AuthenticatedPrincipal, requestId: string): SocialActivityResponse {
-    const viewerAccount = this.socialRepo.find(principal.uid);
+  async getActivity(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialActivityResponse> {
+    const viewerAccount = await this.socialRepo.find(principal.uid);
     if (!viewerAccount || viewerAccount.profile.status !== 'ACTIVE') {
       throw SocialErrors.notEnabled();
     }
@@ -56,12 +46,16 @@ export class SocialActivityService {
       friendRankingParticipationEnabled: viewerAccount.privacy.friendRankingParticipationEnabled,
     };
 
-    const activeFriends = this.friendshipRepo.findActiveFriends(principal.uid);
-    const eligibleFriends = activeFriends.filter(
-      (friend) =>
+    const activeFriends = await this.friendshipRepo.findActiveFriends(principal.uid);
+    const eligibleFriends: FriendProfileRow[] = [];
+    for (const friend of activeFriends) {
+      if (
         this.accessPolicy.canViewFriendActivity(friend, viewerAccessView, true) &&
-        !this.blockService?.isBlocked(principal.uid, friend.ownerUid),
-    );
+        !(await this.blockService?.isBlocked(principal.uid, friend.ownerUid))
+      ) {
+        eligibleFriends.push(friend);
+      }
+    }
 
     if (eligibleFriends.length === 0) {
       this.logger.info('social.activity.listed', {
@@ -76,7 +70,7 @@ export class SocialActivityService {
     // 16 dias de margem cobrem com folga os 14 dias civis em qualquer fuso horário mundial
     const cutoffMs = now - 16 * DAY_MS;
     const friendUids = eligibleFriends.map((f) => f.ownerUid);
-    const workouts = this.trainingSource.getCompletedWorkoutSummaries(friendUids, cutoffMs, now);
+    const workouts = await this.trainingSource.getCompletedWorkoutSummaries(friendUids, cutoffMs, now);
 
     const workoutsByUid = new Map<string, Array<{ startedAt: number }>>();
     for (const w of workouts) {

@@ -5,11 +5,10 @@ import {
   OnApplicationShutdown,
   Optional,
 } from '@nestjs/common';
-import type { Database } from 'better-sqlite3';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import { canonicalPair } from './friendship.repository';
 import type {
   NotificationEvent,
@@ -29,16 +28,12 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
   constructor(
     private readonly repository: NotificationRepository,
-    private readonly sqlite: SqliteService,
+    private readonly db: PostgresService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
     @Optional() @Inject(PUSH_GATEWAY) private readonly pushGateway?: PushGateway,
   ) {}
-
-  private get db(): Database {
-    return this.sqlite.connection;
-  }
 
   onApplicationBootstrap(): void {
     if (!this.config.socialPushEnabled) {
@@ -89,7 +84,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     this.isProcessing = true;
     try {
       await this.dispatchPendingEvents();
-      this.cleanupOldData();
+      await this.cleanupOldData();
     } finally {
       this.isProcessing = false;
     }
@@ -97,13 +92,13 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
   private async dispatchPendingEvents(): Promise<void> {
     const now = this.clock.now();
-    const expiredCount = this.repository.markExpiredEvents(now);
+    const expiredCount = await this.repository.markExpiredEvents(now);
     if (expiredCount > 0) {
       this.logger.info('notification.events.expired_sweep', { count: expiredCount });
     }
 
     const batchSize = this.config.pushBatchSize;
-    const dueEvents = this.repository.findDueEvents(now, batchSize);
+    const dueEvents = await this.repository.findDueEvents(now, batchSize);
 
     if (dueEvents.length === 0) {
       return;
@@ -118,7 +113,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
   private async processEvent(event: NotificationEvent, now: number): Promise<void> {
     // 1. Revalidação de expiração (T17.5 §83)
     if (now >= event.expiresAt) {
-      this.repository.markEventStatus(event.id, 'EXPIRED', now);
+      await this.repository.markEventStatus(event.id, 'EXPIRED', now);
       this.logger.info('notification.event.expired', {
         eventId: event.id,
         eventType: event.type,
@@ -127,9 +122,9 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
 
     // 2. Revalidação de relevância canônica (T17.5 §63–§68)
-    const relevance = this.checkRelevance(event, now);
+    const relevance = await this.checkRelevance(event, now);
     if (!relevance.relevant) {
-      this.repository.markEventStatus(
+      await this.repository.markEventStatus(
         event.id,
         relevance.reason === 'EXPIRED' ? 'EXPIRED' : 'SUPPRESSED',
         now,
@@ -143,9 +138,9 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
 
     // 3. Verificação de consentimento e preferências do usuário (T17.5 §23–§25)
-    const preferences = this.repository.getPreferences(event.recipientUid);
+    const preferences = await this.repository.getPreferences(event.recipientUid);
     if (!this.isCategoryEnabled(preferences, event.type)) {
-      this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
+      await this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
       this.logger.info('notification.event.suppressed', {
         eventId: event.id,
         eventType: event.type,
@@ -155,20 +150,22 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
 
     // 4. Busca recipientSocialId para o payload mínimo seguro (T17.5 §94)
-    const profileRow = this.db
-      .prepare(`SELECT social_id FROM social_profiles WHERE owner_uid = ? AND status = 'ACTIVE'`)
-      .get(event.recipientUid) as { social_id: string } | undefined;
+    const profileRes = await this.db.query<{ social_id: string }>(
+      `SELECT social_id FROM social_profiles WHERE owner_uid = $1 AND status = 'ACTIVE'`,
+      [event.recipientUid],
+    );
+    const profileRow = profileRes.rows[0];
 
     if (!profileRow) {
-      this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
+      await this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
       return;
     }
 
     // 5. Busca dispositivos ativos do destinatário
-    const activeDevices = this.repository.findActiveDevicesForRecipient(event.recipientUid);
+    const activeDevices = await this.repository.findActiveDevicesForRecipient(event.recipientUid);
     if (activeDevices.length === 0) {
       // 0 dispositivos: SUPPRESSED_NO_DEVICE (T17.5 §38)
-      this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
+      await this.repository.markEventStatus(event.id, 'SUPPRESSED', now);
       this.logger.info('notification.event.suppressed', {
         eventId: event.id,
         eventType: event.type,
@@ -178,7 +175,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
 
     // 6. Registra deliveries para cada dispositivo ativo
-    this.repository.createDeliveries(
+    await this.repository.createDeliveries(
       activeDevices.map((d) => ({
         eventId: event.id,
         deviceRegistrationId: d.id,
@@ -186,7 +183,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     );
 
     // 7. Envio para cada dispositivo (fora de transação de banco, T17.5 §42/§179)
-    const deliveries = this.repository.findDeliveriesForEvent(event.id);
+    const deliveries = await this.repository.findDeliveriesForEvent(event.id);
     const payload: PushPayload = {
       v: '1',
       eventId: event.id,
@@ -222,7 +219,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       const attemptCount = delivery.attemptCount + 1;
 
       if (result.success) {
-        this.repository.updateDelivery(
+        await this.repository.updateDelivery(
           event.id,
           delivery.deviceRegistrationId,
           'SENT',
@@ -238,7 +235,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         });
       } else if (result.permanent) {
         // Token inválido/não registrado (T17.5 §79)
-        this.repository.updateDelivery(
+        await this.repository.updateDelivery(
           event.id,
           delivery.deviceRegistrationId,
           'FAILED_PERMANENT',
@@ -247,7 +244,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
           result.errorCode ?? 'PERMANENT_ERROR',
           null,
         );
-        this.repository.disableDeviceByToken(delivery.fcmToken, now);
+        await this.repository.disableDeviceByToken(delivery.fcmToken, now);
         this.logger.warn('notification.token.invalidated', {
           eventId: event.id,
           errorCode: result.errorCode,
@@ -255,7 +252,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       } else {
         // Falha transitória: retry com backoff (T17.5 §76–§78)
         if (attemptCount >= this.config.pushMaxAttempts) {
-          this.repository.updateDelivery(
+          await this.repository.updateDelivery(
             event.id,
             delivery.deviceRegistrationId,
             'FAILED_PERMANENT',
@@ -271,7 +268,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
         } else {
           allCompleted = false;
           const backoffMs = Math.min(300_000, Math.pow(2, attemptCount) * 5_000);
-          this.repository.updateDelivery(
+          await this.repository.updateDelivery(
             event.id,
             delivery.deviceRegistrationId,
             'FAILED_TRANSIENT',
@@ -290,7 +287,7 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
 
     if (allCompleted) {
-      this.repository.markEventStatus(event.id, 'COMPLETED', now);
+      await this.repository.markEventStatus(event.id, 'COMPLETED', now);
       this.logger.info('notification.event.completed', {
         eventId: event.id,
         eventType: event.type,
@@ -298,25 +295,28 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
   }
 
-  private checkRelevance(
+  private async checkRelevance(
     event: NotificationEvent,
     now: number,
-  ): { relevant: boolean; reason?: string } {
+  ): Promise<{ relevant: boolean; reason?: string }> {
     // Verifica se o destinatário está ativo
-    const recipientActive = this.db
-      .prepare(`SELECT 1 FROM social_profiles WHERE owner_uid = ? AND status = 'ACTIVE'`)
-      .get(event.recipientUid);
+    const recipientActive = await this.db.query(
+      `SELECT 1 FROM social_profiles WHERE owner_uid = $1 AND status = 'ACTIVE'`,
+      [event.recipientUid],
+    );
 
-    if (!recipientActive) {
+    if (recipientActive.rows.length === 0) {
       return { relevant: false, reason: 'RECIPIENT_DISABLED' };
     }
 
     switch (event.type) {
       case 'FRIEND_REQUEST_RECEIVED': {
         // Só entrega se a solicitação ainda estiver PENDING (T17.5 §64)
-        const row = this.db
-          .prepare(`SELECT status FROM friend_requests WHERE request_id = ?`)
-          .get(event.entityId) as { status: string } | undefined;
+        const rowRes = await this.db.query<{ status: string }>(
+          `SELECT status FROM friend_requests WHERE request_id = $1`,
+          [event.entityId],
+        );
+        const row = rowRes.rows[0];
 
         if (!row || row.status !== 'PENDING') {
           return { relevant: false, reason: 'REQUEST_NO_LONGER_PENDING' };
@@ -326,13 +326,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'FRIEND_REQUEST_ACCEPTED': {
         // Confirma que o pedido foi de fato aceito
-        const row = this.db
-          .prepare(
-            `SELECT status, requester_uid, recipient_uid FROM friend_requests WHERE request_id = ?`,
-          )
-          .get(event.entityId) as
-          | { status: string; requester_uid: string; recipient_uid: string }
-          | undefined;
+        const rowRes = await this.db.query<{ status: string; requester_uid: string; recipient_uid: string }>(
+          `SELECT status, requester_uid, recipient_uid FROM friend_requests WHERE request_id = $1`,
+          [event.entityId],
+        );
+        const row = rowRes.rows[0];
 
         if (!row || row.status !== 'ACCEPTED') {
           return { relevant: false, reason: 'REQUEST_NOT_ACCEPTED' };
@@ -340,11 +338,12 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
         // Confirma se a amizade ainda existe no momento do envio (T17.5 §65)
         const [userA, userB] = canonicalPair(row.requester_uid, row.recipient_uid);
-        const friendship = this.db
-          .prepare(`SELECT 1 FROM friendships WHERE user_a_uid = ? AND user_b_uid = ?`)
-          .get(userA, userB);
+        const friendship = await this.db.query(
+          `SELECT 1 FROM friendships WHERE user_a_uid = $1 AND user_b_uid = $2`,
+          [userA, userB],
+        );
 
-        if (!friendship) {
+        if (friendship.rows.length === 0) {
           return { relevant: false, reason: 'FRIENDSHIP_REMOVED' };
         }
         return { relevant: true };
@@ -352,22 +351,20 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_INVITATION_RECEIVED': {
         // Só entrega se convite PENDING e desafio UPCOMING e OPEN (T17.5 §66)
-        const row = this.db
-          .prepare(
-            `SELECT i.status as inv_status, c.lifecycle, c.starts_at
-             FROM challenge_invitations i
-             JOIN challenges c ON c.challenge_id = i.challenge_id
-             WHERE i.invitation_id = ?`,
-          )
-          .get(event.entityId) as
-          | { inv_status: string; lifecycle: string; starts_at: number }
-          | undefined;
+        const rowRes = await this.db.query<{ inv_status: string; lifecycle: string; starts_at: string | number }>(
+          `SELECT i.status as inv_status, c.lifecycle, c.starts_at
+           FROM challenge_invitations i
+           JOIN challenges c ON c.challenge_id = i.challenge_id
+           WHERE i.invitation_id = $1`,
+          [event.entityId],
+        );
+        const row = rowRes.rows[0];
 
         if (
           !row ||
           row.inv_status !== 'PENDING' ||
           row.lifecycle !== 'OPEN' ||
-          now >= row.starts_at
+          now >= Number(row.starts_at)
         ) {
           return { relevant: false, reason: 'INVITATION_NO_LONGER_VALID' };
         }
@@ -376,22 +373,20 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_STARTING_SOON': {
         // Só entrega se participante JOINED, desafio OPEN e now < startsAt (T17.5 §67)
-        const row = this.db
-          .prepare(
-            `SELECT p.status as part_status, c.lifecycle, c.starts_at
-             FROM challenge_participants p
-             JOIN challenges c ON c.challenge_id = p.challenge_id
-             WHERE p.challenge_id = ? AND p.participant_uid = ?`,
-          )
-          .get(event.entityId, event.recipientUid) as
-          | { part_status: string; lifecycle: string; starts_at: number }
-          | undefined;
+        const rowRes = await this.db.query<{ part_status: string; lifecycle: string; starts_at: string | number }>(
+          `SELECT p.status as part_status, c.lifecycle, c.starts_at
+           FROM challenge_participants p
+           JOIN challenges c ON c.challenge_id = p.challenge_id
+           WHERE p.challenge_id = $1 AND p.participant_uid = $2`,
+          [event.entityId, event.recipientUid],
+        );
+        const row = rowRes.rows[0];
 
         if (!row || row.part_status !== 'JOINED' || row.lifecycle !== 'OPEN') {
           return { relevant: false, reason: 'CHALLENGE_CANCELLED_OR_WITHDRAWN' };
         }
 
-        if (now >= row.starts_at) {
+        if (now >= Number(row.starts_at)) {
           // Desafio já começou: expira o start-soon em vez de mandar push atrasado (T17.5 §56)
           return { relevant: false, reason: 'EXPIRED' };
         }
@@ -400,52 +395,47 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_ENDED': {
         // Só entrega se participante JOINED e desafio OPEN e now >= endsAtExclusive (T17.5 §68)
-        const row = this.db
-          .prepare(
-            `SELECT p.status as part_status, c.lifecycle, c.ends_at_exclusive
-             FROM challenge_participants p
-             JOIN challenges c ON c.challenge_id = p.challenge_id
-             WHERE p.challenge_id = ? AND p.participant_uid = ?`,
-          )
-          .get(event.entityId, event.recipientUid) as
-          | { part_status: string; lifecycle: string; ends_at_exclusive: number }
-          | undefined;
+        const rowRes = await this.db.query<{ part_status: string; lifecycle: string; ends_at_exclusive: string | number }>(
+          `SELECT p.status as part_status, c.lifecycle, c.ends_at_exclusive
+           FROM challenge_participants p
+           JOIN challenges c ON c.challenge_id = p.challenge_id
+           WHERE p.challenge_id = $1 AND p.participant_uid = $2`,
+          [event.entityId, event.recipientUid],
+        );
+        const row = rowRes.rows[0];
 
         if (!row || row.part_status !== 'JOINED' || row.lifecycle !== 'OPEN') {
           return { relevant: false, reason: 'CHALLENGE_CANCELLED_OR_WITHDRAWN' };
         }
 
-        if (now < row.ends_at_exclusive) {
+        if (now < Number(row.ends_at_exclusive)) {
           return { relevant: false, reason: 'CHALLENGE_NOT_ENDED_YET' };
         }
         return { relevant: true };
       }
 
       case 'WORKOUT_SHARE_RECEIVED': {
-        const row = this.db
-          .prepare(
-            `SELECT status, expires_at, sender_uid
-             FROM workout_shares
-             WHERE id = ?`,
-          )
-          .get(event.entityId) as
-          | { status: string; expires_at: number; sender_uid: string }
-          | undefined;
+        const rowRes = await this.db.query<{ status: string; expires_at: string | number; sender_uid: string }>(
+          `SELECT status, expires_at, sender_uid
+           FROM workout_shares
+           WHERE id = $1`,
+          [event.entityId],
+        );
+        const row = rowRes.rows[0];
 
-        if (!row || row.status !== 'PENDING' || now >= row.expires_at) {
+        if (!row || row.status !== 'PENDING' || now >= Number(row.expires_at)) {
           return { relevant: false, reason: 'SHARE_NO_LONGER_PENDING' };
         }
 
-        const blocked = this.db
-          .prepare(
-            `SELECT 1 FROM social_blocks
-             WHERE (blocker_uid = ? AND blocked_uid = ?)
-                OR (blocker_uid = ? AND blocked_uid = ?)
-             LIMIT 1`,
-          )
-          .get(row.sender_uid, event.recipientUid, event.recipientUid, row.sender_uid);
+        const blockedRes = await this.db.query(
+          `SELECT 1 FROM social_blocks
+           WHERE (blocker_uid = $1 AND blocked_uid = $2)
+              OR (blocker_uid = $2 AND blocked_uid = $1)
+           LIMIT 1`,
+          [row.sender_uid, event.recipientUid],
+        );
 
-        if (blocked) {
+        if (blockedRes.rows.length > 0) {
           return { relevant: false, reason: 'BLOCKED' };
         }
 
@@ -453,43 +443,33 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       }
 
       case 'GROUP_INVITATION_RECEIVED': {
-        // T17.11 §106 — a revalidação que decide se este push ainda faz sentido no instante do
-        // envio. O convite pode ter sido recusado, cancelado, aceito ou expirado desde que entrou
-        // na fila, e o Squad pode ter sido excluído. Nenhum desses estados justifica acordar o
-        // aparelho de alguém para um convite que já não existe.
-        const row = this.db
-          .prepare(
-            `SELECT i.status AS inv_status, i.expires_at, i.sender_uid, g.status AS group_status
-               FROM social_group_invitations i
-               JOIN social_groups g ON g.id = i.group_id
-              WHERE i.id = ?`,
-          )
-          .get(event.entityId) as
-          | { inv_status: string; expires_at: number; sender_uid: string; group_status: string }
-          | undefined;
+        const rowRes = await this.db.query<{ inv_status: string; expires_at: string | number; sender_uid: string; group_status: string }>(
+          `SELECT i.status AS inv_status, i.expires_at, i.sender_uid, g.status AS group_status
+             FROM social_group_invitations i
+             JOIN social_groups g ON g.id = i.group_id
+            WHERE i.id = $1`,
+          [event.entityId],
+        );
+        const row = rowRes.rows[0];
 
         if (
           !row ||
           row.inv_status !== 'PENDING' ||
           row.group_status !== 'ACTIVE' ||
-          now >= row.expires_at
+          now >= Number(row.expires_at)
         ) {
           return { relevant: false, reason: 'INVITATION_NO_LONGER_VALID' };
         }
 
-        // §106 — bloqueio superveniente **suprime** o push. Na prática o bloqueio já cancelou o
-        // convite (§105), e esta verificação é a que cobre a corrida entre as duas escritas: um
-        // evento que já estava sendo despachado não pode entregar o aviso depois do bloqueio.
-        const blocked = this.db
-          .prepare(
-            `SELECT 1 FROM social_blocks
-             WHERE (blocker_uid = ? AND blocked_uid = ?)
-                OR (blocker_uid = ? AND blocked_uid = ?)
-             LIMIT 1`,
-          )
-          .get(row.sender_uid, event.recipientUid, event.recipientUid, row.sender_uid);
+        const blockedRes = await this.db.query(
+          `SELECT 1 FROM social_blocks
+           WHERE (blocker_uid = $1 AND blocked_uid = $2)
+              OR (blocker_uid = $2 AND blocked_uid = $1)
+           LIMIT 1`,
+          [row.sender_uid, event.recipientUid],
+        );
 
-        if (blocked) {
+        if (blockedRes.rows.length > 0) {
           return { relevant: false, reason: 'BLOCKED' };
         }
 
@@ -522,10 +502,10 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
     }
   }
 
-  private cleanupOldData(): void {
+  private async cleanupOldData(): Promise<void> {
     const now = this.clock.now();
     const cutoff = now - THIRTY_DAYS_MS;
-    const { cleanedEvents } = this.repository.cleanupOldEntries(cutoff);
+    const { cleanedEvents } = await this.repository.cleanupOldEntries(cutoff);
     if (cleanedEvents > 0) {
       this.logger.info('notification.cleanup', { cleanedEvents });
     }

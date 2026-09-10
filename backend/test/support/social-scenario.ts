@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
-import { configFor, createTempDb, type TempDb } from './temp-db';
+import { configFor, createPostgresSyncDb, createTempDb, type TempDb } from './temp-db';
 import { createTestApp } from './create-test-app';
 import { FakeAuthTokenVerifier } from './fake-auth-token-verifier';
 import { FakeClock } from './fake-clock';
@@ -150,8 +150,8 @@ export async function createSocialScenario(options: ScenarioOptions = {}): Promi
     server,
     auth,
 
-    inDatabase<T>(read: (db: BetterSqlite3.Database) => T): T {
-      const db = new BetterSqlite3(temp.path);
+    inDatabase<T>(read: (db: any) => T): T {
+      const db = createPostgresSyncDb(temp.schema);
       try {
         return read(db);
       } finally {

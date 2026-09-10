@@ -69,12 +69,12 @@ export class SocialProfileController {
   @UseGuards(BearerAuthGuard)
   @Get(`${FRIENDS_ROUTE_PREFIX}/:socialId/${FRIEND_PROFILE_ROUTE_SUFFIX}`)
   @HttpCode(HttpStatus.OK)
-  friendProfile(
+  async friendProfile(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('socialId') socialId: string,
-  ): SocialFriendProfileResponse {
-    return this.service.friendProfile(
+  ): Promise<SocialFriendProfileResponse> {
+    return await this.service.friendProfile(
       principal,
       requestIdOf(request),
       parseSocialIdParam(socialId),
@@ -85,22 +85,22 @@ export class SocialProfileController {
   @UseGuards(BearerAuthGuard)
   @Get(PROFILE_PREVIEW_ROUTE)
   @HttpCode(HttpStatus.OK)
-  preview(
+  async preview(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
-  ): SocialFriendProfileResponse {
-    return this.service.preview(principal, requestIdOf(request));
+  ): Promise<SocialFriendProfileResponse> {
+    return await this.service.preview(principal, requestIdOf(request));
   }
 
   /** O que eu compartilho, e o que o servidor consegue mostrar de cada campo. */
   @UseGuards(BearerAuthGuard)
   @Get(PROGRESS_SHARING_ROUTE)
   @HttpCode(HttpStatus.OK)
-  progressSharing(
+  async progressSharing(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
-  ): SocialProgressSharingResponse {
-    return this.service.progressSharing(principal, requestIdOf(request));
+  ): Promise<SocialProgressSharingResponse> {
+    return await this.service.progressSharing(principal, requestIdOf(request));
   }
 
   /**
@@ -113,13 +113,13 @@ export class SocialProfileController {
   @UseGuards(BearerAuthGuard)
   @Patch(PROGRESS_SHARING_ROUTE)
   @HttpCode(HttpStatus.OK)
-  updateProgressSharing(
+  async updateProgressSharing(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Body() body: unknown,
-  ): SocialProgressSharingResponse {
+  ): Promise<SocialProgressSharingResponse> {
     assertBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.updateProgressSharing(
+    return await this.service.updateProgressSharing(
       principal,
       requestIdOf(request),
       parseUpdateProgressSharingRequest(body),

@@ -24,16 +24,6 @@ interface CandidateParticipant {
 
 /**
  * Serviço de cálculo do ranking contextual entre amigos (T17.4).
- *
- * ## Regras de negócio e integridade
- * - Reciprocidade estrita: se o usuário não consentir em participar (`friendRankingParticipationEnabled = false`),
- *   ele recebe HTTP 403 RANKING_NOT_ENABLED e não pode consultar o ranking.
- * - Participantes elegíveis: o viewer (se consentido) e amigos diretos ativos que também consentiram.
- * - Métrica: WORKOUTS_COMPLETED_LAST_7_DAYS (janela móvel dos últimos 7 dias a partir do Clock do servidor).
- * - Sem N+1: contagem em lote no SQLite via `CanonicalTrainingSource.getCompletedWorkoutCounts`.
- * - Empates: competition ranking (`1, 1, 3...`), desempate alfabético estável por displayName e socialId.
- * - Teto: top 50 entradas.
- * - Leitura sem efeitos colaterais.
  */
 @Injectable()
 export class FriendRankingService {
@@ -48,8 +38,8 @@ export class FriendRankingService {
     @Optional() private readonly blockService?: BlockService,
   ) {}
 
-  getRanking(principal: AuthenticatedPrincipal, requestId: string): FriendRankingResponse {
-    const viewerAccount = this.socialRepo.find(principal.uid);
+  async getRanking(principal: AuthenticatedPrincipal, requestId: string): Promise<FriendRankingResponse> {
+    const viewerAccount = await this.socialRepo.find(principal.uid);
     if (!viewerAccount || viewerAccount.profile.status !== 'ACTIVE') {
       throw SocialErrors.notEnabled();
     }
@@ -67,11 +57,11 @@ export class FriendRankingService {
       },
     ];
 
-    const activeFriends = this.friendshipRepo.findActiveFriends(principal.uid);
+    const activeFriends = await this.friendshipRepo.findActiveFriends(principal.uid);
     for (const friend of activeFriends) {
       if (
         this.accessPolicy.canParticipateInRanking(friend) &&
-        !this.blockService?.isBlocked(principal.uid, friend.ownerUid)
+        !(await this.blockService?.isBlocked(principal.uid, friend.ownerUid))
       ) {
         participants.push({
           ownerUid: friend.ownerUid,
@@ -86,7 +76,7 @@ export class FriendRankingService {
     const windowStartMs = now - 7 * DAY_MS;
     const participantUids = participants.map((p) => p.ownerUid);
 
-    const countsByUid = this.trainingSource.getCompletedWorkoutCounts(
+    const countsByUid = await this.trainingSource.getCompletedWorkoutCounts(
       participantUids,
       windowStartMs,
       now,

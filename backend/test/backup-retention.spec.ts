@@ -61,10 +61,10 @@ describe('Retenção de backups', () => {
     }
 
     const repository = app.get(BackupRepository);
-    expect(repository.countFor(UID)).toBe(3);
-    expect(repository.findByClientBackupId(UID, id(1))).toBeNull();
-    expect(repository.findByClientBackupId(UID, id(2))).toBeNull();
-    expect(repository.findByClientBackupId(UID, id(3))).not.toBeNull();
+    expect(await repository.countFor(UID)).toBe(3);
+    expect(await repository.findByClientBackupId(UID, id(1))).toBeNull();
+    expect(await repository.findByClientBackupId(UID, id(2))).toBeNull();
+    expect(await repository.findByClientBackupId(UID, id(3))).not.toBeNull();
 
     const latest = await request(app.getHttpServer())
       .get('/v1/backups/latest')
@@ -85,7 +85,7 @@ describe('Retenção de backups', () => {
         .set('Authorization', `Bearer ${TOKEN}`);
       expect(latest.status).toBe(200);
       expect(latest.body.backupId).toBe(response.body.backupId);
-      expect(app.get(BackupRepository).countFor(UID)).toBe(1);
+      expect(await app.get(BackupRepository).countFor(UID)).toBe(1);
     }
   });
 
@@ -109,7 +109,7 @@ describe('Retenção de backups', () => {
       .get('/v1/backups/latest')
       .set('Authorization', `Bearer ${TOKEN}`);
     expect(latest.body.backupId).toBe(second.body.backupId);
-    expect(repository.countFor(UID)).toBe(2);
+    expect(await repository.countFor(UID)).toBe(2);
 
     prune.mockRestore();
   });

@@ -28,4 +28,7 @@ module.exports = {
   coverageDirectory: './coverage',
   testEnvironment: 'node',
   setupFiles: ['<rootDir>/test/setup-env.ts'],
+  moduleNameMapper: {
+    '^better-sqlite3$': '<rootDir>/test/support/better-sqlite3-shim.ts',
+  },
 };

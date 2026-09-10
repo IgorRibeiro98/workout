@@ -20,7 +20,9 @@ export class AccountDeletionController {
   }
 
   @Get('deletion-status')
-  getDeletionStatus(@Principal() principal: AuthenticatedPrincipal): AccountDeletionResponseDto {
+  async getDeletionStatus(
+    @Principal() principal: AuthenticatedPrincipal,
+  ): Promise<AccountDeletionResponseDto> {
     return this.deletionService.getDeletionStatus(principal.uid);
   }
 }

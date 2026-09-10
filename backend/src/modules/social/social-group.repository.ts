@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import type { PoolClient } from 'pg';
+import { DbClient, PostgresService } from '../../database/postgres.service';
 import type { SocialGroupRole, SocialGroupStatus } from './social-group.contract';
 import { VIEWER_BLOCKED_CTE } from './workout-checkin.access-policy';
 
@@ -26,10 +27,6 @@ export interface StoredGroupMembership {
 
 /**
  * Um convite, como ele mora no banco (§19).
- *
- * `EXPIRED` é **gravado** desde a T17.13.1 (migration 0022). Até a T17.11 ele era derivado na
- * leitura, e a derivação não alcançava o índice único parcial de pendentes — o convite vencido
- * segurava a vaga do par (Squad, destinatário) para sempre. Ver [expirePendingInvitations].
  */
 export interface StoredGroupInvitation {
   readonly id: string;
@@ -82,12 +79,6 @@ export interface GroupInvitationRow {
 
 /**
  * Uma linha do feed do Squad, já com a identidade pública do autor resolvida (§121).
- *
- * Até a T17.11 esta linha carregava um `direct`, que dizia se o viewer também alcançava o
- * check-in por amizade — era ele que decidia `canInteract`, porque interagir exigia relação direta.
- * A T17.12 removeu a coluna junto com a regra (§76): dentro do Squad, **participação ativa é a
- * autorização**, e todo item deste feed é interagível na audiência `GROUP` daquele Squad. Manter um
- * campo que ninguém mais lê seria deixar no código a pergunta que a fase inteira respondeu.
  */
 export interface GroupFeedRow {
   readonly checkInId: string;
@@ -104,9 +95,9 @@ interface GroupRow {
   readonly owner_uid: string;
   readonly name: string;
   readonly status: SocialGroupStatus;
-  readonly created_at: number;
-  readonly updated_at: number;
-  readonly deleted_at: number | null;
+  readonly created_at: string | number;
+  readonly updated_at: string | number;
+  readonly deleted_at: string | number | null;
   readonly client_request_id: string | null;
 }
 
@@ -115,7 +106,7 @@ interface MembershipRow {
   readonly group_id: string;
   readonly member_uid: string;
   readonly role: SocialGroupRole;
-  readonly joined_at: number;
+  readonly joined_at: string | number;
 }
 
 interface InvitationRow {
@@ -124,9 +115,9 @@ interface InvitationRow {
   readonly sender_uid: string;
   readonly recipient_uid: string;
   readonly status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED';
-  readonly created_at: number;
-  readonly expires_at: number;
-  readonly responded_at: number | null;
+  readonly created_at: string | number;
+  readonly expires_at: string | number;
+  readonly responded_at: string | number | null;
   readonly client_request_id: string | null;
 }
 
@@ -144,9 +135,9 @@ function toGroup(row: GroupRow): StoredSocialGroup {
     ownerUid: row.owner_uid,
     name: row.name,
     status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    deletedAt: row.deleted_at,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    deletedAt: row.deleted_at != null ? Number(row.deleted_at) : null,
     clientRequestId: row.client_request_id,
   };
 }
@@ -157,7 +148,7 @@ function toMembership(row: MembershipRow): StoredGroupMembership {
     groupId: row.group_id,
     memberUid: row.member_uid,
     role: row.role,
-    joinedAt: row.joined_at,
+    joinedAt: Number(row.joined_at),
   };
 }
 
@@ -168,56 +159,40 @@ function toInvitation(row: InvitationRow): StoredGroupInvitation {
     senderUid: row.sender_uid,
     recipientUid: row.recipient_uid,
     status: row.status,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    respondedAt: row.responded_at,
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+    respondedAt: row.responded_at != null ? Number(row.responded_at) : null,
     clientRequestId: row.client_request_id,
   };
 }
 
 /**
  * O acesso ao banco dos Squads (T17.11 §120/§121).
- *
- * ## O que este repositório garante, e o que ele deliberadamente não decide
- *
- * Ele **não** decide autorização de produto — quem pode convidar, quem pode remover, se o Squad
- * está cheio. Isso é do serviço. O que ele garante é que toda leitura que atravessa a fronteira de
- * uma pessoa para outra já venha filtrada por bloqueio e por participação **em SQL** — a mesma
- * escolha da T17.9 (§78 da T17.8): carregar tudo e filtrar em JavaScript é o desenho que, no dia
- * de um bug no filtro, **já leu** o dado de quem não devia.
- *
- * ## Nenhuma consulta aqui é N+1 (§121)
- *
- * A lista de Squads traz `memberCount` por subconsulta agregada, a lista de membros e a de
- * convites resolvem perfil e bloqueio no `JOIN`, e o feed resolve autor, bloqueio e relação direta
- * em uma consulta só. Nada aqui cresce com o tamanho da página em número de idas ao banco.
  */
 @Injectable()
 export class SocialGroupRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
+
+  private getRunner(client?: PoolClient): DbClient {
+    return (client ?? this.db) as DbClient;
+  }
 
   /**
    * Uma transação do agregado.
-   *
-   * Exposta aqui porque o dono da conexão é o repositório, e o serviço não conhece
-   * `SqliteService` — a mesma separação que o resto do módulo mantém. Os casos que a exigem são
-   * criar (Squad + participação do dono, §17), aceitar (convite + participação) e transferir a
-   * posse (§40/§150).
    */
-  transaction<T>(work: () => T): T {
-    return this.sqlite.connection.transaction(work)();
+  async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.db.transaction(work);
   }
 
   // ------------------------------------------------------------------ Squad
 
-  createGroup(group: StoredSocialGroup): void {
-    this.sqlite.connection
-      .prepare(
-        `INSERT INTO social_groups (
-           id, owner_uid, name, status, created_at, updated_at, deleted_at, client_request_id
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  async createGroup(group: StoredSocialGroup, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(
+      `INSERT INTO social_groups (
+         id, owner_uid, name, status, created_at, updated_at, deleted_at, client_request_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
         group.id,
         group.ownerUid,
         group.name,
@@ -226,274 +201,277 @@ export class SocialGroupRepository {
         group.updatedAt,
         group.deletedAt,
         group.clientRequestId,
-      );
+      ],
+    );
   }
 
-  findGroup(groupId: string): StoredSocialGroup | null {
-    const row = this.sqlite.connection
-      .prepare(`SELECT ${GROUP_COLUMNS} FROM social_groups WHERE id = ? LIMIT 1`)
-      .get(groupId) as GroupRow | undefined;
+  async findGroup(groupId: string, client?: PoolClient): Promise<StoredSocialGroup | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<GroupRow>(
+      `SELECT ${GROUP_COLUMNS} FROM social_groups WHERE id = $1 LIMIT 1`,
+      [groupId],
+    );
+    const row = res.rows[0];
     return row ? toGroup(row) : null;
   }
 
   /** §146 — a mesma intenção do usuário produz o mesmo Squad. */
-  findGroupByClientRequest(ownerUid: string, clientRequestId: string): StoredSocialGroup | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT ${GROUP_COLUMNS} FROM social_groups
-          WHERE owner_uid = ? AND client_request_id = ? LIMIT 1`,
-      )
-      .get(ownerUid, clientRequestId) as GroupRow | undefined;
+  async findGroupByClientRequest(
+    ownerUid: string,
+    clientRequestId: string,
+    client?: PoolClient,
+  ): Promise<StoredSocialGroup | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<GroupRow>(
+      `SELECT ${GROUP_COLUMNS} FROM social_groups
+        WHERE owner_uid = $1 AND client_request_id = $2 LIMIT 1`,
+      [ownerUid, clientRequestId],
+    );
+    const row = res.rows[0];
     return row ? toGroup(row) : null;
   }
 
   /** §18 — quantos Squads **ativos** esta conta criou. */
-  countOwnedActiveGroups(ownerUid: string): number {
-    const row = this.sqlite.connection
-      .prepare(`SELECT COUNT(*) AS n FROM social_groups WHERE owner_uid = ? AND status = 'ACTIVE'`)
-      .get(ownerUid) as { n: number };
-    return row.n;
+  async countOwnedActiveGroups(ownerUid: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ n: string | number }>(
+      `SELECT COUNT(*) AS n FROM social_groups WHERE owner_uid = $1 AND status = 'ACTIVE'`,
+      [ownerUid],
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   /** §18 — em quantos Squads **ativos** esta conta participa. */
-  countActiveMemberships(memberUid: string): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS n
-           FROM social_group_memberships m
-           JOIN social_groups g ON g.id = m.group_id
-          WHERE m.member_uid = ? AND g.status = 'ACTIVE'`,
-      )
-      .get(memberUid) as { n: number };
-    return row.n;
+  async countActiveMemberships(memberUid: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ n: string | number }>(
+      `SELECT COUNT(*) AS n
+         FROM social_group_memberships m
+         JOIN social_groups g ON g.id = m.group_id
+        WHERE m.member_uid = $1 AND g.status = 'ACTIVE'`,
+      [memberUid],
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   /**
    * Exclusão do Squad (§46/§48).
-   *
-   * Soft delete e escrita **condicional** em `status = 'ACTIVE'`: dois toques rápidos produzem uma
-   * transição e um no-op, e a decisão sobrevive ao processo morrer. O `changes` é a resposta; o
-   * serviço não precisa reler para saber o que aconteceu.
-   *
-   * O que este `UPDATE` **não** toca: nenhuma linha de `social_workout_checkins`, nenhuma sessão,
-   * nenhum template (§47/§102). Quem apaga as arestas do grupo é [purgeGroupContext], e apagar uma
-   * aresta nunca alcança a publicação do outro lado dela.
    */
-  markGroupDeleted(groupId: string, ownerUid: string, now: number): boolean {
-    const result = this.sqlite.connection
-      .prepare(
-        `UPDATE social_groups
-            SET status = 'DELETED', deleted_at = ?, updated_at = ?
-          WHERE id = ? AND owner_uid = ? AND status = 'ACTIVE'`,
-      )
-      .run(now, now, groupId, ownerUid);
-    return result.changes > 0;
+  async markGroupDeleted(groupId: string, ownerUid: string, now: number, client?: PoolClient): Promise<boolean> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE social_groups
+          SET status = 'DELETED', deleted_at = $1, updated_at = $2
+        WHERE id = $3 AND owner_uid = $4 AND status = 'ACTIVE'`,
+      [now, now, groupId, ownerUid],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   /**
    * O contexto de grupo, e **só** ele (§48/§49).
-   *
-   * ```text
-   * apaga:  memberships · convites pendentes · arestas de compartilhamento
-   * nunca:  WorkoutCheckIn · WorkoutSession · WorkoutTemplate · WorkoutShare · mídia
-   * ```
-   *
-   * O check-in de A que estava neste Squad continua existindo e continua no Feed de amigos de A
-   * conforme a política original dele (§49). Só o vínculo desaparece — e é por isso que a tabela de
-   * compartilhamento é uma aresta, e não um post.
-   *
-   * Os convites são **cancelados**, e não apagados: a linha continua sendo a prova de que aquele
-   * identificador existiu, e um `POST /accept` posterior encontra `CANCELLED` em vez de "não
-   * existe", o que é a mesma resposta na rota (§29) por um caminho mais honesto no banco.
    */
-  purgeGroupContext(groupId: string, now: number): void {
-    const db = this.sqlite.connection;
-    db.prepare(`DELETE FROM social_group_checkin_shares WHERE group_id = ?`).run(groupId);
-    db.prepare(
+  async purgeGroupContext(groupId: string, now: number, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(`DELETE FROM social_group_checkin_shares WHERE group_id = $1`, [groupId]);
+    await runner.query(
       `UPDATE social_group_invitations
-          SET status = 'CANCELLED', responded_at = ?
-        WHERE group_id = ? AND status = 'PENDING'`,
-    ).run(now, groupId);
-    db.prepare(`DELETE FROM social_group_memberships WHERE group_id = ?`).run(groupId);
+          SET status = 'CANCELLED', responded_at = $1
+        WHERE group_id = $2 AND status = 'PENDING'`,
+      [now, groupId],
+    );
+    await runner.query(`DELETE FROM social_group_memberships WHERE group_id = $1`, [groupId]);
   }
 
   /**
    * Os Squads de que o viewer participa (§131/§132).
-   *
-   * `memberCount` sai de uma subconsulta agregada, e não de uma segunda ida ao banco por item
-   * (§121). Ele conta **todo mundo**, inclusive quem o viewer bloqueou (§35): contagem não é
-   * identidade individual, e um número que mudasse por bloqueio contaria a existência do bloqueio
-   * para quem comparasse duas telas.
    */
-  listGroupsForMember(memberUid: string, limit: number): GroupSummaryRow[] {
-    return this.sqlite.connection
-      .prepare(
-        `SELECT g.id         AS groupId,
-                g.name       AS name,
-                m.role       AS role,
-                g.created_at AS createdAt,
-                (SELECT COUNT(*) FROM social_group_memberships mc WHERE mc.group_id = g.id)
-                             AS memberCount
-           FROM social_group_memberships m
-           JOIN social_groups g ON g.id = m.group_id
-          WHERE m.member_uid = ? AND g.status = 'ACTIVE'
-          ORDER BY g.created_at DESC, g.id DESC
-          LIMIT ?`,
-      )
-      .all(memberUid, limit) as GroupSummaryRow[];
+  async listGroupsForMember(memberUid: string, limit: number, client?: PoolClient): Promise<GroupSummaryRow[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{
+      groupId: string;
+      name: string;
+      role: string;
+      createdAt: string | number;
+      memberCount: string | number;
+    }>(
+      `SELECT g.id         AS "groupId",
+              g.name       AS name,
+              m.role       AS role,
+              g.created_at AS "createdAt",
+              (SELECT COUNT(*) FROM social_group_memberships mc WHERE mc.group_id = g.id)
+                           AS "memberCount"
+         FROM social_group_memberships m
+         JOIN social_groups g ON g.id = m.group_id
+        WHERE m.member_uid = $1 AND g.status = 'ACTIVE'
+        ORDER BY g.created_at DESC, g.id DESC
+        LIMIT $2`,
+      [memberUid, limit],
+    );
+
+    return res.rows.map((row: any) => ({
+      groupId: row.groupId,
+      name: row.name,
+      role: row.role as SocialGroupRole,
+      createdAt: Number(row.createdAt),
+      memberCount: Number(row.memberCount),
+    }));
   }
 
   // ------------------------------------------------------------------ participação
 
-  createMembership(membership: StoredGroupMembership): void {
-    this.sqlite.connection
-      .prepare(
-        `INSERT INTO social_group_memberships (id, group_id, member_uid, role, joined_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(
+  async createMembership(membership: StoredGroupMembership, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(
+      `INSERT INTO social_group_memberships (id, group_id, member_uid, role, joined_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
         membership.id,
         membership.groupId,
         membership.memberUid,
         membership.role,
         membership.joinedAt,
-      );
+      ],
+    );
   }
 
   /**
    * A participação do viewer neste Squad — a autorização de **toda** superfície do grupo (§59).
-   *
-   * `null` para "não existe", "foi excluído" e "você não é membro": os três levam ao mesmo `404`
-   * (§60), e distinguir transformaria a rota num oráculo de existência.
    */
-  findActiveMembership(groupId: string, memberUid: string): StoredGroupMembership | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT m.id, m.group_id, m.member_uid, m.role, m.joined_at
-           FROM social_group_memberships m
-           JOIN social_groups g ON g.id = m.group_id
-          WHERE m.group_id = ? AND m.member_uid = ? AND g.status = 'ACTIVE'
-          LIMIT 1`,
-      )
-      .get(groupId, memberUid) as MembershipRow | undefined;
+  async findActiveMembership(groupId: string, memberUid: string, client?: PoolClient): Promise<StoredGroupMembership | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<MembershipRow>(
+      `SELECT m.id, m.group_id, m.member_uid, m.role, m.joined_at
+         FROM social_group_memberships m
+         JOIN social_groups g ON g.id = m.group_id
+        WHERE m.group_id = $1 AND m.member_uid = $2 AND g.status = 'ACTIVE'
+        LIMIT 1`,
+      [groupId, memberUid],
+    );
+    const row = res.rows[0];
     return row ? toMembership(row) : null;
   }
 
-  findMembershipById(groupId: string, membershipId: string): StoredGroupMembership | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT ${MEMBERSHIP_COLUMNS} FROM social_group_memberships
-          WHERE group_id = ? AND id = ? LIMIT 1`,
-      )
-      .get(groupId, membershipId) as MembershipRow | undefined;
+  async findMembershipById(groupId: string, membershipId: string, client?: PoolClient): Promise<StoredGroupMembership | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<MembershipRow>(
+      `SELECT ${MEMBERSHIP_COLUMNS} FROM social_group_memberships
+        WHERE group_id = $1 AND id = $2 LIMIT 1`,
+      [groupId, membershipId],
+    );
+    const row = res.rows[0];
     return row ? toMembership(row) : null;
   }
 
-  countMembers(groupId: string): number {
-    const row = this.sqlite.connection
-      .prepare(`SELECT COUNT(*) AS n FROM social_group_memberships WHERE group_id = ?`)
-      .get(groupId) as { n: number };
-    return row.n;
+  async countMembers(groupId: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ n: string | number }>(
+      `SELECT COUNT(*) AS n FROM social_group_memberships WHERE group_id = $1`,
+      [groupId],
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   /**
    * A lista de membros, com o bloqueio já resolvido pelo banco (§34/§121).
-   *
-   * O `EXISTS` de bloqueio corre **por linha na mesma consulta**, e não como um segundo `SELECT`
-   * por membro. Com o teto de 20 participantes (§122) isso é barato por construção.
-   *
-   * A ordenação põe o dono primeiro, depois por entrada — é a ordem que a tela desenha, e ela é
-   * determinística com desempate por `membershipId` para que duas leituras nunca troquem itens de
-   * lugar.
    */
-  listMembers(groupId: string, viewerUid: string): GroupMemberRow[] {
-    return this.sqlite.connection
-      .prepare(
-        `SELECT m.id           AS membershipId,
-                m.member_uid   AS memberUid,
-                m.role         AS role,
-                m.joined_at    AS joinedAt,
-                p.social_id    AS socialId,
-                p.display_name AS displayName,
-                CASE WHEN EXISTS (
-                  SELECT 1 FROM social_blocks b
-                   WHERE (b.blocker_uid = :viewer AND b.blocked_uid = m.member_uid)
-                      OR (b.blocker_uid = m.member_uid AND b.blocked_uid = :viewer)
-                ) THEN 1 ELSE 0 END AS blocked
-           FROM social_group_memberships m
-           JOIN social_profiles p ON p.owner_uid = m.member_uid
-          WHERE m.group_id = :groupId
-          ORDER BY CASE WHEN m.role = 'OWNER' THEN 0 ELSE 1 END, m.joined_at ASC, m.id ASC`,
-      )
-      .all({ groupId, viewer: viewerUid }) as GroupMemberRow[];
+  async listMembers(groupId: string, viewerUid: string, client?: PoolClient): Promise<GroupMemberRow[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{
+      membershipId: string;
+      memberUid: string;
+      role: string;
+      joinedAt: string | number;
+      socialId: string;
+      displayName: string;
+      blocked: string | number;
+    }>(
+      `SELECT m.id           AS "membershipId",
+              m.member_uid   AS "memberUid",
+              m.role         AS role,
+              m.joined_at    AS "joinedAt",
+              p.social_id    AS "socialId",
+              p.display_name AS "displayName",
+              CASE WHEN EXISTS (
+                SELECT 1 FROM social_blocks b
+                 WHERE (b.blocker_uid = $2 AND b.blocked_uid = m.member_uid)
+                    OR (b.blocker_uid = m.member_uid AND b.blocked_uid = $2)
+              ) THEN 1 ELSE 0 END AS blocked
+         FROM social_group_memberships m
+         JOIN social_profiles p ON p.owner_uid = m.member_uid
+        WHERE m.group_id = $1
+        ORDER BY CASE WHEN m.role = 'OWNER' THEN 0 ELSE 1 END, m.joined_at ASC, m.id ASC`,
+      [groupId, viewerUid],
+    );
+
+    return res.rows.map((row: any) => ({
+      membershipId: row.membershipId,
+      memberUid: row.memberUid,
+      role: row.role as SocialGroupRole,
+      joinedAt: Number(row.joinedAt),
+      socialId: row.socialId,
+      displayName: row.displayName,
+      blocked: Number(row.blocked),
+    }));
   }
 
   /** Sai do Squad (§38). Idempotente: o `changes` diz se havia o que remover. */
-  deleteMembership(groupId: string, memberUid: string): boolean {
-    const result = this.sqlite.connection
-      .prepare(`DELETE FROM social_group_memberships WHERE group_id = ? AND member_uid = ?`)
-      .run(groupId, memberUid);
-    return result.changes > 0;
+  async deleteMembership(groupId: string, memberUid: string, client?: PoolClient): Promise<boolean> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `DELETE FROM social_group_memberships WHERE group_id = $1 AND member_uid = $2`,
+      [groupId, memberUid],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   /**
    * Os compartilhamentos de uma pessoa **naquele** Squad (§62/§63/§64).
-   *
-   * Apagados quando ela sai ou é removida. É isto que garante §64: um `rejoin` futuro não
-   * ressuscita conteúdo antigo, porque não há o que ressuscitar. Nenhum check-in é tocado — só a
-   * aresta.
    */
-  deleteSharesByAuthorInGroup(groupId: string, authorUid: string): number {
-    const result = this.sqlite.connection
-      .prepare(`DELETE FROM social_group_checkin_shares WHERE group_id = ? AND author_uid = ?`)
-      .run(groupId, authorUid);
-    return result.changes;
+  async deleteSharesByAuthorInGroup(groupId: string, authorUid: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `DELETE FROM social_group_checkin_shares WHERE group_id = $1 AND author_uid = $2`,
+      [groupId, authorUid],
+    );
+    return res.rowCount ?? 0;
   }
 
   /**
    * Quais check-ins desta pessoa estão neste Squad (T17.12 §71/§143).
-   *
-   * Lido **antes** de [deleteSharesByAuthorInGroup], porque depois dela não há como saber quais
-   * eram: some a aresta, e com ela o objeto da conversa que acontecia em cima dela. Quem sai leva
-   * junto não só o que escreveu (§43) como também o que os outros escreveram nas publicações
-   * **dele** naquele Squad — é o mesmo evento de "o compartilhamento acabou" que `unshare` já
-   * tratava (§70), e ele não pode ter dois efeitos diferentes conforme o caminho.
    */
-  listSharedCheckInIdsByAuthorInGroup(groupId: string, authorUid: string): string[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT checkin_id AS checkInId
-           FROM social_group_checkin_shares
-          WHERE group_id = ? AND author_uid = ?`,
-      )
-      .all(groupId, authorUid) as Array<{ checkInId: string }>;
-    return rows.map((row) => row.checkInId);
+  async listSharedCheckInIdsByAuthorInGroup(groupId: string, authorUid: string, client?: PoolClient): Promise<string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ checkInId: string }>(
+      `SELECT checkin_id AS "checkInId"
+         FROM social_group_checkin_shares
+        WHERE group_id = $1 AND author_uid = $2`,
+      [groupId, authorUid],
+    );
+    return res.rows.map((row: any) => row.checkInId);
   }
 
   /** A transferência de posse (§40/§150). Duas escritas, sempre dentro da mesma transação. */
-  updateMembershipRole(membershipId: string, role: SocialGroupRole): void {
-    this.sqlite.connection
-      .prepare(`UPDATE social_group_memberships SET role = ? WHERE id = ?`)
-      .run(role, membershipId);
+  async updateMembershipRole(membershipId: string, role: SocialGroupRole, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(`UPDATE social_group_memberships SET role = $1 WHERE id = $2`, [role, membershipId]);
   }
 
-  updateGroupOwner(groupId: string, ownerUid: string, now: number): void {
-    this.sqlite.connection
-      .prepare(`UPDATE social_groups SET owner_uid = ?, updated_at = ? WHERE id = ?`)
-      .run(ownerUid, now, groupId);
+  async updateGroupOwner(groupId: string, ownerUid: string, now: number, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(`UPDATE social_groups SET owner_uid = $1, updated_at = $2 WHERE id = $3`, [ownerUid, now, groupId]);
   }
 
   // ------------------------------------------------------------------ convites
 
-  createInvitation(invitation: StoredGroupInvitation): void {
-    this.sqlite.connection
-      .prepare(
-        `INSERT INTO social_group_invitations (
-           id, group_id, sender_uid, recipient_uid, status, created_at, expires_at,
-           responded_at, client_request_id
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  async createInvitation(invitation: StoredGroupInvitation, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(
+      `INSERT INTO social_group_invitations (
+         id, group_id, sender_uid, recipient_uid, status, created_at, expires_at,
+         responded_at, client_request_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
         invitation.id,
         invitation.groupId,
         invitation.senderUid,
@@ -503,340 +481,338 @@ export class SocialGroupRepository {
         invitation.expiresAt,
         invitation.respondedAt,
         invitation.clientRequestId,
-      );
+      ],
+    );
   }
 
-  findInvitation(invitationId: string): StoredGroupInvitation | null {
-    const row = this.sqlite.connection
-      .prepare(`SELECT ${INVITATION_COLUMNS} FROM social_group_invitations WHERE id = ? LIMIT 1`)
-      .get(invitationId) as InvitationRow | undefined;
+  async findInvitation(invitationId: string, client?: PoolClient): Promise<StoredGroupInvitation | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<InvitationRow>(
+      `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations WHERE id = $1 LIMIT 1`,
+      [invitationId],
+    );
+    const row = res.rows[0];
     return row ? toInvitation(row) : null;
   }
 
-  findInvitationByClientRequest(
+  async findInvitationByClientRequest(
     groupId: string,
     clientRequestId: string,
-  ): StoredGroupInvitation | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations
-          WHERE group_id = ? AND client_request_id = ? LIMIT 1`,
-      )
-      .get(groupId, clientRequestId) as InvitationRow | undefined;
+    client?: PoolClient,
+  ): Promise<StoredGroupInvitation | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<InvitationRow>(
+      `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations
+        WHERE group_id = $1 AND client_request_id = $2 LIMIT 1`,
+      [groupId, clientRequestId],
+    );
+    const row = res.rows[0];
     return row ? toInvitation(row) : null;
   }
 
-  findPendingInvitation(groupId: string, recipientUid: string): StoredGroupInvitation | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations
-          WHERE group_id = ? AND recipient_uid = ? AND status = 'PENDING' LIMIT 1`,
-      )
-      .get(groupId, recipientUid) as InvitationRow | undefined;
+  async findPendingInvitation(groupId: string, recipientUid: string, client?: PoolClient): Promise<StoredGroupInvitation | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<InvitationRow>(
+      `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations
+        WHERE group_id = $1 AND recipient_uid = $2 AND status = 'PENDING' LIMIT 1`,
+      [groupId, recipientUid],
+    );
+    const row = res.rows[0];
     return row ? toInvitation(row) : null;
   }
 
   /**
    * Marca como `EXPIRED` todo convite pendente cujo prazo já passou (T17.13.1 §27).
-   *
-   * ```sql
-   * UPDATE social_group_invitations SET status = 'EXPIRED'
-   *  WHERE status = 'PENDING' AND expires_at <= :now
-   * ```
-   *
-   * ## Por que a expiração precisa ser gravada
-   *
-   * Porque o índice que garante "um convite pendente por (Squad, destinatário)" é parcial em
-   * `WHERE status = 'PENDING'`, e um índice não consulta o relógio. Enquanto a linha vencida
-   * continuar `PENDING`, ela ocupa a vaga daquele par — e a pessoa não pode ser reconvidada nem
-   * aceitar o que já venceu.
-   *
-   * `responded_at` **não** é preenchido: expirar não é responder, e é essa coluna que distingue
-   * "recusou" de "deixou vencer".
-   *
-   * Devolve quantas linhas mudaram, para o log e para o teste.
    */
-  expirePendingInvitations(now: number): number {
-    return this.sqlite.connection
-      .prepare(
-        `UPDATE social_group_invitations SET status = 'EXPIRED'
-          WHERE status = 'PENDING' AND expires_at <= ?`,
-      )
-      .run(now).changes;
+  async expirePendingInvitations(now: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE social_group_invitations SET status = 'EXPIRED'
+        WHERE status = 'PENDING' AND expires_at <= $1`,
+      [now],
+    );
+    return res.rowCount ?? 0;
   }
 
-  countPendingInvitations(groupId: string): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS n FROM social_group_invitations
-          WHERE group_id = ? AND status = 'PENDING'`,
-      )
-      .get(groupId) as { n: number };
-    return row.n;
+  async countPendingInvitations(groupId: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ n: string | number }>(
+      `SELECT COUNT(*) AS n FROM social_group_invitations
+        WHERE group_id = $1 AND status = 'PENDING'`,
+      [groupId],
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   /**
    * Responde a um convite (§29).
-   *
-   * Escrita **condicional** em `status = 'PENDING'`: dois aceites simultâneos produzem uma
-   * transição e um no-op, e o segundo lê `false` em vez de criar uma segunda participação.
    */
-  resolveInvitation(
+  async resolveInvitation(
     invitationId: string,
     status: 'ACCEPTED' | 'DECLINED' | 'CANCELLED',
     now: number,
-  ): boolean {
-    const result = this.sqlite.connection
-      .prepare(
-        `UPDATE social_group_invitations
-            SET status = ?, responded_at = ?
-          WHERE id = ? AND status = 'PENDING'`,
-      )
-      .run(status, now, invitationId);
-    return result.changes > 0;
+    client?: PoolClient,
+  ): Promise<boolean> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE social_group_invitations
+          SET status = $1, responded_at = $2
+        WHERE id = $3 AND status = 'PENDING'`,
+      [status, now, invitationId],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   /**
    * Cancela os convites pendentes entre um par, nas duas direções (§105).
-   *
-   * Chamado pelo Bloqueio. Cancelar em vez de apagar mantém a linha como prova de que o
-   * identificador existiu — e um push ainda na fila para aquele convite passa a ser irrelevante na
-   * revalidação do dispatcher (§106).
    */
-  cancelPendingInvitationsBetween(uidA: string, uidB: string, now: number): number {
-    const result = this.sqlite.connection
-      .prepare(
-        `UPDATE social_group_invitations
-            SET status = 'CANCELLED', responded_at = ?
-          WHERE status = 'PENDING'
-            AND ((sender_uid = ? AND recipient_uid = ?)
-              OR (sender_uid = ? AND recipient_uid = ?))`,
-      )
-      .run(now, uidA, uidB, uidB, uidA);
-    return result.changes;
+  async cancelPendingInvitationsBetween(uidA: string, uidB: string, now: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE social_group_invitations
+          SET status = 'CANCELLED', responded_at = $1
+        WHERE status = 'PENDING'
+          AND ((sender_uid = $2 AND recipient_uid = $3)
+            OR (sender_uid = $4 AND recipient_uid = $5))`,
+      [now, uidA, uidB, uidB, uidA],
+    );
+    return res.rowCount ?? 0;
   }
 
   /** Cancela todo convite pendente **de** ou **para** esta conta (§96). */
-  cancelAllPendingInvitationsFor(uid: string, now: number): number {
-    const result = this.sqlite.connection
-      .prepare(
-        `UPDATE social_group_invitations
-            SET status = 'CANCELLED', responded_at = ?
-          WHERE status = 'PENDING' AND (sender_uid = ? OR recipient_uid = ?)`,
-      )
-      .run(now, uid, uid);
-    return result.changes;
+  async cancelAllPendingInvitationsFor(uid: string, now: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE social_group_invitations
+          SET status = 'CANCELLED', responded_at = $1
+        WHERE status = 'PENDING' AND (sender_uid = $2 OR recipient_uid = $3)`,
+      [now, uid, uid],
+    );
+    return res.rowCount ?? 0;
   }
 
   /**
    * Os convites recebidos, com a prévia mínima de §138/§139.
-   *
-   * Nome do Squad, contagem de membros e quem convidou — e nada mais. A **lista de membros** não
-   * vem antes do aceite: quem ainda não entrou não é audiência do grupo.
-   *
-   * O bloqueio é resolvido no `JOIN` e devolvido como flag; o serviço decide o que fazer com ela.
-   * Na prática o convite já teria sido cancelado pelo bloqueio (§105) — a flag cobre a corrida
-   * entre as duas escritas, para que nenhuma identidade escape por ela.
    */
-  listInvitationsForRecipient(recipientUid: string, limit: number): GroupInvitationRow[] {
-    return this.sqlite.connection
-      .prepare(
-        `SELECT i.id           AS invitationId,
-                i.group_id     AS groupId,
-                g.name         AS groupName,
-                i.sender_uid   AS inviterUid,
-                sp.social_id   AS inviterSocialId,
-                sp.display_name AS inviterDisplayName,
-                i.status       AS status,
-                i.created_at   AS createdAt,
-                i.expires_at   AS expiresAt,
-                (SELECT COUNT(*) FROM social_group_memberships mc WHERE mc.group_id = g.id)
-                               AS memberCount,
-                CASE WHEN EXISTS (
-                  SELECT 1 FROM social_blocks b
-                   WHERE (b.blocker_uid = :viewer AND b.blocked_uid = i.sender_uid)
-                      OR (b.blocker_uid = i.sender_uid AND b.blocked_uid = :viewer)
-                ) THEN 1 ELSE 0 END AS blocked
-           FROM social_group_invitations i
-           JOIN social_groups g    ON g.id = i.group_id AND g.status = 'ACTIVE'
-           JOIN social_profiles sp ON sp.owner_uid = i.sender_uid AND sp.status = 'ACTIVE'
-          WHERE i.recipient_uid = :viewer
-            AND i.status = 'PENDING'
-          ORDER BY i.created_at DESC, i.id DESC
-          LIMIT :limit`,
-      )
-      .all({ viewer: recipientUid, limit }) as GroupInvitationRow[];
+  async listInvitationsForRecipient(recipientUid: string, limit: number, client?: PoolClient): Promise<GroupInvitationRow[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{
+      invitationId: string;
+      groupId: string;
+      groupName: string;
+      inviterUid: string;
+      inviterSocialId: string;
+      inviterDisplayName: string;
+      status: string;
+      createdAt: string | number;
+      expiresAt: string | number;
+      memberCount: string | number;
+      blocked: string | number;
+    }>(
+      `SELECT i.id           AS "invitationId",
+              i.group_id     AS "groupId",
+              g.name         AS "groupName",
+              i.sender_uid   AS "inviterUid",
+              sp.social_id   AS "inviterSocialId",
+              sp.display_name AS "inviterDisplayName",
+              i.status       AS status,
+              i.created_at   AS "createdAt",
+              i.expires_at   AS "expiresAt",
+              (SELECT COUNT(*) FROM social_group_memberships mc WHERE mc.group_id = g.id)
+                             AS "memberCount",
+              CASE WHEN EXISTS (
+                SELECT 1 FROM social_blocks b
+                 WHERE (b.blocker_uid = $1 AND b.blocked_uid = i.sender_uid)
+                    OR (b.blocker_uid = i.sender_uid AND b.blocked_uid = $1)
+              ) THEN 1 ELSE 0 END AS blocked
+         FROM social_group_invitations i
+         JOIN social_groups g    ON g.id = i.group_id AND g.status = 'ACTIVE'
+         JOIN social_profiles sp ON sp.owner_uid = i.sender_uid AND sp.status = 'ACTIVE'
+        WHERE i.recipient_uid = $1
+          AND i.status = 'PENDING'
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT $2`,
+      [recipientUid, limit],
+    );
+
+    return res.rows.map((row: any) => ({
+      invitationId: row.invitationId,
+      groupId: row.groupId,
+      groupName: row.groupName,
+      inviterUid: row.inviterUid,
+      inviterSocialId: row.inviterSocialId,
+      inviterDisplayName: row.inviterDisplayName,
+      status: row.status as 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED',
+      createdAt: Number(row.createdAt),
+      expiresAt: Number(row.expiresAt),
+      memberCount: Number(row.memberCount),
+      blocked: Number(row.blocked),
+    }));
   }
 
   // ------------------------------------------------------------------ compartilhamento
 
-  createShare(input: {
+  async createShare(input: {
     id: string;
     groupId: string;
     checkInId: string;
     authorUid: string;
     createdAt: number;
-  }): void {
-    this.sqlite.connection
-      .prepare(
-        `INSERT INTO social_group_checkin_shares (id, group_id, checkin_id, author_uid, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(input.id, input.groupId, input.checkInId, input.authorUid, input.createdAt);
+  }, client?: PoolClient): Promise<void> {
+    const runner = this.getRunner(client);
+    await runner.query(
+      `INSERT INTO social_group_checkin_shares (id, group_id, checkin_id, author_uid, created_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [input.id, input.groupId, input.checkInId, input.authorUid, input.createdAt],
+    );
   }
 
-  findShare(
+  async findShare(
     groupId: string,
     checkInId: string,
-  ): { id: string; authorUid: string; createdAt: number } | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT id, author_uid AS authorUid, created_at AS createdAt
-           FROM social_group_checkin_shares
-          WHERE group_id = ? AND checkin_id = ? LIMIT 1`,
-      )
-      .get(groupId, checkInId) as { id: string; authorUid: string; createdAt: number } | undefined;
-    return row ?? null;
+    client?: PoolClient,
+  ): Promise<{ id: string; authorUid: string; createdAt: number } | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ id: string; authorUid: string; createdAt: string | number }>(
+      `SELECT id, author_uid AS "authorUid", created_at AS "createdAt"
+         FROM social_group_checkin_shares
+        WHERE group_id = $1 AND checkin_id = $2 LIMIT 1`,
+      [groupId, checkInId],
+    );
+    const row = res.rows[0];
+    return row ? { id: row.id, authorUid: row.authorUid, createdAt: Number(row.createdAt) } : null;
   }
 
   /** §130 — só o autor remove o próprio compartilhamento. Idempotente. */
-  deleteShare(groupId: string, checkInId: string, authorUid: string): boolean {
-    const result = this.sqlite.connection
-      .prepare(
-        `DELETE FROM social_group_checkin_shares
-          WHERE group_id = ? AND checkin_id = ? AND author_uid = ?`,
-      )
-      .run(groupId, checkInId, authorUid);
-    return result.changes > 0;
+  async deleteShare(groupId: string, checkInId: string, authorUid: string, client?: PoolClient): Promise<boolean> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `DELETE FROM social_group_checkin_shares
+        WHERE group_id = $1 AND checkin_id = $2 AND author_uid = $3`,
+      [groupId, checkInId, authorUid],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   /** §68 — em quantos Squads este check-in já está. */
-  countSharesForCheckIn(checkInId: string): number {
-    const row = this.sqlite.connection
-      .prepare(`SELECT COUNT(*) AS n FROM social_group_checkin_shares WHERE checkin_id = ?`)
-      .get(checkInId) as { n: number };
-    return row.n;
+  async countSharesForCheckIn(checkInId: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ n: string | number }>(
+      `SELECT COUNT(*) AS n FROM social_group_checkin_shares WHERE checkin_id = $1`,
+      [checkInId],
+    );
+    return Number(res.rows[0]?.n ?? 0);
   }
 
   /** §141 — em quais Squads **ativos** este check-in já está. Alimenta o seletor da tela. */
-  listGroupIdsForCheckIn(checkInId: string): string[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT s.group_id AS groupId
-           FROM social_group_checkin_shares s
-           JOIN social_groups g ON g.id = s.group_id AND g.status = 'ACTIVE'
-          WHERE s.checkin_id = ?`,
-      )
-      .all(checkInId) as Array<{ groupId: string }>;
-    return rows.map((row) => row.groupId);
+  async listGroupIdsForCheckIn(checkInId: string, client?: PoolClient): Promise<string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ groupId: string }>(
+      `SELECT s.group_id AS "groupId"
+         FROM social_group_checkin_shares s
+         JOIN social_groups g ON g.id = s.group_id AND g.status = 'ACTIVE'
+        WHERE s.checkin_id = $1`,
+      [checkInId],
+    );
+    return res.rows.map((row: any) => row.groupId);
   }
 
   /**
    * O feed de um Squad (§59–§66/§84/§86).
-   *
-   * ## A autorização está **na consulta**, e não depois dela
-   *
-   * ```text
-   * viewer é membro ativo do Squad          (EXISTS, sem o qual a consulta devolve zero linhas)
-   * ∧ o check-in foi explicitamente compartilhado aqui
-   * ∧ o check-in está PUBLISHED             (§61)
-   * ∧ o autor ainda é membro ativo          (§61/§62/§63)
-   * ∧ o autor tem perfil ACTIVE             (§61)
-   * ∧ ¬bloqueio entre viewer e autor        (§33/§65)
-   * ```
-   *
-   * O `EXISTS` de participação do viewer está dentro da consulta **além** da checagem que o
-   * serviço faz antes: um `404` que dependesse só do serviço viraria vazamento no dia em que
-   * alguém escrevesse um segundo caminho até aqui. Com ele, a consulta não tem como devolver
-   * linha para quem não é membro — nem por engano.
-   *
-   * ## Bounded por construção (§86/§87)
-   *
-   * Janela de 30 dias sobre a data do **compartilhamento** no `WHERE`, teto de itens no `LIMIT`, e
-   * nenhum cursor histórico. `ORDER BY s.created_at DESC, s.id DESC` — desempate determinístico,
-   * para que dois compartilhamentos no mesmo milissegundo tenham sempre a mesma ordem.
    */
-  findGroupFeed(
+  async findGroupFeed(
     viewerUid: string,
     groupId: string,
     sharedSinceMs: number,
     limit: number,
-  ): GroupFeedRow[] {
-    return this.sqlite.connection
-      .prepare(
-        `WITH ${VIEWER_BLOCKED_CTE}
-         SELECT c.id            AS checkInId,
-                c.author_uid    AS authorUid,
-                p.social_id     AS authorSocialId,
-                p.display_name  AS authorDisplayName,
-                c.caption       AS caption,
-                c.created_at    AS publishedAt,
-                s.created_at    AS sharedToGroupAt
-           FROM social_group_checkin_shares s
-           JOIN social_groups g             ON g.id = s.group_id AND g.status = 'ACTIVE'
-           JOIN social_workout_checkins c   ON c.id = s.checkin_id
-           JOIN social_profiles p           ON p.owner_uid = c.author_uid
-           JOIN social_group_memberships am ON am.group_id = s.group_id
-                                           AND am.member_uid = c.author_uid
-          WHERE s.group_id = :groupId
-            AND s.created_at >= :sharedSince
-            AND c.status = 'PUBLISHED'
-            AND p.status = 'ACTIVE'
-            AND c.author_uid NOT IN (SELECT uid FROM viewer_blocked)
-            AND EXISTS (SELECT 1 FROM social_group_memberships vm
-                         WHERE vm.group_id = :groupId AND vm.member_uid = :viewer)
-            AND EXISTS (SELECT 1 FROM social_profiles vp
-                         WHERE vp.owner_uid = :viewer AND vp.status = 'ACTIVE')
-          ORDER BY s.created_at DESC, s.id DESC
-          LIMIT :limit`,
-      )
-      .all({
-        viewer: viewerUid,
-        groupId,
-        sharedSince: sharedSinceMs,
-        limit,
-      }) as GroupFeedRow[];
+    client?: PoolClient,
+  ): Promise<GroupFeedRow[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{
+      checkInId: string;
+      authorUid: string;
+      authorSocialId: string;
+      authorDisplayName: string;
+      caption: string | null;
+      publishedAt: string | number;
+      sharedToGroupAt: string | number;
+    }>(
+      `WITH ${VIEWER_BLOCKED_CTE}
+       SELECT c.id            AS "checkInId",
+              c.author_uid    AS "authorUid",
+              p.social_id     AS "authorSocialId",
+              p.display_name  AS "authorDisplayName",
+              c.caption       AS caption,
+              c.created_at    AS "publishedAt",
+              s.created_at    AS "sharedToGroupAt"
+         FROM social_group_checkin_shares s
+         JOIN social_groups g             ON g.id = s.group_id AND g.status = 'ACTIVE'
+         JOIN social_workout_checkins c   ON c.id = s.checkin_id
+         JOIN social_profiles p           ON p.owner_uid = c.author_uid
+         JOIN social_group_memberships am ON am.group_id = s.group_id
+                                         AND am.member_uid = c.author_uid
+        WHERE s.group_id = $2
+          AND s.created_at >= $3
+          AND c.status = 'PUBLISHED'
+          AND p.status = 'ACTIVE'
+          AND c.author_uid NOT IN (SELECT uid FROM viewer_blocked)
+          AND EXISTS (SELECT 1 FROM social_group_memberships vm
+                       WHERE vm.group_id = $2 AND vm.member_uid = $1)
+          AND EXISTS (SELECT 1 FROM social_profiles vp
+                       WHERE vp.owner_uid = $1 AND vp.status = 'ACTIVE')
+        ORDER BY s.created_at DESC, s.id DESC
+        LIMIT $4`,
+      [viewerUid, groupId, sharedSinceMs, limit],
+    );
+
+    return res.rows.map((row: any) => ({
+      checkInId: row.checkInId,
+      authorUid: row.authorUid,
+      authorSocialId: row.authorSocialId,
+      authorDisplayName: row.authorDisplayName,
+      caption: row.caption,
+      publishedAt: Number(row.publishedAt),
+      sharedToGroupAt: Number(row.sharedToGroupAt),
+    }));
   }
 
   // ------------------------------------------------------------------ ciclo de vida da conta
 
   /**
    * Os Squads em que esta conta é dona e que ainda têm **outras** pessoas (§98/§99).
-   *
-   * A desativação do Social usa isto para decidir entre "posso resolver sozinho" e "preciso que a
-   * pessoa escolha". Devolve `groupId` e nada mais: §99 é explícito em que a resposta carrega uma
-   * **contagem**, e nunca dados dos membros.
    */
-  listOwnedActiveGroupsWithOthers(ownerUid: string): string[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT g.id AS groupId
-           FROM social_groups g
-          WHERE g.owner_uid = ? AND g.status = 'ACTIVE'
-            AND (SELECT COUNT(*) FROM social_group_memberships m WHERE m.group_id = g.id) > 1`,
-      )
-      .all(ownerUid) as Array<{ groupId: string }>;
-    return rows.map((row) => row.groupId);
+  async listOwnedActiveGroupsWithOthers(ownerUid: string, client?: PoolClient): Promise<string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ groupId: string }>(
+      `SELECT g.id AS "groupId"
+         FROM social_groups g
+        WHERE g.owner_uid = $1 AND g.status = 'ACTIVE'
+          AND (SELECT COUNT(*) FROM social_group_memberships m WHERE m.group_id = g.id) > 1`,
+      [ownerUid],
+    );
+    return res.rows.map((row: any) => row.groupId);
   }
 
   /** Os Squads ativos criados por esta conta — usado na exclusão de conta (§100/§101). */
-  listOwnedActiveGroups(ownerUid: string): string[] {
-    const rows = this.sqlite.connection
-      .prepare(`SELECT id AS groupId FROM social_groups WHERE owner_uid = ? AND status = 'ACTIVE'`)
-      .all(ownerUid) as Array<{ groupId: string }>;
-    return rows.map((row) => row.groupId);
+  async listOwnedActiveGroups(ownerUid: string, client?: PoolClient): Promise<string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ groupId: string }>(
+      `SELECT id AS "groupId" FROM social_groups WHERE owner_uid = $1 AND status = 'ACTIVE'`,
+      [ownerUid],
+    );
+    return res.rows.map((row: any) => row.groupId);
   }
 
   /** As participações **como MEMBER** desta conta em Squads ativos (§97). */
-  listActiveMemberGroups(memberUid: string): string[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT m.group_id AS groupId
-           FROM social_group_memberships m
-           JOIN social_groups g ON g.id = m.group_id
-          WHERE m.member_uid = ? AND m.role = 'MEMBER' AND g.status = 'ACTIVE'`,
-      )
-      .all(memberUid) as Array<{ groupId: string }>;
-    return rows.map((row) => row.groupId);
+  async listActiveMemberGroups(memberUid: string, client?: PoolClient): Promise<string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ groupId: string }>(
+      `SELECT m.group_id AS "groupId"
+         FROM social_group_memberships m
+         JOIN social_groups g ON g.id = m.group_id
+        WHERE m.member_uid = $1 AND m.role = 'MEMBER' AND g.status = 'ACTIVE'`,
+      [memberUid],
+    );
+    return res.rows.map((row: any) => row.groupId);
   }
 }

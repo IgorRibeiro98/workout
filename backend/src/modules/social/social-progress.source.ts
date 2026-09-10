@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
@@ -37,10 +37,10 @@ import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } fr
  */
 export interface SocialProgressSource {
   /** O nível canônico do dono. */
-  getLevel(ownerUid: string): SocialProgressValue<number>;
+  getLevel(ownerUid: string): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /** A sequência **semanal** de consistência (§20). */
-  getConsistencyStreak(ownerUid: string): SocialProgressValue<number>;
+  getConsistencyStreak(ownerUid: string): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /**
    * Quantos treinos **concluídos** o dono tem na semana canônica que contém [nowMs].
@@ -53,10 +53,10 @@ export interface SocialProgressSource {
     ownerUid: string,
     weekTimeZone: string | null,
     nowMs: number,
-  ): SocialProgressValue<number>;
+  ): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /** Os identificadores canônicos das conquistas que o dono realmente obteve. */
-  getEarnedAchievementIds(ownerUid: string): SocialProgressValue<readonly string[]>;
+  getEarnedAchievementIds(ownerUid: string): SocialProgressValue<readonly string[]> | Promise<SocialProgressValue<readonly string[]>>;
 }
 
 /**
@@ -102,7 +102,7 @@ export const unsupported = <T>(): SocialProgressValue<T> => ({ kind: 'UNSUPPORTE
  * `sync_entities` virar API social. A fronteira que sustenta isso, e que é testada:
  *
  * - o `SocialModule` continua **sem importar** `SyncModule`, `BackupModule` e `AiModule`. Esta
- *   classe fala com o `SqliteService`, que é infraestrutura compartilhada do processo — e não com
+ *   classe fala com o `PostgresService`, que é infraestrutura compartilhada do processo — e não com
  *   `SyncRepository`, cuja superfície é o protocolo de sync inteiro;
  * - **backup nunca**. `backup_snapshots`, `backup_items` e `backup_payloads` não são lidos por
  *   nada aqui: um snapshot é a conta inteira em um documento, e ler dele para responder "quantos
@@ -119,15 +119,15 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
 
   constructor(
     @Inject(CANONICAL_TRAINING_SOURCE)
-    trainingSourceOrSqlite: CanonicalTrainingSource | SqliteService,
+    trainingSourceOrDb: CanonicalTrainingSource | PostgresService,
   ) {
     if (
-      'countCompletedWorkouts' in trainingSourceOrSqlite &&
-      'hasAnyCompletedSession' in trainingSourceOrSqlite
+      'countCompletedWorkouts' in trainingSourceOrDb &&
+      'hasAnyCompletedSession' in trainingSourceOrDb
     ) {
-      this.trainingSource = trainingSourceOrSqlite;
+      this.trainingSource = trainingSourceOrDb;
     } else {
-      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrSqlite);
+      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrDb);
     }
   }
 
@@ -162,11 +162,11 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
    *
    * Utiliza a fonte canônica unificada CanonicalTrainingSource (T17.4.1).
    */
-  getWeeklyWorkoutCount(
+  async getWeeklyWorkoutCount(
     ownerUid: string,
     weekTimeZone: string | null,
     nowMs: number,
-  ): SocialProgressValue<number> {
+  ): Promise<SocialProgressValue<number>> {
     if (!weekTimeZone) {
       return unavailable();
     }
@@ -174,13 +174,13 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     if (!window) {
       return unavailable();
     }
-    if (!this.trainingSource.hasAnyCompletedSession(ownerUid)) {
+    if (!(await this.trainingSource.hasAnyCompletedSession(ownerUid))) {
       // Nunca sincronizou nada concluído: o servidor não sabe se são zero treinos ou zero
       // sincronizações, e afirmar zero seria inventar o que não foi comprovado.
       return unavailable();
     }
 
-    const total = this.trainingSource.countCompletedWorkouts(
+    const total = await this.trainingSource.countCompletedWorkouts(
       ownerUid,
       window.startMs,
       window.endMs,

@@ -1,13 +1,20 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MIGRATIONS_DIR, configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
+import { loadMigrations, runMigrations } from '../src/database/migration-runner';
 import {
-  VIEWER_BLOCKED_CTE,
-  VIEWER_SCOPE_CTE,
+  viewerBlockedCte,
+  viewerScopeCte,
   groupInteractionVisibleSql,
   interactionVisibleSql,
   viewerInActiveGroupSql,
 } from '../src/modules/social/workout-checkin.access-policy';
+
+const LEGACY_SQLITE_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+const VIEWER_BLOCKED_CTE = viewerBlockedCte(':viewer');
+const VIEWER_SCOPE_CTE = viewerScopeCte(':viewer');
 
 /**
  * T17.10 §36/§123/§124/§125 — as consultas críticas do Social sob volume.
@@ -66,9 +73,12 @@ interface Seeded {
 }
 
 function seed(databasePath: string): Seeded {
-  const sqlite = sqliteFor(configFor(databasePath));
-  sqlite.initialize(MIGRATIONS_DIR);
-  const db = sqlite.connection;
+  const dbPath = databasePath.startsWith('postgres')
+    ? join(tmpdir(), `bench-${Date.now()}-${Math.random().toString(36).substring(2)}.db`)
+    : databasePath;
+  const db = new BetterSqlite3(dbPath);
+  db.pragma('foreign_keys = ON');
+  runMigrations(db, loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR));
 
   const uids = Array.from(
     { length: USERS },

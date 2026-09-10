@@ -31,45 +31,19 @@ export class AccountDeletionService {
   }
 
   /** Confere se o UID já foi excluído anteriormente (barreira de autenticação). */
-  isAccountDeleted(uid: string): boolean {
+  async isAccountDeleted(uid: string): Promise<boolean> {
     const hash = this.hashUid(uid);
     return this.repo.isTombstoned(hash);
   }
 
   /**
    * Executa a exclusão de conta de ponta a ponta (T17.13.1 §5–§11).
-   *
-   * ```text
-   * lê as chaves de mídia          (antes do purge: depois, as linhas não existem mais)
-   *         │
-   *   BEGIN │ tombstone + job(LEDGER_PENDING) + purge das tabelas account-scoped
-   *  COMMIT │ ← a partir daqui a conta está inacessível, e isso é irreversível
-   *         │
-   *  apaga os arquivos de mídia    (fora da transação: I/O de disco não segura o SQLite)
-   *         │
-   *  persiste o ledger de DR       (durável, com fsync — falha aqui ⇒ DELETION_PENDING)
-   *         │
-   *  apaga o usuário no Firebase   (falha aqui ⇒ DELETION_PENDING)
-   *         │
-   *  remove o job                  ⇒ DELETED
-   * ```
-   *
-   * ## A regra que ordena tudo isso (§9)
-   *
-   * Depois que o purge é committed, **os dados nunca voltam** — nem se o sistema de arquivos
-   * falhar, nem se o Firebase estiver fora do ar. O que ainda pode acontecer é a exclusão não ser
-   * declarada *terminada*: enquanto o registro anti-DR obrigatório não estiver no disco, a
-   * resposta é `DELETION_PENDING` e o job continua na tabela, com a conta bloqueada pelo tombstone
-   * do banco.
-   *
-   * Dizer `DELETED` sem o ledger persistido seria uma promessa que o servidor não pode cumprir: é
-   * exatamente o restore posterior que traria a conta de volta.
    */
   async deleteAccount(uid: string): Promise<AccountDeletionResponseDto> {
     const uidHash = this.hashUid(uid);
     const now = this.clock.now();
-    const isAlreadyTombstoned = this.repo.isTombstoned(uidHash);
-    const existingJob = this.repo.findJobByFirebaseUid(uid);
+    const isAlreadyTombstoned = await this.repo.isTombstoned(uidHash);
+    const existingJob = await this.repo.findJobByFirebaseUid(uid);
 
     // Sem tombstone pendente e sem job: já terminou. Uma segunda chamada converge (§64).
     if (isAlreadyTombstoned && !existingJob) {
@@ -79,12 +53,10 @@ export class AccountDeletionService {
     if (!isAlreadyTombstoned) {
       // §6 — as chaves saem **antes** do purge. Depois dele as linhas não existem mais, e os
       // arquivos ficariam órfãos no disco de um servidor que afirma ter apagado tudo.
-      const mediaKeys = this.repo.listMediaStorageKeys(uid);
+      const mediaKeys = await this.repo.listMediaStorageKeys(uid);
 
-      // §5 — tombstone, job e purge são uma transação só. Se qualquer `DELETE` falhar, o
-      // `ROLLBACK` leva junto o tombstone e o job: nada de conta bloqueada sobre dados intactos,
-      // nada de job órfão, nada de purge pela metade.
-      this.repo.beginAccountDeletion({
+      // §5 — tombstone, job e purge são uma transação só.
+      await this.repo.beginAccountDeletion({
         firebaseUid: uid,
         uidHash,
         tombstoneId: randomUUID(),
@@ -92,9 +64,6 @@ export class AccountDeletionService {
         now,
       });
 
-      // Os arquivos saem depois do commit: uma falha de I/O aqui não pode desfazer o purge do
-      // banco, que é a parte que revoga o acesso. O que sobrar de arquivo é recolhido pela
-      // varredura de órfãos (§140 da T17.9), porque a metadata correspondente já não existe.
       const removedFiles = await this.purgeMediaFiles(mediaKeys);
 
       this.logger.info('account.deletion.data_purged', {
@@ -103,7 +72,7 @@ export class AccountDeletionService {
       });
     }
 
-    const job = this.repo.findJobByFirebaseUid(uid);
+    const job = await this.repo.findJobByFirebaseUid(uid);
     if (!job) {
       // Só acontece se outra execução concorrente terminou a exclusão entre as duas leituras.
       return { status: 'DELETED' };
@@ -114,9 +83,10 @@ export class AccountDeletionService {
       this.logger.info('account.deletion.completed', { uidPrefix: uid.slice(0, 6) });
       return { status: 'DELETED' };
     } catch (error: unknown) {
+      const currentJob = await this.repo.findJobByFirebaseUid(uid);
       this.logger.warn('account.deletion.pending', {
         uidPrefix: uid.slice(0, 6),
-        phase: this.repo.findJobByFirebaseUid(uid)?.phase ?? 'unknown',
+        phase: currentJob?.phase ?? 'unknown',
         error: error instanceof Error ? error.message : String(error),
       });
       return { status: 'DELETION_PENDING' };
@@ -125,14 +95,6 @@ export class AccountDeletionService {
 
   /**
    * Executa os passos que ainda faltam para um job, na ordem, e remove o job quando terminam.
-   *
-   * Uma implementação só, usada pela rota interativa e pelo reconciliador em segundo plano
-   * (§11): duas cópias desta sequência divergiriam na primeira mudança, e a divergência aqui é uma
-   * conta que fica presa numa fase que só um dos dois caminhos sabe destravar.
-   *
-   * **Lança** quando o passo atual falha. Quem chama decide o que fazer com isso: a rota responde
-   * `DELETION_PENDING`, o reconciliador agenda backoff. O job permanece na tabela, na fase em que
-   * parou, e sobrevive a um restart do processo porque é uma linha do SQLite (§11).
    */
   async advanceJob(job: StoredDeletionJob, now: number): Promise<void> {
     let current = job;
@@ -141,7 +103,7 @@ export class AccountDeletionService {
       // §10 — a falha propaga. Este `append` é o registro anti-ressurreição obrigatório, e sem ele
       // a exclusão não pode ser declarada terminada.
       this.ledger.appendDurably(current.uid_hash, now);
-      this.repo.updateJobPhase(current.id, 'FIREBASE_PENDING', now);
+      await this.repo.updateJobPhase(current.id, 'FIREBASE_PENDING', now);
       current = { ...current, phase: 'FIREBASE_PENDING' };
       this.logger.info('account.deletion.ledger_persisted', {
         uidPrefix: current.firebase_uid.slice(0, 6),
@@ -156,16 +118,16 @@ export class AccountDeletionService {
     }
 
     // A chave estável é o uid, e nunca o `id` do job (T17.10 §83).
-    this.repo.deleteJobByFirebaseUid(current.firebase_uid);
+    await this.repo.deleteJobByFirebaseUid(current.firebase_uid);
   }
 
   /** Consulta o status da exclusão para retry ou reconciliação. */
-  getDeletionStatus(uid: string): AccountDeletionResponseDto {
+  async getDeletionStatus(uid: string): Promise<AccountDeletionResponseDto> {
     const uidHash = this.hashUid(uid);
-    if (!this.repo.isTombstoned(uidHash)) {
+    if (!(await this.repo.isTombstoned(uidHash))) {
       return { status: 'DELETION_PENDING' };
     }
-    if (this.repo.hasPendingJob(uid)) {
+    if (await this.repo.hasPendingJob(uid)) {
       return { status: 'DELETION_PENDING' };
     }
     return { status: 'DELETED' };
@@ -176,20 +138,16 @@ export class AccountDeletionService {
    * Varre o banco restaurado e expurga qualquer conta cujo HMAC coincida com a lista de tombstones.
    */
   async reconcileTombstones(tombstoneHashes: Set<string>): Promise<number> {
-    const ownerUids = this.repo.listAllOwnerUidsInDatabase();
+    const ownerUids = await this.repo.listAllOwnerUidsInDatabase();
     let purgedCount = 0;
     const now = this.clock.now();
 
     for (const uid of ownerUids) {
       const hash = this.hashUid(uid);
       if (tombstoneHashes.has(hash)) {
-        // §139/§178 — um restore antigo pode trazer de volta o banco **e** a mídia de uma conta já
-        // excluída. Reconciliar significa apagar os dois: purgar só o SQLite deixaria as fotos
-        // ressuscitadas no disco, sem metadata que as revogue e sem nada que as recolha além da
-        // varredura de órfãos — que levaria a fazer, mas por acidente e não por política.
-        const mediaKeys = this.repo.listMediaStorageKeys(uid);
-        this.repo.purgeAccountData(uid);
-        this.repo.insertTombstone(randomUUID(), hash, now);
+        const mediaKeys = await this.repo.listMediaStorageKeys(uid);
+        await this.repo.purgeAccountData(uid);
+        await this.repo.insertTombstone(randomUUID(), hash, now);
         const removedFiles = await this.purgeMediaFiles(mediaKeys);
         purgedCount++;
         this.logger.info('account.deletion.dr_purged', {

@@ -4,7 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppConfig, ConfigValidationError } from '../src/config/app-config';
 import { DEVELOPMENT_DELETION_HMAC_KEY } from '../src/config/env.schema';
-import { configFor, createTempDb, sqliteFor, MIGRATIONS_DIR, type TempDb } from './support/temp-db';
+import { configFor, createTempDb, postgresFor, sqliteFor, MIGRATIONS_DIR, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeAiProviderGateway } from './support/fake-ai-provider';
@@ -23,19 +23,32 @@ const UID = 'uid-da-conta-a';
  * restore legítimo. Nada aqui toca rede, Firebase, Gemini ou VPS.
  */
 describe('Configuração de produção', () => {
-  const base = { NODE_ENV: 'test', DATABASE_PATH: '/tmp/spark-hardening.db' };
+  const base = {
+    NODE_ENV: 'test',
+    DATABASE_PATH: '/tmp/spark-hardening.db',
+    DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+  };
 
-  it('escolhe synchronous = FULL por padrão, e aceita NORMAL explicitamente', () => {
-    expect(AppConfig.fromEnv(base).sqliteSynchronous).toBe('FULL');
-    expect(AppConfig.fromEnv({ ...base, SQLITE_SYNCHRONOUS: 'NORMAL' }).sqliteSynchronous).toBe(
-      'NORMAL',
-    );
+  it('configura pool padrão e aceita valores customizados explicitamente', () => {
+    const config = AppConfig.fromEnv(base);
+    expect(config.databasePoolMin).toBe(2);
+    expect(config.databasePoolMax).toBe(10);
+    expect(config.databaseStatementTimeoutMs).toBe(30_000);
+
+    const custom = AppConfig.fromEnv({
+      ...base,
+      DATABASE_POOL_MAX: '25',
+      DATABASE_POOL_MIN: '4',
+    });
+    expect(custom.databasePoolMax).toBe(25);
+    expect(custom.databasePoolMin).toBe(4);
   });
 
-  it('recusa um synchronous que não seja um dos dois modos escolhidos', () => {
-    // `OFF` existe no SQLite e é justamente o que não pode entrar por engano: ele troca
-    // durabilidade por velocidade num servidor cujo cliente só libera a Outbox com confirmação.
-    expect(() => AppConfig.fromEnv({ ...base, SQLITE_SYNCHRONOUS: 'OFF' })).toThrow(
+  it('recusa tamanho de pool inválido', () => {
+    expect(() => AppConfig.fromEnv({ ...base, DATABASE_POOL_MAX: '0' })).toThrow(
+      ConfigValidationError,
+    );
+    expect(() => AppConfig.fromEnv({ ...base, DATABASE_POOL_MAX: '500' })).toThrow(
       ConfigValidationError,
     );
   });
@@ -160,7 +173,7 @@ describe('Configuração de produção', () => {
   });
 });
 
-describe('PRAGMAs efetivos no banco real', () => {
+describe('Configurações efetivas e saúde do banco PostgreSQL', () => {
   let temp: TempDb;
 
   beforeEach(() => {
@@ -171,41 +184,46 @@ describe('PRAGMAs efetivos no banco real', () => {
     temp.cleanup();
   });
 
-  it('aplica synchronous = FULL de verdade, e não apenas na configuração', () => {
-    const sqlite = sqliteFor(configFor(temp.path));
-    sqlite.initialize(MIGRATIONS_DIR);
+  it('conecta com sucesso e reporta saúde no pool', async () => {
+    const postgres = postgresFor(configFor(temp.path));
+    await postgres.initialize(MIGRATIONS_DIR);
 
-    // 2 = FULL no SQLite. Lido de volta do banco, não da configuração: em produção o que vale é
-    // o que o arquivo aceitou.
-    expect(sqlite.pragmas().synchronous).toBe(2);
-    sqlite.close();
+    const health = await postgres.checkHealth();
+    expect(health.reachable).toBe(true);
+    expect(health.migrationsUpToDate).toBe(true);
+    await postgres.close();
   });
 
-  it('aplica synchronous = NORMAL quando o operador escolhe explicitamente', () => {
-    const sqlite = sqliteFor(configFor(temp.path, { SQLITE_SYNCHRONOUS: 'NORMAL' }));
-    sqlite.initialize(MIGRATIONS_DIR);
-
-    expect(sqlite.pragmas().synchronous).toBe(1);
-    sqlite.close();
+  it('pool respeita configurações de DATABASE_POOL_MAX e MIN', () => {
+    const config = configFor(temp.path, { DATABASE_POOL_MAX: '25', DATABASE_POOL_MIN: '3' });
+    expect(config.databasePoolMax).toBe(25);
+    expect(config.databasePoolMin).toBe(3);
   });
 
-  it('o WAL tem teto de crescimento declarado', () => {
-    const sqlite = sqliteFor(configFor(temp.path, { SQLITE_WAL_AUTOCHECKPOINT_PAGES: '200' }));
-    sqlite.initialize(MIGRATIONS_DIR);
-
-    expect(sqlite.pragmas().journalMode).toBe('wal');
-    expect(sqlite.pragmas().walAutocheckpointPages).toBe(200);
-    sqlite.close();
+  it('statement_timeout e timeouts de conexão são configurados', () => {
+    const config = configFor(temp.path, {
+      DATABASE_STATEMENT_TIMEOUT_MS: '15000',
+      DATABASE_CONNECTION_TIMEOUT_MS: '5000',
+    });
+    expect(config.databaseStatementTimeoutMs).toBe(15000);
+    expect(config.databaseConnectionTimeoutMs).toBe(5000);
   });
 
-  it('reporta o tamanho em disco sem tocar em conteúdo', () => {
-    const sqlite = sqliteFor(configFor(temp.path));
-    sqlite.initialize(MIGRATIONS_DIR);
+  it('executa consultas e transações atômicas com rollback em erro', async () => {
+    const postgres = postgresFor(configFor(temp.path));
+    await postgres.initialize(MIGRATIONS_DIR);
 
-    const storage = sqlite.storage();
-    expect(storage.databaseBytes).toBeGreaterThan(0);
-    expect(storage.walBytes).toBeGreaterThanOrEqual(0);
-    sqlite.close();
+    const res = await postgres.query('SELECT 1 AS n');
+    expect(Number(res.rows[0].n)).toBe(1);
+
+    await expect(
+      postgres.transaction(async (client: any) => {
+        await client.query('CREATE TEMPORARY TABLE test_txn (val int)');
+        throw new Error('falha intencional');
+      }),
+    ).rejects.toThrow('falha intencional');
+
+    await postgres.close();
   });
 });
 

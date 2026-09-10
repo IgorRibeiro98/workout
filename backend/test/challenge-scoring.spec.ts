@@ -20,7 +20,8 @@ import {
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeClock } from './support/fake-clock';
-import { configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
+import { PostgresService } from '../src/database/postgres.service';
+import { configFor, createTempDb, postgresFor, type TempDb } from './support/temp-db';
 
 /**
  * A pontuação dos desafios (T17.3 §220–§222).
@@ -204,33 +205,33 @@ describe('Pontuação de desafio', () => {
     it('ler o placar não escreve nada: nem sync, nem XP, nem placar (§81/§211)', async () => {
       await pushCompletedSession(app, igor, 'sess-1', saoPauloInstant('2026-09-10T07:00:00'));
 
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      const snapshot = () => ({
-        entities: sqlite.connection.prepare('SELECT COUNT(*) AS n FROM sync_entities').get() as {
-          n: number;
-        },
-        changes: sqlite.connection.prepare('SELECT COUNT(*) AS n FROM sync_changes').get() as {
-          n: number;
-        },
-        mutations: sqlite.connection.prepare('SELECT COUNT(*) AS n FROM sync_mutations').get() as {
-          n: number;
-        },
-        participants: sqlite.connection
-          .prepare('SELECT * FROM challenge_participants ORDER BY participant_uid')
-          .all(),
-        challenges: sqlite.connection.prepare('SELECT * FROM challenges').all(),
+      const postgres = app.get(PostgresService);
+      const snapshot = async () => ({
+        entities: (
+          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_entities')
+        ).rows[0],
+        changes: (
+          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_changes')
+        ).rows[0],
+        mutations: (
+          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_mutations')
+        ).rows[0],
+        participants: (
+          await postgres.query(
+            'SELECT * FROM challenge_participants ORDER BY participant_uid',
+          )
+        ).rows,
+        challenges: (await postgres.query('SELECT * FROM challenges')).rows,
       });
 
-      const before = snapshot();
+      const before = await snapshot();
       // Dez leituras do placar.
       for (let i = 0; i < 10; i += 1) {
         await leaderboard();
       }
-      const after = snapshot();
+      const after = await snapshot();
 
       expect(after).toEqual(before);
-      sqlite.close();
     });
 
     it('empate permanece empate, em competition ranking 1-1-3 (§89/§222)', async () => {
@@ -506,86 +507,85 @@ describe('Pontuação de desafio', () => {
   describe('a fonte canônica, sobre o banco', () => {
     let temp: TempDb;
     let source: SyncedChallengeProgressSource;
-    let sqlite: ReturnType<typeof sqliteFor>;
+    let postgres: PostgresService;
 
-    const insertSession = (
+    const insertSession = async (
       ownerUid: string,
       syncId: string,
       startedAt: number,
       status = 'COMPLETED',
       deleted = 0,
     ) => {
-      sqlite.connection
-        .prepare(
-          `INSERT INTO sync_entities
-             (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-              last_server_sequence, payload, payload_hash, origin_device_id, created_at,
-              updated_at, deleted)
-           VALUES (?, 'WORKOUT_SESSION', ?, 1, 1, 1, ?, 'hash', 'device-a', 1, 1, ?)`,
-        )
-        .run(ownerUid, syncId, JSON.stringify({ syncId, status, startedAt }), deleted);
+      await postgres.query(
+        `INSERT INTO sync_entities
+           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+            last_server_sequence, payload, payload_hash, origin_device_id, created_at,
+            updated_at, deleted)
+         VALUES ($1, 'WORKOUT_SESSION', $2, 1, 1, 1, $3, 'hash', 'device-a', 1, 1, $4)`,
+        [ownerUid, syncId, JSON.stringify({ syncId, status, startedAt }), deleted],
+      );
     };
 
-    beforeEach(() => {
+    beforeEach(async () => {
       temp = createTempDb();
-      sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      source = new SyncedChallengeProgressSource(sqlite);
+      postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      source = new SyncedChallengeProgressSource(postgres);
     });
 
-    afterEach(() => {
-      sqlite.close();
+    afterEach(async () => {
+      await postgres.close();
       temp.cleanup();
     });
 
-    it('só COMPLETED conta — a regra é declarada onde é aplicada (§4/§220)', () => {
+    it('só COMPLETED conta — a regra é declarada onde é aplicada (§4/§220)', async () => {
       // Estes status **não chegam** ao servidor pelo push real (o registry recusa). Inseridos à
       // mão aqui de propósito: é a única forma de provar que a cláusula existe, e é o que fará
       // este teste falhar se algum dia o registry passar a aceitá-los.
-      insertSession('uid-a', 'ok', STARTS + 3_600_000, 'COMPLETED');
-      insertSession('uid-a', 'planned', STARTS + 3_600_000, 'PLANNED');
-      insertSession('uid-a', 'progress', STARTS + 3_600_000, 'IN_PROGRESS');
-      insertSession('uid-a', 'paused', STARTS + 3_600_000, 'PAUSED');
-      insertSession('uid-a', 'cancelled', STARTS + 3_600_000, 'CANCELLED');
+      await insertSession('uid-a', 'ok', STARTS + 3_600_000, 'COMPLETED');
+      await insertSession('uid-a', 'planned', STARTS + 3_600_000, 'PLANNED');
+      await insertSession('uid-a', 'progress', STARTS + 3_600_000, 'IN_PROGRESS');
+      await insertSession('uid-a', 'paused', STARTS + 3_600_000, 'PAUSED');
+      await insertSession('uid-a', 'cancelled', STARTS + 3_600_000, 'CANCELLED');
 
-      expect(source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
-      expect(source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO)).toBe(1);
+      expect(await source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
+      expect(await source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO)).toBe(1);
     });
 
-    it('sessão apagada pelo usuário (tombstone) não conta', () => {
-      insertSession('uid-a', 'viva', STARTS + 3_600_000, 'COMPLETED', 0);
-      insertSession('uid-a', 'apagada', STARTS + 7_200_000, 'COMPLETED', 1);
+    it('sessão apagada pelo usuário (tombstone) não conta', async () => {
+      await insertSession('uid-a', 'viva', STARTS + 3_600_000, 'COMPLETED', 0);
+      await insertSession('uid-a', 'apagada', STARTS + 7_200_000, 'COMPLETED', 1);
 
-      expect(source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
+      expect(await source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
     });
 
-    it('a contagem é isolada por dono — nunca soma o treino de outra conta (§200)', () => {
-      insertSession('uid-a', 'a1', STARTS + 3_600_000);
-      insertSession('uid-b', 'b1', STARTS + 3_600_000);
-      insertSession('uid-b', 'b2', STARTS + 7_200_000);
+    it('a contagem é isolada por dono — nunca soma o treino de outra conta (§200)', async () => {
+      await insertSession('uid-a', 'a1', STARTS + 3_600_000);
+      await insertSession('uid-b', 'b1', STARTS + 3_600_000);
+      await insertSession('uid-b', 'b2', STARTS + 7_200_000);
 
-      expect(source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
-      expect(source.countCompletedWorkouts('uid-b', STARTS, ENDS_EXCLUSIVE)).toBe(2);
-      expect(source.countCompletedWorkouts('uid-c', STARTS, ENDS_EXCLUSIVE)).toBe(0);
+      expect(await source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(1);
+      expect(await source.countCompletedWorkouts('uid-b', STARTS, ENDS_EXCLUSIVE)).toBe(2);
+      expect(await source.countCompletedWorkouts('uid-c', STARTS, ENDS_EXCLUSIVE)).toBe(0);
     });
 
-    it('zero é zero, e não ausência: um participante sem treino tem 0 de 12', () => {
+    it('zero é zero, e não ausência: um participante sem treino tem 0 de 12', async () => {
       // Diferente da T17.2, onde "nunca sincronizou" responde `UNAVAILABLE`. Num desafio, quem não
       // treinou tem zero — e mostrar campo ausente faria a linha dele sumir do placar.
-      expect(source.countCompletedWorkouts('uid-novo', STARTS, ENDS_EXCLUSIVE)).toBe(0);
-      expect(source.countActiveDays('uid-novo', START_DATE, END_DATE, SAO_PAULO)).toBe(0);
+      expect(await source.countCompletedWorkouts('uid-novo', STARTS, ENDS_EXCLUSIVE)).toBe(0);
+      expect(await source.countActiveDays('uid-novo', START_DATE, END_DATE, SAO_PAULO)).toBe(0);
     });
 
-    it('a pontuação é determinística: mesma entrada, mesma saída (§210)', () => {
+    it('a pontuação é determinística: mesma entrada, mesma saída (§210)', async () => {
       for (let i = 0; i < 5; i += 1) {
-        insertSession('uid-a', `s-${i}`, STARTS + i * 24 * 3_600_000 + 3_600_000);
+        await insertSession('uid-a', `s-${i}`, STARTS + i * 24 * 3_600_000 + 3_600_000);
       }
-      const first = source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE);
-      const days = source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO);
+      const first = await source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE);
+      const days = await source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO);
 
       for (let i = 0; i < 10; i += 1) {
-        expect(source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(first);
-        expect(source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO)).toBe(days);
+        expect(await source.countCompletedWorkouts('uid-a', STARTS, ENDS_EXCLUSIVE)).toBe(first);
+        expect(await source.countActiveDays('uid-a', START_DATE, END_DATE, SAO_PAULO)).toBe(days);
       }
       expect(first).toBe(5);
       expect(days).toBe(5);
@@ -597,8 +597,8 @@ describe('Pontuação de desafio', () => {
   describe('o ranking, sobre uma fonte de mentira', () => {
     /** Uma fonte controlada: prova o ranking sem montar banco, sync nem HTTP. */
     const sourceOf = (scores: Record<string, number>): ChallengeProgressSource => ({
-      countCompletedWorkouts: (ownerUid) => scores[ownerUid] ?? 0,
-      countActiveDays: (ownerUid) => scores[ownerUid] ?? 0,
+      countCompletedWorkouts: async (ownerUid) => scores[ownerUid] ?? 0,
+      countActiveDays: async (ownerUid) => scores[ownerUid] ?? 0,
     });
 
     const challenge = {
@@ -618,9 +618,9 @@ describe('Pontuação de desafio', () => {
       role: 'MEMBER' as const,
     });
 
-    it('ordena por score decrescente, e o exemplo da tarefa fecha', () => {
+    it('ordena por score decrescente, e o exemplo da tarefa fecha', async () => {
       const scoring = new ChallengeScoringService(sourceOf({ igor: 8, joao: 7, jonathas: 5 }));
-      const board = scoring.leaderboard(challenge, [
+      const board = await scoring.leaderboard(challenge, [
         participant('jonathas', 'Jonathas'),
         participant('igor', 'Igor'),
         participant('joao', 'João'),
@@ -632,9 +632,9 @@ describe('Pontuação de desafio', () => {
       expect(board.every((p) => !p.goalReached)).toBe(true);
     });
 
-    it('empate triplo mantém a mesma posição para todos', () => {
+    it('empate triplo mantém a mesma posição para todos', async () => {
       const scoring = new ChallengeScoringService(sourceOf({ a: 4, b: 4, c: 4 }));
-      const board = scoring.leaderboard(challenge, [
+      const board = await scoring.leaderboard(challenge, [
         participant('a', 'Ana'),
         participant('b', 'Bruno'),
         participant('c', 'Caio'),
@@ -642,29 +642,35 @@ describe('Pontuação de desafio', () => {
       expect(board.map((p) => p.rank)).toEqual([1, 1, 1]);
     });
 
-    it('a ordem de exibição de um empate é estável entre leituras', () => {
+    it('a ordem de exibição de um empate é estável entre leituras', async () => {
       const scoring = new ChallengeScoringService(sourceOf({ a: 4, b: 4 }));
-      const order = () =>
-        scoring
-          .leaderboard(challenge, [participant('b', 'Bruno'), participant('a', 'Ana')])
-          .map((p) => p.displayName);
+      const order = async () =>
+        (
+          await scoring.leaderboard(challenge, [
+            participant('b', 'Bruno'),
+            participant('a', 'Ana'),
+          ])
+        ).map((p) => p.displayName);
 
       // A entrada vem em ordem diferente da saída, e a saída é sempre a mesma: sem isto, duas
       // linhas empatadas trocariam de lugar entre dois refreshes da tela.
-      expect(order()).toEqual(['Ana', 'Bruno']);
-      expect(order()).toEqual(order());
+      expect(await order()).toEqual(['Ana', 'Bruno']);
+      expect(await order()).toEqual(await order());
     });
 
-    it('ninguém pontua fora do próprio uid', () => {
+    it('ninguém pontua fora do próprio uid', async () => {
       const seen: string[] = [];
       const scoring = new ChallengeScoringService({
-        countCompletedWorkouts: (ownerUid) => {
+        countCompletedWorkouts: async (ownerUid) => {
           seen.push(ownerUid);
           return 1;
         },
-        countActiveDays: () => 0,
+        countActiveDays: async () => 0,
       });
-      scoring.leaderboard(challenge, [participant('a', 'Ana'), participant('b', 'Bruno')]);
+      await scoring.leaderboard(challenge, [
+        participant('a', 'Ana'),
+        participant('b', 'Bruno'),
+      ]);
       expect(seen.sort()).toEqual(['a', 'b']);
     });
   });

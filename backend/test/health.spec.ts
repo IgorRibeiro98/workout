@@ -1,19 +1,19 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { createApp } from '../src/bootstrap/create-app';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
 
 describe('Health (liveness e readiness)', () => {
   let temp: TempDb;
   let app: INestApplication;
-  let sqlite: SqliteService;
+  let postgres: PostgresService;
 
   beforeEach(async () => {
     temp = createTempDb();
     const created = await createApp(configFor(temp.path));
     app = created.app;
-    sqlite = created.sqlite;
+    postgres = created.postgres;
     await app.init();
   });
 
@@ -40,7 +40,7 @@ describe('Health (liveness e readiness)', () => {
   });
 
   it('GET /health/ready responde 503 quando o banco não está disponível', async () => {
-    sqlite.close();
+    await postgres.close();
 
     const response = await request(app.getHttpServer()).get('/health/ready');
 
@@ -55,12 +55,13 @@ describe('Health (liveness e readiness)', () => {
 
   it('readiness não expõe path interno, variável de ambiente, credencial ou stack trace', async () => {
     const ok = JSON.stringify((await request(app.getHttpServer()).get('/health/ready')).body);
-    sqlite.close();
+    await postgres.close();
     const failed = JSON.stringify((await request(app.getHttpServer()).get('/health/ready')).body);
 
     for (const body of [ok, failed]) {
       expect(body).not.toContain(temp.path);
       expect(body).not.toContain(temp.directory);
+      expect(body).not.toContain('DATABASE_URL');
       expect(body).not.toContain('DATABASE_PATH');
       expect(body).not.toMatch(/\bat \w+.*\(.*:\d+:\d+\)/);
       expect(body).not.toContain('.db');

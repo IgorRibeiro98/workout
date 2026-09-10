@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import type { BackupMetadataResponse } from './backup.contract';
 import type { ValidatedSnapshot } from './backup.validator';
 
@@ -11,129 +11,110 @@ export interface StoredSnapshot extends BackupMetadataResponse {
 }
 
 /**
- * A persistência dos snapshots (T16.4).
+ * A persistência dos snapshots (T16.4 / T18.0 PostgreSQL).
  *
  * Duas garantias vivem aqui, e nenhuma delas é "o código toma cuidado":
  *
- * 1. **atomicidade** — snapshot e itens entram na mesma transação SQLite. Falhar no item N não
+ * 1. **atomicidade** — snapshot e itens entram na mesma transação PostgreSQL. Falhar no item N não
  *    deixa N-1 itens nem um snapshot vazio para trás;
  * 2. **ordem da retenção** — o novo backup é gravado e confirmado **antes** de qualquer limpeza.
- *    Apagar o antigo primeiro e falhar em gravar o novo deixaria o usuário sem backup nenhum, que
- *    é o oposto do que a feature promete.
  */
 @Injectable()
 export class BackupRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
 
   /**
    * Os backups retidos **daquela conta**, do mais recente para o mais antigo.
-   *
-   * Só metadata: o `payload` não é lido aqui. A lista é a descoberta do restore (T16.5), e baixar
-   * todos os snapshots inteiros para montar uma lista de datas seria trabalho e tráfego por nada.
-   *
-   * A ordem vem de `id` — sequência do **servidor** —, nunca de `captured_at`: relógio de aparelho
-   * diverge, e um celular adiantado colocaria um backup velho no topo da lista para sempre.
    */
-  listFor(ownerUid: string): StoredSnapshot[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
-                payload_hash, item_count, size_bytes, created_at
-         FROM backup_snapshots
-         WHERE owner_uid = ?
-         ORDER BY id DESC`,
-      )
-      .all(ownerUid);
-    return (rows as SnapshotRow[]).map(toStored);
+  async listFor(ownerUid: string): Promise<StoredSnapshot[]> {
+    const res = await this.db.query<SnapshotRow>(
+      `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+              payload_hash, item_count, size_bytes, created_at
+       FROM backup_snapshots
+       WHERE owner_uid = $1
+       ORDER BY id DESC`,
+      [ownerUid],
+    );
+    return res.rows.map(toStored);
   }
 
   /**
    * Um backup **da conta informada**, pelo `backupId` opaco.
-   *
-   * `owner_uid` está na cláusula `WHERE`, e não em uma verificação depois da leitura: a consulta
-   * que não pode devolver o backup de outra conta é a que nunca o carrega. Um `backupId` de outra
-   * conta é indistinguível de um inexistente — para quem pergunta e para este método.
    */
-  findByBackupId(ownerUid: string, backupId: string): StoredSnapshot | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
-                payload_hash, item_count, size_bytes, created_at
-         FROM backup_snapshots
-         WHERE owner_uid = ? AND backup_id = ?`,
-      )
-      .get(ownerUid, backupId);
-    return row ? toStored(row as SnapshotRow) : null;
+  async findByBackupId(ownerUid: string, backupId: string): Promise<StoredSnapshot | null> {
+    const res = await this.db.query<SnapshotRow>(
+      `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+              payload_hash, item_count, size_bytes, created_at
+       FROM backup_snapshots
+       WHERE owner_uid = $1 AND backup_id = $2`,
+      [ownerUid, backupId],
+    );
+    const row = res.rows[0];
+    return row ? toStored(row) : null;
   }
 
   /**
    * O documento canônico do snapshot, verbatim.
-   *
-   * `null` quando a linha veio da T16.4, que não guardava o texto (ver `0004_backup_payload.sql`).
-   * Quem chama transforma isso em erro tipado; devolver uma reconstrução seria arriscar um hash
-   * que não fecha no aparelho do usuário.
-   *
-   * Leitura pura: nenhum caminho daqui escreve, marca, consome ou apaga o snapshot.
    */
-  findPayload(ownerUid: string, backupId: string): string | null {
-    const row = this.sqlite.connection
-      .prepare(`SELECT payload FROM backup_snapshots WHERE owner_uid = ? AND backup_id = ?`)
-      .get(ownerUid, backupId) as { payload: string | null } | undefined;
-    return row?.payload ?? null;
+  async findPayload(ownerUid: string, backupId: string): Promise<string | null> {
+    const res = await this.db.query<{ payload: string | null }>(
+      `SELECT payload FROM backup_snapshots WHERE owner_uid = $1 AND backup_id = $2`,
+      [ownerUid, backupId],
+    );
+    return res.rows[0]?.payload ?? null;
   }
 
   /** O backup já existente para aquela tentativa lógica, se houver. */
-  findByClientBackupId(ownerUid: string, clientBackupId: string): StoredSnapshot | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
-                payload_hash, item_count, size_bytes, created_at
-         FROM backup_snapshots
-         WHERE owner_uid = ? AND client_backup_id = ?`,
-      )
-      .get(ownerUid, clientBackupId);
-    return row ? toStored(row as SnapshotRow) : null;
+  async findByClientBackupId(
+    ownerUid: string,
+    clientBackupId: string,
+  ): Promise<StoredSnapshot | null> {
+    const res = await this.db.query<SnapshotRow>(
+      `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+              payload_hash, item_count, size_bytes, created_at
+       FROM backup_snapshots
+       WHERE owner_uid = $1 AND client_backup_id = $2`,
+      [ownerUid, clientBackupId],
+    );
+    const row = res.rows[0];
+    return row ? toStored(row) : null;
   }
 
   /**
    * O mais recente **daquela conta**.
-   *
-   * Ordenado por `id` — sequência do servidor — e não por `captured_at`: relógio de aparelho
-   * diverge, e um celular adiantado esconderia backups reais para sempre.
    */
-  findLatest(ownerUid: string): StoredSnapshot | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
-                payload_hash, item_count, size_bytes, created_at
-         FROM backup_snapshots
-         WHERE owner_uid = ?
-         ORDER BY id DESC
-         LIMIT 1`,
-      )
-      .get(ownerUid);
-    return row ? toStored(row as SnapshotRow) : null;
+  async findLatest(ownerUid: string): Promise<StoredSnapshot | null> {
+    const res = await this.db.query<SnapshotRow>(
+      `SELECT id, backup_id, owner_uid, client_backup_id, backup_schema_version,
+              payload_hash, item_count, size_bytes, created_at
+       FROM backup_snapshots
+       WHERE owner_uid = $1
+       ORDER BY id DESC
+       LIMIT 1`,
+      [ownerUid],
+    );
+    const row = res.rows[0];
+    return row ? toStored(row) : null;
   }
 
   /**
-   * Grava o snapshot inteiro em uma transação.
-   *
-   * `createdAt` vem do **servidor**. O `capturedAt` do aparelho é guardado ao lado como metadado
-   * informativo e nunca decide nada.
+   * Grava o snapshot inteiro em uma transação atômica.
    */
-  insert(ownerUid: string, snapshot: ValidatedSnapshot, now: number): StoredSnapshot {
-    const db = this.sqlite.connection;
+  async insert(
+    ownerUid: string,
+    snapshot: ValidatedSnapshot,
+    now: number,
+  ): Promise<StoredSnapshot> {
     const backupId = randomUUID();
 
-    const transaction = db.transaction((): number => {
-      const result = db
-        .prepare(
-          `INSERT INTO backup_snapshots
-             (backup_id, owner_uid, client_backup_id, device_id, backup_schema_version,
-              payload_hash, item_count, size_bytes, captured_at, created_at, payload)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+    const sequence = await this.db.transaction(async (client) => {
+      const res = await client.query<{ id: string | number }>(
+        `INSERT INTO backup_snapshots
+           (backup_id, owner_uid, client_backup_id, device_id, backup_schema_version,
+            payload_hash, item_count, size_bytes, captured_at, created_at, payload)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id`,
+        [
           backupId,
           ownerUid,
           snapshot.clientBackupId,
@@ -144,31 +125,30 @@ export class BackupRepository {
           snapshot.sizeBytes,
           snapshot.capturedAt,
           now,
-          // O texto canônico inteiro, para que o restore (T16.5) receba exatamente os bytes que
-          // `payload_hash` resume. O servidor guarda; ele não interpreta.
           snapshot.canonicalText,
-        );
-
-      const snapshotId = Number(result.lastInsertRowid);
-      const insertItem = db.prepare(
-        `INSERT INTO backup_items
-           (snapshot_id, entity_type, entity_sync_id, entity_schema_version, payload, content_hash)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        ],
       );
+
+      const snapshotId = Number(res.rows[0].id);
+
       for (const item of snapshot.items) {
-        insertItem.run(
-          snapshotId,
-          item.entityType,
-          item.entitySyncId,
-          item.entitySchemaVersion,
-          item.canonicalPayload,
-          item.contentHash,
+        await client.query(
+          `INSERT INTO backup_items
+             (snapshot_id, entity_type, entity_sync_id, entity_schema_version, payload, content_hash)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            snapshotId,
+            item.entityType,
+            item.entitySyncId,
+            item.entitySchemaVersion,
+            item.canonicalPayload,
+            item.contentHash,
+          ],
         );
       }
+
       return snapshotId;
     });
-
-    const sequence = transaction();
 
     return {
       sequence,
@@ -185,36 +165,30 @@ export class BackupRepository {
 
   /**
    * Apaga os snapshots que excedem a política, **preservando os [keep] mais recentes**.
-   *
-   * Chamado só depois do commit do novo backup. O `id > 0` implícito na subconsulta garante que o
-   * recém-criado — que é o de maior `id` — nunca esteja entre os candidatos.
-   *
-   * Devolve quantos foram removidos. Falhar aqui não invalida o backup novo: quem chama trata
-   * isso como limpeza pendente, não como backup perdido.
    */
-  pruneOlderThan(ownerUid: string, keep: number): number {
-    const result = this.sqlite.connection
-      .prepare(
-        `DELETE FROM backup_snapshots
-         WHERE owner_uid = ?
-           AND id NOT IN (
-             SELECT id FROM backup_snapshots WHERE owner_uid = ? ORDER BY id DESC LIMIT ?
-           )`,
-      )
-      .run(ownerUid, ownerUid, keep);
-    return result.changes;
+  async pruneOlderThan(ownerUid: string, keep: number): Promise<number> {
+    const res = await this.db.query(
+      `DELETE FROM backup_snapshots
+       WHERE owner_uid = $1
+         AND id NOT IN (
+           SELECT id FROM backup_snapshots WHERE owner_uid = $2 ORDER BY id DESC LIMIT $3
+         )`,
+      [ownerUid, ownerUid, keep],
+    );
+    return res.rowCount ?? 0;
   }
 
-  countFor(ownerUid: string): number {
-    const row = this.sqlite.connection
-      .prepare('SELECT COUNT(*) AS total FROM backup_snapshots WHERE owner_uid = ?')
-      .get(ownerUid) as { total: number } | undefined;
-    return row?.total ?? 0;
+  async countFor(ownerUid: string): Promise<number> {
+    const res = await this.db.query<{ total: string | number }>(
+      'SELECT COUNT(*) AS total FROM backup_snapshots WHERE owner_uid = $1',
+      [ownerUid],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 }
 
 interface SnapshotRow {
-  id: number;
+  id: string | number;
   backup_id: string;
   owner_uid: string;
   client_backup_id: string;
@@ -222,17 +196,17 @@ interface SnapshotRow {
   payload_hash: string;
   item_count: number;
   size_bytes: number;
-  created_at: number;
+  created_at: string | number;
 }
 
 function toStored(row: SnapshotRow): StoredSnapshot {
   return {
-    sequence: row.id,
+    sequence: Number(row.id),
     ownerUid: row.owner_uid,
     backupId: row.backup_id,
     clientBackupId: row.client_backup_id,
     backupSchemaVersion: row.backup_schema_version,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
     itemCount: row.item_count,
     sizeBytes: row.size_bytes,
     payloadHash: row.payload_hash,

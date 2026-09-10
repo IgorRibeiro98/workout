@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
@@ -109,7 +109,7 @@ export interface ChallengeProgressSource {
    * Uma sessão canônica `COMPLETED` cujo `startedAt` cai na janela vale 1 ponto (§3).
    * `PLANNED`, `IN_PROGRESS`, `PAUSED` e `CANCELLED` não valem nada (§4).
    */
-  countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): number;
+  countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number>;
 
   /**
    * Em quantos **dias de calendário** do desafio este dono concluiu pelo menos um treino (§7).
@@ -117,38 +117,27 @@ export interface ChallengeProgressSource {
    * Dois treinos no mesmo dia contam 1, e não 2. O dia é o dia local do fuso **do desafio** (§8/§9)
    * — o mesmo para todos os participantes.
    */
-  countActiveDays(ownerUid: string, startDate: string, endDate: string, timeZoneId: string): number;
+  countActiveDays(ownerUid: string, startDate: string, endDate: string, timeZoneId: string): Promise<number>;
 }
 
 /** O token de injeção. Interface no ponto de injeção, como `SOCIAL_PROGRESS_SOURCE` (T17.2). */
 export const CHALLENGE_PROGRESS_SOURCE = Symbol('CHALLENGE_PROGRESS_SOURCE');
 
-/**
- * A implementação sobre o estado que de fato chega ao servidor.
- *
- * Ela fala com o `SqliteService` — infraestrutura compartilhada do processo —, e **não** com
- * `SyncRepository`, cuja superfície é o protocolo de sync inteiro. O `SocialModule` continua sem
- * importar `SyncModule`, `BackupModule` e `AiModule`, e há teste estrutural sobre isso.
- *
- * Backup permanece **inalcançável em qualquer forma**: `backup_snapshots`, `backup_items` e
- * `backup_payloads` não são lidos aqui. Um snapshot é a conta inteira em um documento, e abri-lo
- * para contar treinos seria abrir a caixa errada.
- */
 @Injectable()
 export class SyncedChallengeProgressSource implements ChallengeProgressSource {
   private readonly trainingSource: CanonicalTrainingSource;
 
   constructor(
     @Inject(CANONICAL_TRAINING_SOURCE)
-    trainingSourceOrSqlite: CanonicalTrainingSource | SqliteService,
+    trainingSourceOrDb: CanonicalTrainingSource | import('../../database/postgres.service').PostgresService,
   ) {
     if (
-      'countCompletedWorkouts' in trainingSourceOrSqlite &&
-      'countActiveDays' in trainingSourceOrSqlite
+      'countCompletedWorkouts' in trainingSourceOrDb &&
+      'countActiveDays' in trainingSourceOrDb
     ) {
-      this.trainingSource = trainingSourceOrSqlite;
+      this.trainingSource = trainingSourceOrDb;
     } else {
-      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrSqlite);
+      this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrDb);
     }
   }
 
@@ -157,8 +146,8 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
    *
    * Delega à fonte canônica de treino centralizada (T17.4.1).
    */
-  countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): number {
-    return this.trainingSource.countCompletedWorkouts(ownerUid, startMs, endMsExclusive);
+  async countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number> {
+    return await this.trainingSource.countCompletedWorkouts(ownerUid, startMs, endMsExclusive);
   }
 
   /**
@@ -166,13 +155,13 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
    *
    * Delega à fonte canônica de treino centralizada (T17.4.1).
    */
-  countActiveDays(
+  async countActiveDays(
     ownerUid: string,
     startDate: string,
     endDate: string,
     timeZoneId: string,
-  ): number {
-    return this.trainingSource.countActiveDays(ownerUid, startDate, endDate, timeZoneId);
+  ): Promise<number> {
+    return await this.trainingSource.countActiveDays(ownerUid, startDate, endDate, timeZoneId);
   }
 }
 

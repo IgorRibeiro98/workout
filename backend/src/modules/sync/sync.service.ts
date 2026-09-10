@@ -73,7 +73,7 @@ export class SyncService {
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
-  push(principal: AuthenticatedPrincipal, requestId: string, rawBody: string): SyncPushResponse {
+  async push(principal: AuthenticatedPrincipal, requestId: string, rawBody: string): Promise<SyncPushResponse> {
     // Interruptor de escrita (T16.8 §121), antes de tudo: diante de um defeito grave no sync, o
     // que se quer é parar de gravar — não parar de responder. O pull continua, porque leitura não
     // corrompe nada, e a Outbox do aparelho permanece pendente porque 5xx nunca confirma.
@@ -92,7 +92,7 @@ export class SyncService {
     // chegar na ordem em que a intenção nasceu. Aplicar a segunda antes da primeira produziria
     // uma revision que descreve um estado intermediário abandonado.
     for (const mutation of request.mutations) {
-      results.push(this.applyOne(principal.uid, request.deviceId, mutation));
+      results.push(await this.applyOne(principal.uid, request.deviceId, mutation));
     }
 
     this.logger.info('sync.push', {
@@ -114,23 +114,25 @@ export class SyncService {
    * O cursor é posição no change log do **servidor**. Ele nunca é um timestamp, nunca vem do
    * relógio do aparelho, e um valor impossível é recusado em vez de virar zero em silêncio.
    */
-  pull(
+  async pull(
     principal: AuthenticatedPrincipal,
     requestId: string,
     rawCursor: unknown,
     rawLimit: unknown,
-  ): SyncPullResponse {
+  ): Promise<SyncPullResponse> {
     this.assertWithinRateLimit(principal.uid);
 
     const startedAt = Date.now();
+    const maxSeq = await this.repository.maxSequence();
+    const oldestSeq = await this.repository.oldestSequence(principal.uid);
     const cursor = parseCursor(
       rawCursor,
-      this.repository.maxSequence(),
-      this.repository.oldestSequence(principal.uid),
+      maxSeq,
+      oldestSeq,
     );
     const limit = parseLimit(rawLimit);
 
-    const { changes, hasMore } = this.repository.changesAfter(principal.uid, cursor, limit);
+    const { changes, hasMore } = await this.repository.changesAfter(principal.uid, cursor, limit);
     const nextCursor = changes.length > 0 ? changes[changes.length - 1].serverSequence : cursor;
 
     this.logger.info('sync.pull', {
@@ -171,17 +173,17 @@ export class SyncService {
    * por conta no `WHERE`. Uma identidade que existe para **outra** conta é `404` — a mesma
    * resposta de uma que nunca existiu.
    */
-  entityState(
+  async entityState(
     principal: AuthenticatedPrincipal,
     requestId: string,
     rawEntityType: unknown,
     rawEntitySyncId: unknown,
-  ): SyncEntityStateResponse {
+  ): Promise<SyncEntityStateResponse> {
     this.assertWithinRateLimit(principal.uid);
 
     const startedAt = Date.now();
     const lookup = parseEntityLookup(rawEntityType, rawEntitySyncId);
-    const entity = this.repository.findEntitySnapshot(
+    const entity = await this.repository.findEntitySnapshot(
       principal.uid,
       lookup.entityType,
       lookup.entitySyncId,
@@ -223,17 +225,17 @@ export class SyncService {
     }
   }
 
-  private applyOne(
+  private async applyOne(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
-  ): SyncMutationResult {
+  ): Promise<SyncMutationResult> {
     // 1. Idempotência primeiro, antes de qualquer validação de conteúdo.
     //
     // Um reenvio precisa devolver o resultado original mesmo que o servidor tenha ficado mais
     // exigente entre as duas tentativas: a mutação já foi aplicada, e "revalidar e recusar agora"
     // faria o aparelho reenviar para sempre algo que o servidor já tem.
-    const ledger = this.repository.findMutation(ownerUid, mutation.clientMutationId);
+    const ledger = await this.repository.findMutation(ownerUid, mutation.clientMutationId);
     if (ledger) {
       // Uma exclusão não tem conteúdo, então o hash dela é vazio — e é a **intenção** (tipo,
       // identidade, operação) que o ledger compara para distinguir reenvio de mutação nova.
@@ -276,7 +278,7 @@ export class SyncService {
     }
     const accepted = verdict.accepted;
 
-    const entity = this.repository.findEntity(ownerUid, accepted.entityType, mutation.entitySyncId);
+    const entity = await this.repository.findEntity(ownerUid, accepted.entityType, mutation.entitySyncId);
     const now = Date.now();
 
     if (accepted.operation === 'DELETE') {
@@ -369,34 +371,15 @@ export class SyncService {
 
   /**
    * Uma exclusão (T16.7).
-   *
-   * ```text
-   * Template X revision 5
-   *      ↓ DELETE baseRevision = 5
-   * tombstone revision 6  +  sync_change operation = DELETE
-   * ```
-   *
-   * As três decisões que importam:
-   *
-   * 1. **exclusão gasta revision.** Ela é uma mudança como qualquer outra, entra no change log e
-   *    tem posição na sequência — é assim que o aparelho que ficou offline aprende que a entidade
-   *    morreu, em vez de reenviá-la;
-   * 2. **exclusão stale não apaga nada.** Se outro aparelho escreveu depois da `baseRevision`, o
-   *    servidor devolve `STALE` com a revision atual. Apagar aqui destruiria em silêncio uma
-   *    alteração mais nova que quem pediu a exclusão nunca viu;
-   * 3. **exclusão de identidade desconhecida também cria tombstone.** Dois aparelhos podem ter o
-   *    mesmo `syncId` sem que o servidor jamais o tenha visto — dataset restaurado do mesmo
-   *    backup. Sem o tombstone, o segundo aparelho criaria a entidade depois, e a exclusão do
-   *    primeiro teria sido desfeita por ninguém.
    */
-  private applyDelete(
+  private async applyDelete(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
     accepted: AcceptedMutation,
     entity: StoredSyncEntity | null,
     now: number,
-  ): SyncMutationResult {
+  ): Promise<SyncMutationResult> {
     if (entity?.deleted) {
       // Já é tombstone. Idempotente: nenhuma revision nova, nenhuma mudança nova no log — e a
       // tentativa passa a ter resposta guardada, para que um reenvio não recomece o raciocínio.
@@ -439,15 +422,15 @@ export class SyncService {
     );
   }
 
-  private deleteEntity(
+  private async deleteEntity(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
     accepted: AcceptedMutation,
     nextRevision: number,
     now: number,
-  ): SyncMutationResult {
-    const applied = this.repository.applyDelete({
+  ): Promise<SyncMutationResult> {
+    const applied = await this.repository.applyDelete({
       ownerUid,
       deviceId,
       clientMutationId: mutation.clientMutationId,
@@ -466,7 +449,7 @@ export class SyncService {
     };
   }
 
-  private apply(
+  private async apply(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
@@ -474,8 +457,8 @@ export class SyncService {
     nextRevision: number,
     now: number,
     status: SyncMutationStatus,
-  ): SyncMutationResult {
-    const applied = this.repository.applyMutation({
+  ): Promise<SyncMutationResult> {
+    const applied = await this.repository.applyMutation({
       ownerUid,
       deviceId,
       clientMutationId: mutation.clientMutationId,
@@ -503,15 +486,15 @@ export class SyncService {
    * Não é `APPLIED` — nenhuma revision foi gasta e nenhuma mudança foi anexada ao log. Para o
    * aparelho o efeito é o mesmo: ele confirma a Outbox e passa a conhecer a revision remota.
    */
-  private converged(
+  private async converged(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
     accepted: AcceptedMutation,
     entity: { serverRevision: number; lastServerSequence: number },
     now: number,
-  ): SyncMutationResult {
-    this.repository.recordConverged({
+  ): Promise<SyncMutationResult> {
+    await this.repository.recordConverged({
       ownerUid,
       deviceId,
       clientMutationId: mutation.clientMutationId,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PoolClient } from 'pg';
+import { DbClient, PostgresService } from '../../database/postgres.service';
 import type {
   WorkoutShareItemDto,
   WorkoutShareStatus,
@@ -25,22 +26,36 @@ export interface StoredWorkoutShare {
 
 @Injectable()
 export class WorkoutShareRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
 
-  private get db() {
-    return this.sqlite.connection;
+  private toDomain(row: any): StoredWorkoutShare {
+    return {
+      id: row.id,
+      sender_uid: row.sender_uid,
+      recipient_uid: row.recipient_uid,
+      snapshot_version: Number(row.snapshot_version),
+      snapshot_json: row.snapshot_json,
+      snapshot_hash: row.snapshot_hash,
+      status: row.status as WorkoutShareStatus,
+      client_request_id: row.client_request_id,
+      created_at: Number(row.created_at),
+      accepted_at: row.accepted_at != null ? Number(row.accepted_at) : null,
+      imported_at: row.imported_at != null ? Number(row.imported_at) : null,
+      declined_at: row.declined_at != null ? Number(row.declined_at) : null,
+      cancelled_at: row.cancelled_at != null ? Number(row.cancelled_at) : null,
+      expires_at: Number(row.expires_at),
+    };
   }
 
-  insertShare(share: StoredWorkoutShare): void {
-    this.db
-      .prepare(
-        `INSERT INTO workout_shares
-           (id, sender_uid, recipient_uid, snapshot_version, snapshot_json, snapshot_hash,
-            status, client_request_id, created_at, accepted_at, imported_at, declined_at,
-            cancelled_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  async insertShare(share: StoredWorkoutShare, client?: PoolClient): Promise<void> {
+    const runner: DbClient = (client ?? this.db) as DbClient;
+    await runner.query(
+      `INSERT INTO workout_shares
+         (id, sender_uid, recipient_uid, snapshot_version, snapshot_json, snapshot_hash,
+          status, client_request_id, created_at, accepted_at, imported_at, declined_at,
+          cancelled_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [
         share.id,
         share.sender_uid,
         share.recipient_uid,
@@ -55,215 +70,172 @@ export class WorkoutShareRepository {
         share.declined_at,
         share.cancelled_at,
         share.expires_at,
-      );
+      ],
+    );
   }
 
-  findBySenderAndClientRequestId(
+  async findBySenderAndClientRequestId(
     senderUid: string,
     clientRequestId: string,
-  ): StoredWorkoutShare | undefined {
-    return this.db
-      .prepare(
-        `SELECT * FROM workout_shares
-         WHERE sender_uid = ? AND client_request_id = ?`,
-      )
-      .get(senderUid, clientRequestId) as StoredWorkoutShare | undefined;
+  ): Promise<StoredWorkoutShare | undefined> {
+    const res = await this.db.query(
+      `SELECT * FROM workout_shares
+       WHERE sender_uid = $1 AND client_request_id = $2`,
+      [senderUid, clientRequestId],
+    );
+    if (res.rows.length === 0) return undefined;
+    return this.toDomain(res.rows[0]);
   }
 
-  findById(shareId: string): StoredWorkoutShare | undefined {
-    return this.db.prepare(`SELECT * FROM workout_shares WHERE id = ?`).get(shareId) as
-      | StoredWorkoutShare
-      | undefined;
+  async findById(shareId: string): Promise<StoredWorkoutShare | undefined> {
+    const res = await this.db.query(`SELECT * FROM workout_shares WHERE id = $1`, [shareId]);
+    if (res.rows.length === 0) return undefined;
+    return this.toDomain(res.rows[0]);
   }
 
-  countPendingBySender(senderUid: string, now: number): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) as count FROM workout_shares
-         WHERE sender_uid = ? AND status = 'PENDING' AND expires_at > ?`,
-      )
-      .get(senderUid, now) as { count: number };
-    return row.count;
+  async countPendingBySender(senderUid: string, now: number): Promise<number> {
+    const res = await this.db.query<{ count: string | number }>(
+      `SELECT COUNT(*) as count FROM workout_shares
+       WHERE sender_uid = $1 AND status = 'PENDING' AND expires_at > $2`,
+      [senderUid, now],
+    );
+    return Number(res.rows[0]?.count ?? 0);
   }
 
-  countCreatedToday(senderUid: string, since: number): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) as count FROM workout_shares
-         WHERE sender_uid = ? AND created_at >= ?`,
-      )
-      .get(senderUid, since) as { count: number };
-    return row.count;
+  async countCreatedToday(senderUid: string, since: number): Promise<number> {
+    const res = await this.db.query<{ count: string | number }>(
+      `SELECT COUNT(*) as count FROM workout_shares
+       WHERE sender_uid = $1 AND created_at >= $2`,
+      [senderUid, since],
+    );
+    return Number(res.rows[0]?.count ?? 0);
   }
 
-  isFriendshipActive(uidA: string, uidB: string): boolean {
-    const row = this.db
-      .prepare(
-        `SELECT 1 FROM friendships
-         WHERE (user_a_uid = ? AND user_b_uid = ?)
-            OR (user_a_uid = ? AND user_b_uid = ?)
-         LIMIT 1`,
-      )
-      .get(uidA, uidB, uidB, uidA);
-    return row !== undefined;
+  async isFriendshipActive(uidA: string, uidB: string): Promise<boolean> {
+    const res = await this.db.query(
+      `SELECT 1 FROM friendships
+       WHERE (user_a_uid = $1 AND user_b_uid = $2)
+          OR (user_a_uid = $3 AND user_b_uid = $4)
+       LIMIT 1`,
+      [uidA, uidB, uidB, uidA],
+    );
+    return res.rows.length > 0;
   }
 
-  findProfileBySocialId(
+  async findProfileBySocialId(
     socialId: string,
-  ): { ownerUid: string; displayName: string; socialId: string } | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT owner_uid AS ownerUid, display_name AS displayName, social_id AS socialId
-         FROM social_profiles
-         WHERE social_id = ? AND status = 'ACTIVE'`,
-      )
-      .get(socialId) as { ownerUid: string; displayName: string; socialId: string } | undefined;
-    return row;
+  ): Promise<{ ownerUid: string; displayName: string; socialId: string } | undefined> {
+    const res = await this.db.query(
+      `SELECT owner_uid AS "ownerUid", display_name AS "displayName", social_id AS "socialId"
+       FROM social_profiles
+       WHERE social_id = $1 AND status = 'ACTIVE'`,
+      [socialId],
+    );
+    if (res.rows.length === 0) return undefined;
+    const row = res.rows[0] as any;
+    return {
+      ownerUid: row.ownerUid ?? row.owneruid,
+      displayName: row.displayName ?? row.displayname,
+      socialId: row.socialId ?? row.socialid,
+    };
   }
 
-  findProfileByUid(ownerUid: string): { socialId: string; displayName: string } | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT social_id AS socialId, display_name AS displayName
-         FROM social_profiles
-         WHERE owner_uid = ? AND status = 'ACTIVE'`,
-      )
-      .get(ownerUid) as { socialId: string; displayName: string } | undefined;
-    return row;
+  async findProfileByUid(ownerUid: string): Promise<{ socialId: string; displayName: string } | undefined> {
+    const res = await this.db.query(
+      `SELECT social_id AS "socialId", display_name AS "displayName"
+       FROM social_profiles
+       WHERE owner_uid = $1 AND status = 'ACTIVE'`,
+      [ownerUid],
+    );
+    if (res.rows.length === 0) return undefined;
+    const row = res.rows[0] as any;
+    return {
+      socialId: row.socialId ?? row.socialid,
+      displayName: row.displayName ?? row.displayname,
+    };
   }
 
   /**
    * Uma transição de estado **condicional** ao estado esperado (T17.13.1 §50/§51).
-   *
-   * ```sql
-   * UPDATE workout_shares SET status = :to, <campo> = :ts
-   *  WHERE id = :id AND status = :from
-   * ```
-   *
-   * ## Por que o `AND status = :from` importa
-   *
-   * A versão anterior escrevia `WHERE id = ?` e nada mais. Quem chamava lia a linha, conferia o
-   * estado em memória, decidia, e só então escrevia — e entre a leitura e a escrita cabe outra
-   * requisição inteira. Duas transições incompatíveis simultâneas **ambas** passavam, e a última a
-   * escrever ganhava:
-   *
-   *   - aceitar e cancelar ao mesmo tempo: o remetente cancela, o destinatário aceita, e o
-   *     resultado depende de qual `UPDATE` chegou por último. O aceite podia sobrescrever um
-   *     cancelamento já respondido com sucesso ao remetente — e o destinatário levava para casa um
-   *     treino que o dono retirou;
-   *   - expirar e aceitar: a auto-expiração de uma listagem concorrente podia apagar um `ACCEPTED`
-   *     recém-gravado, deixando `EXPIRED` uma oferta que a pessoa já importou;
-   *   - concluir importação duas vezes: as duas escritas passavam, e `imported_at` virava o
-   *     carimbo da segunda.
-   *
-   * Com a condição no `WHERE`, o SQLite decide — e ele decide uma vez só. `changes` diz quem
-   * ganhou: `true` para quem transicionou, `false` para quem chegou depois. Quem perdeu **relê** e
-   * responde a partir do estado real, em vez de assumir que escreveu.
-   *
-   * ## O que isto não é (§53)
-   *
-   * Não é uma segunda máquina de estados. A tabela continua sendo a autoridade, os estados válidos
-   * continuam declarados no `CHECK` da migration 0014, e as regras de quem pode fazer o quê
-   * continuam no serviço. Isto é só a escrita, feita de forma que não possa perder uma corrida.
    */
-  transitionStatus(
+  async transitionStatus(
     shareId: string,
     fromStatus: WorkoutShareStatus,
     newStatus: WorkoutShareStatus,
     timestampField: 'accepted_at' | 'imported_at' | 'declined_at' | 'cancelled_at',
     timestamp: number,
-  ): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE workout_shares
-         SET status = ?, ${timestampField} = ?
-         WHERE id = ? AND status = ?`,
-      )
-      .run(newStatus, timestamp, shareId, fromStatus);
-    return result.changes > 0;
+  ): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE workout_shares
+       SET status = $1, ${timestampField} = $2
+       WHERE id = $3 AND status = $4`,
+      [newStatus, timestamp, shareId, fromStatus],
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   /**
    * O compartilhamento e o evento de notificação, numa transação só (T17.13.1 §45–§47).
-   *
-   * ## Por que os dois precisam ser uma decisão só
-   *
-   * O evento em `social_notification_events` é o **outbox** do push: ele é o que faz o destinatário
-   * saber que a oferta existe. As duas escritas eram sequenciais e independentes, e uma falha entre
-   * elas deixava um dos dois estados órfãos:
-   *
-   *   - share sem evento: a oferta existe no banco, ninguém é avisado, e ela expira em trinta dias
-   *     sem que o destinatário jamais tenha sabido dela. É o pior dos dois, porque é **silencioso**
-   *     — nada no sistema indica que faltou avisar;
-   *   - evento sem share: o push chega, a pessoa abre o app e não encontra nada.
-   *
-   * Aqui os dois entram ou nenhum entra. `better-sqlite3` faz `ROLLBACK` automático se qualquer
-   * `run()` lançar, e as duas escritas usam a **mesma conexão** — há uma só neste processo.
-   *
-   * ## O FCM continua fora (§46)
-   *
-   * Esta transação grava a *intenção* de notificar, e não a notificação. A entrega é do
-   * `NotificationDispatcher`, que lê o outbox depois, fora de qualquer transação: uma chamada de
-   * rede dentro de um `BEGIN` seguraria o banco pelo tempo do timeout do Firebase.
    */
-  insertShareWithNotification(share: StoredWorkoutShare, enqueueEvent: () => void): void {
-    this.db.transaction(() => {
-      this.insertShare(share);
-      enqueueEvent();
-    })();
+  async insertShareWithNotification(
+    share: StoredWorkoutShare,
+    enqueueEvent: (client: PoolClient) => Promise<void>,
+  ): Promise<void> {
+    await this.db.transaction(async (client) => {
+      await this.insertShare(share, client);
+      await enqueueEvent(client);
+    });
   }
 
   /**
    * Lista recebidos para recipientUid. Auto-expira itens PENDING se now >= expires_at.
    */
-  listReceived(recipientUid: string, now: number): WorkoutShareItemDto[] {
+  async listReceived(recipientUid: string, now: number): Promise<WorkoutShareItemDto[]> {
     // 1. Auto-expira PENDING passados
-    this.db
-      .prepare(
-        `UPDATE workout_shares
-         SET status = 'EXPIRED'
-         WHERE recipient_uid = ? AND status = 'PENDING' AND expires_at <= ?`,
-      )
-      .run(recipientUid, now);
+    await this.db.query(
+      `UPDATE workout_shares
+       SET status = 'EXPIRED'
+       WHERE recipient_uid = $1 AND status = 'PENDING' AND expires_at <= $2`,
+      [recipientUid, now],
+    );
 
     // 2. Busca shares recebidos excluindo usuários com bloqueio bilateral
-    const rows = this.db
-      .prepare(
-        `SELECT s.id AS shareId, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt,
-                s.snapshot_json AS snapshotJson,
-                p.social_id AS otherSocialId, p.display_name AS otherDisplayName
-         FROM workout_shares s
-         JOIN social_profiles p ON s.sender_uid = p.owner_uid
-         WHERE s.recipient_uid = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM social_blocks b
-             WHERE (b.blocker_uid = s.sender_uid AND b.blocked_uid = s.recipient_uid)
-                OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
-           )
-         ORDER BY s.created_at DESC`,
-      )
-      .all(recipientUid) as Array<{
+    const res = await this.db.query<{
       shareId: string;
       status: WorkoutShareStatus;
-      createdAt: number;
-      expiresAt: number;
+      createdAt: string | number;
+      expiresAt: string | number;
       snapshotJson: string;
       otherSocialId: string;
       otherDisplayName: string;
-    }>;
+    }>(
+      `SELECT s.id AS "shareId", s.status, s.created_at AS "createdAt", s.expires_at AS "expiresAt",
+              s.snapshot_json AS "snapshotJson",
+              p.social_id AS "otherSocialId", p.display_name AS "otherDisplayName"
+       FROM workout_shares s
+       JOIN social_profiles p ON s.sender_uid = p.owner_uid
+       WHERE s.recipient_uid = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM social_blocks b
+           WHERE (b.blocker_uid = s.sender_uid AND b.blocked_uid = s.recipient_uid)
+              OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
+         )
+       ORDER BY s.created_at DESC`,
+      [recipientUid],
+    );
 
-    return rows.map((r) => {
-      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
+    return res.rows.map((r: any) => {
+      const snap = JSON.parse(r.snapshotJson ?? r.snapshotjson) as WorkoutTemplateShareSnapshotV1;
       return {
-        shareId: r.shareId,
+        shareId: r.shareId ?? r.shareid,
         status: r.status,
-        createdAt: r.createdAt,
-        expiresAt: r.expiresAt,
+        createdAt: Number(r.createdAt ?? r.createdat),
+        expiresAt: Number(r.expiresAt ?? r.expiresat),
         templateName: snap.name,
         exerciseCount: snap.exercises?.length ?? 0,
         otherUser: {
-          socialId: r.otherSocialId,
-          displayName: r.otherDisplayName,
+          socialId: r.otherSocialId ?? r.othersocialid,
+          displayName: r.otherDisplayName ?? r.otherdisplayname,
         },
       };
     });
@@ -272,52 +244,50 @@ export class WorkoutShareRepository {
   /**
    * Lista enviados para senderUid. Auto-expira itens PENDING se now >= expires_at.
    */
-  listSent(senderUid: string, now: number): WorkoutShareItemDto[] {
-    this.db
-      .prepare(
-        `UPDATE workout_shares
-         SET status = 'EXPIRED'
-         WHERE sender_uid = ? AND status = 'PENDING' AND expires_at <= ?`,
-      )
-      .run(senderUid, now);
+  async listSent(senderUid: string, now: number): Promise<WorkoutShareItemDto[]> {
+    await this.db.query(
+      `UPDATE workout_shares
+       SET status = 'EXPIRED'
+       WHERE sender_uid = $1 AND status = 'PENDING' AND expires_at <= $2`,
+      [senderUid, now],
+    );
 
-    const rows = this.db
-      .prepare(
-        `SELECT s.id AS shareId, s.status, s.created_at AS createdAt, s.expires_at AS expiresAt,
-                s.snapshot_json AS snapshotJson,
-                p.social_id AS otherSocialId, p.display_name AS otherDisplayName
-         FROM workout_shares s
-         JOIN social_profiles p ON s.recipient_uid = p.owner_uid
-         WHERE s.sender_uid = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM social_blocks b
-             WHERE (b.blocker_uid = s.sender_uid AND b.blocked_uid = s.recipient_uid)
-                OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
-           )
-         ORDER BY s.created_at DESC`,
-      )
-      .all(senderUid) as Array<{
+    const res = await this.db.query<{
       shareId: string;
       status: WorkoutShareStatus;
-      createdAt: number;
-      expiresAt: number;
+      createdAt: string | number;
+      expiresAt: string | number;
       snapshotJson: string;
       otherSocialId: string;
       otherDisplayName: string;
-    }>;
+    }>(
+      `SELECT s.id AS "shareId", s.status, s.created_at AS "createdAt", s.expires_at AS "expiresAt",
+              s.snapshot_json AS "snapshotJson",
+              p.social_id AS "otherSocialId", p.display_name AS "otherDisplayName"
+       FROM workout_shares s
+       JOIN social_profiles p ON s.recipient_uid = p.owner_uid
+       WHERE s.sender_uid = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM social_blocks b
+           WHERE (b.blocker_uid = s.sender_uid AND b.blocked_uid = s.recipient_uid)
+              OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
+         )
+       ORDER BY s.created_at DESC`,
+      [senderUid],
+    );
 
-    return rows.map((r) => {
-      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
+    return res.rows.map((r: any) => {
+      const snap = JSON.parse(r.snapshotJson ?? r.snapshotjson) as WorkoutTemplateShareSnapshotV1;
       return {
-        shareId: r.shareId,
+        shareId: r.shareId ?? r.shareid,
         status: r.status,
-        createdAt: r.createdAt,
-        expiresAt: r.expiresAt,
+        createdAt: Number(r.createdAt ?? r.createdat),
+        expiresAt: Number(r.expiresAt ?? r.expiresat),
         templateName: snap.name,
         exerciseCount: snap.exercises?.length ?? 0,
         otherUser: {
-          socialId: r.otherSocialId,
-          displayName: r.otherDisplayName,
+          socialId: r.otherSocialId ?? r.othersocialid,
+          displayName: r.otherDisplayName ?? r.otherdisplayname,
         },
       };
     });

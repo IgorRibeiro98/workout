@@ -46,7 +46,7 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
 
     try {
       const now = this.clock.now();
-      const dueJobs = this.repo.findDueJobs(now, 20);
+      const dueJobs = await this.repo.findDueJobs(now, 20);
       let processed = 0;
 
       for (const job of dueJobs) {
@@ -63,13 +63,14 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
           const nextAttemptAt = now + backoff;
           const errorMessage = error instanceof Error ? error.message : String(error);
 
-          this.repo.incrementJobAttempt(job.id, errorMessage, nextAttemptAt);
+          await this.repo.incrementJobAttempt(job.id, errorMessage, nextAttemptAt);
+          const refreshed = await this.repo.findJobByFirebaseUid(job.firebase_uid);
           this.logger.warn('account.deletion.job.retry_scheduled', {
             jobId: job.id,
             // A fase relida do banco, e não a do `job` em memória: `advanceJob` pode ter
             // persistido o ledger e falhado só no passo seguinte, e é a fase **nova** que diz o
             // que o retry vai tentar.
-            phase: this.repo.findJobByFirebaseUid(job.firebase_uid)?.phase ?? job.phase,
+            phase: refreshed?.phase ?? job.phase,
             attempt,
             nextAttemptInSec: Math.round(backoff / 1000),
           });

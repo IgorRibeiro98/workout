@@ -34,37 +34,37 @@ export class NotificationController {
 
   @Post('devices')
   @HttpCode(HttpStatus.CREATED)
-  registerDevice(
+  async registerDevice(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() req: Request,
     @Body() body: unknown,
-  ): PushDeviceRegistrationDto {
+  ): Promise<PushDeviceRegistrationDto> {
     const parsed = validateRegisterPushDevice(body, this.contentLength(req));
-    return this.service.registerDevice(principal, this.requestId(req), parsed);
+    return await this.service.registerDevice(principal, this.requestId(req), parsed);
   }
 
   @Delete('devices/:deviceId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  unregisterDevice(
+  async unregisterDevice(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('deviceId') deviceId: string,
-  ): void {
-    this.service.unregisterDevice(principal, deviceId);
+  ): Promise<void> {
+    await this.service.unregisterDevice(principal, deviceId);
   }
 
   @Get('preferences')
-  getPreferences(@Principal() principal: AuthenticatedPrincipal): NotificationPreferencesDto {
-    return this.service.getPreferences(principal);
+  async getPreferences(@Principal() principal: AuthenticatedPrincipal): Promise<NotificationPreferencesDto> {
+    return await this.service.getPreferences(principal);
   }
 
   @Patch('preferences')
-  updatePreferences(
+  async updatePreferences(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() req: Request,
     @Body() body: unknown,
-  ): NotificationPreferencesDto {
+  ): Promise<NotificationPreferencesDto> {
     const parsed = validateUpdateNotificationPreferences(body, this.contentLength(req));
-    return this.service.updatePreferences(principal, this.requestId(req), parsed);
+    return await this.service.updatePreferences(principal, this.requestId(req), parsed);
   }
 
   private requestId(req: Request): string {

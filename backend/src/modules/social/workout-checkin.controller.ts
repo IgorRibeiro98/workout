@@ -38,39 +38,6 @@ import {
 
 /**
  * As rotas de check-in de treino e do Feed social (T17.8), sob `/v1/social`.
- *
- * ```text
- * Firebase ID Token ──▶ BearerAuthGuard ──▶ uid verificado
- *                                            │
- *   POST   /v1/social/workout-checkins                       ──┤ publica (idempotente)
- *   GET    /v1/social/workout-checkins/{id}                  ──┤ o detalhe de uma publicação
- *   DELETE /v1/social/workout-checkins/{id}                  ──┤ exclui a própria publicação
- *   PUT    /v1/social/workout-checkins/{id}/reaction         ──┤ adiciona ou troca a reação
- *   DELETE /v1/social/workout-checkins/{id}/reaction         ──┤ remove a reação
- *   GET    /v1/social/workout-checkins/{id}/comments         ──┤ os comentários visíveis
- *   POST   /v1/social/workout-checkins/{id}/comments         ──┤ comenta
- *   DELETE /v1/social/workout-checkins/{id}/comments/{cid}   ──┤ apaga (autor ou dono do post)
- *   GET    /v1/social/feed                                   ──┘ o feed do próprio viewer
- * ```
- *
- * A T17.9 acrescentou rotas ao **mesmo** agregado (§5): não existe `/v1/social/posts`, não existe
- * um segundo Feed e não existe um segundo tipo de publicação. As rotas de mídia moram em
- * `SocialMediaController` porque o corpo delas é binário e precisa de outro parser — a política de
- * acesso continua sendo a mesma (§128/§129).
- *
- * ## Nenhuma rota é pública
- *
- * Não existe `GET /users/{socialId}/posts` (§72), não existe `GET /feed?users=A,B,C` (§71) e não
- * existe feed sem token. A audiência de leitura é **derivada** do `uid` autenticado, das amizades
- * atuais e da política de bloqueio — o cliente não a propõe em nenhuma forma. Uma lista de
- * usuários no query string seria o cliente escolhendo de quem ler, que é exatamente o feed público
- * que a T17.8 não é.
- *
- * ## O corpo cru também é lido, só para medir
- *
- * O teto global do processo é o do backup (4 MiB), e uma rota que recebe dois identificadores não
- * tem por que aceitar isso. O conteúdo do corpo nunca vai para log: `SparkLogger` redige
- * `req.body`/`body`, e nenhum ponto deste módulo registra o corpo.
  */
 @Controller('social')
 @UseGuards(BearerAuthGuard)
@@ -79,13 +46,13 @@ export class WorkoutCheckInController {
 
   @Post('workout-checkins')
   @HttpCode(HttpStatus.CREATED)
-  create(
+  async create(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Body() body: unknown,
-  ): WorkoutCheckInDto {
+  ): Promise<WorkoutCheckInDto> {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.createCheckIn(
+    return await this.service.createCheckIn(
       principal.uid,
       requestIdOf(request),
       parseCreateCheckInRequest(body),
@@ -98,82 +65,70 @@ export class WorkoutCheckInController {
    */
   @Delete('workout-checkins/:checkInId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(
+  async remove(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
-  ): void {
-    this.service.deleteCheckIn(principal.uid, requestIdOf(request), checkInId);
+  ): Promise<void> {
+    await this.service.deleteCheckIn(principal.uid, requestIdOf(request), checkInId);
   }
 
   @Get('feed')
   @HttpCode(HttpStatus.OK)
-  feed(
+  async feed(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Query() query: Record<string, unknown>,
-  ): SocialFeedDto {
+  ): Promise<SocialFeedDto> {
     const { limit } = parseFeedQuery(query);
-    return this.service.getFeed(principal.uid, requestIdOf(request), limit);
+    return await this.service.getFeed(principal.uid, requestIdOf(request), limit);
   }
 
   // ================================================================ T17.9
 
   /**
    * O detalhe de uma publicação (§118). Mesmo DTO do Feed, mesma política.
-   *
-   * T17.12 §35 — `?context=GROUP&groupId=X` diz de **onde a tela veio**, e é o que faz o detalhe
-   * mostrar a conversa daquele Squad em vez da do Feed de amigos. É navegação local, não
-   * autorização: o servidor revalida o contexto inteiro a cada requisição (§36).
    */
   @Get('workout-checkins/:checkInId')
   @HttpCode(HttpStatus.OK)
-  detail(
+  async detail(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('checkInId') checkInId: string,
     @Query() query: Record<string, unknown>,
-  ): WorkoutCheckInDto {
+  ): Promise<WorkoutCheckInDto> {
     const { context } = parseCheckInDetailQuery(query);
-    return this.service.getCheckIn(principal.uid, checkInId, context);
+    return await this.service.getCheckIn(principal.uid, checkInId, context);
   }
 
   /**
    * Adiciona ou troca a reação (§64/§66).
-   *
-   * `PUT`, e não `POST`: a operação é idempotente e descreve o **estado** da reação desta pessoa
-   * nesta publicação. Enviar `FIRE` duas vezes deixa o mesmo estado, e `MUSCLE` depois de `FIRE`
-   * substitui — que é exatamente a semântica do verbo.
    */
   @Put('workout-checkins/:checkInId/reaction')
   @HttpCode(HttpStatus.OK)
-  putReaction(
+  async putReaction(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
     @Body() body: unknown,
-  ): WorkoutCheckInDto {
+  ): Promise<WorkoutCheckInDto> {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
     const { type, context } = parseReactionRequest(body);
-    return this.service.putReaction(principal.uid, requestIdOf(request), checkInId, type, context);
+    return await this.service.putReaction(principal.uid, requestIdOf(request), checkInId, type, context);
   }
 
   /**
    * Remove a reação (§65). Idempotente: remover o que já não existe é sucesso.
-   *
-   * T17.12 §16 — o corpo carrega o contexto, e por isso este `DELETE` tem um. Sem ele, "desfazer"
-   * dentro de um Squad apagaria a reação que a pessoa deixou no Feed de amigos. Um corpo ausente
-   * continua válido e significa `FRIEND` (§68).
    */
   @Delete('workout-checkins/:checkInId/reaction')
   @HttpCode(HttpStatus.OK)
-  removeReaction(
+  async removeReaction(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
     @Body() body: unknown,
-  ): WorkoutCheckInDto {
+  ): Promise<WorkoutCheckInDto> {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.removeReaction(
+    return await this.service.removeReaction(
       principal.uid,
       requestIdOf(request),
       checkInId,
@@ -183,26 +138,26 @@ export class WorkoutCheckInController {
 
   @Get('workout-checkins/:checkInId/comments')
   @HttpCode(HttpStatus.OK)
-  listComments(
+  async listComments(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('checkInId') checkInId: string,
     @Query() query: Record<string, unknown>,
-  ): CheckInCommentsDto {
+  ): Promise<CheckInCommentsDto> {
     const { limit, context } = parseCommentsQuery(query);
-    return this.service.listComments(principal.uid, checkInId, limit, context);
+    return await this.service.listComments(principal.uid, checkInId, limit, context);
   }
 
   @Post('workout-checkins/:checkInId/comments')
   @HttpCode(HttpStatus.CREATED)
-  createComment(
+  async createComment(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
     @Body() body: unknown,
-  ): CheckInCommentDto {
+  ): Promise<CheckInCommentDto> {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
     const { body: commentBody, context } = parseCommentRequest(body);
-    return this.service.createComment(
+    return await this.service.createComment(
       principal.uid,
       requestIdOf(request),
       checkInId,
@@ -217,13 +172,13 @@ export class WorkoutCheckInController {
    */
   @Delete('workout-checkins/:checkInId/comments/:commentId')
   @HttpCode(HttpStatus.NO_CONTENT)
-  deleteComment(
+  async deleteComment(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Param('checkInId') checkInId: string,
     @Param('commentId') commentId: string,
-  ): void {
-    this.service.deleteComment(principal.uid, requestIdOf(request), checkInId, commentId);
+  ): Promise<void> {
+    await this.service.deleteComment(principal.uid, requestIdOf(request), checkInId, commentId);
   }
 }
 

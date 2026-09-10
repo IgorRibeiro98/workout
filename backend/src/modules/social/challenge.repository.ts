@@ -1,5 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import type { PoolClient } from 'pg';
+import { DbClient, PostgresService } from '../../database/postgres.service';
 import type {
   ChallengeParticipantStatus,
   ChallengeRole,
@@ -114,7 +115,7 @@ export type AcceptInvitationOutcome =
 @Injectable()
 export class ChallengeRepository {
   constructor(
-    private readonly sqlite: SqliteService,
+    private readonly db: PostgresService,
     @Optional() private readonly notificationService?: NotificationService,
   ) {}
 
@@ -122,32 +123,17 @@ export class ChallengeRepository {
 
   /**
    * Cria o desafio, o participante-criador e todos os convites — **em uma transação** (§44).
-   *
-   * ```text
-   * challenges (1)  +  challenge_participants (o criador)  +  challenge_invitations (N)
-   *                        tudo, ou nada
-   * ```
-   *
-   * A atomicidade não é zelo: fora de uma transação, uma falha no terceiro convite deixaria um
-   * desafio existindo com dois dos três amigos convidados — e o criador não teria como perceber,
-   * porque a tela mostraria um desafio criado. §45 é explícito: erro em um convidado significa
-   * desafio nenhum.
-   *
-   * O ledger de idempotência é escrito na **mesma** transação: um desafio criado sem a linha do
-   * ledger faria o retry criar um segundo.
    */
-  create(input: CreateChallengeInput): CreateChallengeOutcome {
-    const db = this.sqlite.connection;
-
-    return db.transaction((): CreateChallengeOutcome => {
-      const previous = this.findCreationRequest(input.creatorUid, input.clientRequestId);
+  async create(input: CreateChallengeInput): Promise<CreateChallengeOutcome> {
+    return this.db.transaction(async (client): Promise<CreateChallengeOutcome> => {
+      const previous = await this.findCreationRequest(input.creatorUid, input.clientRequestId, client);
       if (previous) {
         // Mesma tentativa. Conteúdo igual devolve o mesmo desafio; conteúdo diferente é conflito —
         // e nunca uma segunda criação silenciosa (§190).
         if (previous.requestHash !== input.requestHash) {
           return { kind: 'IDEMPOTENCY_CONFLICT' };
         }
-        const existing = this.findById(previous.challengeId);
+        const existing = await this.findById(previous.challengeId, client);
         if (existing) {
           return { kind: 'ALREADY_CREATED', challenge: existing };
         }
@@ -157,51 +143,53 @@ export class ChallengeRepository {
         return { kind: 'IDEMPOTENCY_CONFLICT' };
       }
 
-      db.prepare(
+      await client.query(
         `INSERT INTO challenges
            (challenge_id, creator_uid, name, type, target, start_date, end_date, time_zone_id,
             starts_at, ends_at_exclusive, lifecycle, cancelled_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', NULL, ?, ?)`,
-      ).run(
-        input.challengeId,
-        input.creatorUid,
-        input.name,
-        input.type,
-        input.target,
-        input.startDate,
-        input.endDate,
-        input.timeZoneId,
-        input.startsAt,
-        input.endsAtExclusive,
-        input.now,
-        input.now,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', NULL, $11, $12)`,
+        [
+          input.challengeId,
+          input.creatorUid,
+          input.name,
+          input.type,
+          input.target,
+          input.startDate,
+          input.endDate,
+          input.timeZoneId,
+          input.startsAt,
+          input.endsAtExclusive,
+          input.now,
+          input.now,
+        ],
       );
 
       // O criador entra automaticamente, já aceito (§31/§42). Ele não recebe convite: convidá-lo
       // seria pedir que ele aceite o que acabou de propor.
-      db.prepare(
+      await client.query(
         `INSERT INTO challenge_participants
            (challenge_id, participant_uid, role, status, joined_at, left_at)
-         VALUES (?, ?, 'CREATOR', 'JOINED', ?, NULL)`,
-      ).run(input.challengeId, input.creatorUid, input.now);
-
-      const insertInvitation = db.prepare(
-        `INSERT INTO challenge_invitations
-           (invitation_id, challenge_id, inviter_uid, recipient_uid, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'PENDING', ?, ?)`,
+         VALUES ($1, $2, 'CREATOR', 'JOINED', $3, NULL)`,
+        [input.challengeId, input.creatorUid, input.now],
       );
+
       for (const invitation of input.invitations) {
-        insertInvitation.run(
-          invitation.invitationId,
-          input.challengeId,
-          input.creatorUid,
-          invitation.recipientUid,
-          input.now,
-          input.now,
+        await client.query(
+          `INSERT INTO challenge_invitations
+             (invitation_id, challenge_id, inviter_uid, recipient_uid, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'PENDING', $5, $6)`,
+          [
+            invitation.invitationId,
+            input.challengeId,
+            input.creatorUid,
+            invitation.recipientUid,
+            input.now,
+            input.now,
+          ],
         );
 
         // Notifica convidados sobre o novo convite recebido (T17.5 §50)
-        this.notificationService?.enqueueChallengeInvitationReceived(db, {
+        await this.notificationService?.enqueueChallengeInvitationReceived(client, {
           invitationId: invitation.invitationId,
           challengeId: input.challengeId,
           recipientUid: invitation.recipientUid,
@@ -211,192 +199,183 @@ export class ChallengeRepository {
       }
 
       // Notificações programadas do criador (T17.5 §52/§57)
-      this.notificationService?.enqueueChallengeStartingSoon(db, {
+      await this.notificationService?.enqueueChallengeStartingSoon(client, {
         challengeId: input.challengeId,
         participantUid: input.creatorUid,
         startsAt: input.startsAt,
         now: input.now,
       });
-      this.notificationService?.enqueueChallengeEnded(db, {
+      await this.notificationService?.enqueueChallengeEnded(client, {
         challengeId: input.challengeId,
         participantUid: input.creatorUid,
         endsAtExclusive: input.endsAtExclusive,
         now: input.now,
       });
 
-      db.prepare(
+      await client.query(
         `INSERT INTO challenge_creation_requests
            (owner_uid, client_request_id, request_hash, challenge_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(
-        input.creatorUid,
-        input.clientRequestId,
-        input.requestHash,
-        input.challengeId,
-        input.now,
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          input.creatorUid,
+          input.clientRequestId,
+          input.requestHash,
+          input.challengeId,
+          input.now,
+        ],
       );
 
-      const challenge = this.findById(input.challengeId);
+      const challenge = await this.findById(input.challengeId, client);
       if (!challenge) {
         // Irrepresentável: o `INSERT` acima acabou de acontecer nesta transação.
         throw new Error('challenge desapareceu dentro da própria transação de criação');
       }
       return { kind: 'CREATED', challenge };
-    })();
+    });
   }
 
-  private findCreationRequest(
+  private getRunner(client?: PoolClient): DbClient {
+    return (client ?? this.db) as DbClient;
+  }
+
+  async findCreationRequest(
     ownerUid: string,
     clientRequestId: string,
-  ): { requestHash: string; challengeId: string } | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT request_hash, challenge_id FROM challenge_creation_requests
-          WHERE owner_uid = ? AND client_request_id = ?`,
-      )
-      .get(ownerUid, clientRequestId) as { request_hash: string; challenge_id: string } | undefined;
+    client?: PoolClient,
+  ): Promise<{ requestHash: string; challengeId: string } | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ request_hash: string; challenge_id: string }>(
+      `SELECT request_hash, challenge_id FROM challenge_creation_requests
+        WHERE owner_uid = $1 AND client_request_id = $2`,
+      [ownerUid, clientRequestId],
+    );
+    const row = res.rows[0];
     return row ? { requestHash: row.request_hash, challengeId: row.challenge_id } : null;
   }
 
   /**
    * Quantos desafios **abertos** esta conta criou (§111).
-   *
-   * "Aberto" é `lifecycle = 'OPEN'` e a janela ainda não fechou: um desafio encerrado não ocupa
-   * vaga, porque ele não é mais um compromisso — é histórico. Cancelados também não ocupam.
    */
-  countOpenChallengesBy(creatorUid: string, nowMs: number): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS total FROM challenges
-          WHERE creator_uid = ? AND lifecycle = 'OPEN' AND ends_at_exclusive > ?`,
-      )
-      .get(creatorUid, nowMs) as { total: number };
-    return row.total;
+  async countOpenChallengesBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM challenges
+        WHERE creator_uid = $1 AND lifecycle = 'OPEN' AND ends_at_exclusive > $2`,
+      [creatorUid, nowMs],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 
   // ------------------------------------------------------------------------------- leitura
 
-  findById(challengeId: string): StoredChallenge | null {
-    const row = this.sqlite.connection
-      .prepare(`${CHALLENGE_COLUMNS} FROM challenges WHERE challenge_id = ?`)
-      .get(challengeId) as ChallengeRow | undefined;
+  async findById(challengeId: string, client?: PoolClient): Promise<StoredChallenge | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<ChallengeRow>(
+      `${CHALLENGE_COLUMNS} FROM challenges WHERE challenge_id = $1`,
+      [challengeId],
+    );
+    const row = res.rows[0];
     return row ? toChallenge(row) : null;
   }
 
   /**
    * A participação de uma conta num desafio, ou `null`.
-   *
-   * É esta consulta que decide **todo** acesso de leitura: quem não tem linha aqui recebe
-   * `CHALLENGE_NOT_FOUND`, indistinguível de um desafio inexistente (§100/§182). Conhecer o
-   * `challengeId` não concede nada (§101).
    */
-  findParticipation(
+  async findParticipation(
     challengeId: string,
     participantUid: string,
-  ): { role: ChallengeRole; status: ChallengeParticipantStatus } | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT role, status FROM challenge_participants
-          WHERE challenge_id = ? AND participant_uid = ?`,
-      )
-      .get(challengeId, participantUid) as
-      | { role: ChallengeRole; status: ChallengeParticipantStatus }
-      | undefined;
-    return row ?? null;
+    client?: PoolClient,
+  ): Promise<{ role: ChallengeRole; status: ChallengeParticipantStatus } | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ role: string; status: string }>(
+      `SELECT role, status FROM challenge_participants
+        WHERE challenge_id = $1 AND participant_uid = $2`,
+      [challengeId, participantUid],
+    );
+    const row = res.rows[0];
+    return row ? { role: row.role as ChallengeRole, status: row.status as ChallengeParticipantStatus } : null;
   }
 
   /**
    * Os participantes de um desafio, com o perfil social resolvido.
-   *
-   * `JOINED` e `WITHDRAWN` vêm juntos: o serviço decide o que fazer com cada um (o placar
-   * competitivo só mostra `JOINED`, §96, e a contagem de quem saiu é metadado). Duas consultas
-   * separadas fariam a soma "ativos + saídos" precisar de duas leituras que podem discordar.
-   *
-   * O perfil vem por `JOIN`, e um participante cujo perfil social foi desativado **continua**
-   * aparecendo com o nome que tem: a política de desativação (§117) o transforma em `WITHDRAWN`
-   * na mesma operação, então ele já sai do placar competitivo por esse caminho — e não por
-   * desaparecer da consulta, o que faria a contagem de participantes mudar sem que ninguém tivesse
-   * saído.
    */
-  listParticipants(challengeId: string): readonly StoredChallengeParticipant[] {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT cp.participant_uid, cp.role, cp.status, cp.joined_at,
-                p.social_id, p.display_name
-           FROM challenge_participants cp
-           JOIN social_profiles p ON p.owner_uid = cp.participant_uid
-          WHERE cp.challenge_id = ?
-          ORDER BY cp.joined_at ASC, cp.participant_uid ASC`,
-      )
-      .all(challengeId) as ParticipantRow[];
+  async listParticipants(challengeId: string, client?: PoolClient): Promise<readonly StoredChallengeParticipant[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<ParticipantRow>(
+      `SELECT cp.participant_uid, cp.role, cp.status, cp.joined_at,
+              p.social_id, p.display_name
+         FROM challenge_participants cp
+         JOIN social_profiles p ON p.owner_uid = cp.participant_uid
+        WHERE cp.challenge_id = $1
+        ORDER BY cp.joined_at ASC, cp.participant_uid ASC`,
+      [challengeId],
+    );
 
-    return rows.map((row) => ({
+    return res.rows.map((row) => ({
       ownerUid: row.participant_uid,
       socialId: row.social_id,
       displayName: row.display_name,
       role: row.role as ChallengeRole,
       status: row.status as ChallengeParticipantStatus,
-      joinedAt: row.joined_at,
+      joinedAt: Number(row.joined_at),
     }));
   }
 
   /** Quantos participantes ativos. Usado pela política para decidir `VOID` (§28). */
-  countActiveParticipants(challengeId: string): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS total FROM challenge_participants
-          WHERE challenge_id = ? AND status = 'JOINED'`,
-      )
-      .get(challengeId) as { total: number };
-    return row.total;
+  async countActiveParticipants(challengeId: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM challenge_participants
+        WHERE challenge_id = $1 AND status = 'JOINED'`,
+      [challengeId],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 
   /** Quantos convites ainda estão pendentes. Só o criador vê o número (§172), sem nomes (§173). */
-  countPendingInvitations(challengeId: string): number {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT COUNT(*) AS total FROM challenge_invitations
-          WHERE challenge_id = ? AND status = 'PENDING'`,
-      )
-      .get(challengeId) as { total: number };
-    return row.total;
+  async countPendingInvitations(challengeId: string, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM challenge_invitations
+        WHERE challenge_id = $1 AND status = 'PENDING'`,
+      [challengeId],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 
   /**
    * Os desafios de que esta conta participa, paginados.
-   *
-   * A ordenação é `starts_at` **decrescente**, com `challenge_id` de desempate: o que está
-   * acontecendo e o que vem a seguir ficam perto do topo, e o histórico desce. A categorização
-   * final — ativos, próximos, encerrados (§103/§107) — é derivada do status no serviço, porque ela
-   * depende do relógio e a ordenação do banco não pode depender de um valor que muda.
-   *
-   * Participação `WITHDRAWN` continua listada: quem saiu ainda tem direito de ver que participou,
-   * e sumir com o desafio da lista dele pareceria perda de dado.
    */
-  listForParticipant(participantUid: string, page: PageRequest): Page<StoredChallenge> {
-    const cursorClause = page.cursor
-      ? `AND (c.starts_at < ? OR (c.starts_at = ? AND c.challenge_id < ?))`
-      : '';
-    const cursorValues = page.cursor
-      ? [Number(page.cursor.primary), Number(page.cursor.primary), page.cursor.secondary]
-      : [];
+  async listForParticipant(participantUid: string, page: PageRequest): Promise<Page<StoredChallenge>> {
+    let query: string;
+    let params: unknown[];
 
-    const rows = this.sqlite.connection
-      .prepare(
-        `${PARTICIPANT_CHALLENGES_SELECT}
-         ${cursorClause}
-         ORDER BY c.starts_at DESC, c.challenge_id DESC
-         LIMIT ?`,
-      )
-      .all(participantUid, ...cursorValues, page.limit + 1) as ChallengeRow[];
+    if (page.cursor) {
+      query = `
+        ${PARTICIPANT_CHALLENGES_SELECT}
+        AND (c.starts_at < $2 OR (c.starts_at = $2 AND c.challenge_id < $3))
+        ORDER BY c.starts_at DESC, c.challenge_id DESC
+        LIMIT $4
+      `;
+      params = [participantUid, Number(page.cursor.primary), page.cursor.secondary, page.limit + 1];
+    } else {
+      query = `
+        ${PARTICIPANT_CHALLENGES_SELECT}
+        ORDER BY c.starts_at DESC, c.challenge_id DESC
+        LIMIT $2
+      `;
+      params = [participantUid, page.limit + 1];
+    }
 
-    const total = (
-      this.sqlite.connection
-        .prepare(`SELECT COUNT(*) AS total FROM (${PARTICIPANT_CHALLENGES_SELECT})`)
-        .get(participantUid) as { total: number }
-    ).total;
+    const res = await this.db.query<ChallengeRow>(query, params);
 
-    return paginateChallenges(rows.map(toChallenge), page.limit, total, (challenge) => ({
+    const totalRes = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM (${PARTICIPANT_CHALLENGES_SELECT}) AS count_subquery`,
+      [participantUid],
+    );
+    const total = Number(totalRes.rows[0]?.total ?? 0);
+
+    return paginateChallenges(res.rows.map(toChallenge), page.limit, total, (challenge) => ({
       primary: challenge.startsAt,
       secondary: challenge.challengeId,
     }));
@@ -404,54 +383,53 @@ export class ChallengeRepository {
 
   // ------------------------------------------------------------------------------- convites
 
-  findInvitationById(invitationId: string): StoredChallengeInvitation | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT invitation_id, challenge_id, inviter_uid, recipient_uid, status, created_at
-           FROM challenge_invitations WHERE invitation_id = ?`,
-      )
-      .get(invitationId) as InvitationRow | undefined;
+  async findInvitationById(invitationId: string, client?: PoolClient): Promise<StoredChallengeInvitation | null> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<InvitationRow>(
+      `SELECT invitation_id, challenge_id, inviter_uid, recipient_uid, status, created_at
+         FROM challenge_invitations WHERE invitation_id = $1`,
+      [invitationId],
+    );
+    const row = res.rows[0];
     return row ? toInvitation(row) : null;
   }
 
   /**
    * Os convites **pendentes** desta conta, com o desafio carregado.
-   *
-   * Só `PENDING` gravado: recusados e aceitos não voltam para a tela de convites. Os pendentes de
-   * desafios cancelados ou já iniciados **vêm** — o serviço os classifica como `CANCELLED`/
-   * `EXPIRED` (§36) e a tela os mostra assim, em vez de eles sumirem sem explicação depois de a
-   * pessoa ter visto a notificação.
-   *
-   * Convite cujo **criador** desativou o Social não aparece: o `JOIN` com `social_profiles` exige
-   * `ACTIVE`, a mesma regra que a T17.1 aplica às listas do grafo (§50).
    */
-  listPendingInvitations(
+  async listPendingInvitations(
     recipientUid: string,
     page: PageRequest,
-  ): Page<StoredInvitationWithChallenge> {
-    const cursorClause = page.cursor
-      ? `AND (i.created_at < ? OR (i.created_at = ? AND i.invitation_id < ?))`
-      : '';
-    const cursorValues = page.cursor
-      ? [Number(page.cursor.primary), Number(page.cursor.primary), page.cursor.secondary]
-      : [];
+  ): Promise<Page<StoredInvitationWithChallenge>> {
+    let query: string;
+    let params: unknown[];
 
-    const rows = this.sqlite.connection
-      .prepare(
-        `${PENDING_INVITATIONS_SELECT}
-         ${cursorClause}
-         ORDER BY i.created_at DESC, i.invitation_id DESC
-         LIMIT ?`,
-      )
-      .all(recipientUid, ...cursorValues, page.limit + 1) as InvitationWithChallengeRow[];
+    if (page.cursor) {
+      query = `
+        ${PENDING_INVITATIONS_SELECT}
+        AND (i.created_at < $2 OR (i.created_at = $2 AND i.invitation_id < $3))
+        ORDER BY i.created_at DESC, i.invitation_id DESC
+        LIMIT $4
+      `;
+      params = [recipientUid, Number(page.cursor.primary), page.cursor.secondary, page.limit + 1];
+    } else {
+      query = `
+        ${PENDING_INVITATIONS_SELECT}
+        ORDER BY i.created_at DESC, i.invitation_id DESC
+        LIMIT $2
+      `;
+      params = [recipientUid, page.limit + 1];
+    }
 
-    const total = (
-      this.sqlite.connection
-        .prepare(`SELECT COUNT(*) AS total FROM (${PENDING_INVITATIONS_SELECT})`)
-        .get(recipientUid) as { total: number }
-    ).total;
+    const res = await this.db.query<InvitationWithChallengeRow>(query, params);
 
-    const items = rows.map((row) => ({
+    const totalRes = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM (${PENDING_INVITATIONS_SELECT}) AS count_subquery`,
+      [recipientUid],
+    );
+    const total = Number(totalRes.rows[0]?.total ?? 0);
+
+    const items = res.rows.map((row) => ({
       ...toInvitation(row),
       challenge: toChallenge(row),
     }));
@@ -464,122 +442,99 @@ export class ChallengeRepository {
 
   /**
    * Aceita um convite: marca `ACCEPTED` **e** cria a participação, ou não faz nenhuma das duas.
-   *
-   * O desfecho é decidido pelo `changes` do `UPDATE` condicional, e não por uma leitura anterior.
-   * A corrida real: o criador cancela o desafio enquanto o convidado aceita. Uma das duas escritas
-   * vence atomicamente, e a outra recebe um desfecho honesto.
-   *
-   * O teto de participantes é verificado **dentro** da transação (§30/§166): entre uma verificação
-   * externa e o `INSERT` cabe outro `INSERT`, e o resultado seria o décimo primeiro participante.
    */
-  acceptInvitation(
+  async acceptInvitation(
     invitationId: string,
     challengeId: string,
     recipientUid: string,
     maxParticipants: number,
     now: number,
-  ): AcceptInvitationOutcome {
-    const db = this.sqlite.connection;
+  ): Promise<AcceptInvitationOutcome> {
+    return this.db.transaction(async (client): Promise<AcceptInvitationOutcome> => {
+      const changedRes = await client.query(
+        `UPDATE challenge_invitations SET status = 'ACCEPTED', updated_at = $1
+          WHERE invitation_id = $2 AND status = 'PENDING'`,
+        [now, invitationId],
+      );
 
-    return db.transaction((): AcceptInvitationOutcome => {
-      const changed = db
-        .prepare(
-          `UPDATE challenge_invitations SET status = 'ACCEPTED', updated_at = ?
-            WHERE invitation_id = ? AND status = 'PENDING'`,
-        )
-        .run(now, invitationId).changes;
-
-      if (changed === 0) {
+      if ((changedRes.rowCount ?? 0) === 0) {
         // Ninguém aceitou agora. Se a participação existe, este aceite é a repetição de um que já
         // funcionou — e repetir uma operação bem-sucedida não é erro (§191).
-        const participation = this.findParticipation(challengeId, recipientUid);
+        const participation = await this.findParticipation(challengeId, recipientUid, client);
         if (participation) {
           return { kind: 'ALREADY_PARTICIPATING' };
         }
         return { kind: 'NOT_PENDING' };
       }
 
-      // `JOINED` **e** `WITHDRAWN` ocupam vaga na contagem? Não: quem saiu liberou o lugar, e não
-      // há rejoin (§66), então a vaga não pode ser retomada por ele. Contar só os ativos é o que
-      // permite a um desafio de 10 continuar recebendo aceites depois de alguém sair.
-      if (this.countActiveParticipants(challengeId) >= maxParticipants) {
+      if ((await this.countActiveParticipants(challengeId, client)) >= maxParticipants) {
         // A transação inteira é desfeita, inclusive o `UPDATE` acima: o convite volta a
         // `PENDING`, e não fica aceito num desafio de que a pessoa não participa.
         throw new ChallengeFullError();
       }
 
-      db.prepare(
+      await client.query(
         `INSERT INTO challenge_participants
            (challenge_id, participant_uid, role, status, joined_at, left_at)
-         VALUES (?, ?, 'MEMBER', 'JOINED', ?, NULL)
+         VALUES ($1, $2, 'MEMBER', 'JOINED', $3, NULL)
          ON CONFLICT (challenge_id, participant_uid) DO NOTHING`,
-      ).run(challengeId, recipientUid, now);
+        [challengeId, recipientUid, now],
+      );
 
-      const ch = db
-        .prepare(`SELECT starts_at, ends_at_exclusive FROM challenges WHERE challenge_id = ?`)
-        .get(challengeId) as { starts_at: number; ends_at_exclusive: number } | undefined;
+      const chRes = await client.query<{ starts_at: string | number; ends_at_exclusive: string | number }>(
+        `SELECT starts_at, ends_at_exclusive FROM challenges WHERE challenge_id = $1`,
+        [challengeId],
+      );
+      const ch = chRes.rows[0];
 
       if (ch) {
         // Notificações programadas do participante aceito (T17.5 §55/§57)
-        this.notificationService?.enqueueChallengeStartingSoon(db, {
+        await this.notificationService?.enqueueChallengeStartingSoon(client, {
           challengeId,
           participantUid: recipientUid,
-          startsAt: ch.starts_at,
+          startsAt: Number(ch.starts_at),
           now,
         });
-        this.notificationService?.enqueueChallengeEnded(db, {
+        await this.notificationService?.enqueueChallengeEnded(client, {
           challengeId,
           participantUid: recipientUid,
-          endsAtExclusive: ch.ends_at_exclusive,
+          endsAtExclusive: Number(ch.ends_at_exclusive),
           now,
         });
       }
 
       return { kind: 'ACCEPTED' };
-    })();
+    });
   }
 
   /**
    * Recusa um convite pendente. `true` quando **esta** chamada foi a que mudou.
-   *
-   * `false` não é falha: é "outra escrita chegou antes". Quem chamou decide o que isso significa —
-   * recusar duas vezes é idempotente (§192), recusar algo já aceito não é.
    */
-  declineInvitation(invitationId: string, now: number): boolean {
-    return (
-      this.sqlite.connection
-        .prepare(
-          `UPDATE challenge_invitations SET status = 'DECLINED', updated_at = ?
-            WHERE invitation_id = ? AND status = 'PENDING'`,
-        )
-        .run(now, invitationId).changes > 0
+  async declineInvitation(invitationId: string, now: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE challenge_invitations SET status = 'DECLINED', updated_at = $1
+        WHERE invitation_id = $2 AND status = 'PENDING'`,
+      [now, invitationId],
     );
+    return (res.rowCount ?? 0) > 0;
   }
 
   // ------------------------------------------------------------------------------- saída
 
   /**
    * Sai do desafio. `true` quando **esta** chamada foi a que mudou (§193).
-   *
-   * A linha **não** é apagada (§65): ela vira `WITHDRAWN` com `left_at`, e continua registrando
-   * que aquela pessoa participou. Apagar tornaria "saiu" indistinguível de "nunca entrou", e a
-   * integridade histórica do desafio dependeria de todo mundo ter ficado até o fim.
-   *
-   * `WITHDRAWN` é terminal: não há rejoin nesta fase (§66), e o `WHERE status = 'JOINED'` é o que
-   * garante isso mesmo sob duas requisições simultâneas.
    */
-  leave(challengeId: string, participantUid: string, now: number): boolean {
-    const success =
-      this.sqlite.connection
-        .prepare(
-          `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = ?
-            WHERE challenge_id = ? AND participant_uid = ? AND status = 'JOINED'
-              AND role = 'MEMBER'`,
-        )
-        .run(now, challengeId, participantUid).changes > 0;
+  async leave(challengeId: string, participantUid: string, now: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = $1
+        WHERE challenge_id = $2 AND participant_uid = $3 AND status = 'JOINED'
+          AND role = 'MEMBER'`,
+      [now, challengeId, participantUid],
+    );
+    const success = (res.rowCount ?? 0) > 0;
 
     if (success) {
-      this.notificationService?.cancelParticipantEvents(challengeId, participantUid);
+      await this.notificationService?.cancelParticipantEvents(challengeId, participantUid);
     }
 
     return success;
@@ -587,25 +542,17 @@ export class ChallengeRepository {
 
   /**
    * Cancela o desafio. `true` quando **esta** chamada foi a que mudou (§194).
-   *
-   * Uma escrita, sobre uma linha. Os convites pendentes **não** são reescritos: eles passam a ser
-   * lidos como `CANCELLED` (§36), derivado do desafio. Reescrevê-los custaria N escritas para
-   * gravar uma informação que já é dedutível — e a dedução não pode divergir da fonte.
-   *
-   * Nada é apagado (§138/§139): o desafio continua existindo, com resultado nenhum (§69/§94), e os
-   * participantes continuam podendo abri-lo para ver que ele foi cancelado.
    */
-  cancel(challengeId: string, now: number): boolean {
-    const success =
-      this.sqlite.connection
-        .prepare(
-          `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = ?, updated_at = ?
-            WHERE challenge_id = ? AND lifecycle = 'OPEN'`,
-        )
-        .run(now, now, challengeId).changes > 0;
+  async cancel(challengeId: string, now: number): Promise<boolean> {
+    const res = await this.db.query(
+      `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = $1, updated_at = $2
+        WHERE challenge_id = $3 AND lifecycle = 'OPEN'`,
+      [now, now, challengeId],
+    );
+    const success = (res.rowCount ?? 0) > 0;
 
     if (success) {
-      this.notificationService?.cancelChallengeEvents(challengeId);
+      await this.notificationService?.cancelChallengeEvents(challengeId);
     }
 
     return success;
@@ -615,123 +562,75 @@ export class ChallengeRepository {
 
   /**
    * Os desafios **ainda não encerrados** que esta conta criou (§118).
-   *
-   * Usado quando alguém desativa o Social: o criador não pode deixar para trás um desafio que
-   * ninguém mais consegue encerrar.
    */
-  openChallengesCreatedBy(creatorUid: string, nowMs: number): readonly string[] {
-    return (
-      this.sqlite.connection
-        .prepare(
-          `SELECT challenge_id FROM challenges
-            WHERE creator_uid = ? AND lifecycle = 'OPEN' AND ends_at_exclusive > ?`,
-        )
-        .all(creatorUid, nowMs) as { challenge_id: string }[]
-    ).map((row) => row.challenge_id);
+  async openChallengesCreatedBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<readonly string[]> {
+    const runner = this.getRunner(client);
+    const res = await runner.query<{ challenge_id: string }>(
+      `SELECT challenge_id FROM challenges
+        WHERE creator_uid = $1 AND lifecycle = 'OPEN' AND ends_at_exclusive > $2`,
+      [creatorUid, nowMs],
+    );
+    return res.rows.map((row: any) => row.challenge_id);
   }
 
   /**
    * Tira esta conta de todos os desafios ainda não encerrados em que ela participa como membro
    * (§117), e recusa os convites pendentes dela (§116).
-   *
-   * Chamado dentro da transação de desativar o Social. Devolve quantos participações e convites
-   * foram alterados — para o log, que registra contagem e nunca identificadores.
-   *
-   * A razão é o consentimento: participar de um desafio é consentir em compartilhar a pontuação
-   * daquele desafio (§123). Desligar os recursos sociais retira esse consentimento, e continuar
-   * publicando a pontuação de alguém que desligou o Social seria manter um compartilhamento que a
-   * pessoa acabou de encerrar.
-   *
-   * Desafios **encerrados** não são tocados (§120): o resultado deles é histórico, e reescrevê-lo
-   * apagaria um fato de que outras pessoas participaram.
    */
-  withdrawFromOpenChallenges(participantUid: string, nowMs: number): number {
-    return this.sqlite.connection
-      .prepare(
-        `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = ?
-          WHERE participant_uid = ? AND status = 'JOINED' AND role = 'MEMBER'
-            AND challenge_id IN (
-                SELECT challenge_id FROM challenges
-                 WHERE lifecycle = 'OPEN' AND ends_at_exclusive > ?
-            )`,
-      )
-      .run(nowMs, participantUid, nowMs).changes;
+  async withdrawFromOpenChallenges(participantUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = $1
+        WHERE participant_uid = $2 AND status = 'JOINED' AND role = 'MEMBER'
+          AND challenge_id IN (
+              SELECT challenge_id FROM challenges
+               WHERE lifecycle = 'OPEN' AND ends_at_exclusive > $3
+          )`,
+      [nowMs, participantUid, nowMs],
+    );
+    return res.rowCount ?? 0;
   }
 
   /** Recusa todos os convites pendentes desta conta (§116). Parte da mesma transação. */
-  declinePendingInvitationsOf(recipientUid: string, nowMs: number): number {
-    return this.sqlite.connection
-      .prepare(
-        `UPDATE challenge_invitations SET status = 'DECLINED', updated_at = ?
-          WHERE recipient_uid = ? AND status = 'PENDING'`,
-      )
-      .run(nowMs, recipientUid).changes;
+  async declinePendingInvitationsOf(recipientUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE challenge_invitations SET status = 'DECLINED', updated_at = $1
+        WHERE recipient_uid = $2 AND status = 'PENDING'`,
+      [nowMs, recipientUid],
+    );
+    return res.rowCount ?? 0;
   }
 
   /** Cancela os desafios abertos criados por esta conta (§118). Parte da mesma transação. */
-  cancelOpenChallengesCreatedBy(creatorUid: string, nowMs: number): number {
-    return this.sqlite.connection
-      .prepare(
-        `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = ?, updated_at = ?
-          WHERE creator_uid = ? AND lifecycle = 'OPEN' AND ends_at_exclusive > ?`,
-      )
-      .run(nowMs, nowMs, creatorUid, nowMs).changes;
+  async cancelOpenChallengesCreatedBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+    const runner = this.getRunner(client);
+    const res = await runner.query(
+      `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = $1, updated_at = $2
+        WHERE creator_uid = $3 AND lifecycle = 'OPEN' AND ends_at_exclusive > $4`,
+      [nowMs, nowMs, creatorUid, nowMs],
+    );
+    return res.rowCount ?? 0;
   }
 
   /**
    * O efeito de **desativar o Social** sobre os desafios (T17.3 §115–§120).
-   *
-   * ```text
-   * convites pendentes recebidos          ──▶ DECLINED    (§116)
-   * participações como MEMBER, em aberto  ──▶ WITHDRAWN   (§117)
-   * desafios abertos que eu criei         ──▶ CANCELLED   (§118)
-   * desafios já encerrados                ──▶ intocados   (§120)
-   * ```
-   *
-   * ## Por que desativar precisa alcançar os desafios
-   *
-   * Porque participar é **consentir em compartilhar a pontuação daquele desafio** (§123), e
-   * desligar os recursos sociais retira esse consentimento. Sem isto, alguém que desativasse o
-   * Social continuaria com a própria pontuação atualizando no placar dos outros — que é o
-   * bloqueante "disable Social continua compartilhando progresso ativo sem política".
-   *
-   * ## Por que o criador tem de cancelar, e não só sair
-   *
-   * Um desafio sem criador ativo é um desafio que ninguém mais pode encerrar (§62/§118). Cancelar
-   * é honesto com os outros participantes: ele acaba para todos, sem resultado, em vez de ficar
-   * correndo com regras que perderam o dono.
-   *
-   * ## Encerrados não são tocados
-   *
-   * O resultado de um desafio que já acabou é histórico do qual **outras** pessoas participaram, e
-   * reescrevê-lo apagaria um fato delas para atender a decisão de uma. Desativar suspende
-   * participação futura; ele não reescreve o passado — a mesma regra que a T17.1 aplica à amizade.
-   *
-   * A ordem importa: os desafios criados são cancelados **por último**, porque `withdraw` filtra
-   * por `lifecycle = 'OPEN'` e cancelar antes deixaria as participações de membro do próprio
-   * criador (que não existem, mas a ordem não deve depender disso) fora do alcance.
-   *
-   * Chamado **dentro** da transação que muda o status do perfil (§119). Devolve contagens, e
-   * apenas contagens: o log registra quantos, nunca quais.
    */
-  applySocialDisable(
+  async applySocialDisable(
     ownerUid: string,
     nowMs: number,
-  ): { declinedInvitations: number; withdrawnFrom: number; cancelledChallenges: number } {
+    client?: PoolClient,
+  ): Promise<{ declinedInvitations: number; withdrawnFrom: number; cancelledChallenges: number }> {
     return {
-      declinedInvitations: this.declinePendingInvitationsOf(ownerUid, nowMs),
-      withdrawnFrom: this.withdrawFromOpenChallenges(ownerUid, nowMs),
-      cancelledChallenges: this.cancelOpenChallengesCreatedBy(ownerUid, nowMs),
+      declinedInvitations: await this.declinePendingInvitationsOf(ownerUid, nowMs, client),
+      withdrawnFrom: await this.withdrawFromOpenChallenges(ownerUid, nowMs, client),
+      cancelledChallenges: await this.cancelOpenChallengesCreatedBy(ownerUid, nowMs, client),
     };
   }
 }
 
 /**
  * O desafio encheu entre a verificação e o `INSERT`.
- *
- * Erro, e não valor de retorno, porque ele precisa **desfazer a transação**: o `UPDATE` que marcou
- * o convite como aceito já aconteceu, e deixá-lo valendo produziria um convite aceito sem
- * participação — a pessoa acreditaria estar no desafio.
  */
 export class ChallengeFullError extends Error {
   constructor() {
@@ -752,7 +651,7 @@ const PARTICIPANT_CHALLENGES_SELECT = `
          c.created_at, c.updated_at
     FROM challenges c
     JOIN challenge_participants cp ON cp.challenge_id = c.challenge_id
-   WHERE cp.participant_uid = ?
+   WHERE cp.participant_uid = $1
 `;
 
 /** Convites pendentes, com o desafio e o filtro de criador ativo. */
@@ -764,7 +663,7 @@ const PENDING_INVITATIONS_SELECT = `
     FROM challenge_invitations i
     JOIN challenges c ON c.challenge_id = i.challenge_id
     JOIN social_profiles p ON p.owner_uid = i.inviter_uid
-   WHERE i.recipient_uid = ?
+   WHERE i.recipient_uid = $1
      AND i.status = 'PENDING'
      AND p.status = 'ACTIVE'
 `;
@@ -774,17 +673,17 @@ interface ChallengeRow {
   creator_uid: string;
   name: string;
   type: string;
-  target: number;
+  target: string | number;
   start_date: string;
   end_date: string;
   time_zone_id: string;
-  starts_at: number;
-  ends_at_exclusive: number;
+  starts_at: string | number;
+  ends_at_exclusive: string | number;
   lifecycle: string;
-  cancelled_at: number | null;
-  created_at: number;
-  challenge_created_at?: number;
-  updated_at: number;
+  cancelled_at: string | number | null;
+  created_at: string | number;
+  challenge_created_at?: string | number;
+  updated_at: string | number;
 }
 
 interface ParticipantRow {
@@ -793,7 +692,7 @@ interface ParticipantRow {
   display_name: string;
   role: string;
   status: string;
-  joined_at: number;
+  joined_at: string | number;
 }
 
 interface InvitationRow {
@@ -802,7 +701,7 @@ interface InvitationRow {
   inviter_uid: string;
   recipient_uid: string;
   status: string;
-  created_at: number;
+  created_at: string | number;
 }
 
 interface InvitationWithChallengeRow extends InvitationRow, ChallengeRow {}
@@ -813,19 +712,16 @@ function toChallenge(row: ChallengeRow): StoredChallenge {
     creatorUid: row.creator_uid,
     name: row.name,
     type: row.type as ChallengeType,
-    target: row.target,
+    target: Number(row.target),
     startDate: row.start_date,
     endDate: row.end_date,
     timeZoneId: row.time_zone_id,
-    startsAt: row.starts_at,
-    endsAtExclusive: row.ends_at_exclusive,
+    startsAt: Number(row.starts_at),
+    endsAtExclusive: Number(row.ends_at_exclusive),
     lifecycle: row.lifecycle as 'OPEN' | 'CANCELLED',
-    cancelledAt: row.cancelled_at,
-    // Na listagem de convites as duas tabelas têm `created_at`; o do desafio vem com alias para
-    // que o do convite não o sobrescreva. Sem isto, a data de criação do desafio seria a do
-    // convite — e um desafio pareceria criado depois de ter sido convidado para ele.
-    createdAt: row.challenge_created_at ?? row.created_at,
-    updatedAt: row.updated_at,
+    cancelledAt: row.cancelled_at != null ? Number(row.cancelled_at) : null,
+    createdAt: Number(row.challenge_created_at ?? row.created_at),
+    updatedAt: Number(row.updated_at),
   };
 }
 
@@ -836,7 +732,7 @@ function toInvitation(row: InvitationRow): StoredChallengeInvitation {
     inviterUid: row.inviter_uid,
     recipientUid: row.recipient_uid,
     status: row.status as 'PENDING' | 'ACCEPTED' | 'DECLINED',
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 

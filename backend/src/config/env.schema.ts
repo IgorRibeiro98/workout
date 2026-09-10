@@ -36,39 +36,38 @@ export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
 
   /**
-   * Caminho do arquivo SQLite. Obrigatório e sem default: em container ele precisa apontar para
-   * um volume persistente (ex.: `/data/spark.db`). Um default silencioso esconderia exatamente o
-   * erro que queremos impossibilitar — banco vivendo só na camada efêmera do container.
+   * Connection string pooled para runtime (PostgreSQL / Neon).
+   * Obrigatório e sem default: falha cedo no bootstrap se ausente.
+   * Nunca é logado.
    */
-  DATABASE_PATH: z.string().min(1, 'DATABASE_PATH é obrigatório'),
+  DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatório'),
+
+  /**
+   * Connection string direta (não-pooled), usada para migrations e administração.
+   * Opcional: quando ausente, faz fallback para DATABASE_URL.
+   * Nunca é logado.
+   */
+  DATABASE_URL_DIRECT: z.string().min(1).optional(),
+
+  /** Caminho legado do arquivo de banco (para compatibilidade e derivação de caminhos locais). */
+  DATABASE_PATH: z.string().optional(),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
-  /**
-   * `PRAGMA synchronous` (T16.8 §18).
-   *
-   * **`FULL` por padrão, e a escolha é deliberada.** Em WAL, `NORMAL` deixa o commit voltar antes
-   * de o WAL estar no disco: um corte de energia na VPS pode custar as últimas transações
-   * *confirmadas*. No Spark isso não é "perder alguns segundos de escrita" — o aparelho só libera
-   * a Outbox depois da confirmação do servidor (§13.2/§13.4), então uma transação confirmada e
-   * perdida é dado que o cliente considera salvo e que ninguém vai reenviar.
-   *
-   * O custo é irrelevante na escala do projeto: as escritas são pequenas, esparsas e nunca em
-   * laço. `NORMAL` continua disponível como configuração para quem rodar em um disco com
-   * garantia de bateria/flush, mas trocar é decisão explícita, não default.
-   */
-  SQLITE_SYNCHRONOUS: z.enum(['NORMAL', 'FULL']).default('FULL'),
+  /** Tamanho mínimo do pool de conexões PostgreSQL. */
+  DATABASE_POOL_MIN: z.coerce.number().int().min(0).max(50).default(2),
 
-  /**
-   * `PRAGMA wal_autocheckpoint`, em páginas (T16.8 §77).
-   *
-   * O default do SQLite (1000 páginas ≈ 4 MB) já impede o WAL de crescer indefinidamente, e é
-   * exatamente ele que preservamos. A configuração existe para que a política seja **explícita e
-   * localizável** em vez de herdada em silêncio — e para permitir baixá-la se o arquivo `-wal`
-   * incomodar em uma VPS pequena. `0` desliga o checkpoint automático e é aceito só porque o
-   * shutdown ainda faz `wal_checkpoint(TRUNCATE)`; não use isso sem motivo.
-   */
-  SQLITE_WAL_AUTOCHECKPOINT_PAGES: z.coerce.number().int().min(0).max(1_000_000).default(1_000),
+  /** Tamanho máximo do pool de conexões PostgreSQL (adequado para Neon Free e Cloud Run). */
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+
+  /** Timeout para aquisição de conexão do pool (ms). */
+  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+
+  /** Tempo máximo que uma conexão pode ficar ociosa no pool (ms). */
+  DATABASE_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
+
+  /** Statement timeout no PostgreSQL (ms). */
+  DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
 
   /**
    * Teto de tempo de uma requisição HTTP inteira, aplicado no servidor Node (T16.8 §88).
@@ -85,11 +84,6 @@ export const envSchema = z.object({
    * Caddy reaproveita uma conexão que o Node acabou de fechar e o cliente vê um 502 esporádico.
    */
   HTTP_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(65_000),
-
-  /**
-   * `PRAGMA busy_timeout`. Centralizado aqui: nenhum outro ponto do código escolhe esse valor.
-   */
-  SQLITE_BUSY_TIMEOUT_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
 
   /** Tempo máximo para drenar conexões em SIGTERM/SIGINT antes de encerrar à força. */
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(10_000),

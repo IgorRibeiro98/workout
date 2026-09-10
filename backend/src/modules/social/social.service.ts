@@ -1,7 +1,7 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import { ChallengeRepository } from './challenge.repository';
 import { SocialGroupService } from './social-group.service';
 import { NotificationService } from './notification.service';
@@ -88,7 +88,7 @@ export class SocialService {
      */
     private readonly groups: SocialGroupService,
     /** A conexão, para que desativar e sair dos desafios sejam uma transação só (§119). */
-    private readonly sqlite: SqliteService,
+    private readonly db: PostgresService,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
     @Optional() private readonly notificationService?: NotificationService,
@@ -100,8 +100,8 @@ export class SocialService {
    * Leitura pura. Uma conta sem perfil recebe `{ enabled: false }` — que é um estado normal do
    * produto, não um erro, e por isso não é `404`.
    */
-  me(principal: AuthenticatedPrincipal, requestId: string): SocialMeResponse {
-    const account = this.repository.find(principal.uid);
+  async me(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialMeResponse> {
+    const account = await this.repository.find(principal.uid);
     this.logger.info('social.me', {
       requestId,
       uidPrefix: uidPrefix(principal.uid),
@@ -130,12 +130,12 @@ export class SocialService {
    * Um perfil `DISABLED` também é devolvido como está: reativar é `POST /me/enable`, e fazer a
    * ativação religar em silêncio esconderia do usuário que ele tinha desativado.
    */
-  activate(
+  async activate(
     principal: AuthenticatedPrincipal,
     requestId: string,
     request: ActivateSocialRequest,
-  ): SocialProfileResponse {
-    const existing = this.repository.find(principal.uid);
+  ): Promise<SocialProfileResponse> {
+    const existing = await this.repository.find(principal.uid);
     if (existing) {
       this.logger.info('social.activate.already', {
         requestId,
@@ -154,7 +154,7 @@ export class SocialService {
 
     for (let attempt = 1; attempt <= FRIEND_CODE_MAX_GENERATION_ATTEMPTS; attempt += 1) {
       try {
-        const created = this.repository.create({
+        const created = await this.repository.create({
           ownerUid: principal.uid,
           socialId,
           friendCode: generateFriendCode(),
@@ -191,31 +191,31 @@ export class SocialService {
   }
 
   /** `PATCH /v1/social/me` — só o nome social. */
-  updateProfile(
+  async updateProfile(
     principal: AuthenticatedPrincipal,
     requestId: string,
     request: UpdateSocialProfileRequest,
-  ): SocialProfileResponse {
-    const account = this.require(principal);
+  ): Promise<SocialProfileResponse> {
+    const account = await this.require(principal);
 
     const now = Date.now();
-    this.repository.updateDisplayName(principal.uid, request.displayName, now);
+    await this.repository.updateDisplayName(principal.uid, request.displayName, now);
 
     // O nome não vai para o log — nem o antigo, nem o novo.
     this.logger.info('social.profile.updated', {
       requestId,
       uidPrefix: uidPrefix(principal.uid),
     });
-    return { profile: toOwnerProfile(this.reload(principal, account)) };
+    return { profile: toOwnerProfile(await this.reload(principal, account)) };
   }
 
   /** `PATCH /v1/social/me/privacy` — parcial; o que não veio no corpo não é tocado. */
-  updatePrivacy(
+  async updatePrivacy(
     principal: AuthenticatedPrincipal,
     requestId: string,
     request: UpdateSocialPrivacyRequest,
-  ): SocialProfileResponse {
-    const account = this.require(principal);
+  ): Promise<SocialProfileResponse> {
+    const account = await this.require(principal);
 
     if (request.activitySharingEnabled === true) {
       const effectiveTimeZone = request.activityTimeZoneId ?? account.privacy.activityTimeZoneId;
@@ -227,7 +227,7 @@ export class SocialService {
     }
 
     const now = this.clock.now();
-    this.repository.updatePrivacy(principal.uid, { ...request, now });
+    await this.repository.updatePrivacy(principal.uid, { ...request, now });
 
     this.logger.info('social.privacy.updated', {
       requestId,
@@ -236,7 +236,7 @@ export class SocialService {
       // reclamação de "eu não mudei isso" sem registrar a configuração da pessoa.
       fields: Object.keys(request).sort().join(','),
     });
-    return { profile: toOwnerProfile(this.reload(principal, account)) };
+    return { profile: toOwnerProfile(await this.reload(principal, account)) };
   }
 
   /**
@@ -249,8 +249,8 @@ export class SocialService {
    * A linha permanece, com `status = DISABLED`: é ela que preserva `socialId` e `friendCode` para
    * uma reativação futura.
    */
-  disable(principal: AuthenticatedPrincipal, requestId: string): SocialProfileResponse {
-    const account = this.require(principal);
+  async disable(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialProfileResponse> {
+    const account = await this.require(principal);
     if (account.profile.status === 'DISABLED') {
       throw SocialErrors.alreadyDisabled();
     }
@@ -258,48 +258,27 @@ export class SocialService {
     const now = this.clock.now();
 
     // T17.11 §98/§99 — a recusa vem **antes** da transação, e é deliberada.
-    //
-    // Ser dono de um Squad com outras pessoas é o único caso em que desativar o Social não pode
-    // ser resolvido pelo servidor sozinho. A alternativa seria escolher um novo dono, e qualquer
-    // ordenação que fizesse isso entregaria um grupo de gente real a alguém que não pediu. Recusar
-    // é mais explícito e mais seguro: a pessoa transfere a posse para quem ela escolher, ou exclui
-    // o Squad, e só então desativa.
-    //
-    // A resposta carrega uma **contagem**, e nunca dados de membro (§99).
-    const pendingGroups = this.groups.countGroupsRequiringOwnerAction(principal.uid);
+    const pendingGroups = await this.groups.countGroupsRequiringOwnerAction(principal.uid);
     if (pendingGroups > 0) {
       throw SocialErrors.groupOwnershipRequiresAction(pendingGroups);
     }
 
-    // T17.3 §119 — desativar o Social e sair dos desafios acontecem **juntos**, ou não acontecem.
-    //
-    // Fora de uma transação, uma falha entre as duas escritas deixaria o pior estado possível:
-    // perfil desativado com a pontuação da pessoa ainda atualizando no placar dos amigos, ou um
-    // desafio cancelado para todos com o criador ainda ativo. As duas são visíveis para **outras**
-    // pessoas, e nenhuma delas se corrige sozinha.
-    //
-    // A amizade continua intocada (T17.1): desativar suspende, não desfaz.
-    // T17.11 §96/§97 — os Squads entram na **mesma** transação, pelo mesmo motivo dos desafios:
-    // fora dela, uma falha entre as escritas deixaria um perfil desativado com a pessoa ainda
-    // aparecendo no feed de um grupo, ou um grupo resolvido com o perfil ainda ativo. As duas são
-    // visíveis para **outras** pessoas, e nenhuma se corrige sozinha.
-    const effect = this.sqlite.connection.transaction(() => {
-      this.repository.updateStatus(principal.uid, 'DISABLED', now);
-      this.notificationService?.onSocialDisable(principal.uid);
-      const challengeEffect = this.challenges.applySocialDisable(principal.uid, now);
-      const groupEffect = this.groups.applySocialDisable(principal.uid, now);
+    const effect = await this.db.transaction(async (client) => {
+      await this.repository.updateStatus(principal.uid, 'DISABLED', now, client);
+      if (this.notificationService) {
+        await this.notificationService.onSocialDisable(principal.uid, client);
+      }
+      const challengeEffect = await this.challenges.applySocialDisable(principal.uid, now, client);
+      const groupEffect = await this.groups.applySocialDisable(principal.uid, now, client);
       return { ...challengeEffect, ...groupEffect };
-    })();
+    });
 
     this.logger.info('social.disabled', {
       requestId,
       uidPrefix: uidPrefix(principal.uid),
-      // Contagens, e nunca identificadores (§128/§129; T17.11 §124). É o suficiente para
-      // investigar "sumi de um desafio" ou "sumi de um squad" sem registrar de quais a pessoa
-      // participava.
       ...effect,
     });
-    return { profile: toOwnerProfile(this.reload(principal, account)) };
+    return { profile: toOwnerProfile(await this.reload(principal, account)) };
   }
 
   /**
@@ -309,20 +288,20 @@ export class SocialService {
    * continua sendo o dele, e as relações que a T17.1 vier a criar não precisam ser reconstruídas
    * a cada toque no interruptor.
    */
-  enable(principal: AuthenticatedPrincipal, requestId: string): SocialProfileResponse {
-    const account = this.require(principal);
+  async enable(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialProfileResponse> {
+    const account = await this.require(principal);
     if (account.profile.status === 'ACTIVE') {
       throw SocialErrors.alreadyEnabled();
     }
 
-    this.repository.updateStatus(principal.uid, 'ACTIVE', Date.now());
+    await this.repository.updateStatus(principal.uid, 'ACTIVE', Date.now());
     this.logger.info('social.enabled', { requestId, uidPrefix: uidPrefix(principal.uid) });
-    return { profile: toOwnerProfile(this.reload(principal, account)) };
+    return { profile: toOwnerProfile(await this.reload(principal, account)) };
   }
 
   /** O perfil da conta autenticada, ou `SOCIAL_NOT_ENABLED`. Toda escrita passa por aqui. */
-  private require(principal: AuthenticatedPrincipal): StoredSocialAccount {
-    const account = this.repository.find(principal.uid);
+  private async require(principal: AuthenticatedPrincipal): Promise<StoredSocialAccount> {
+    const account = await this.repository.find(principal.uid);
     if (!account) {
       throw SocialErrors.notEnabled();
     }
@@ -335,11 +314,11 @@ export class SocialService {
    * Devolver o objeto anterior com os campos alterados "na mão" faria a resposta descrever o que o
    * servidor **pretendia** gravar. O que a API afirma é o que ficou gravado.
    */
-  private reload(
+  private async reload(
     principal: AuthenticatedPrincipal,
     fallback: StoredSocialAccount,
-  ): StoredSocialAccount {
-    return this.repository.find(principal.uid) ?? fallback;
+  ): Promise<StoredSocialAccount> {
+    return (await this.repository.find(principal.uid)) ?? fallback;
   }
 }
 

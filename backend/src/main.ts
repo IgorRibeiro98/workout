@@ -124,7 +124,7 @@ async function bootstrap(): Promise<void> {
     }, config.shutdownTimeoutMs);
     timer.unref();
 
-    // `app.close()` dispara os shutdown hooks do Nest, que fecham o SQLite (SqliteService).
+    // `app.close()` dispara os shutdown hooks do Nest, que fecham o pool do PostgreSQL (PostgresService).
     void app
       .close()
       .then(() => {

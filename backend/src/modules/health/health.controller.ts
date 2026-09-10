@@ -20,8 +20,8 @@ export class HealthController {
   }
 
   @Get('ready')
-  ready(@Res() res: Response): void {
-    const result = this.health.readiness();
+  async ready(@Res() res: Response): Promise<void> {
+    const result = await this.health.readiness();
     const status = result.status === 'ok' ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
     res.status(status).json(result);
   }

@@ -58,7 +58,7 @@ export async function createTestApp(
   const moduleRef = await builder.compile();
 
   const app = moduleRef.createNestApplication({ logger: false });
-  configureApp(app, config);
+  await configureApp(app, config);
   await app.init();
   return app;
 }

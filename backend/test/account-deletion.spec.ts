@@ -101,7 +101,7 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
     expect(purgedCount).toBe(1);
 
     // Confirma que A agora está tombstoned
-    expect(deletionRepo.isTombstoned(hashA)).toBe(true);
+    expect(await deletionRepo.isTombstoned(hashA)).toBe(true);
 
     // E requisição de A é bloqueada com 403
     const blockedRes = await request(server())

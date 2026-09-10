@@ -29,21 +29,21 @@ export class SocialActivityController {
 
   @Get(SOCIAL_ACTIVITY_ROUTE)
   @UseGuards(BearerAuthGuard)
-  getActivity(
+  async getActivity(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() req: Request,
-  ): SocialActivityResponse {
+  ): Promise<SocialActivityResponse> {
     const requestId = (req as RequestWithId).requestId ?? 'unknown';
-    return this.activityService.getActivity(principal, requestId);
+    return await this.activityService.getActivity(principal, requestId);
   }
 
   @Get(FRIEND_RANKING_LAST_7_DAYS_ROUTE)
   @UseGuards(BearerAuthGuard)
-  getRankingLast7Days(
+  async getRankingLast7Days(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() req: Request,
-  ): FriendRankingResponse {
+  ): Promise<FriendRankingResponse> {
     const requestId = (req as RequestWithId).requestId ?? 'unknown';
-    return this.rankingService.getRanking(principal, requestId);
+    return await this.rankingService.getRanking(principal, requestId);
   }
 }

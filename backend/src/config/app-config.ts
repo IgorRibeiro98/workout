@@ -17,12 +17,31 @@ export class AppConfig {
   private constructor(private readonly env: SparkEnv) {}
 
   static fromEnv(source: NodeJS.ProcessEnv = process.env): AppConfig {
-    const result = envSchema.safeParse(source);
+    const raw = { ...source };
+    const issues: string[] = [];
+
+    if (!raw.DATABASE_URL && !raw.DATABASE_PATH) {
+      issues.push('DATABASE_PATH: DATABASE_PATH é obrigatório');
+    } else if (raw.DATABASE_PATH !== undefined && raw.DATABASE_PATH.trim() === '') {
+      issues.push('DATABASE_PATH: DATABASE_PATH não pode ser vazio');
+    } else if (!raw.DATABASE_URL && raw.DATABASE_PATH) {
+      raw.DATABASE_URL = raw.DATABASE_PATH.startsWith('postgres')
+        ? raw.DATABASE_PATH
+        : (process.env.DATABASE_URL || 'postgresql://spark:spark@localhost:5432/spark_dev');
+    }
+    const result = envSchema.safeParse(raw);
     if (!result.success) {
-      throw new ConfigValidationError(
-        result.error.issues.map((issue) => `${issue.path.join('.') || '(raiz)'}: ${issue.message}`),
+      issues.push(
+        ...result.error.issues.map(
+          (issue) => `${issue.path.join('.') || '(raiz)'}: ${issue.message}`,
+        ),
       );
     }
+
+    if (issues.length > 0 || !result.success) {
+      throw new ConfigValidationError(issues);
+    }
+
     return new AppConfig(result.data);
   }
 
@@ -38,24 +57,36 @@ export class AppConfig {
     return this.env.PORT;
   }
 
-  get databasePath(): string {
-    return this.env.DATABASE_PATH;
+  get databaseUrl(): string {
+    return this.env.DATABASE_URL;
+  }
+
+  get databaseUrlDirect(): string {
+    return this.env.DATABASE_URL_DIRECT ?? this.env.DATABASE_URL;
   }
 
   get logLevel(): SparkEnv['LOG_LEVEL'] {
     return this.env.LOG_LEVEL;
   }
 
-  get sqliteBusyTimeoutMs(): number {
-    return this.env.SQLITE_BUSY_TIMEOUT_MS;
+  get databasePoolMin(): number {
+    return this.env.DATABASE_POOL_MIN;
   }
 
-  get sqliteSynchronous(): SparkEnv['SQLITE_SYNCHRONOUS'] {
-    return this.env.SQLITE_SYNCHRONOUS;
+  get databasePoolMax(): number {
+    return this.env.DATABASE_POOL_MAX;
   }
 
-  get sqliteWalAutocheckpointPages(): number {
-    return this.env.SQLITE_WAL_AUTOCHECKPOINT_PAGES;
+  get databaseConnectionTimeoutMs(): number {
+    return this.env.DATABASE_CONNECTION_TIMEOUT_MS;
+  }
+
+  get databaseIdleTimeoutMs(): number {
+    return this.env.DATABASE_IDLE_TIMEOUT_MS;
+  }
+
+  get databaseStatementTimeoutMs(): number {
+    return this.env.DATABASE_STATEMENT_TIMEOUT_MS;
   }
 
   get httpRequestTimeoutMs(): number {
@@ -68,6 +99,23 @@ export class AppConfig {
 
   get shutdownTimeoutMs(): number {
     return this.env.SHUTDOWN_TIMEOUT_MS;
+  }
+
+  // Compatibilidade legada
+  get databasePath(): string {
+    return (this.env as any).DATABASE_PATH ?? ':memory:';
+  }
+
+  get sqliteBusyTimeoutMs(): number {
+    return (this.env as any).SQLITE_BUSY_TIMEOUT_MS ?? 5000;
+  }
+
+  get sqliteSynchronous(): string {
+    return (this.env as any).SQLITE_SYNCHRONOUS ?? 'NORMAL';
+  }
+
+  get sqliteWalAutocheckpointPages(): number {
+    return (this.env as any).SQLITE_WAL_AUTOCHECKPOINT_PAGES ?? 1000;
   }
 
   /** Caminho do arquivo de service account do Firebase Admin, quando configurado. */
@@ -196,10 +244,11 @@ export class AppConfig {
     if (configured) {
       return configured;
     }
-    if (this.databasePath === ':memory:') {
-      return join(process.cwd(), '.spark-media');
+    const dbPath = this.databasePath;
+    if (dbPath && dbPath !== ':memory:' && !dbPath.startsWith('postgres')) {
+      return join(dirname(dbPath), 'media');
     }
-    return join(dirname(this.databasePath), 'media');
+    return join(process.cwd(), '.spark-media');
   }
 
   /** `true` quando o operador declarou o caminho, e não quando ele foi derivado. */

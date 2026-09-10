@@ -32,26 +32,26 @@ export class BlockController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  blockUser(
+  async blockUser(
     @Principal() principal: AuthenticatedPrincipal,
     @Body() body: BlockUserRequestDto,
     @Req() req: Request,
-  ): BlockUserResponseDto {
+  ): Promise<BlockUserResponseDto> {
     assertBodyWithinLimit((req as RequestWithRawBody).rawBody);
-    return this.blockService.blockUser(principal.uid, body.blockedSocialId);
+    return await this.blockService.blockUser(principal.uid, body.blockedSocialId);
   }
 
   @Delete(':socialId')
   @HttpCode(HttpStatus.OK)
-  unblockUser(
+  async unblockUser(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('socialId') socialId: string,
-  ): UnblockUserResponseDto {
-    return this.blockService.unblockUser(principal.uid, socialId);
+  ): Promise<UnblockUserResponseDto> {
+    return await this.blockService.unblockUser(principal.uid, socialId);
   }
 
   @Get()
-  listBlocked(@Principal() principal: AuthenticatedPrincipal): ListBlockedUsersResponseDto {
-    return this.blockService.listBlocked(principal.uid);
+  async listBlocked(@Principal() principal: AuthenticatedPrincipal): Promise<ListBlockedUsersResponseDto> {
+    return await this.blockService.listBlocked(principal.uid);
   }
 }

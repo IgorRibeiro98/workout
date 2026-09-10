@@ -46,7 +46,7 @@ export class WorkoutShareService {
     private readonly logger: SparkLogger,
   ) {}
 
-  createShare(senderUid: string, request: CreateWorkoutShareRequest): WorkoutShareDetailDto {
+  async createShare(senderUid: string, request: CreateWorkoutShareRequest): Promise<WorkoutShareDetailDto> {
     const now = this.clock.now();
 
     // 1. Validação de clientRequestId
@@ -58,7 +58,7 @@ export class WorkoutShareService {
     }
 
     // 2. Validação de perfil remetente
-    const senderProfile = this.repository.findProfileByUid(senderUid);
+    const senderProfile = await this.repository.findProfileByUid(senderUid);
     if (!senderProfile) {
       throw new ForbiddenException({
         code: WorkoutShareErrorCodes.SOCIAL_NOT_ENABLED,
@@ -74,7 +74,7 @@ export class WorkoutShareService {
       });
     }
 
-    const recipientProfile = this.repository.findProfileBySocialId(request.recipientSocialId);
+    const recipientProfile = await this.repository.findProfileBySocialId(request.recipientSocialId);
     if (!recipientProfile) {
       throw new NotFoundException({
         code: WorkoutShareErrorCodes.RECIPIENT_NOT_FOUND,
@@ -93,7 +93,7 @@ export class WorkoutShareService {
     }
 
     // 5. Bloqueio mútuo (T17.6)
-    if (this.blockRepository.isBlockedBidirectional(senderUid, recipientUid)) {
+    if (await this.blockRepository.isBlockedBidirectional(senderUid, recipientUid)) {
       throw new ForbiddenException({
         code: WorkoutShareErrorCodes.BLOCKED_USER,
         message: 'Não é possível interagir com este usuário.',
@@ -101,7 +101,7 @@ export class WorkoutShareService {
     }
 
     // 6. Amizade ativa obrigatória (T17.1)
-    if (!this.repository.isFriendshipActive(senderUid, recipientUid)) {
+    if (!(await this.repository.isFriendshipActive(senderUid, recipientUid))) {
       throw new ForbiddenException({
         code: WorkoutShareErrorCodes.FRIENDSHIP_REQUIRED,
         message: 'Compartilhamento permitido apenas entre amigos.',
@@ -122,7 +122,7 @@ export class WorkoutShareService {
     const snapshotHash = createHash('sha256').update(snapshotJson).digest('hex');
 
     // 8. Idempotência por clientRequestId
-    const existing = this.repository.findBySenderAndClientRequestId(
+    const existing = await this.repository.findBySenderAndClientRequestId(
       senderUid,
       request.clientRequestId,
     );
@@ -137,7 +137,7 @@ export class WorkoutShareService {
     }
 
     // 9. Rate limit de criação
-    const pendingCount = this.repository.countPendingBySender(senderUid, now);
+    const pendingCount = await this.repository.countPendingBySender(senderUid, now);
     if (pendingCount >= MAX_PENDING_SHARES) {
       throw new HttpException(
         {
@@ -148,7 +148,7 @@ export class WorkoutShareService {
       );
     }
 
-    const dailyCount = this.repository.countCreatedToday(senderUid, now - 24 * 60 * 60 * 1000);
+    const dailyCount = await this.repository.countCreatedToday(senderUid, now - 24 * 60 * 60 * 1000);
     if (dailyCount >= MAX_DAILY_SHARES) {
       throw new HttpException(
         {
@@ -181,16 +181,8 @@ export class WorkoutShareService {
     };
 
     // 11. O share e o evento de notificação, numa transação só (T17.13.1 §45–§47).
-    //
-    // Eram duas escritas independentes, e uma falha entre elas deixava a oferta no banco sem nada
-    // que avisasse o destinatário — em silêncio, expirando em trinta dias sem que ele jamais
-    // soubesse. O FCM continua fora daqui: isto grava a **intenção** de notificar, e a entrega é do
-    // dispatcher, depois, fora de qualquer transação (§46).
-    //
-    // O `dedupeKey` é o que garante §48: um replay que chegasse a este ponto não criaria um segundo
-    // evento — mas ele não chega, porque a idempotência acima já devolveu o share existente.
-    this.repository.insertShareWithNotification(stored, () => {
-      this.notificationRepository.createEvent(
+    await this.repository.insertShareWithNotification(stored, async (client) => {
+      await this.notificationRepository.createEvent(
         {
           id: randomUUID(),
           recipientUid,
@@ -201,6 +193,7 @@ export class WorkoutShareService {
           expiresAt,
         },
         now,
+        client,
       );
     });
 
@@ -213,19 +206,19 @@ export class WorkoutShareService {
     return this.toDetailDto(stored, senderProfile, recipientProfile, request.snapshot);
   }
 
-  listReceived(recipientUid: string): WorkoutShareItemDto[] {
+  async listReceived(recipientUid: string): Promise<WorkoutShareItemDto[]> {
     const now = this.clock.now();
     return this.repository.listReceived(recipientUid, now);
   }
 
-  listSent(senderUid: string): WorkoutShareItemDto[] {
+  async listSent(senderUid: string): Promise<WorkoutShareItemDto[]> {
     const now = this.clock.now();
     return this.repository.listSent(senderUid, now);
   }
 
-  getShareDetail(callerUid: string, shareId: string): WorkoutShareDetailDto {
+  async getShareDetail(callerUid: string, shareId: string): Promise<WorkoutShareDetailDto> {
     const now = this.clock.now();
-    const share = this.repository.findById(shareId);
+    const share = await this.repository.findById(shareId);
 
     if (!share) {
       throw new NotFoundException({
@@ -243,18 +236,18 @@ export class WorkoutShareService {
     }
 
     // Se houver bloqueio bilateral, responde 404
-    if (this.blockRepository.isBlockedBidirectional(share.sender_uid, share.recipient_uid)) {
+    if (await this.blockRepository.isBlockedBidirectional(share.sender_uid, share.recipient_uid)) {
       throw new NotFoundException({
         code: WorkoutShareErrorCodes.SHARE_NOT_FOUND,
         message: 'Oferta de treino não encontrada.',
       });
     }
 
-    const senderProfile = this.repository.findProfileByUid(share.sender_uid) ?? {
+    const senderProfile = (await this.repository.findProfileByUid(share.sender_uid)) ?? {
       socialId: 'indisponivel',
       displayName: 'Participante indisponível',
     };
-    const recipientProfile = this.repository.findProfileByUid(share.recipient_uid) ?? {
+    const recipientProfile = (await this.repository.findProfileByUid(share.recipient_uid)) ?? {
       socialId: 'indisponivel',
       displayName: 'Participante indisponível',
     };
@@ -262,13 +255,10 @@ export class WorkoutShareService {
     // Auto-expira se necessário
     let currentStatus = share.status;
     if (currentStatus === 'PENDING' && now >= share.expires_at) {
-      // §52 — condicional em `PENDING`. Uma leitura concorrente que expire não pode sobrescrever
-      // um `ACCEPTED` que outra requisição acabou de gravar; se a transição não acontece, o estado
-      // real é relido e é ele que a resposta reporta.
-      if (this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now)) {
+      if (await this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now)) {
         currentStatus = 'EXPIRED';
       } else {
-        currentStatus = this.repository.findById(shareId)?.status ?? currentStatus;
+        currentStatus = (await this.repository.findById(shareId))?.status ?? currentStatus;
       }
     }
 
@@ -281,9 +271,9 @@ export class WorkoutShareService {
     );
   }
 
-  acceptShare(recipientUid: string, shareId: string): WorkoutTemplateShareSnapshotV1 {
+  async acceptShare(recipientUid: string, shareId: string): Promise<WorkoutTemplateShareSnapshotV1> {
     const now = this.clock.now();
-    const share = this.repository.findById(shareId);
+    const share = await this.repository.findById(shareId);
 
     if (!share || share.recipient_uid !== recipientUid) {
       throw new NotFoundException({
@@ -292,7 +282,7 @@ export class WorkoutShareService {
       });
     }
 
-    if (this.blockRepository.isBlockedBidirectional(share.sender_uid, recipientUid)) {
+    if (await this.blockRepository.isBlockedBidirectional(share.sender_uid, recipientUid)) {
       throw new NotFoundException({
         code: WorkoutShareErrorCodes.SHARE_NOT_FOUND,
         message: 'Oferta de treino não encontrada.',
@@ -312,7 +302,7 @@ export class WorkoutShareService {
     }
 
     if (now >= share.expires_at) {
-      this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now);
+      await this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now);
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
         message: 'Oferta de treino expirada.',
@@ -320,19 +310,16 @@ export class WorkoutShareService {
     }
 
     // Amizade ainda ativa?
-    if (!this.repository.isFriendshipActive(share.sender_uid, recipientUid)) {
-      this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now);
+    if (!(await this.repository.isFriendshipActive(share.sender_uid, recipientUid))) {
+      await this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now);
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
         message: 'A amizade não está mais ativa.',
       });
     }
 
-    // §50/§52 — `PENDING → ACCEPTED`, condicional. Quem perde a corrida relê e responde a partir
-    // do estado real: se o vencedor foi outro aceite do mesmo destinatário, o desfecho é o mesmo
-    // e a resposta é idempotente; se foi um cancelamento ou uma expiração, a oferta acabou.
-    if (!this.repository.transitionStatus(shareId, 'PENDING', 'ACCEPTED', 'accepted_at', now)) {
-      const current = this.repository.findById(shareId);
+    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'ACCEPTED', 'accepted_at', now))) {
+      const current = await this.repository.findById(shareId);
       if (current && (current.status === 'ACCEPTED' || current.status === 'IMPORTED')) {
         return JSON.parse(current.snapshot_json) as WorkoutTemplateShareSnapshotV1;
       }
@@ -346,9 +333,9 @@ export class WorkoutShareService {
     return JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
   }
 
-  completeImport(recipientUid: string, shareId: string): { success: boolean } {
+  async completeImport(recipientUid: string, shareId: string): Promise<{ success: boolean }> {
     const now = this.clock.now();
-    const share = this.repository.findById(shareId);
+    const share = await this.repository.findById(shareId);
 
     if (!share || share.recipient_uid !== recipientUid) {
       throw new NotFoundException({
@@ -368,11 +355,8 @@ export class WorkoutShareService {
       });
     }
 
-    // §50/§52 — `ACCEPTED → IMPORTED`. Duas conclusões simultâneas produziam duas escritas, e
-    // `imported_at` acabava sendo o carimbo da segunda. Agora só uma transiciona; a outra relê e
-    // converge, porque o desfecho pretendido é o mesmo.
-    if (!this.repository.transitionStatus(shareId, 'ACCEPTED', 'IMPORTED', 'imported_at', now)) {
-      if (this.repository.findById(shareId)?.status === 'IMPORTED') {
+    if (!(await this.repository.transitionStatus(shareId, 'ACCEPTED', 'IMPORTED', 'imported_at', now))) {
+      if ((await this.repository.findById(shareId))?.status === 'IMPORTED') {
         return { success: true };
       }
       throw new BadRequestException({
@@ -385,9 +369,9 @@ export class WorkoutShareService {
     return { success: true };
   }
 
-  declineShare(recipientUid: string, shareId: string): { success: boolean } {
+  async declineShare(recipientUid: string, shareId: string): Promise<{ success: boolean }> {
     const now = this.clock.now();
-    const share = this.repository.findById(shareId);
+    const share = await this.repository.findById(shareId);
 
     if (!share || share.recipient_uid !== recipientUid) {
       throw new NotFoundException({
@@ -407,10 +391,8 @@ export class WorkoutShareService {
       });
     }
 
-    // §50/§52 — `PENDING → DECLINED`. Recusar e aceitar ao mesmo tempo: só uma vence, e quem
-    // perde vê o estado que ganhou.
-    if (!this.repository.transitionStatus(shareId, 'PENDING', 'DECLINED', 'declined_at', now)) {
-      if (this.repository.findById(shareId)?.status === 'DECLINED') {
+    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'DECLINED', 'declined_at', now))) {
+      if ((await this.repository.findById(shareId))?.status === 'DECLINED') {
         return { success: true };
       }
       throw new BadRequestException({
@@ -423,9 +405,9 @@ export class WorkoutShareService {
     return { success: true };
   }
 
-  cancelShare(senderUid: string, shareId: string): { success: boolean } {
+  async cancelShare(senderUid: string, shareId: string): Promise<{ success: boolean }> {
     const now = this.clock.now();
-    const share = this.repository.findById(shareId);
+    const share = await this.repository.findById(shareId);
 
     if (!share || share.sender_uid !== senderUid) {
       throw new NotFoundException({
@@ -445,10 +427,8 @@ export class WorkoutShareService {
       });
     }
 
-    // §50/§52 — `PENDING → CANCELLED`. Cancelar e aceitar ao mesmo tempo: uma só vence, e o
-    // remetente nunca recebe "cancelado" para uma oferta que o destinatário já levou.
-    if (!this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now)) {
-      if (this.repository.findById(shareId)?.status === 'CANCELLED') {
+    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now))) {
+      if ((await this.repository.findById(shareId))?.status === 'CANCELLED') {
         return { success: true };
       }
       throw new BadRequestException({
@@ -524,16 +504,6 @@ export class WorkoutShareService {
     }
 
     snapshot.exercises.forEach((ex, idx) => {
-      // T17.10 §99 — o identificador canônico precisa **parecer** um identificador canônico.
-      //
-      // Antes, `typeof string` e "não vazio" eram tudo: com 30 exercícios e o teto global de 4 MiB
-      // de JSON, o campo era um canal de texto livre de megabytes que o servidor guardava e
-      // devolvia. Nenhum id do catálogo passa de 47 caracteres e todos são slugs; 128 e uma
-      // allowlist de forma deixam folga larga para o catálogo crescer e recusam o resto.
-      //
-      // Isto **não** é a política de exercício CUSTOM (§59), que continua sendo fail-closed no
-      // aparelho (`WorkoutShareSnapshotBuilder`): o servidor não conhece o catálogo e não pode
-      // decidir se um slug existe. O que ele pode garantir é a forma — e é o que faz aqui.
       if (
         typeof ex.canonicalExerciseId !== 'string' ||
         !CANONICAL_EXERCISE_ID_PATTERN.test(ex.canonicalExerciseId)

@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { DbClient, PostgresService } from '../../database/postgres.service';
+import { isPgUniqueViolation } from '../../database/database.errors';
 import type { SocialDiscoverability, SocialProfileStatus } from './social.contract';
 
-/** O perfil social como ele está gravado. `ownerUid` existe aqui e **nunca** em um DTO. */
 export interface StoredSocialProfile {
   readonly ownerUid: string;
   readonly socialId: string;
@@ -22,7 +22,6 @@ export interface StoredSocialPrivacy {
   readonly updatedAt: number;
 }
 
-/** Perfil e privacidade juntos: as duas linhas nascem na mesma transação e são lidas juntas. */
 export interface StoredSocialAccount {
   readonly profile: StoredSocialProfile;
   readonly privacy: StoredSocialPrivacy;
@@ -50,7 +49,6 @@ export interface UpdateSocialPrivacyInput {
   readonly now: number;
 }
 
-/** Um `friendCode` já em uso. Sinaliza colisão para o retry limitado do serviço. */
 export class FriendCodeCollisionError extends Error {
   constructor() {
     super('friendCode já existe');
@@ -59,121 +57,101 @@ export class FriendCodeCollisionError extends Error {
 }
 
 /**
- * A persistência do domínio social (T17.0).
- *
- * Três garantias vivem aqui, e nenhuma delas é "o código toma cuidado":
- *
- * 1. **isolamento por conta** — `owner_uid` está na cláusula `WHERE` de toda consulta, e não numa
- *    verificação depois da leitura. A consulta que não pode devolver o perfil de outra conta é a
- *    que nunca o carrega. Não existe método que leia por `social_id` sozinho, e não existe método
- *    que liste perfis: enumeração é impossível porque a consulta não foi escrita;
- * 2. **atomicidade da criação** — perfil, privacidade e compartilhamento de progresso (T17.2)
- *    entram na **mesma** transação. Um perfil sem essas linhas seria um perfil cujos defaults
- *    ninguém escolheu, e a primeira leitura teria de inventar um;
- * 3. **unicidade pelo banco** — `social_id` e `friend_code` são `UNIQUE` no schema. A colisão é
- *    detectada pela constraint, e nunca por um `SELECT` anterior ao `INSERT`: entre a consulta e a
- *    escrita cabe outra ativação.
+ * A persistência do domínio social (T17.0 / T18.0 PostgreSQL).
  */
 @Injectable()
 export class SocialRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
 
   /** O perfil **daquela conta**, com a privacidade. `null` quando a conta nunca ativou. */
-  find(ownerUid: string): StoredSocialAccount | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT p.owner_uid, p.social_id, p.friend_code, p.display_name, p.status,
-                p.created_at, p.updated_at,
-                s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
-                s.activity_time_zone_id, s.friend_ranking_participation_enabled,
-                s.updated_at AS privacy_updated_at
-         FROM social_profiles p
-         JOIN social_privacy_settings s ON s.owner_uid = p.owner_uid
-         WHERE p.owner_uid = ?`,
-      )
-      .get(ownerUid) as AccountRow | undefined;
+  async find(ownerUid: string): Promise<StoredSocialAccount | null> {
+    const res = await this.db.query<AccountRow>(
+      `SELECT p.owner_uid, p.social_id, p.friend_code, p.display_name, p.status,
+              p.created_at, p.updated_at,
+              s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
+              s.activity_time_zone_id, s.friend_ranking_participation_enabled,
+              s.updated_at AS privacy_updated_at
+       FROM social_profiles p
+       JOIN social_privacy_settings s ON s.owner_uid = p.owner_uid
+       WHERE p.owner_uid = $1`,
+      [ownerUid],
+    );
 
+    const row = res.rows[0];
     return row ? toAccount(row) : null;
   }
 
   /**
-   * Cria o perfil, a privacidade e o compartilhamento de progresso, em uma transação.
-   *
-   * Concorrência: duas ativações simultâneas da **mesma** conta chegam aqui e a segunda esbarra na
-   * chave primária `owner_uid`. Em vez de propagar o erro, ela relê e devolve o que a primeira
-   * criou — o resultado é um perfil, um `socialId` e um `friendCode`, que é exatamente o que a
-   * convergência exige. Devolver erro faria um dos dois aparelhos mostrar falha por uma ativação
-   * que **funcionou**.
-   *
-   * @throws {FriendCodeCollisionError} o código sorteado já pertence a outra conta. Quem trata é
-   * o serviço, com um retry limitado: aqui não se sorteia nada, porque uma transação não é lugar
-   * de laço de geração.
+   * Cria o perfil, a privacidade e o compartilhamento de progresso, em uma transação atômica.
    */
-  create(input: CreateSocialAccountInput): StoredSocialAccount {
-    const db = this.sqlite.connection;
+  async create(input: CreateSocialAccountInput): Promise<StoredSocialAccount> {
+    let existing: StoredSocialAccount | null = null;
 
-    const insert = db.transaction((): StoredSocialAccount | null => {
-      const existing = this.find(input.ownerUid);
-      if (existing) {
-        // Já ativado por outra requisição. Não é erro, e nada é sobrescrito.
-        return existing;
-      }
-
-      db.prepare(
-        `INSERT INTO social_profiles
-           (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)`,
-      ).run(
-        input.ownerUid,
-        input.socialId,
-        input.friendCode,
-        input.displayName,
-        input.now,
-        input.now,
-      );
-
-      db.prepare(
-        `INSERT INTO social_privacy_settings
-           (owner_uid, discoverability, friend_requests_enabled, activity_sharing_enabled,
-            activity_time_zone_id, friend_ranking_participation_enabled, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        input.ownerUid,
-        input.discoverability,
-        input.friendRequestsEnabled ? 1 : 0,
-        input.activitySharingEnabled ? 1 : 0,
-        input.activityTimeZoneId ?? null,
-        input.friendRankingParticipationEnabled ? 1 : 0,
-        input.now,
-      );
-
-      // T17.2 — compartilhamento de progresso, tudo desligado, na **mesma** transação.
-      //
-      // Um perfil sem esta linha seria um perfil cujo default ninguém escolheu, e a primeira
-      // leitura teria de inventar um. É a mesma razão pela qual a privacidade nasce junto com a
-      // identidade desde a T17.0 — e o motivo de os quatro nascerem `0` é o §14: ativar o Social
-      // não pode publicar progresso.
-      db.prepare(
-        `INSERT INTO social_progress_settings
-           (owner_uid, share_level, share_consistency_streak, share_weekly_workout_count,
-            share_highlighted_achievements, week_time_zone, updated_at)
-         VALUES (?, 0, 0, 0, 0, NULL, ?)`,
-      ).run(input.ownerUid, input.now);
-
-      return null;
-    });
-
-    let existing: StoredSocialAccount | null;
     try {
-      existing = insert();
+      existing = await this.db.transaction(async (client) => {
+        const checkRes = await client.query<AccountRow>(
+          `SELECT p.owner_uid, p.social_id, p.friend_code, p.display_name, p.status,
+                  p.created_at, p.updated_at,
+                  s.discoverability, s.friend_requests_enabled, s.activity_sharing_enabled,
+                  s.activity_time_zone_id, s.friend_ranking_participation_enabled,
+                  s.updated_at AS privacy_updated_at
+           FROM social_profiles p
+           JOIN social_privacy_settings s ON s.owner_uid = p.owner_uid
+           WHERE p.owner_uid = $1`,
+          [input.ownerUid],
+        );
+        if (checkRes.rows[0]) {
+          return toAccount(checkRes.rows[0]);
+        }
+
+        await client.query(
+          `INSERT INTO social_profiles
+             (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6)`,
+          [
+            input.ownerUid,
+            input.socialId,
+            input.friendCode,
+            input.displayName,
+            input.now,
+            input.now,
+          ],
+        );
+
+        await client.query(
+          `INSERT INTO social_privacy_settings
+             (owner_uid, discoverability, friend_requests_enabled, activity_sharing_enabled,
+              activity_time_zone_id, friend_ranking_participation_enabled, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            input.ownerUid,
+            input.discoverability,
+            Boolean(input.friendRequestsEnabled),
+            Boolean(input.activitySharingEnabled),
+            input.activityTimeZoneId ?? null,
+            input.friendRankingParticipationEnabled !== undefined
+              ? Boolean(input.friendRankingParticipationEnabled)
+              : false,
+            input.now,
+          ],
+        );
+
+        await client.query(
+          `INSERT INTO social_progress_settings
+             (owner_uid, share_level, share_consistency_streak, share_weekly_workout_count,
+              share_highlighted_achievements, week_time_zone, updated_at)
+           VALUES ($1, FALSE, FALSE, FALSE, FALSE, NULL, $2)`,
+          [input.ownerUid, input.now],
+        );
+
+        return null;
+      });
     } catch (error) {
-      if (isUniqueViolation(error, 'social_profiles.friend_code')) {
+      if (isPgUniqueViolation(error, 'friend_code')) {
         throw new FriendCodeCollisionError();
       }
-      if (isUniqueViolation(error, 'social_profiles.owner_uid')) {
-        // A corrida perdida: outra requisição da mesma conta criou o perfil entre a leitura e a
-        // escrita. A resposta certa é o perfil que existe, não um erro.
-        const created = this.find(input.ownerUid);
+      if (isPgUniqueViolation(error, 'owner_uid') || isPgUniqueViolation(error, 'social_profiles_pkey')) {
+        const created = await this.find(input.ownerUid);
         if (created) {
           return created;
         }
@@ -184,68 +162,73 @@ export class SocialRepository {
     if (existing) {
       return existing;
     }
-    // Relido do banco, e não montado a partir do input: o que a API devolve é o que ficou gravado.
-    const created = this.find(input.ownerUid);
+
+    const created = await this.find(input.ownerUid);
     if (!created) {
       throw new Error('perfil social não encontrado imediatamente após a criação');
     }
     return created;
   }
 
-  /** Renomeia. `social_id`, `friend_code` e `owner_uid` não aparecem no `SET`, e é o contrato. */
-  updateDisplayName(ownerUid: string, displayName: string, now: number): void {
-    this.sqlite.connection
-      .prepare(`UPDATE social_profiles SET display_name = ?, updated_at = ? WHERE owner_uid = ?`)
-      .run(displayName, now, ownerUid);
+  /** Renomeia. */
+  async updateDisplayName(ownerUid: string, displayName: string, now: number): Promise<void> {
+    await this.db.query(
+      `UPDATE social_profiles SET display_name = $1, updated_at = $2 WHERE owner_uid = $3`,
+      [displayName, now, ownerUid],
+    );
   }
 
-  /**
-   * Muda o status preservando a identidade.
-   *
-   * `social_id` e `friend_code` não são tocados: desativar e reativar precisa devolver a **mesma**
-   * identidade, senão nenhuma relação futura sobrevive a um toque acidental no interruptor.
-   */
-  updateStatus(ownerUid: string, status: SocialProfileStatus, now: number): void {
-    this.sqlite.connection
-      .prepare(`UPDATE social_profiles SET status = ?, updated_at = ? WHERE owner_uid = ?`)
-      .run(status, now, ownerUid);
+  /** Muda o status preservando a identidade. */
+  async updateStatus(
+    ownerUid: string,
+    status: SocialProfileStatus,
+    now: number,
+    client?: import('pg').PoolClient,
+  ): Promise<void> {
+    const runner: DbClient = (client ?? this.db) as DbClient;
+    await runner.query(
+      `UPDATE social_profiles SET status = $1, updated_at = $2 WHERE owner_uid = $3`,
+      [status, now, ownerUid],
+    );
   }
 
-  /** Atualização parcial da privacidade: só o que veio no corpo é escrito. */
-  updatePrivacy(ownerUid: string, input: UpdateSocialPrivacyInput): void {
+  /** Atualização parcial da privacidade. */
+  async updatePrivacy(ownerUid: string, input: UpdateSocialPrivacyInput): Promise<void> {
     const assignments: string[] = [];
     const values: unknown[] = [];
+    let paramIndex = 1;
 
     if (input.discoverability !== undefined) {
-      assignments.push('discoverability = ?');
+      assignments.push(`discoverability = $${paramIndex++}`);
       values.push(input.discoverability);
     }
     if (input.friendRequestsEnabled !== undefined) {
-      assignments.push('friend_requests_enabled = ?');
-      values.push(input.friendRequestsEnabled ? 1 : 0);
+      assignments.push(`friend_requests_enabled = $${paramIndex++}`);
+      values.push(Boolean(input.friendRequestsEnabled));
     }
     if (input.activitySharingEnabled !== undefined) {
-      assignments.push('activity_sharing_enabled = ?');
-      values.push(input.activitySharingEnabled ? 1 : 0);
+      assignments.push(`activity_sharing_enabled = $${paramIndex++}`);
+      values.push(Boolean(input.activitySharingEnabled));
     }
     if (input.activityTimeZoneId !== undefined) {
-      assignments.push('activity_time_zone_id = ?');
+      assignments.push(`activity_time_zone_id = $${paramIndex++}`);
       values.push(input.activityTimeZoneId);
     }
     if (input.friendRankingParticipationEnabled !== undefined) {
-      assignments.push('friend_ranking_participation_enabled = ?');
-      values.push(input.friendRankingParticipationEnabled ? 1 : 0);
+      assignments.push(`friend_ranking_participation_enabled = $${paramIndex++}`);
+      values.push(Boolean(input.friendRankingParticipationEnabled));
     }
     if (assignments.length === 0) {
       return;
     }
 
-    assignments.push('updated_at = ?');
-    values.push(input.now, ownerUid);
+    assignments.push(`updated_at = $${paramIndex++}`);
+    values.push(input.now);
 
-    this.sqlite.connection
-      .prepare(`UPDATE social_privacy_settings SET ${assignments.join(', ')} WHERE owner_uid = ?`)
-      .run(...values);
+    values.push(ownerUid);
+    const sql = `UPDATE social_privacy_settings SET ${assignments.join(', ')} WHERE owner_uid = $${paramIndex}`;
+
+    await this.db.query(sql, values);
   }
 }
 
@@ -255,14 +238,14 @@ interface AccountRow {
   friend_code: string;
   display_name: string;
   status: string;
-  created_at: number;
-  updated_at: number;
+  created_at: string | number;
+  updated_at: string | number;
   discoverability: string;
-  friend_requests_enabled: number;
-  activity_sharing_enabled: number;
+  friend_requests_enabled: boolean | number;
+  activity_sharing_enabled: boolean | number;
   activity_time_zone_id: string | null;
-  friend_ranking_participation_enabled: number;
-  privacy_updated_at: number;
+  friend_ranking_participation_enabled: boolean | number;
+  privacy_updated_at: string | number;
 }
 
 function toAccount(row: AccountRow): StoredSocialAccount {
@@ -273,56 +256,16 @@ function toAccount(row: AccountRow): StoredSocialAccount {
       friendCode: row.friend_code,
       displayName: row.display_name,
       status: row.status as SocialProfileStatus,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
     },
     privacy: {
       discoverability: row.discoverability as SocialDiscoverability,
-      friendRequestsEnabled: row.friend_requests_enabled === 1,
-      activitySharingEnabled: row.activity_sharing_enabled === 1,
+      friendRequestsEnabled: Boolean(row.friend_requests_enabled),
+      activitySharingEnabled: Boolean(row.activity_sharing_enabled),
       activityTimeZoneId: row.activity_time_zone_id ?? null,
-      friendRankingParticipationEnabled: row.friend_ranking_participation_enabled === 1,
-      updatedAt: row.privacy_updated_at,
+      friendRankingParticipationEnabled: Boolean(row.friend_ranking_participation_enabled),
+      updatedAt: Number(row.privacy_updated_at),
     },
   };
-}
-
-/**
- * A violação de `UNIQUE` **daquela** coluna.
- *
- * `better-sqlite3` traz `code = 'SQLITE_CONSTRAINT_PRIMARYKEY' | 'SQLITE_CONSTRAINT_UNIQUE'` e uma
- * mensagem que nomeia a coluna. Sem olhar a coluna, um `friendCode` repetido e uma segunda
- * ativação da mesma conta seriam o mesmo erro — e o retry de geração ficaria sorteando códigos
- * novos para um problema que não é de código.
- */
-function isUniqueViolation(error: unknown, column: string): boolean {
-  if (typeof error !== 'object' || error === null) {
-    return false;
-  }
-  const code = 'code' in error ? String((error as { code: unknown }).code) : '';
-  if (code !== 'SQLITE_CONSTRAINT_UNIQUE' && code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-    return false;
-  }
-  // A mensagem é lida **estruturalmente**, e não por `error instanceof Error`.
-  //
-  // O `SqliteError` do `better-sqlite3` nasce no addon nativo, que é carregado uma vez por
-  // processo e guarda o construtor registrado pelo **primeiro** módulo a exigi-lo. Sob o Jest,
-  // cada arquivo de teste roda em um contexto de VM próprio, com o seu próprio `Error` global —
-  // então um erro lançado pelo addon pode ter na cadeia de protótipos o `Error` de outro contexto,
-  // e `instanceof Error` responde `false` para um `Error` de verdade.
-  //
-  // Isso não é peculiaridade de teste que se resolve no teste: era uma decisão de **fluxo** —
-  // "isto é colisão de código ou é outra coisa?" — tomada por uma verificação que pode responder
-  // errado. Quando ela respondia errado, a colisão de `friendCode` deixava de virar
-  // `FriendCodeCollisionError`, o retry limitado do serviço não acontecia, e a ativação falhava
-  // com um `SqliteError` cru em vez de tentar outro código. Em produção o gatilho seria qualquer
-  // caminho em que o addon fosse carregado por outro realm; em CI, a ordem dos arquivos de teste.
-  //
-  // `code` já era lido assim, por `in`. A mensagem passa a ser lida do mesmo jeito, e a decisão
-  // deixa de depender de qual realm criou o objeto.
-  const message =
-    'message' in error && typeof (error as { message: unknown }).message === 'string'
-      ? (error as { message: string }).message
-      : '';
-  return message.includes(column);
 }

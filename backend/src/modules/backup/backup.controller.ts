@@ -58,11 +58,11 @@ export class BackupController {
 
   @UseGuards(BearerAuthGuard)
   @Post()
-  create(
+  async create(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Res() response: Response,
-  ): void {
+  ): Promise<void> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
     const rawBody = (request as RequestWithRawBody).rawBody;
     if (rawBody === undefined) {
@@ -71,16 +71,10 @@ export class BackupController {
       throw BackupErrors.invalid('corpo do backup ausente');
     }
 
-    const result = this.service.create(principal, requestId, rawBody);
+    const result = await this.service.create(principal, requestId, rawBody);
     response.status(result.created ? HttpStatus.CREATED : HttpStatus.OK).json(result.metadata);
   }
 
-  /**
-   * A metadata do backup mais recente **da conta autenticada**.
-   *
-   * Sem parâmetro de usuário: a única identidade que existe aqui é a do token. Uma conta nunca vê
-   * o backup de outra, e não há como pedir.
-   */
   /**
    * Os backups retidos **da conta autenticada**.
    *
@@ -90,14 +84,14 @@ export class BackupController {
   @UseGuards(BearerAuthGuard)
   @Get()
   @HttpCode(HttpStatus.OK)
-  list(@Principal() principal: AuthenticatedPrincipal): BackupListResponse {
+  async list(@Principal() principal: AuthenticatedPrincipal): Promise<BackupListResponse> {
     return this.service.list(principal);
   }
 
   @UseGuards(BearerAuthGuard)
   @Get('latest')
   @HttpCode(HttpStatus.OK)
-  latest(@Principal() principal: AuthenticatedPrincipal): BackupMetadataResponse {
+  async latest(@Principal() principal: AuthenticatedPrincipal): Promise<BackupMetadataResponse> {
     return this.service.latest(principal);
   }
 
@@ -110,31 +104,26 @@ export class BackupController {
   @UseGuards(BearerAuthGuard)
   @Get(':backupId')
   @HttpCode(HttpStatus.OK)
-  metadata(
+  async metadata(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('backupId') backupId: string,
-  ): BackupMetadataResponse {
+  ): Promise<BackupMetadataResponse> {
     return this.service.metadata(principal, backupId);
   }
 
   /**
    * O snapshot canônico, verbatim — o corpo que o restore da T16.5 valida e aplica.
-   *
-   * A resposta é o **documento**, e não um envelope em volta dele: o Android calcula o SHA-256 do
-   * corpo recebido e compara com `payloadHash` da metadata. Qualquer embrulho obrigaria o cliente
-   * a recortar o texto antes de hashear — um passo a mais capaz de errar exatamente onde a
-   * integridade importa.
    */
   @UseGuards(BearerAuthGuard)
   @Get(':backupId/content')
-  content(
+  async content(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('backupId') backupId: string,
     @Req() request: Request,
     @Res() response: Response,
-  ): void {
+  ): Promise<void> {
     const requestId = (request as RequestWithId).requestId ?? 'unknown';
-    const payload = this.service.content(principal, requestId, backupId);
+    const payload = await this.service.content(principal, requestId, backupId);
     response
       .status(HttpStatus.OK)
       .type('application/json')

@@ -1,7 +1,9 @@
+import { join } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
 import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { PostgresService } from '../src/database/postgres.service';
 import {
   account,
   acceptChallenge,
@@ -13,7 +15,7 @@ import {
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeClock } from './support/fake-clock';
-import { configFor, createTempDb, MIGRATIONS_DIR, sqliteFor, type TempDb } from './support/temp-db';
+import { configFor, createPostgresSyncDb, createTempDb, MIGRATIONS_DIR, postgresFor, type TempDb } from './support/temp-db';
 
 /**
  * A persistência dos desafios (T17.3 §131–§143/§225).
@@ -28,6 +30,8 @@ describe('Persistência dos desafios', () => {
   const joao = account('joao', 'João');
   const NOW = saoPauloInstant('2026-09-08T12:00:00');
 
+  const LEGACY_SQLITE_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+
   beforeEach(() => {
     temp = createTempDb();
   });
@@ -40,12 +44,13 @@ describe('Persistência dos desafios', () => {
 
   describe('a migration é aditiva (§132)', () => {
     it('sobe sobre a base T17.2 sem tocar em perfil, amizade, privacidade nem T16', () => {
-      const db = new BetterSqlite3(temp.path);
+      const sqlitePath = join(temp.directory, 'legacy.db');
+      const db = new BetterSqlite3(sqlitePath);
       db.pragma('foreign_keys = ON');
       // O estado de um servidor que ainda não subiu a T17.3.
       runMigrations(
         db,
-        loadMigrations(MIGRATIONS_DIR).filter((migration) => migration.version <= 9),
+        loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).filter((migration) => migration.version <= 9),
       );
 
       // Dado das fases anteriores que precisa sobreviver — inclusive o que a T17.3 encosta
@@ -99,7 +104,7 @@ describe('Persistência dos desafios', () => {
         backups: db.prepare('SELECT * FROM backup_snapshots').all(),
       };
 
-      const applied = runMigrations(db, loadMigrations(MIGRATIONS_DIR));
+      const applied = runMigrations(db, loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR));
 
       expect(applied.map((migration) => migration.version)).toEqual([
         10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
@@ -148,7 +153,7 @@ describe('Persistência dos desafios', () => {
     });
 
     it('a migration só cria: nenhum DROP, ALTER, DELETE ou UPDATE (§132)', () => {
-      const sql = loadMigrations(MIGRATIONS_DIR).find((m) => m.version === 10)?.sql ?? '';
+      const sql = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 10)?.sql ?? '';
       const code = sql.replace(/--.*$/gm, '');
 
       expect(code).toMatch(/CREATE TABLE challenges/);
@@ -184,10 +189,10 @@ describe('Persistência dos desafios', () => {
   // ------------------------------------------------------------------------- constraints
 
   describe('as constraints existem no banco, e não só no código (§40/§41/§43)', () => {
-    it('um participante por pessoa, um criador por desafio, um convite por convidado', () => {
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      const db = sqlite.connection;
+    it('um participante por pessoa, um criador por desafio, um convite por convidado', async () => {
+      const postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      const db = createPostgresSyncDb(temp.schema);
 
       const profile = (uid: string, socialId: string, code: string) => {
         db.prepare(
@@ -240,13 +245,13 @@ describe('Persistência dos desafios', () => {
       // Convite para si mesmo: `CHECK`.
       expect(() => addInvitation('i-3', 'uid-a')).toThrow(/CHECK/i);
 
-      sqlite.close();
+      await postgres.close();
     });
 
-    it('tipo desconhecido, meta não positiva e estado inconsistente são irrepresentáveis', () => {
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
-      const db = sqlite.connection;
+    it('tipo desconhecido, meta não positiva e estado inconsistente são irrepresentáveis', async () => {
+      const postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      const db = createPostgresSyncDb(temp.schema);
 
       db.prepare(
         `INSERT INTO social_profiles
@@ -295,12 +300,13 @@ describe('Persistência dos desafios', () => {
       // E o caminho válido continua passando.
       insert({});
 
-      sqlite.close();
+      await postgres.close();
     });
 
-    it('não existe coluna de pontuação em nenhuma tabela de desafio (§82/§134)', () => {
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
+    it('não existe coluna de pontuação em nenhuma tabela de desafio (§82/§134)', async () => {
+      const postgres = postgresFor(configFor(temp.path));
+      await postgres.initialize();
+      const db = createPostgresSyncDb(temp.schema);
 
       const tables = [
         'challenges',
@@ -310,7 +316,7 @@ describe('Persistência dos desafios', () => {
       ];
       for (const table of tables) {
         const columns = (
-          sqlite.connection.pragma(`table_info(${table})`) as Array<{ name: string }>
+          db.pragma(`table_info(${table})`) as Array<{ name: string }>
         ).map((column) => column.name);
 
         for (const forbidden of ['score', 'progress', 'points', 'rank', 'winner', 'count']) {
@@ -323,14 +329,14 @@ describe('Persistência dos desafios', () => {
       }
 
       // E a tabela que guardaria um contador não existe.
-      const progressTable = sqlite.connection
+      const progressTable = db
         .prepare(
           `SELECT name FROM sqlite_master WHERE type='table' AND name = 'challenge_progress'`,
         )
         .get();
       expect(progressTable).toBeUndefined();
 
-      sqlite.close();
+      await postgres.close();
     });
   });
 
@@ -452,23 +458,20 @@ describe('Persistência dos desafios', () => {
       const { challengeId } = await createChallenge(app, igor, [joao]);
       await acceptChallenge(app, joao, challengeId);
 
-      const sqlite = sqliteFor(configFor(temp.path));
-      sqlite.initialize();
+      const db = createPostgresSyncDb(temp.schema);
 
       // Criar e aceitar um desafio não escreveu **uma linha** no protocolo de sync.
       for (const table of ['sync_entities', 'sync_changes', 'sync_mutations']) {
-        const count = sqlite.connection.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
-          n: number;
+        const count = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
+          n: number | string;
         };
-        expect({ table, n: count.n }).toEqual({ table, n: 0 });
+        expect({ table, n: Number(count.n) }).toEqual({ table, n: 0 });
       }
       // Nem no backup.
-      const backups = sqlite.connection
+      const backups = db
         .prepare('SELECT COUNT(*) AS n FROM backup_snapshots')
-        .get() as { n: number };
-      expect(backups.n).toBe(0);
-
-      sqlite.close();
+        .get() as { n: number | string };
+      expect(Number(backups.n)).toBe(0);
 
       // E o servidor recusa um push que tente declarar um desafio como entidade de sync.
       const push = await request(app.getHttpServer())

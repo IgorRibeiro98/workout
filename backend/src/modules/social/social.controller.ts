@@ -67,8 +67,8 @@ export class SocialController {
   @UseGuards(BearerAuthGuard)
   @Get('me')
   @HttpCode(HttpStatus.OK)
-  me(@Principal() principal: AuthenticatedPrincipal, @Req() request: Request): SocialMeResponse {
-    return this.service.me(principal, requestIdOf(request));
+  async me(@Principal() principal: AuthenticatedPrincipal, @Req() request: Request): Promise<SocialMeResponse> {
+    return await this.service.me(principal, requestIdOf(request));
   }
 
   /**
@@ -82,26 +82,26 @@ export class SocialController {
   @UseGuards(BearerAuthGuard)
   @Post('me/activate')
   @HttpCode(HttpStatus.OK)
-  activate(
+  async activate(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Body() body: unknown,
-  ): SocialProfileResponse {
+  ): Promise<SocialProfileResponse> {
     assertBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.activate(principal, requestIdOf(request), parseActivateRequest(body));
+    return await this.service.activate(principal, requestIdOf(request), parseActivateRequest(body));
   }
 
   /** Renomeia. Identidade (`socialId`, `friendCode`) não muda por `PATCH`, e nunca vai mudar. */
   @UseGuards(BearerAuthGuard)
   @Patch('me')
   @HttpCode(HttpStatus.OK)
-  updateProfile(
+  async updateProfile(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Body() body: unknown,
-  ): SocialProfileResponse {
+  ): Promise<SocialProfileResponse> {
     assertBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.updateProfile(
+    return await this.service.updateProfile(
       principal,
       requestIdOf(request),
       parseUpdateProfileRequest(body),
@@ -112,13 +112,13 @@ export class SocialController {
   @UseGuards(BearerAuthGuard)
   @Patch('me/privacy')
   @HttpCode(HttpStatus.OK)
-  updatePrivacy(
+  async updatePrivacy(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
     @Body() body: unknown,
-  ): SocialProfileResponse {
+  ): Promise<SocialProfileResponse> {
     assertBodyWithinLimit((request as RequestWithRawBody).rawBody);
-    return this.service.updatePrivacy(
+    return await this.service.updatePrivacy(
       principal,
       requestIdOf(request),
       parseUpdatePrivacyRequest(body),
@@ -135,22 +135,22 @@ export class SocialController {
   @UseGuards(BearerAuthGuard)
   @Post('me/disable')
   @HttpCode(HttpStatus.OK)
-  disable(
+  async disable(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
-  ): SocialProfileResponse {
-    return this.service.disable(principal, requestIdOf(request));
+  ): Promise<SocialProfileResponse> {
+    return await this.service.disable(principal, requestIdOf(request));
   }
 
   /** Reativa, com o mesmo `socialId` e o mesmo `friendCode`. */
   @UseGuards(BearerAuthGuard)
   @Post('me/enable')
   @HttpCode(HttpStatus.OK)
-  enable(
+  async enable(
     @Principal() principal: AuthenticatedPrincipal,
     @Req() request: Request,
-  ): SocialProfileResponse {
-    return this.service.enable(principal, requestIdOf(request));
+  ): Promise<SocialProfileResponse> {
+    return await this.service.enable(principal, requestIdOf(request));
   }
 }
 

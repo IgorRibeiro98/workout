@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 
 export interface LivenessResult {
   readonly status: 'ok';
@@ -25,17 +25,17 @@ export interface ReadinessResult {
 export class HealthService {
   constructor(
     @Inject(APP_CONFIG) private readonly config: AppConfig,
-    private readonly sqlite: SqliteService,
+    private readonly postgres: PostgresService,
   ) {}
 
   liveness(): LivenessResult {
     return { status: 'ok' };
   }
 
-  readiness(): ReadinessResult {
+  async readiness(): Promise<ReadinessResult> {
     // Se a injeção chegou até aqui, a configuração obrigatória passou pela validação do bootstrap.
-    const configLoaded = this.config.databasePath.length > 0;
-    const database = this.sqlite.checkHealth();
+    const configLoaded = this.config.databaseUrl.length > 0;
+    const database = await this.postgres.checkHealth();
 
     const healthy = configLoaded && database.reachable && database.migrationsUpToDate;
 

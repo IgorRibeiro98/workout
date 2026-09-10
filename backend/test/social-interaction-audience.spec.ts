@@ -358,7 +358,7 @@ describe('T17.12 — interações por audiência', () => {
         // As duas que existem continuam lá: uma por audiência.
         const rows = db
           .prepare(
-            `SELECT audience_type AS audience, group_id AS groupId, type
+            `SELECT audience_type AS audience, group_id AS "groupId", type
                FROM social_checkin_reactions
               WHERE checkin_id = ? AND reactor_uid = ?
               ORDER BY audience_type`,
@@ -920,7 +920,7 @@ describe('T17.12 — interações por audiência', () => {
       s.inDatabase((db) => {
         const row = db
           .prepare(
-            `SELECT audience_type AS audience, group_id AS groupId
+            `SELECT audience_type AS audience, group_id AS "groupId"
                FROM social_checkin_comments WHERE checkin_id = ?`,
           )
           .get(checkInId) as { audience: string; groupId: string | null };

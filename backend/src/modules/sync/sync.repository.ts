@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SqliteService } from '../../database/sqlite.service';
+import { PostgresService } from '../../database/postgres.service';
 import type { SyncChangeResponse, SyncEntityType, SyncOperation } from './sync.contract';
 
 /** O estado atual de um agregado no servidor. */
@@ -73,95 +73,86 @@ export interface AppliedMutation {
 }
 
 /**
- * A persistência do sync (T16.6).
+ * A persistência do sync (T16.6 / T18.0 PostgreSQL).
  *
  * Três garantias vivem aqui, e nenhuma delas é "o código toma cuidado":
  *
  * 1. **atomicidade por mutação** — `sync_entities`, `sync_changes` e `sync_mutations` são
- *    escritas na **mesma** transação SQLite. Atualizar a entidade e falhar ao registrar a mudança
- *    deixaria os outros aparelhos sem nunca saber da alteração; registrar o ledger sem aplicar
- *    faria um reenvio devolver um resultado que não existe;
- * 2. **sequência do servidor** — `server_sequence` é `AUTOINCREMENT`, gerada pelo banco dentro da
+ *    escritas na **mesma** transação PostgreSQL.
+ * 2. **sequência do servidor** — `server_sequence` é `BIGSERIAL`, gerada pelo banco dentro da
  *    transação. Ela nunca vem de relógio, de contador em memória nem de `updated_at`;
- * 3. **isolamento por conta** — `owner_uid` está na cláusula `WHERE` de toda consulta, e não em
- *    uma verificação depois da leitura. A consulta que não pode devolver dado de outra conta é a
- *    que nunca o carrega.
+ * 3. **isolamento por conta** — `owner_uid` está na cláusula `WHERE` de toda consulta.
  */
 @Injectable()
 export class SyncRepository {
-  constructor(private readonly sqlite: SqliteService) {}
+  constructor(private readonly db: PostgresService) {}
 
   /** O estado atual de um agregado **daquela conta**. */
-  findEntity(ownerUid: string, entityType: string, entitySyncId: string): StoredSyncEntity | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
-                last_server_sequence, payload_hash, deleted
-         FROM sync_entities
-         WHERE owner_uid = ? AND entity_type = ? AND entity_sync_id = ?`,
-      )
-      .get(ownerUid, entityType, entitySyncId) as EntityRow | undefined;
+  async findEntity(
+    ownerUid: string,
+    entityType: string,
+    entitySyncId: string,
+  ): Promise<StoredSyncEntity | null> {
+    const res = await this.db.query<EntityRow>(
+      `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
+              last_server_sequence, payload_hash, deleted
+       FROM sync_entities
+       WHERE owner_uid = $1 AND entity_type = $2 AND entity_sync_id = $3`,
+      [ownerUid, entityType, entitySyncId],
+    );
+    const row = res.rows[0];
     if (!row) return null;
     return {
       entityType: row.entity_type as SyncEntityType,
       entitySyncId: row.entity_sync_id,
       entitySchemaVersion: row.entity_schema_version,
       serverRevision: row.server_revision,
-      lastServerSequence: row.last_server_sequence,
+      lastServerSequence: Number(row.last_server_sequence),
       payloadHash: row.payload_hash,
-      deleted: row.deleted === 1,
+      deleted: Boolean(row.deleted),
     };
   }
 
   /**
    * O estado atual de um agregado **daquela conta**, com o conteúdo (T16.7.1).
-   *
-   * `owner_uid` está no `WHERE`, e não numa verificação depois da leitura: a consulta que não pode
-   * devolver dado de outra conta é a que nunca o carrega. Uma identidade que existe para outro
-   * dono devolve `null` aqui, e o serviço a transforma em `404` — indistinguível de inexistente.
-   *
-   * **Somente leitura.** Nenhuma revision é gasta, nenhuma linha é anexada a `sync_changes` e
-   * nenhuma entrada nasce em `sync_mutations`.
    */
-  findEntitySnapshot(
+  async findEntitySnapshot(
     ownerUid: string,
     entityType: string,
     entitySyncId: string,
-  ): StoredSyncEntitySnapshot | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
-                last_server_sequence, payload, payload_hash, deleted
-         FROM sync_entities
-         WHERE owner_uid = ? AND entity_type = ? AND entity_sync_id = ?`,
-      )
-      .get(ownerUid, entityType, entitySyncId) as (EntityRow & { payload: string }) | undefined;
+  ): Promise<StoredSyncEntitySnapshot | null> {
+    const res = await this.db.query<EntityRow & { payload: string }>(
+      `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
+              last_server_sequence, payload, payload_hash, deleted
+       FROM sync_entities
+       WHERE owner_uid = $1 AND entity_type = $2 AND entity_sync_id = $3`,
+      [ownerUid, entityType, entitySyncId],
+    );
+    const row = res.rows[0];
     if (!row) return null;
-    const deleted = row.deleted === 1;
+    const deleted = Boolean(row.deleted);
     return {
       entityType: row.entity_type as SyncEntityType,
       entitySyncId: row.entity_sync_id,
       entitySchemaVersion: row.entity_schema_version,
       serverRevision: row.server_revision,
-      lastServerSequence: row.last_server_sequence,
+      lastServerSequence: Number(row.last_server_sequence),
       payloadHash: row.payload_hash,
       deleted,
-      // Um tombstone esvazia payload e hash na própria linha. Devolver `''` deixaria o cliente
-      // decidir o que uma string vazia significa; `null` só tem uma leitura possível.
       payload: deleted || row.payload === '' ? null : row.payload,
     };
   }
 
   /** A tentativa já registrada para aquele `clientMutationId`, se houver. */
-  findMutation(ownerUid: string, clientMutationId: string): StoredMutation | null {
-    const row = this.sqlite.connection
-      .prepare(
-        `SELECT client_mutation_id, entity_type, entity_sync_id, operation, payload_hash,
-                result_revision, result_sequence
-         FROM sync_mutations
-         WHERE owner_uid = ? AND client_mutation_id = ?`,
-      )
-      .get(ownerUid, clientMutationId) as MutationRow | undefined;
+  async findMutation(ownerUid: string, clientMutationId: string): Promise<StoredMutation | null> {
+    const res = await this.db.query<MutationRow>(
+      `SELECT client_mutation_id, entity_type, entity_sync_id, operation, payload_hash,
+              result_revision, result_sequence
+       FROM sync_mutations
+       WHERE owner_uid = $1 AND client_mutation_id = $2`,
+      [ownerUid, clientMutationId],
+    );
+    const row = res.rows[0];
     if (!row) return null;
     return {
       clientMutationId: row.client_mutation_id,
@@ -170,29 +161,22 @@ export class SyncRepository {
       operation: row.operation,
       payloadHash: row.payload_hash,
       resultRevision: row.result_revision,
-      resultSequence: row.result_sequence,
+      resultSequence: Number(row.result_sequence),
     };
   }
 
   /**
    * Aplica a mutação: estado atual, log de mudança e ledger — **em uma transação**.
-   *
-   * A ordem dentro dela não é estética. A mudança é anexada depois de a entidade existir, e o
-   * ledger depois das duas, porque é ele que autoriza um reenvio a devolver `ALREADY_APPLIED`:
-   * um ledger gravado antes descreveria um resultado que a transação ainda podia desfazer.
    */
-  applyMutation(input: ApplyMutationInput): AppliedMutation {
-    const db = this.sqlite.connection;
-
-    const transaction = db.transaction((): AppliedMutation => {
-      const change = db
-        .prepare(
-          `INSERT INTO sync_changes
-             (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-              operation, payload, payload_hash, origin_device_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+  async applyMutation(input: ApplyMutationInput): Promise<AppliedMutation> {
+    return this.db.transaction(async (client) => {
+      const changeRes = await client.query<{ server_sequence: string | number }>(
+        `INSERT INTO sync_changes
+           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+            operation, payload, payload_hash, origin_device_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING server_sequence`,
+        [
           input.ownerUid,
           input.entityType,
           input.entitySyncId,
@@ -203,75 +187,68 @@ export class SyncRepository {
           input.payloadHash,
           input.deviceId,
           input.now,
-        );
-      const serverSequence = Number(change.lastInsertRowid);
+        ],
+      );
+      const serverSequence = Number(changeRes.rows[0].server_sequence);
 
-      // `INSERT ... ON CONFLICT DO UPDATE` e não "verificar e então escrever": a constraint de
-      // identidade é quem resolve duas requisições simultâneas, não uma checagem em código.
-      db.prepare(
+      await client.query(
         `INSERT INTO sync_entities
            (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
             last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
-           entity_schema_version = excluded.entity_schema_version,
-           server_revision       = excluded.server_revision,
-           last_server_sequence  = excluded.last_server_sequence,
-           payload               = excluded.payload,
-           payload_hash          = excluded.payload_hash,
-           origin_device_id      = excluded.origin_device_id,
-           updated_at            = excluded.updated_at
-         WHERE sync_entities.server_revision < excluded.server_revision
-           -- Ressurreição é impossível no banco, e não só por disciplina do serviço: um UPSERT
-           -- que chegasse a um tombstone não atualiza linha nenhuma (T16.7).
-           AND sync_entities.deleted = 0`,
-      ).run(
-        input.ownerUid,
-        input.entityType,
-        input.entitySyncId,
-        input.entitySchemaVersion,
-        input.nextRevision,
-        serverSequence,
-        input.canonicalPayload,
-        input.payloadHash,
-        input.deviceId,
-        input.now,
-        input.now,
+           entity_schema_version = EXCLUDED.entity_schema_version,
+           server_revision       = EXCLUDED.server_revision,
+           last_server_sequence  = EXCLUDED.last_server_sequence,
+           payload               = EXCLUDED.payload,
+           payload_hash          = EXCLUDED.payload_hash,
+           origin_device_id      = EXCLUDED.origin_device_id,
+           updated_at            = EXCLUDED.updated_at
+         WHERE sync_entities.server_revision < EXCLUDED.server_revision
+           AND sync_entities.deleted = FALSE`,
+        [
+          input.ownerUid,
+          input.entityType,
+          input.entitySyncId,
+          input.entitySchemaVersion,
+          input.nextRevision,
+          serverSequence,
+          input.canonicalPayload,
+          input.payloadHash,
+          input.deviceId,
+          input.now,
+          input.now,
+        ],
       );
 
-      db.prepare(
+      await client.query(
         `INSERT INTO sync_mutations
            (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
             base_revision, result_revision, result_sequence, payload_hash, applied_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        input.ownerUid,
-        input.clientMutationId,
-        input.deviceId,
-        input.entityType,
-        input.entitySyncId,
-        input.operation,
-        input.baseRevision,
-        input.nextRevision,
-        serverSequence,
-        input.payloadHash,
-        input.now,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          input.ownerUid,
+          input.clientMutationId,
+          input.deviceId,
+          input.entityType,
+          input.entitySyncId,
+          input.operation,
+          input.baseRevision,
+          input.nextRevision,
+          serverSequence,
+          input.payloadHash,
+          input.now,
+        ],
       );
 
       return { serverRevision: input.nextRevision, serverSequence };
     });
-
-    return transaction();
   }
 
   /**
    * Registra no ledger uma tentativa cujo resultado **já existia**.
-   *
-   * Acontece quando um `clientMutationId` novo carrega exatamente o conteúdo que o servidor já
-   * tem: nada é aplicado, nenhuma revision é gasta e nenhuma mudança é anexada ao log — mas a
-   * tentativa passa a ter resposta guardada, para que um reenvio dela não recomece o raciocínio.
    */
-  recordConverged(input: {
+  async recordConverged(input: {
     readonly ownerUid: string;
     readonly deviceId: string;
     readonly clientMutationId: string;
@@ -283,15 +260,14 @@ export class SyncRepository {
     readonly resultRevision: number;
     readonly resultSequence: number;
     readonly now: number;
-  }): void {
-    this.sqlite.connection
-      .prepare(
-        `INSERT OR IGNORE INTO sync_mutations
-           (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
-            base_revision, result_revision, result_sequence, payload_hash, applied_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  }): Promise<void> {
+    await this.db.query(
+      `INSERT INTO sync_mutations
+         (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
+          base_revision, result_revision, result_sequence, payload_hash, applied_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (owner_uid, client_mutation_id) DO NOTHING`,
+      [
         input.ownerUid,
         input.clientMutationId,
         input.deviceId,
@@ -303,34 +279,22 @@ export class SyncRepository {
         input.resultSequence,
         input.payloadHash,
         input.now,
-      );
+      ],
+    );
   }
 
   /**
-   * Marca a entidade como excluída — tombstone, change log e ledger, **na mesma transação**
-   * (T16.7).
-   *
-   * A linha de `sync_entities` continua existindo, uma `revision` adiante: é ela que responde
-   * "esta identidade morreu" para todo push futuro. O payload é esvaziado porque um tombstone não
-   * afirma conteúdo nenhum — e o estado anterior continua no change log, nas sequências que vieram
-   * antes, para quem ainda não as leu.
-   *
-   * A mudança anexada ao log carrega `payload = 'null'`: o outro aparelho precisa da identidade e
-   * da `serverRevision`, e mandar de volta o conteúdo do que foi apagado só duplicaria dado
-   * pessoal sem ninguém ter o que fazer com ele.
+   * Marca a entidade como excluída — tombstone, change log e ledger, **na mesma transação** (T16.7).
    */
-  applyDelete(input: ApplyDeleteInput): AppliedMutation {
-    const db = this.sqlite.connection;
-
-    const transaction = db.transaction((): AppliedMutation => {
-      const change = db
-        .prepare(
-          `INSERT INTO sync_changes
-             (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-              operation, payload, payload_hash, origin_device_id, created_at)
-           VALUES (?, ?, ?, ?, ?, 'DELETE', 'null', '', ?, ?)`,
-        )
-        .run(
+  async applyDelete(input: ApplyDeleteInput): Promise<AppliedMutation> {
+    return this.db.transaction(async (client) => {
+      const changeRes = await client.query<{ server_sequence: string | number }>(
+        `INSERT INTO sync_changes
+           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+            operation, payload, payload_hash, origin_device_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, 'DELETE', 'null', '', $6, $7)
+         RETURNING server_sequence`,
+        [
           input.ownerUid,
           input.entityType,
           input.entitySyncId,
@@ -338,124 +302,110 @@ export class SyncRepository {
           input.nextRevision,
           input.deviceId,
           input.now,
-        );
-      const serverSequence = Number(change.lastInsertRowid);
+        ],
+      );
+      const serverSequence = Number(changeRes.rows[0].server_sequence);
 
-      // `INSERT ... ON CONFLICT DO UPDATE` de novo, e não `UPDATE`: uma exclusão pode chegar para
-      // uma identidade que este servidor nunca viu (dois aparelhos com o mesmo dataset restaurado,
-      // e o primeiro push é o delete). Sem o tombstone nesse caso, o outro aparelho recriaria a
-      // entidade depois — que é exatamente a ressurreição que a T16.7 existe para impedir.
-      db.prepare(
+      await client.query(
         `INSERT INTO sync_entities
            (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
             last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at,
             deleted, deleted_at, deleted_by_device_id)
-         VALUES (?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 1, ?, ?)
+         VALUES ($1, $2, $3, $4, $5, $6, '', '', $7, $8, $9, TRUE, $10, $11)
          ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
-           server_revision      = excluded.server_revision,
-           last_server_sequence = excluded.last_server_sequence,
+           server_revision      = EXCLUDED.server_revision,
+           last_server_sequence = EXCLUDED.last_server_sequence,
            payload              = '',
            payload_hash         = '',
-           origin_device_id     = excluded.origin_device_id,
-           updated_at           = excluded.updated_at,
-           deleted              = 1,
-           deleted_at           = excluded.deleted_at,
-           deleted_by_device_id = excluded.deleted_by_device_id
-         WHERE sync_entities.server_revision < excluded.server_revision`,
-      ).run(
-        input.ownerUid,
-        input.entityType,
-        input.entitySyncId,
-        input.entitySchemaVersion,
-        input.nextRevision,
-        serverSequence,
-        input.deviceId,
-        input.now,
-        input.now,
-        input.now,
-        input.deviceId,
+           origin_device_id     = EXCLUDED.origin_device_id,
+           updated_at           = EXCLUDED.updated_at,
+           deleted              = TRUE,
+           deleted_at           = EXCLUDED.deleted_at,
+           deleted_by_device_id = EXCLUDED.deleted_by_device_id
+         WHERE sync_entities.server_revision < EXCLUDED.server_revision`,
+        [
+          input.ownerUid,
+          input.entityType,
+          input.entitySyncId,
+          input.entitySchemaVersion,
+          input.nextRevision,
+          serverSequence,
+          input.deviceId,
+          input.now,
+          input.now,
+          input.now,
+          input.deviceId,
+        ],
       );
 
-      db.prepare(
+      await client.query(
         `INSERT INTO sync_mutations
            (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
             base_revision, result_revision, result_sequence, payload_hash, applied_at)
-         VALUES (?, ?, ?, ?, ?, 'DELETE', ?, ?, ?, '', ?)`,
-      ).run(
-        input.ownerUid,
-        input.clientMutationId,
-        input.deviceId,
-        input.entityType,
-        input.entitySyncId,
-        input.baseRevision,
-        input.nextRevision,
-        serverSequence,
-        input.now,
+         VALUES ($1, $2, $3, $4, $5, 'DELETE', $6, $7, $8, '', $9)`,
+        [
+          input.ownerUid,
+          input.clientMutationId,
+          input.deviceId,
+          input.entityType,
+          input.entitySyncId,
+          input.baseRevision,
+          input.nextRevision,
+          serverSequence,
+          input.now,
+        ],
       );
 
       return { serverRevision: input.nextRevision, serverSequence };
     });
-
-    return transaction();
   }
 
   /**
-   * A **menor** sequência que o servidor ainda guarda desta conta, ou `0` se ela não tem mudanças.
-   *
-   * É contra ela que um cursor expirado é reconhecido. Hoje nada compacta o log, então o valor é
-   * sempre a primeira mudança da conta — e a verificação só dispara se o banco do servidor for
-   * restaurado de uma cópia mais nova que o aparelho.
+   * A menor sequência que o servidor ainda guarda desta conta, ou `0` se ela não tem mudanças.
    */
-  oldestSequence(ownerUid: string): number {
-    const row = this.sqlite.connection
-      .prepare(
-        'SELECT COALESCE(MIN(server_sequence), 0) AS min FROM sync_changes WHERE owner_uid = ?',
-      )
-      .get(ownerUid) as { min: number } | undefined;
-    return row?.min ?? 0;
+  async oldestSequence(ownerUid: string): Promise<number> {
+    const res = await this.db.query<{ min: string | number | null }>(
+      'SELECT COALESCE(MIN(server_sequence), 0) AS min FROM sync_changes WHERE owner_uid = $1',
+      [ownerUid],
+    );
+    return Number(res.rows[0]?.min ?? 0);
   }
 
   /**
    * A maior sequência já emitida pelo servidor.
-   *
-   * Global, e não por conta: `server_sequence` é uma coluna `AUTOINCREMENT` única, e é contra ela
-   * que um cursor impossível é reconhecido. Ela não vaza dado de outra conta — é um número.
    */
-  maxSequence(): number {
-    const row = this.sqlite.connection
-      .prepare('SELECT COALESCE(MAX(server_sequence), 0) AS max FROM sync_changes')
-      .get() as { max: number } | undefined;
-    return row?.max ?? 0;
+  async maxSequence(): Promise<number> {
+    const res = await this.db.query<{ max: string | number | null }>(
+      'SELECT COALESCE(MAX(server_sequence), 0) AS max FROM sync_changes',
+    );
+    return Number(res.rows[0]?.max ?? 0);
   }
 
   /**
    * A página de mudanças **daquela conta** depois do cursor.
-   *
-   * Lê `limit + 1` para saber se há mais sem uma segunda consulta de contagem.
    */
-  changesAfter(
+  async changesAfter(
     ownerUid: string,
     cursor: number,
     limit: number,
-  ): { changes: SyncChangeResponse[]; hasMore: boolean } {
-    const rows = this.sqlite.connection
-      .prepare(
-        `SELECT server_sequence, entity_type, entity_sync_id, entity_schema_version,
-                server_revision, operation, payload, payload_hash, origin_device_id, created_at
-         FROM sync_changes
-         WHERE owner_uid = ? AND server_sequence > ?
-         ORDER BY server_sequence ASC
-         LIMIT ?`,
-      )
-      .all(ownerUid, cursor, limit + 1) as ChangeRow[];
-
+  ): Promise<{ changes: SyncChangeResponse[]; hasMore: boolean }> {
+    const res = await this.db.query<ChangeRow>(
+      `SELECT server_sequence, entity_type, entity_sync_id, entity_schema_version,
+              server_revision, operation, payload, payload_hash, origin_device_id, created_at
+       FROM sync_changes
+       WHERE owner_uid = $1 AND server_sequence > $2
+       ORDER BY server_sequence ASC
+       LIMIT $3`,
+      [ownerUid, cursor, limit + 1],
+    );
+    const rows = res.rows;
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
     return {
       hasMore,
       changes: page.map((row) => ({
-        serverSequence: row.server_sequence,
+        serverSequence: Number(row.server_sequence),
         entityType: row.entity_type as SyncEntityType,
         entitySyncId: row.entity_sync_id,
         entitySchemaVersion: row.entity_schema_version,
@@ -463,20 +413,19 @@ export class SyncRepository {
         operation: row.operation as SyncOperation,
         payloadHash: row.payload_hash,
         originDeviceId: row.origin_device_id,
-        createdAt: row.created_at,
-        // O texto canônico guardado volta como valor JSON. O que o cliente confere é o
-        // `payloadHash`, calculado sobre a forma canônica — reserializar aqui não o afeta.
+        createdAt: Number(row.created_at),
         payload: JSON.parse(row.payload) as unknown,
       })),
     };
   }
 
   /** Quantos agregados a conta tem no servidor. Diagnóstico e teste. */
-  countEntities(ownerUid: string): number {
-    const row = this.sqlite.connection
-      .prepare('SELECT COUNT(*) AS total FROM sync_entities WHERE owner_uid = ?')
-      .get(ownerUid) as { total: number } | undefined;
-    return row?.total ?? 0;
+  async countEntities(ownerUid: string): Promise<number> {
+    const res = await this.db.query<{ total: string | number }>(
+      'SELECT COUNT(*) AS total FROM sync_entities WHERE owner_uid = $1',
+      [ownerUid],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 }
 
@@ -485,9 +434,9 @@ interface EntityRow {
   entity_sync_id: string;
   entity_schema_version: number;
   server_revision: number;
-  last_server_sequence: number;
+  last_server_sequence: string | number;
   payload_hash: string;
-  deleted: number;
+  deleted: boolean | number;
 }
 
 interface MutationRow {
@@ -497,11 +446,11 @@ interface MutationRow {
   operation: string;
   payload_hash: string;
   result_revision: number;
-  result_sequence: number;
+  result_sequence: string | number;
 }
 
 interface ChangeRow {
-  server_sequence: number;
+  server_sequence: string | number;
   entity_type: string;
   entity_sync_id: string;
   entity_schema_version: number;
@@ -510,5 +459,5 @@ interface ChangeRow {
   payload: string;
   payload_hash: string;
   origin_device_id: string;
-  created_at: number;
+  created_at: string | number;
 }

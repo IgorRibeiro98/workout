@@ -6,16 +6,6 @@ import type { ReactionType, WorkoutCheckInDto } from './workout-checkin.contract
 
 /**
  * Uma linha pronta para virar `WorkoutCheckInDto`.
- *
- * É o menor denominador comum entre o Feed de amigos (`FeedRow`), o detalhe
- * (`AccessibleCheckIn`) e o feed de Squad (`GroupFeedRow`) — os três produzem exatamente estes
- * campos, e é por isso que os três podem passar pelo mesmo projetor.
- *
- * [canInteract] não é um campo do banco: ele é o resultado da política de acesso, e desde a T17.12
- * ele é resolvido **dentro de uma audiência** (§76). `true` quando o viewer pode reagir e comentar
- * naquela audiência — no Feed de amigos porque alcança o autor por relação direta; no feed de um
- * Squad porque é membro ativo dele, ainda que não haja amizade nenhuma. `false` sobra para um caso
- * só: o detalhe aberto sem contexto por quem chega à publicação apenas por um Squad.
  */
 export interface ProjectableCheckIn {
   readonly checkInId: string;
@@ -29,54 +19,6 @@ export interface ProjectableCheckIn {
 
 /**
  * A **única** montagem de `WorkoutCheckInDto` do servidor (T17.9 §131/§132; T17.11 §50/§77).
- *
- * ## Por que ela virou um provider na T17.11
- *
- * Na T17.9 este código era um método privado de `WorkoutCheckInService`, e havia uma superfície
- * só que o chamava. A T17.11 acrescenta a segunda: o feed de um Squad é a **mesma** publicação
- * lida por outra audiência (§50), e um card montado por um segundo caminho divergiria do primeiro
- * no próximo campo novo — que é exatamente o que "não existe um segundo Feed authority" proíbe.
- *
- * Extrair para cá não muda o que o Feed de amigos devolve: ele passa a chamar o que já chamava,
- * pelo nome de fora em vez do de dentro.
- *
- * ## Por que quatro consultas, e não quatro por item (§121 da T17.11, §131 da T17.9)
- *
- * A tentação é resolver cada card sozinho: para cada check-in, buscar a foto, contar as reações,
- * descobrir a do viewer e contar os comentários. Uma página de 20 itens viraria 80 consultas, e o
- * custo cresceria com o tamanho da página.
- *
- * Aqui a página inteira vai junto em cada agregação: uma consulta de mídia, uma de contagem de
- * reações, uma da reação do viewer e uma de contagem de comentários. Quatro, independentemente de
- * a página ter 1 ou 50 itens.
- *
- * ## As contagens são **do viewer**, não do post (T17.9 §69/§92)
- *
- * `countReactionsForCheckIns` e `countCommentsForCheckIns` recebem o `viewerUid` e filtram por
- * ele. Não existe caminho aqui que produza um número global: o cenário de §69 — A reage ao post de
- * C, A bloqueou B, B lê o post de C — precisa que a participação de A não transpareça nem como
- * número, e um `COUNT(*)` sem viewer vazaria exatamente isso.
- *
- * ## As contagens são da **audiência** que está sendo lida (T17.12 §37/§38/§63/§64)
- *
- * O mesmo check-in pode estar no Feed de amigos e em vários Squads, e cada um desses lugares tem a
- * própria conversa (§3). Por isso [project] recebe a audiência: um card lido no Squad X mostra 🔥3
- * porque três pessoas reagiram **em X**, e a reação que alguém deixou no Feed de amigos não entra
- * nesse número — nem no contrário (§38/§64).
- *
- * A audiência não é escolhida aqui: ela chega já resolvida por `WorkoutCheckInContextResolver` ou
- * pela própria rota que está sendo servida (o feed de amigos é `FRIEND`; o feed do Squad X é
- * `GROUP(X)`). Este projetor não decide autorização — ele só não tem como misturar duas audiências,
- * porque recebe **uma**.
- *
- * ## Um item sem direito de interação vem zerado
- *
- * `canInteract: false` acontece em um caso só depois da T17.12: o detalhe de um check-in aberto
- * **sem** contexto, alcançado apenas por um Squad (T17.11 §70). Ali não existe audiência definida —
- * o servidor não tem como saber de qual Squad a tela está falando —, e devolver a contagem de uma
- * audiência escolhida por sorteio seria pior do que não devolver nenhuma. Quando a tela informa o
- * contexto (`?context=GROUP&groupId=X`), esse caso desaparece: o item vem com as contagens de X e
- * com interação liberada para qualquer membro ativo (§76).
  */
 @Injectable()
 export class CheckInProjector {
@@ -85,23 +27,22 @@ export class CheckInProjector {
     private readonly interactions: CheckInInteractionRepository,
   ) {}
 
-  project(
+  async project(
     viewerUid: string,
     rows: readonly ProjectableCheckIn[],
     audience: InteractionAudience,
-  ): WorkoutCheckInDto[] {
+  ): Promise<WorkoutCheckInDto[]> {
     if (rows.length === 0) {
       return [];
     }
 
     const ids = rows.map((row) => row.checkInId);
+    const attachedMedia = await this.media.findAttachedForCheckIns(ids);
     const mediaById = new Map(
-      this.media
-        .findAttachedForCheckIns(ids)
-        .map((item) => [
-          item.checkInId,
-          { mediaId: item.mediaId, width: item.width, height: item.height },
-        ]),
+      attachedMedia.map((item) => [
+        item.checkInId,
+        { mediaId: item.mediaId, width: item.width, height: item.height },
+      ]),
     );
 
     // Só os itens com direito de interação entram nas agregações. Além de honrar §70, isso evita
@@ -113,27 +54,30 @@ export class CheckInProjector {
     const commentCounts = new Map<string, number>();
 
     if (interactableIds.length > 0) {
-      for (const row of this.interactions.countReactionsForCheckIns(
+      const reactionRows = await this.interactions.countReactionsForCheckIns(
         viewerUid,
         interactableIds,
         audience,
-      )) {
+      );
+      for (const row of reactionRows) {
         const bucket = reactionTotals.get(row.checkInId) ?? {};
         bucket[row.type] = row.total;
         reactionTotals.set(row.checkInId, bucket);
       }
-      for (const [id, type] of this.interactions.findViewerReactions(
+      const reactionsMap = await this.interactions.findViewerReactions(
         viewerUid,
         interactableIds,
         audience,
-      )) {
+      );
+      for (const [id, type] of reactionsMap) {
         viewerReactions.set(id, type);
       }
-      for (const [id, count] of this.interactions.countCommentsForCheckIns(
+      const commentsMap = await this.interactions.countCommentsForCheckIns(
         viewerUid,
         interactableIds,
         audience,
-      )) {
+      );
+      for (const [id, count] of commentsMap) {
         commentCounts.set(id, count);
       }
     }
