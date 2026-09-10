@@ -281,6 +281,44 @@ require_database_url() {
     || fail "DATABASE_URL não encontrada (nem SPARK_DATABASE_URL, nem DATABASE_URL, nem ${SPARK_COMPOSE_DIR}/.env)"
 }
 
+# O nome do banco (o pathname) de uma connection string PostgreSQL (T18.0.3 P0).
+#
+#   postgresql://usuario:senha@host:porta/NOME_DO_BANCO?parametro=valor
+#
+# Só o suficiente para o que `same_postgres_database` precisa: tudo depois do primeiro `/` que
+# aparece **depois** da autoridade (usuário/senha/host/porta), sem query string nem fragmento.
+# Devolve vazio quando a URL não tem path — connection strings sem `/dbname` existem (o driver usa
+# o banco padrão do papel), e "vazio" não pode ser tratado como igual a outro "vazio": a chamadora
+# decide o que fazer com isso.
+pg_url_database() {
+  local url="$1"
+  local rest="${url#*://}"
+  local authority="${rest%%/*}"
+  local after_authority="${rest#"$authority"}"
+  local path="${after_authority#/}"
+  path="${path%%\?*}"
+  path="${path%%#*}"
+  printf '%s' "$path"
+}
+
+# Dois endereços PostgreSQL podem ser o MESMO banco (T18.0.3 P0)?
+#
+# Comparação de string pura não basta: no Neon, o endpoint pooled (`ep-xxx-pooler.../spark`) e o
+# direto (`ep-xxx.../spark`) são hosts **diferentes** que servem o **mesmo** banco. A defesa aqui é
+# deliberadamente conservadora — nomes de banco iguais são tratados como o mesmo banco mesmo com
+# hosts diferentes. Um falso positivo (recusar um ensaio legítimo porque duas VPS distintas usam o
+# nome "spark" por convenção) é um incômodo que o operador contorna nomeando o banco descartável de
+# outro jeito; um falso negativo (`pg_restore --clean` sobre produção) não tem contorno.
+same_postgres_database() {
+  local url_a="$1" url_b="$2"
+  [ "$url_a" = "$url_b" ] && return 0
+
+  local db_a db_b
+  db_a="$(pg_url_database "$url_a")"
+  db_b="$(pg_url_database "$url_b")"
+  [ -n "$db_a" ] && [ -n "$db_b" ] && [ "$db_a" = "$db_b" ]
+}
+
 # Executa um script de shell com as ferramentas do PostgreSQL contra uma connection string.
 #
 #   pg_run <connection-url> <script> [argumentos extras do docker run…]
@@ -290,12 +328,18 @@ require_database_url() {
 # (Neon), um PostgreSQL local na porta 5432 ou o serviço do CI —, e uma rede de bridge traduziria
 # `localhost` para o container errado. `--user` é quem chamou o script: um dump escrito num
 # diretório montado precisa nascer pertencendo ao operador, sem `chown` depois.
+#
+# `-e SPARK_PG_CONN` (sem `=valor`) e não `-e "SPARK_PG_CONN=${url}"` (T18.0.3 P1): a segunda forma
+# grava a connection string — com a senha — no argv do processo `docker`, visível para qualquer um
+# que rode `ps` na máquina. A primeira só declara que a variável deve atravessar para o container, e
+# o valor vem do ambiente do próprio comando `docker run` (`SPARK_PG_CONN="$url" docker run ...`),
+# nunca da linha de comando.
 pg_run() {
   local url="$1" script="$2"
   shift 2
-  docker run --rm --network host \
+  SPARK_PG_CONN="$url" docker run --rm --network host \
     --user "$(id -u):$(id -g)" \
-    -e "SPARK_PG_CONN=${url}" \
+    -e SPARK_PG_CONN \
     "$@" \
     --entrypoint sh "$SPARK_PG_TOOLS_IMAGE" -c "$script"
 }

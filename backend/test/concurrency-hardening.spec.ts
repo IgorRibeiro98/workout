@@ -17,6 +17,7 @@ import * as aiFixtures from './support/ai-fixtures';
 import { programPayload, pushBody, uuid } from './support/sync-fixtures';
 import { withClientBackupId } from './support/backup-fixtures';
 import { FriendshipRepository } from '../src/modules/social/friendship.repository';
+import { BlockService } from '../src/modules/social/block.service';
 import { MIGRATION_ADVISORY_LOCK_KEY } from '../src/database/database.constants';
 
 const TOKEN_A = 'token-user-a';
@@ -826,6 +827,155 @@ describe('T18.0.1 Concurrency Hardening Suite', () => {
         expect(state.friends).toBe(true);
         expect(state.requests).toHaveLength(1);
         expect(state.requests[0].status).toBe('ACCEPTED');
+      }
+    });
+
+    // --- unificação do lock com bloqueio (T18.0.3) --------------------------------------------
+    //
+    // `blockUser` passou a compartilhar o mesmo `lockRelationshipPair` que `sendRequest`,
+    // `acceptRequest`, `resolveRequest` e `removeFriendship` já usavam, e block+limpeza viraram
+    // uma única transação. O invariante final, em qualquer interleaving:
+    //
+    //   um par bloqueado nunca termina com friendship ativa NEM friend request PENDING criada
+    //   pela mesma corrida.
+    //
+    // `sendRequest` também passou a reler `social_blocks` sob o lock (T18.0.3): sem isso, um
+    // bloqueio que já tivesse commitado — e cuja limpeza já rodou, sem nada para limpar — seria
+    // invisível para um `sendRequest` que corresse depois, e criaria um pedido novo que nenhuma
+    // limpeza futura alcançaria.
+
+    async function socialBlockCount(
+      postgres: PostgresService,
+      blockerUid: string,
+      blockedUid: string,
+    ) {
+      const res = await postgres.query<{ count: string | number }>(
+        `SELECT COUNT(*) AS count FROM social_blocks WHERE blocker_uid = $1 AND blocked_uid = $2`,
+        [blockerUid, blockedUid],
+      );
+      return Number(res.rows[0].count);
+    }
+
+    it('block × send: nunca sobra PENDING nem amizade com o par bloqueado', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+      const blockService = app.get(BlockService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+
+        const [sendOutcome] = await Promise.all([
+          repo.sendRequest({ requestId: uuid(), requesterUid: a, recipientUid: b, now }),
+          blockService.blockUser(a, `soc-${b}`),
+        ]);
+
+        expect(['CREATED', 'BLOCKED']).toContain(sendOutcome.kind);
+
+        const state = await pairState(postgres, repo, a, b);
+        expect(state.friends).toBe(false);
+        expect(state.requests.filter((r) => r.status === 'PENDING')).toHaveLength(0);
+        expect(await socialBlockCount(postgres, a, b)).toBe(1);
+      }
+    });
+
+    it('block × accept: nunca sobra PENDING nem amizade com o par bloqueado', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+      const blockService = app.get(BlockService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const sent = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: b,
+          recipientUid: a,
+          now,
+        });
+        const requestId = sent.kind === 'CREATED' ? sent.request.requestId : '';
+
+        await Promise.all([
+          repo.acceptRequest(requestId, now + 1),
+          blockService.blockUser(a, `soc-${b}`),
+        ]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expect(state.friends).toBe(false);
+        expect(state.requests.filter((r) => r.status === 'PENDING')).toHaveLength(0);
+        expect(await socialBlockCount(postgres, a, b)).toBe(1);
+      }
+    });
+
+    it('block × removeFriendship: nunca sobra amizade com o par bloqueado', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+      const blockService = app.get(BlockService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const sent = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: a,
+          recipientUid: b,
+          now,
+        });
+        const requestId = sent.kind === 'CREATED' ? sent.request.requestId : '';
+        const accepted = await repo.acceptRequest(requestId, now + 1);
+        expect(accepted.kind).toBe('ACCEPTED');
+
+        await Promise.all([repo.removeFriendship(a, b), blockService.blockUser(a, `soc-${b}`)]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expect(state.friends).toBe(false);
+        expect(await socialBlockCount(postgres, a, b)).toBe(1);
+      }
+    });
+
+    it('removeFriendship × send: nunca amizade e pedido PENDING coexistem', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const sent = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: a,
+          recipientUid: b,
+          now,
+        });
+        const requestId = sent.kind === 'CREATED' ? sent.request.requestId : '';
+        const accepted = await repo.acceptRequest(requestId, now + 1);
+        expect(accepted.kind).toBe('ACCEPTED');
+
+        const [removed, sendOutcome] = await Promise.all([
+          repo.removeFriendship(a, b),
+          repo.sendRequest({ requestId: uuid(), requesterUid: a, recipientUid: b, now: now + 2 }),
+        ]);
+
+        expect(removed).toBe(true);
+        const state = await pairState(postgres, repo, a, b);
+        expect(state.friends).toBe(false);
+        const pending = state.requests.filter((r) => r.status === 'PENDING');
+
+        if (sendOutcome.kind === 'CREATED') {
+          // removeFriendship venceu o lock primeiro: sem amigos, o envio criou um pedido novo.
+          expect(pending).toHaveLength(1);
+        } else {
+          // sendRequest venceu o lock primeiro: ainda amigos naquele instante, nada foi criado.
+          expect(sendOutcome.kind).toBe('ALREADY_FRIENDS');
+          expect(pending).toHaveLength(0);
+        }
       }
     });
   });

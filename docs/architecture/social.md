@@ -376,7 +376,7 @@ Ciclo de DR:
 
 ```text
 A existe, com conteúdo social e mídia
-   ↓  backup (restic: spark.db + $SPARK_MEDIA_DIR + deletion_tombstones.tsv)
+   ↓  backup (restic: pg_dump --format=custom + $SPARK_MEDIA_DIR + deletion_tombstones.tsv)
 A exclui a conta            →  linhas apagadas, arquivos apagados, tombstone gravado
    ↓  restore de um snapshot ANTERIOR  →  linhas e arquivos de A ressuscitam fisicamente
    ↓  reconciliação de tombstones      →  purga banco E arquivos de novo
@@ -427,9 +427,13 @@ Ver [`../runbooks/account-deletion-dr.md`](../runbooks/account-deletion-dr.md).
 
 | Recurso | Backup | Restore | Reconciliação de exclusão |
 | --- | --- | --- | --- |
-| `spark.db` | `VACUUM INTO` → restic | `ops/restore.sh` | purga por uid |
+| PostgreSQL (`DATABASE_URL`) | `pg_dump --format=custom` → restic | `pg_restore` (`ops/restore.sh`) | purga por uid |
 | `$SPARK_MEDIA_DIR` | restic, no mesmo snapshot | `--media-from` / `--install` | arquivos apagados por chave |
 | tombstones (`.tsv`) | junto do banco | junto do banco | é a **fonte** da reconciliação |
+
+Histórico: até a T18.0.2 o banco era um arquivo SQLite (`spark.db`), copiado por `VACUUM INTO`. Não
+existe mais arquivo de banco na VPS — só o PostgreSQL de `DATABASE_URL`. O Room do Android continua
+usando SQLite, localmente e sem relação com este backup (§13).
 
 O restore tolera incoerência entre banco e mídia nos dois sentidos: metadata apontando para arquivo
 ausente devolve 404 (nunca derruba o processo), e arquivo sem linha é recolhido como órfão.

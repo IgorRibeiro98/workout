@@ -1,33 +1,55 @@
 import { Injectable } from '@nestjs/common';
-import { PostgresService } from '../../database/postgres.service';
+import { PostgresService, type PoolClient } from '../../database/postgres.service';
+import { lockRelationshipPair } from './friendship.repository';
 import type { BlockedUserItemDto } from './block.contract';
 
 @Injectable()
 export class BlockRepository {
   constructor(private readonly db: PostgresService) {}
 
-  /** Cria ou ignora bloqueio (idempotente). */
-  async createBlock(
+  /**
+   * Bloqueia e limpa os relacionamentos compartilhados numa única transação, sob o lock do par
+   * canônico (T18.0.3).
+   *
+   * Antes, `createBlock` e `cleanupSharedRelationsOnBlock` eram duas chamadas separadas, nenhuma
+   * sob o protocolo de lock que `sendRequest`/`acceptRequest`/`resolveRequest` já usavam — uma
+   * transação concorrente (enviar pedido, aceitar, desfazer amizade) podia correr **entre** as
+   * duas, ou correr sem nunca enxergar o bloqueio recém-criado. Unificado aqui, block e limpeza
+   * disputam o mesmo lock que toda mudança de relação do par usa, e o par nunca fica um instante
+   * "bloqueado, mas ainda com amizade/pedido pendente" por acaso de interleaving.
+   */
+  async blockAndCleanup(
     id: string,
     blockerUid: string,
     blockedUid: string,
     now: number,
   ): Promise<void> {
-    await this.db.query(
-      `INSERT INTO social_blocks (id, blocker_uid, blocked_uid, created_at)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (blocker_uid, blocked_uid) DO NOTHING`,
-      [id, blockerUid, blockedUid, now],
-    );
+    await this.db.transaction(async (client) => {
+      await lockRelationshipPair(client, blockerUid, blockedUid);
+      await client.query(
+        `INSERT INTO social_blocks (id, blocker_uid, blocked_uid, created_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (blocker_uid, blocked_uid) DO NOTHING`,
+        [id, blockerUid, blockedUid, now],
+      );
+      await this.cleanupSharedRelations(client, blockerUid, blockedUid, now);
+    });
   }
 
-  /** Remove bloqueio (idempotente). */
+  /**
+   * Remove bloqueio (idempotente), sob o mesmo lock do par (T18.0.3): desbloquear também altera o
+   * estado relacional do par, e precisa serializar com as demais mutações — mesmo que, por
+   * decisão de produto, ele não restaure nada (§ "Não alterar" da T18.0.3).
+   */
   async deleteBlock(blockerUid: string, blockedUid: string): Promise<boolean> {
-    const res = await this.db.query(
-      `DELETE FROM social_blocks WHERE blocker_uid = $1 AND blocked_uid = $2`,
-      [blockerUid, blockedUid],
-    );
-    return (res.rowCount ?? 0) > 0;
+    return await this.db.transaction(async (client) => {
+      await lockRelationshipPair(client, blockerUid, blockedUid);
+      const res = await client.query(
+        `DELETE FROM social_blocks WHERE blocker_uid = $1 AND blocked_uid = $2`,
+        [blockerUid, blockedUid],
+      );
+      return (res.rowCount ?? 0) > 0;
+    });
   }
 
   /** Confere se existe bloqueio em qualquer uma das duas direções. */
@@ -75,7 +97,8 @@ export class BlockRepository {
   }
 
   /**
-   * Executa a limpeza server-side de relacionamentos mútuos no momento do bloqueio:
+   * A limpeza server-side de relacionamentos mútuos no momento do bloqueio, dentro da transação e
+   * do lock de `blockAndCleanup` — nunca chamada fora dele (T18.0.3):
    * 1. Remove amizades;
    * 2. Cancela pedidos de amizade pendentes;
    * 3. Cancela convites de desafio pendentes entre o par;
@@ -84,123 +107,122 @@ export class BlockRepository {
    *    - Blocker member: retira blocker (WITHDRAWN);
    * 5. Cancela eventos de notificação pendentes.
    */
-  async cleanupSharedRelationsOnBlock(
+  private async cleanupSharedRelations(
+    client: PoolClient,
     blockerUid: string,
     blockedUid: string,
     now: number,
   ): Promise<void> {
-    await this.db.transaction(async (client) => {
-      // 1. Remove amizades bilaterais
-      await client.query(
-        `DELETE FROM friendships
-         WHERE (user_a_uid = $1 AND user_b_uid = $2)
-            OR (user_a_uid = $3 AND user_b_uid = $4)`,
-        [blockerUid, blockedUid, blockedUid, blockerUid],
-      );
+    // 1. Remove amizades bilaterais
+    await client.query(
+      `DELETE FROM friendships
+       WHERE (user_a_uid = $1 AND user_b_uid = $2)
+          OR (user_a_uid = $3 AND user_b_uid = $4)`,
+      [blockerUid, blockedUid, blockedUid, blockerUid],
+    );
 
-      // 2. Cancela pedidos de amizade pendentes entre o par
-      await client.query(
-        `UPDATE friend_requests
-         SET status = 'CANCELLED', updated_at = $1
-         WHERE status = 'PENDING'
-           AND ((requester_uid = $2 AND recipient_uid = $3)
-             OR (requester_uid = $4 AND recipient_uid = $5))`,
-        [now, blockerUid, blockedUid, blockedUid, blockerUid],
-      );
+    // 2. Cancela pedidos de amizade pendentes entre o par
+    await client.query(
+      `UPDATE friend_requests
+       SET status = 'CANCELLED', updated_at = $1
+       WHERE status = 'PENDING'
+         AND ((requester_uid = $2 AND recipient_uid = $3)
+           OR (requester_uid = $4 AND recipient_uid = $5))`,
+      [now, blockerUid, blockedUid, blockedUid, blockerUid],
+    );
 
-      // 3. Cancela convites de desafios pendentes entre o par
-      await client.query(
-        `UPDATE challenge_invitations
-         SET status = 'DECLINED', updated_at = $1
-         WHERE status = 'PENDING'
-           AND ((inviter_uid = $2 AND recipient_uid = $3)
-             OR (inviter_uid = $4 AND recipient_uid = $5))`,
-        [now, blockerUid, blockedUid, blockedUid, blockerUid],
-      );
+    // 3. Cancela convites de desafios pendentes entre o par
+    await client.query(
+      `UPDATE challenge_invitations
+       SET status = 'DECLINED', updated_at = $1
+       WHERE status = 'PENDING'
+         AND ((inviter_uid = $2 AND recipient_uid = $3)
+           OR (inviter_uid = $4 AND recipient_uid = $5))`,
+      [now, blockerUid, blockedUid, blockedUid, blockerUid],
+    );
 
-      // 4. Desafios compartilhados:
-      // Se blocker é creator e blocked é member em desafio não encerrado -> retira o blocked
-      await client.query(
-        `UPDATE challenge_participants
-         SET status = 'WITHDRAWN', left_at = $1
-         WHERE status = 'JOINED'
-           AND participant_uid = $2
-           AND challenge_id IN (
-             SELECT challenge_id FROM challenges
-             WHERE creator_uid = $3 AND lifecycle = 'OPEN'
-           )`,
-        [now, blockedUid, blockerUid],
-      );
+    // 4. Desafios compartilhados:
+    // Se blocker é creator e blocked é member em desafio não encerrado -> retira o blocked
+    await client.query(
+      `UPDATE challenge_participants
+       SET status = 'WITHDRAWN', left_at = $1
+       WHERE status = 'JOINED'
+         AND participant_uid = $2
+         AND challenge_id IN (
+           SELECT challenge_id FROM challenges
+           WHERE creator_uid = $3 AND lifecycle = 'OPEN'
+         )`,
+      [now, blockedUid, blockerUid],
+    );
 
-      // Se blocker é member em desafio não encerrado criado pelo blocked ou terceiro compartilhado -> retira o blocker
-      await client.query(
-        `UPDATE challenge_participants
-         SET status = 'WITHDRAWN', left_at = $1
-         WHERE status = 'JOINED'
-           AND participant_uid = $2
-           AND challenge_id IN (
-             SELECT challenge_id FROM challenges
-             WHERE creator_uid = $3 AND lifecycle = 'OPEN'
-           )`,
-        [now, blockerUid, blockedUid],
-      );
+    // Se blocker é member em desafio não encerrado criado pelo blocked ou terceiro compartilhado -> retira o blocker
+    await client.query(
+      `UPDATE challenge_participants
+       SET status = 'WITHDRAWN', left_at = $1
+       WHERE status = 'JOINED'
+         AND participant_uid = $2
+         AND challenge_id IN (
+           SELECT challenge_id FROM challenges
+           WHERE creator_uid = $3 AND lifecycle = 'OPEN'
+         )`,
+      [now, blockerUid, blockedUid],
+    );
 
-      // Para desafios de terceiros onde ambos estão JOINED -> blocker é retirado
-      await client.query(
-        `UPDATE challenge_participants
-         SET status = 'WITHDRAWN', left_at = $1
-         WHERE status = 'JOINED'
-           AND participant_uid = $2
-           AND challenge_id IN (
-             SELECT p1.challenge_id FROM challenge_participants p1
-             JOIN challenge_participants p2 ON p1.challenge_id = p2.challenge_id
-             JOIN challenges c ON p1.challenge_id = c.challenge_id
-             WHERE p1.participant_uid = $3
-               AND p2.participant_uid = $4
-               AND p1.status = 'JOINED'
-               AND p2.status = 'JOINED'
-               AND c.lifecycle = 'OPEN'
-           )`,
-        [now, blockerUid, blockerUid, blockedUid],
-      );
+    // Para desafios de terceiros onde ambos estão JOINED -> blocker é retirado
+    await client.query(
+      `UPDATE challenge_participants
+       SET status = 'WITHDRAWN', left_at = $1
+       WHERE status = 'JOINED'
+         AND participant_uid = $2
+         AND challenge_id IN (
+           SELECT p1.challenge_id FROM challenge_participants p1
+           JOIN challenge_participants p2 ON p1.challenge_id = p2.challenge_id
+           JOIN challenges c ON p1.challenge_id = c.challenge_id
+           WHERE p1.participant_uid = $3
+             AND p2.participant_uid = $4
+             AND p1.status = 'JOINED'
+             AND p2.status = 'JOINED'
+             AND c.lifecycle = 'OPEN'
+         )`,
+      [now, blockerUid, blockerUid, blockedUid],
+    );
 
-      // 5. Cancela workout shares PENDING ou ACCEPTED entre o par
-      await client.query(
-        `UPDATE workout_shares
-         SET status = 'CANCELLED', cancelled_at = $1
-         WHERE status IN ('PENDING', 'ACCEPTED')
-           AND ((sender_uid = $2 AND recipient_uid = $3)
-             OR (sender_uid = $4 AND recipient_uid = $5))`,
-        [now, blockerUid, blockedUid, blockedUid, blockerUid],
-      );
+    // 5. Cancela workout shares PENDING ou ACCEPTED entre o par
+    await client.query(
+      `UPDATE workout_shares
+       SET status = 'CANCELLED', cancelled_at = $1
+       WHERE status IN ('PENDING', 'ACCEPTED')
+         AND ((sender_uid = $2 AND recipient_uid = $3)
+           OR (sender_uid = $4 AND recipient_uid = $5))`,
+      [now, blockerUid, blockedUid, blockedUid, blockerUid],
+    );
 
-      // 6. Convites de Squad pendentes entre o par (T17.11 §105).
-      await client.query(
-        `UPDATE social_group_invitations
-         SET status = 'CANCELLED', responded_at = $1
-         WHERE status = 'PENDING'
-           AND ((sender_uid = $2 AND recipient_uid = $3)
-             OR (sender_uid = $4 AND recipient_uid = $5))`,
-        [now, blockerUid, blockedUid, blockedUid, blockerUid],
-      );
+    // 6. Convites de Squad pendentes entre o par (T17.11 §105).
+    await client.query(
+      `UPDATE social_group_invitations
+       SET status = 'CANCELLED', responded_at = $1
+       WHERE status = 'PENDING'
+         AND ((sender_uid = $2 AND recipient_uid = $3)
+           OR (sender_uid = $4 AND recipient_uid = $5))`,
+      [now, blockerUid, blockedUid, blockedUid, blockerUid],
+    );
 
-      // 7. Cancela notificações de outbox pendentes para ambos
-      await client.query(
-        `UPDATE social_notification_events
-         SET status = 'CANCELLED', completed_at = $1
-         WHERE status = 'PENDING'
-           AND (recipient_uid = $2 OR recipient_uid = $3)`,
-        [now, blockerUid, blockedUid],
-      );
+    // 7. Cancela notificações de outbox pendentes para ambos
+    await client.query(
+      `UPDATE social_notification_events
+       SET status = 'CANCELLED', completed_at = $1
+       WHERE status = 'PENDING'
+         AND (recipient_uid = $2 OR recipient_uid = $3)`,
+      [now, blockerUid, blockedUid],
+    );
 
-      await client.query(
-        `UPDATE social_notification_deliveries
-         SET status = 'FAILED_PERMANENT'
-         WHERE status = 'PENDING'
-           AND event_id IN (
-             SELECT id FROM social_notification_events WHERE status = 'CANCELLED'
-           )`,
-      );
-    });
+    await client.query(
+      `UPDATE social_notification_deliveries
+       SET status = 'FAILED_PERMANENT'
+       WHERE status = 'PENDING'
+         AND event_id IN (
+           SELECT id FROM social_notification_events WHERE status = 'CANCELLED'
+         )`,
+    );
   }
 }

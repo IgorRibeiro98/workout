@@ -79,7 +79,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U spark -d spark_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -143,7 +143,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U spark -d spark_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -494,7 +494,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U spark -d spark_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -799,7 +799,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U spark -d spark_dev"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -814,6 +814,20 @@ jobs:
       SPARK_DRILL_DATABASE_URL: postgresql://spark:spark@127.0.0.1:5432/spark_drill
     steps:
       - uses: actions/checkout@v4
+
+      # A defesa contra restaurar sobre produção (T18.0.3 P0): identificação do banco pelo nome
+      # (pathname da URL), não só pela string inteira — pega o pooled × direct do mesmo projeto
+      # Neon — e prova que `ops/verify-backup.sh` recusa antes de qualquer `pg_restore`. Não
+      # depende da imagem nem de um PostgreSQL alcançável: roda primeiro, e roda rápido.
+      - name: Identidade do banco de produção no ensaio de restauração
+        run: ops/tests/database-identity.test.sh
+
+      # O risco documentado de restaurar um snapshot mais antigo que a migration mais recente de
+      # produção (T18.0.3 §8): `pg_restore --clean --if-exists` não apaga objetos que só existem
+      # no banco de destino. Prova o mecanismo com `pg_dump`/`pg_restore` reais, num banco
+      # descartável próprio — não depende da imagem, roda cedo.
+      - name: Risco de restaurar snapshot antigo sobre schema mais novo
+        run: SPARK_TEST_DATABASE_URL=postgresql://spark:spark@127.0.0.1:5432/spark_dev ops/tests/restore-old-snapshot-risk.test.sh
 
       - name: Build image
         run: docker build -t spark-backend:local backend

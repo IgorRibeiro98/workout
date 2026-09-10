@@ -158,6 +158,11 @@ export class FriendshipService {
         return { result: 'FRIENDSHIP_CREATED', friend: toFriend(target, outcome.friendsSince) };
       case 'ALREADY_FRIENDS':
         throw FriendshipErrors.alreadyFriends();
+      case 'BLOCKED':
+        // O mesmo desfecho do pré-check de bloqueio acima (linha ~123): este caminho só é
+        // alcançado quando o bloqueio foi criado **depois** do pré-check e **sob o lock do par**
+        // antes deste envio (T18.0.3) — o resultado para quem chamou precisa ser idêntico.
+        throw FriendshipErrors.profileNotFound();
     }
   }
 

@@ -70,7 +70,8 @@ export type SendRequestOutcome =
   | { readonly kind: 'CREATED'; readonly request: StoredFriendRequest }
   | { readonly kind: 'ALREADY_PENDING'; readonly request: StoredFriendRequest }
   | { readonly kind: 'FRIENDSHIP_CREATED'; readonly friendsSince: number }
-  | { readonly kind: 'ALREADY_FRIENDS' };
+  | { readonly kind: 'ALREADY_FRIENDS' }
+  | { readonly kind: 'BLOCKED' };
 
 /** O desfecho de um aceite, decidido **dentro** da transação. */
 export type AcceptOutcome =
@@ -184,23 +185,15 @@ export class FriendshipRepository {
 
   // ------------------------------------------------------------------------------- protocolo
 
-  /**
-   * Serializa **toda** mudança de relação de um par de contas (T18.0.1, fechado na T18.0.2).
-   *
-   * O lock é transacional (`pg_advisory_xact_lock`) sobre o par canônico `(min(uid), max(uid))`:
-   * A→B e B→A disputam o mesmo lock, e ele solta sozinho no COMMIT/ROLLBACK. Todo caminho que
-   * altera `friend_requests` ou `friendships` para um par — enviar, aceitar, rejeitar, cancelar —
-   * passa por aqui, e **relê o estado depois** de adquirir o lock. Uma decisão tomada sobre uma
-   * leitura anterior ao lock é uma decisão sobre um estado que outra transação pode já ter
-   * mudado — foi assim que "rejeitar B→A" e "enviar A→B" conseguiam terminar com o pedido
-   * `REJECTED` e a amizade criada.
-   */
-  private async lockPair(client: PoolClient, uidA: string, uidB: string): Promise<void> {
-    const [uidMin, uidMax] = canonicalPair(uidA, uidB);
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-      uidMin,
-      uidMax,
-    ]);
+  /** Bloqueio existente entre o par, em qualquer direção — lido sob o lock do par (T18.0.3). */
+  private async isBlockedPair(client: PoolClient, uidA: string, uidB: string): Promise<boolean> {
+    const res = await client.query(
+      `SELECT 1 FROM social_blocks
+       WHERE (blocker_uid = $1 AND blocked_uid = $2) OR (blocker_uid = $3 AND blocked_uid = $4)
+       LIMIT 1`,
+      [uidA, uidB, uidB, uidA],
+    );
+    return res.rows.length > 0;
   }
 
   // ------------------------------------------------------------------------------- envio
@@ -215,7 +208,15 @@ export class FriendshipRepository {
     readonly now: number;
   }): Promise<SendRequestOutcome> {
     return await this.db.transaction(async (client): Promise<SendRequestOutcome> => {
-      await this.lockPair(client, input.requesterUid, input.recipientUid);
+      await lockRelationshipPair(client, input.requesterUid, input.recipientUid);
+
+      // Relido sob o lock do par (T18.0.3): um bloqueio criado por uma transação concorrente que
+      // já commitou — e que por isso não tem mais nada para `cleanupSharedRelationsOnBlock`
+      // limpar depois — só é visível aqui. Sem este check, um par bloqueado terminaria com um
+      // `friend_requests` PENDING (ou uma amizade) que nenhuma limpeza futura alcança.
+      if (await this.isBlockedPair(client, input.requesterUid, input.recipientUid)) {
+        return { kind: 'BLOCKED' };
+      }
 
       if (await this.areFriends(input.requesterUid, input.recipientUid, client)) {
         return { kind: 'ALREADY_FRIENDS' };
@@ -306,7 +307,7 @@ export class FriendshipRepository {
         return { kind: 'NOT_PENDING' };
       }
 
-      await this.lockPair(client, located.requesterUid, located.recipientUid);
+      await lockRelationshipPair(client, located.requesterUid, located.recipientUid);
 
       const request = (await this.findRequestById(requestId, client)) ?? located;
 
@@ -363,7 +364,7 @@ export class FriendshipRepository {
         return false;
       }
 
-      await this.lockPair(client, located.requesterUid, located.recipientUid);
+      await lockRelationshipPair(client, located.requesterUid, located.recipientUid);
 
       const res = await client.query(
         `UPDATE friend_requests SET status = $1, updated_at = $2
@@ -411,14 +412,21 @@ export class FriendshipRepository {
 
   /**
    * Desfaz a amizade. `true` quando havia uma.
+   *
+   * Sob o mesmo lock do par (T18.0.3): sem ele, um `removeFriendship` concorrendo com `sendRequest`
+   * (pedido cruzado que cria amizade) ou com `blockUser` (que também apaga a linha) decide sobre um
+   * estado que a outra transação pode estar mudando no mesmo instante.
    */
   async removeFriendship(uidA: string, uidB: string): Promise<boolean> {
-    const [a, b] = canonicalPair(uidA, uidB);
-    const res = await this.db.query(
-      `DELETE FROM friendships WHERE user_a_uid = $1 AND user_b_uid = $2`,
-      [a, b],
-    );
-    return (res.rowCount ?? 0) > 0;
+    return await this.db.transaction(async (client) => {
+      await lockRelationshipPair(client, uidA, uidB);
+      const [a, b] = canonicalPair(uidA, uidB);
+      const res = await client.query(
+        `DELETE FROM friendships WHERE user_a_uid = $1 AND user_b_uid = $2`,
+        [a, b],
+      );
+      return (res.rowCount ?? 0) > 0;
+    });
   }
 
   // ------------------------------------------------------------------------------- listagens
@@ -556,6 +564,31 @@ export class FriendshipRepository {
  */
 export function canonicalPair(uidA: string, uidB: string): [string, string] {
   return uidA < uidB ? [uidA, uidB] : [uidB, uidA];
+}
+
+/**
+ * Serializa **toda** mudança de estado relacional de um par de contas (T18.0.1, estendido na
+ * T18.0.3 para bloqueio).
+ *
+ * O lock é transacional (`pg_advisory_xact_lock`) sobre o par canônico `(min(uid), max(uid))`:
+ * A→B e B→A disputam o mesmo lock, e ele solta sozinho no COMMIT/ROLLBACK. Todo caminho que altera
+ * `friend_requests`, `friendships` ou `social_blocks` para um par — enviar, aceitar, rejeitar,
+ * cancelar, desfazer amizade, bloquear — passa por aqui, e **relê o estado depois** de adquirir o
+ * lock. Uma decisão tomada sobre uma leitura anterior ao lock é uma decisão sobre um estado que
+ * outra transação pode já ter mudado — foi assim que "rejeitar B→A" e "enviar A→B" conseguiam
+ * terminar com o pedido `REJECTED` e a amizade criada, e como um bloqueio conseguia coexistir com
+ * uma amizade nascida da mesma corrida.
+ *
+ * Exportada (e não um método privado) porque `BlockRepository` também precisa dela: bloquear e
+ * desbloquear alteram o mesmo par, e não podem correr fora deste protocolo.
+ */
+export async function lockRelationshipPair(
+  client: PoolClient,
+  uidA: string,
+  uidB: string,
+): Promise<void> {
+  const [uidMin, uidMax] = canonicalPair(uidA, uidB);
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [uidMin, uidMax]);
 }
 
 const FRIENDS_SELECT = `

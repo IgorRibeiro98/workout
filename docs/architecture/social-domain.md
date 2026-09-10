@@ -931,16 +931,21 @@ de denunciar porque o servidor subiu.
 
 ### 14.15 Backup e DR
 
-O backup off-site passou a levar **duas** coisas:
+O backup off-site leva **duas** coisas:
 
 ```text
-spark.db ──VACUUM INTO──▶ snapshot ──integrity_check──▶ manifesto ──┐
-                                                                     ├──▶ restic ──▶ off-site
-/opt/spark/media  ──────────────────────────────────────────────────┘
+PostgreSQL ──pg_dump --format=custom──▶ snapshot ──pg_restore --list──▶ manifesto ──┐
+                                                                                     ├──▶ restic ──▶ off-site
+/opt/spark/media  ────────────────────────────────────────────────────────────────┘
 ```
 
 A mídia entra como segundo caminho do mesmo `restic backup`: sem cópia extra em disco, deduplicada
 entre snapshots (as fotos são imutáveis depois de escritas) e criptografada antes de sair da VPS.
+
+Histórico: até a T18.0.2 o banco era um arquivo SQLite (`spark.db`), copiado por `VACUUM INTO` e
+verificado por `integrity_check`. Desde a T18.0 o banco do servidor é PostgreSQL (`DATABASE_URL`);
+não existe mais arquivo de banco na VPS. O Room do Android continua usando SQLite localmente — é
+autoridade local do app, e não tem relação com este backup do servidor (§14.16).
 
 `ops/restore.sh` restaura os dois e instala os dois (`--install`), preservando o diretório anterior
 em `media.pre-restore-<timestamp>`. `ops/verify-backup.sh` sobe o backend real sobre a cópia e

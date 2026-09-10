@@ -620,7 +620,7 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   credencial de storage — mas **com** um PostgreSQL real de serviço: o ensaio de backup
   (`backup-drill`) e a topologia de produção rodam contra ele.
 
-## 13.8 PostgreSQL como único runtime de persistência (T18.0 → T18.0.2)
+## 13.8 PostgreSQL como único runtime de persistência (T18.0 → T18.0.3)
 
 - **Só existe um modelo de persistência no servidor: PostgreSQL.** `DATABASE_URL` é obrigatória e
   sem default; `DATABASE_URL_DIRECT` é opcional e **vazio significa ausente** (é como o Compose
@@ -633,15 +633,39 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   Dois runners sobre um schema vazio aplicam a baseline exatamente uma vez, sem `CREATE` duplicado,
   sem migration parcial e sem lock esquecido — e é isso que o teste prova, não dois runners sobre um
   banco já migrado.
-- **Toda mudança de relação de um par de contas passa pelo mesmo lock.** Enviar, aceitar, rejeitar
-  e cancelar pedido de amizade tomam `pg_advisory_xact_lock` sobre o par canônico
-  `(min(uid), max(uid))` e **releem o estado depois** do lock. Um `UPDATE ... WHERE status =
-  'PENDING'` que afeta 0 linhas aborta a transação — nunca segue criando amizade de um pedido que
-  não foi aceito. O invariante testado em corrida real: nunca existe pedido `REJECTED`/`CANCELLED`
-  **e** amizade nascida daquele pedido.
+- **O runner de migrations devolve a conexão ao pool exatamente como a recebeu (T18.0.3).**
+  `statement_timeout`/`lock_timeout` são lidos com `SHOW` antes de qualquer alteração e restaurados
+  com `set_config` num `finally` — sucesso ou erro, com ou sem advisory lock adquirido — **antes**
+  de o client voltar ao pool. Sem isto, quando o client de migration é o próprio pool principal
+  (sem `DATABASE_URL_DIRECT`), a próxima requisição HTTP a reutilizá-lo herdaria os timeouts de
+  migration silenciosamente.
+- **Toda mudança de estado relacional de um par de contas passa pelo mesmo lock — inclusive
+  bloqueio.** Enviar, aceitar, rejeitar e cancelar pedido de amizade, desfazer amizade, bloquear e
+  desbloquear tomam `pg_advisory_xact_lock` sobre o par canônico `(min(uid), max(uid))`
+  (`lockRelationshipPair`, exportado de `friendship.repository.ts`) e **releem o estado depois** do
+  lock. Um `UPDATE ... WHERE status = 'PENDING'` que afeta 0 linhas aborta a transação — nunca segue
+  criando amizade de um pedido que não foi aceito. Bloquear e limpar relações compartilhadas
+  (`BlockRepository.blockAndCleanup`, T18.0.3) são a **mesma** transação, sob o mesmo lock — nunca
+  duas chamadas separadas. `sendRequest` também relê `social_blocks` sob o lock: um bloqueio que já
+  commitou (e cuja limpeza já rodou, sem nada para limpar) precisa ser visível para quem tenta
+  enviar um pedido depois, ou a corrida cria um `PENDING` que nenhuma limpeza futura alcança. O
+  invariante testado em corrida real: nunca existe pedido `REJECTED`/`CANCELLED` **e** amizade
+  nascida daquele pedido; e um par bloqueado nunca termina com amizade ativa **nem** pedido
+  `PENDING` criado pela mesma corrida.
 - **Indisponibilidade do banco é erro, nunca resultado vazio.** `PostgresService.query()`,
   `transaction()` e `appliedVersions()` lançam `PostgresUnavailableError` com o pool ausente,
   encerrado ou encerrando. `checkHealth()` é a única exceção, e é o readiness.
+- **O ensaio de restauração identifica o banco de produção pelo nome, não só pela string da URL
+  (T18.0.3).** `ops/lib.sh#same_postgres_database` compara o pathname (nome do banco) de
+  `DATABASE_URL` e `SPARK_DRILL_DATABASE_URL` além da string inteira — um endpoint Neon pooled e o
+  direto do mesmo projeto são hosts diferentes com o mesmo banco, e a checagem antiga (só string)
+  não pegava isso. A defesa é deliberadamente conservadora: nomes de banco iguais são recusados
+  mesmo com hosts diferentes.
+- **Connection strings PostgreSQL não passam pelo argv de `docker run`.** `ops/lib.sh#pg_run` e os
+  `docker run` de `ops/restore.sh`/`ops/verify-backup.sh` usam `-e NOME` (sem `=valor`) com o valor
+  vindo do ambiente do próprio comando (`DATABASE_URL="$url" docker run ... -e DATABASE_URL`), nunca
+  `-e "NOME=${url}"` — a segunda forma grava a senha no argv do processo `docker`, visível a
+  qualquer `ps` da máquina.
 
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 

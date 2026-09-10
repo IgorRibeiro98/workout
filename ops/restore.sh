@@ -270,13 +270,14 @@ else
 fi
 
 # `--network host` pelo mesmo motivo de `pg_run`: o comando precisa alcançar exatamente o endereço
-# de `DATABASE_URL`, que não passa pela linha de comando do host.
-docker run --rm --network host \
+# de `DATABASE_URL`, que não passa pela linha de comando do host (T18.0.3 P1): `-e DATABASE_URL`
+# sem valor, com o valor vindo do ambiente do próprio `docker run` — nunca do argv.
+DATABASE_URL="$PRODUCTION_URL" docker run --rm --network host \
   --group-add "$DATA_GID" \
   -v "${SPARK_DATA_DIR}:/data" \
   -v "${SPARK_MEDIA_DIR}:/media" \
   -e NODE_ENV=production \
-  -e "DATABASE_URL=${PRODUCTION_URL}" \
+  -e DATABASE_URL \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e "DELETION_TOMBSTONES_FILE_PATH=/data/${TOMBSTONES_FILENAME}" \
   "${RECONCILE_ENV[@]}" \

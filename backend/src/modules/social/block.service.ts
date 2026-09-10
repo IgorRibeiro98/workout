@@ -33,8 +33,7 @@ export class BlockService {
     const now = this.clock.now();
     const blockId = randomUUID();
 
-    await this.blockRepo.createBlock(blockId, blockerUid, target.ownerUid, now);
-    await this.blockRepo.cleanupSharedRelationsOnBlock(blockerUid, target.ownerUid, now);
+    await this.blockRepo.blockAndCleanup(blockId, blockerUid, target.ownerUid, now);
 
     this.logger.info('social.block.created', {
       blockerUidPrefix: blockerUid.slice(0, 6),

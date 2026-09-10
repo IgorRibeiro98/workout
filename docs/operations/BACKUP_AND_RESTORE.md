@@ -251,6 +251,34 @@ Objetos que existam no banco e não no dump (uma migration mais nova que a do sn
 o runner de migrations, no próximo startup, parte da `schema_migrations` restaurada e reaplica o
 que faltar.
 
+**Risco conhecido, não resolvido nesta tarefa (T18.0.3 §8): restaurar um snapshot mais antigo que a
+migration mais recente de produção.** `pg_restore --clean --if-exists` só recria os objetos que
+estão no dump — ele não sabe quais tabelas/colunas o banco de destino ganhou **depois** daquele
+snapshot, e por isso não as apaga. O resultado depois do `--install`:
+
+- `schema_migrations` volta a mostrar só as versões do snapshot — a bookkeeping "esquece" que a(s)
+  migration(ões) mais recente(s) já rodou(aram);
+- mas os objetos que aquela migration criou **continuam no banco**, porque `--clean --if-exists` não
+  os tocou.
+
+No próximo boot, o runner de migrations vê `schema_migrations` incompleta e tenta reaplicar a
+migration que "falta". Para a maioria das migrations — `CREATE TABLE`, `ALTER TABLE ... ADD COLUMN`
+sem `IF NOT EXISTS`, `CREATE INDEX` sem `IF NOT EXISTS` — isso **falha alto**: o objeto já existe, o
+`CREATE`/`ALTER` dá erro, a migration não commita, e o processo não sobe. É desconfortável, mas é o
+desfecho seguro: nada fica silenciosamente incoerente, e o operador percebe no primeiro `/health/ready`
+que falhou.
+
+O desfecho perigoso é uma migration futura escrita de forma idempotente (`CREATE TABLE IF NOT
+EXISTS`, `ADD COLUMN IF NOT EXISTS`): ela reaplicaria **sem erro** sobre o objeto que já estava lá
+desde antes da restauração — sem recriar dados, sem revalidar constraints que só o `CREATE`
+original teria checado — e o boot pareceria limpo. Esse é o cenário de "corrupção silenciosa" que
+esta tarefa não resolve: a mitigação correta (recriar o schema do zero antes de um `--install` que
+"anda para trás" no tempo, ou detectar e recusar um dump mais antigo que `schema_migrations` atual)
+fica para a T18.3, junto com o desenho definitivo de PITR/branches do Neon. Até lá, um operador que
+precisar restaurar um snapshot conhecidamente anterior à migration mais recente deve tratar o banco
+pós-restore como **suspeito** e conferir manualmente `schema_migrations` contra o histórico de
+`backend/migrations/postgres/` antes de declarar a restauração concluída.
+
 **O Feed só está recuperado quando os dois voltaram.** `--install` instala o banco **e** a mídia:
 restaurar só o banco deixa `/health/ready` respondendo e cada card com foto sem imagem. A mídia
 anterior é preservada em `/opt/spark/media.pre-restore-<timestamp>` pelo mesmo motivo do banco — se

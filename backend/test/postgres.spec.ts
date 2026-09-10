@@ -1,7 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Pool } from 'pg';
 
 import { loadMigrations, runMigrations } from '../src/database/postgres-migration-runner';
+import { MIGRATION_ADVISORY_LOCK_KEY } from '../src/database/database.constants';
 import {
   configFor,
   createTempDb,
@@ -226,5 +228,100 @@ describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
     writeFileSync(join(temp.directory, '0002_pula_a_um.sql'), 'SELECT 1;');
 
     expect(() => loadMigrations(temp.directory)).toThrow(/Sequência de migrations quebrada/);
+  });
+
+  // --- timeouts do client não vazam para fora de runMigrations (T18.0.3 P1) --------------------
+  //
+  // `runMigrations` altera `statement_timeout`/`lock_timeout` na conexão para serializar o
+  // advisory lock. Antes disso, essa conexão podia voltar ao pool com os timeouts de migration em
+  // vez dos originais — e, se o `client` recebido fosse do pool principal (o caso comum: sem
+  // `DATABASE_URL_DIRECT`), a próxima requisição HTTP a reutilizá-la herdaria um
+  // `statement_timeout`/`lock_timeout` diferente do resto do pool, silenciosamente.
+
+  async function currentTimeouts(
+    queryable: Pick<Pool, 'query'>,
+  ): Promise<{ statementTimeout: string; lockTimeout: string }> {
+    const stmt = await queryable.query<{ statement_timeout: string }>('SHOW statement_timeout');
+    const lock = await queryable.query<{ lock_timeout: string }>('SHOW lock_timeout');
+    return {
+      statementTimeout: stmt.rows[0].statement_timeout,
+      lockTimeout: lock.rows[0].lock_timeout,
+    };
+  }
+
+  it('runMigrations bem-sucedida restaura o statement_timeout/lock_timeout que a conexão tinha antes', async () => {
+    // `max: 1`: só existe uma conexão física no pool, então a que aplica as migrations é,
+    // necessariamente, a mesma que atende as queries seguintes — a mesma reutilização que o pool
+    // principal de `PostgresService` faz quando não há `DATABASE_URL_DIRECT`.
+    const config = configFor(temp.path);
+    const pool = new Pool({ connectionString: config.databaseUrl, max: 1 });
+    try {
+      // Timeouts deliberadamente diferentes dos que o runner usa internamente (15000ms) e do
+      // default do servidor (0/desabilitado), para que "restaurou o original" não possa ser
+      // confundido com "voltou para um valor fixo qualquer".
+      await pool.query("SET statement_timeout = '9000ms'");
+      await pool.query("SET lock_timeout = '4000ms'");
+      const before = await currentTimeouts(pool);
+
+      const applied = await runMigrations(pool, loadMigrations(MIGRATIONS_DIR));
+      expect(applied.length).toBeGreaterThan(0);
+
+      const after = await currentTimeouts(pool);
+      expect(after).toEqual(before);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('runMigrations que falha no meio também restaura os timeouts e libera o advisory lock', async () => {
+    const config = configFor(temp.path);
+    const pool = new Pool({ connectionString: config.databaseUrl, max: 1 });
+    try {
+      await pool.query("SET statement_timeout = '7000ms'");
+      await pool.query("SET lock_timeout = '3000ms'");
+      const before = await currentTimeouts(pool);
+
+      const migrations = loadMigrations(MIGRATIONS_DIR);
+      await expect(
+        runMigrations(pool, [
+          ...migrations,
+          {
+            version: migrations.length + 1,
+            name: 'quebrada',
+            sql: 'ISTO NAO E SQL;',
+          },
+        ]),
+      ).rejects.toThrow();
+
+      // Mesma conexão (max: 1), depois de devolvida ao pool pelo `finally` do runner.
+      const after = await currentTimeouts(pool);
+      expect(after).toEqual(before);
+
+      // Nenhum advisory lock de migration sobrevive ao erro.
+      const locks = await pool.query<{ total: string | number }>(
+        `SELECT COUNT(*) AS total FROM pg_locks WHERE locktype = 'advisory' AND classid = $1`,
+        [MIGRATION_ADVISORY_LOCK_KEY],
+      );
+      expect(Number(locks.rows[0].total)).toBe(0);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('uma conexão reutilizada pelo runtime mantém o timeout configurado por PostgresService, não o de migration', async () => {
+    // Pool com exatamente uma conexão: a mesma que aplica as migrations no boot é,
+    // necessariamente, a que atende a query seguinte — é essa reutilização que o teste prova.
+    const config = configFor(temp.path, {
+      DATABASE_POOL_MAX: '1',
+      DATABASE_POOL_MIN: '1',
+      DATABASE_STATEMENT_TIMEOUT_MS: '8000',
+    });
+    const postgres = postgresFor(config);
+    await postgres.initialize(MIGRATIONS_DIR);
+
+    const res = await postgres.query<{ statement_timeout: string }>('SHOW statement_timeout');
+    expect(res.rows[0].statement_timeout).toBe('8s');
+
+    await postgres.close();
   });
 });

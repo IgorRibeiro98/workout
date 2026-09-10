@@ -75,6 +75,17 @@ function schemaHash(name: string): number {
   return hash;
 }
 
+/** O valor atual de um GUC de timeout, na forma textual que `SET`/`set_config` aceita de volta. */
+async function currentSetting(
+  client: PoolClient,
+  name: 'statement_timeout' | 'lock_timeout',
+): Promise<string> {
+  // `SHOW` não aceita bind parameter para o nome do GUC; `name` é sempre um dos dois literais
+  // acima, nunca entrada externa — não há interpolação de valor de usuário aqui.
+  const res = await client.query<Record<string, string>>(`SHOW ${name}`);
+  return res.rows[0]?.[name] ?? '0';
+}
+
 export async function runMigrations(
   target: PoolClient | Pool,
   migrations: Migration[],
@@ -99,83 +110,119 @@ export async function runMigrations(
 
     schemaLockKey = schemaHash(currentSchema);
 
-    // Advisory lock com timeout de statement e lock para serializar migrations concorrentes no mesmo schema
-    await client.query('SET statement_timeout = 15000').catch(() => undefined);
-    await client.query('SET lock_timeout = 15000').catch(() => undefined);
-    await client.query('SELECT pg_advisory_lock($1, $2)', [
-      MIGRATION_ADVISORY_LOCK_KEY,
-      schemaLockKey,
-    ]);
-    await client.query('SET statement_timeout = 0').catch(() => undefined);
+    // Os timeouts da conexão como ela chegou (T18.0.3): o `client` que este runner usa pode ser um
+    // client do pool principal (quando não há `DATABASE_URL_DIRECT` dedicada), devolvido a
+    // `PostgresService` depois de `initialize()` — e reutilizado por qualquer requisição HTTP
+    // seguinte. Sem restaurar, essa próxima requisição herdaria `statement_timeout`/`lock_timeout`
+    // de migration, silenciosamente diferente do resto do pool.
+    const originalStatementTimeout = await currentSetting(client, 'statement_timeout');
+    const originalLockTimeout = await currentSetting(client, 'lock_timeout');
+    let lockAcquired = false;
 
     try {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-          version    INTEGER NOT NULL PRIMARY KEY,
-          name       TEXT    NOT NULL,
-          applied_at BIGINT  NOT NULL,
-          checksum   TEXT
-        );
-      `);
-
-      const result = await client.query<{
-        version: number;
-        name: string;
-        checksum: string | null;
-      }>('SELECT version, name, checksum FROM schema_migrations ORDER BY version');
-
-      const alreadyApplied = new Map(result.rows.map((row) => [row.version, row]));
-      const applied: AppliedMigration[] = [];
-
-      for (const migration of migrations) {
-        const previous = alreadyApplied.get(migration.version);
-        if (previous !== undefined) {
-          if (previous.name !== migration.name) {
-            throw new Error(
-              `Migration ${migration.version} já aplicada como "${previous.name}", mas o repositório ` +
-                `agora traz "${migration.name}". Histórico de migrations não pode ser reescrito.`,
-            );
-          }
-
-          const checksum = checksumOf(migration.sql);
-          if (previous.checksum === null) {
-            await client.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
-              checksum,
-              migration.version,
-            ]);
-          } else if (previous.checksum !== checksum) {
-            throw new Error(
-              `Migration ${migration.version} ("${migration.name}") foi editada depois de aplicada. ` +
-                `Histórico de migrations não pode ser reescrito: crie uma migration nova.`,
-            );
-          }
-          continue;
-        }
-
-        const appliedAt = Date.now();
-        const checksum = checksumOf(migration.sql);
-
-        // Cada migration é aplicada dentro de uma transação explícita na mesma conexão
-        await client.query('BEGIN');
-        try {
-          await client.query(migration.sql);
-          await client.query(
-            'INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES ($1, $2, $3, $4)',
-            [migration.version, migration.name, appliedAt, checksum],
-          );
-          await client.query('COMMIT');
-        } catch (error) {
-          await client.query('ROLLBACK').catch(() => undefined);
-          throw error;
-        }
-
-        applied.push({ version: migration.version, name: migration.name, appliedAt });
-      }
-
-      return applied;
-    } finally {
+      // Advisory lock com timeout de statement e de lock, para serializar migrations concorrentes
+      // no mesmo schema. `set_config` — nunca `SET ... = <valor>` montado por interpolação —
+      // porque aceita bind parameter tanto para o nome quanto para o valor do GUC.
       await client
-        .query('SELECT pg_advisory_unlock($1, $2)', [MIGRATION_ADVISORY_LOCK_KEY, schemaLockKey])
+        .query('SELECT set_config($1, $2, false)', ['statement_timeout', '15000'])
+        .catch(() => undefined);
+      await client
+        .query('SELECT set_config($1, $2, false)', ['lock_timeout', '15000'])
+        .catch(() => undefined);
+      await client.query('SELECT pg_advisory_lock($1, $2)', [
+        MIGRATION_ADVISORY_LOCK_KEY,
+        schemaLockKey,
+      ]);
+      lockAcquired = true;
+      await client
+        .query('SELECT set_config($1, $2, false)', ['statement_timeout', '0'])
+        .catch(() => undefined);
+
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS schema_migrations (
+            version    INTEGER NOT NULL PRIMARY KEY,
+            name       TEXT    NOT NULL,
+            applied_at BIGINT  NOT NULL,
+            checksum   TEXT
+          );
+        `);
+
+        const result = await client.query<{
+          version: number;
+          name: string;
+          checksum: string | null;
+        }>('SELECT version, name, checksum FROM schema_migrations ORDER BY version');
+
+        const alreadyApplied = new Map(result.rows.map((row) => [row.version, row]));
+        const applied: AppliedMigration[] = [];
+
+        for (const migration of migrations) {
+          const previous = alreadyApplied.get(migration.version);
+          if (previous !== undefined) {
+            if (previous.name !== migration.name) {
+              throw new Error(
+                `Migration ${migration.version} já aplicada como "${previous.name}", mas o repositório ` +
+                  `agora traz "${migration.name}". Histórico de migrations não pode ser reescrito.`,
+              );
+            }
+
+            const checksum = checksumOf(migration.sql);
+            if (previous.checksum === null) {
+              await client.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
+                checksum,
+                migration.version,
+              ]);
+            } else if (previous.checksum !== checksum) {
+              throw new Error(
+                `Migration ${migration.version} ("${migration.name}") foi editada depois de aplicada. ` +
+                  `Histórico de migrations não pode ser reescrito: crie uma migration nova.`,
+              );
+            }
+            continue;
+          }
+
+          const appliedAt = Date.now();
+          const checksum = checksumOf(migration.sql);
+
+          // Cada migration é aplicada dentro de uma transação explícita na mesma conexão
+          await client.query('BEGIN');
+          try {
+            await client.query(migration.sql);
+            await client.query(
+              'INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES ($1, $2, $3, $4)',
+              [migration.version, migration.name, appliedAt, checksum],
+            );
+            await client.query('COMMIT');
+          } catch (error) {
+            await client.query('ROLLBACK').catch(() => undefined);
+            throw error;
+          }
+
+          applied.push({ version: migration.version, name: migration.name, appliedAt });
+        }
+
+        return applied;
+      } finally {
+        if (lockAcquired) {
+          await client
+            .query('SELECT pg_advisory_unlock($1, $2)', [
+              MIGRATION_ADVISORY_LOCK_KEY,
+              schemaLockKey,
+            ])
+            .catch(() => undefined);
+        }
+      }
+    } finally {
+      // Restaura statement_timeout/lock_timeout ANTES de o client voltar ao pool (T18.0.3) —
+      // inclusive quando a migration falhou, que é justamente quando a conexão tende a ser
+      // reaproveitada mais cedo. Sem isto, a próxima requisição HTTP a pegar este client herdaria
+      // os timeouts de migration em vez dos do resto do pool.
+      await client
+        .query('SELECT set_config($1, $2, false)', ['statement_timeout', originalStatementTimeout])
+        .catch(() => undefined);
+      await client
+        .query('SELECT set_config($1, $2, false)', ['lock_timeout', originalLockTimeout])
         .catch(() => undefined);
     }
   } finally {

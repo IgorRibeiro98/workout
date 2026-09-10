@@ -68,8 +68,12 @@ done
 
 DRILL_URL="${SPARK_DRILL_DATABASE_URL:-}"
 [ -n "$DRILL_URL" ] || fail "SPARK_DRILL_DATABASE_URL é obrigatório: o banco DESCARTÁVEL onde o dump será restaurado"
-if PRODUCTION_URL="$(spark_database_url)" && [ "$PRODUCTION_URL" = "$DRILL_URL" ]; then
-  fail "SPARK_DRILL_DATABASE_URL é o mesmo banco de produção; o ensaio nunca restaura sobre produção"
+# A defesa contra restaurar sobre produção (T18.0.3 P0). `same_postgres_database` não compara só a
+# string: um endpoint Neon pooled e o direto do mesmo projeto são hosts diferentes com o mesmo
+# `/spark` no fim — e essa checagem falha **antes** de qualquer `pg_restore --clean`, aqui, bem
+# antes do primeiro container do ensaio subir.
+if PRODUCTION_URL="$(spark_database_url)" && same_postgres_database "$PRODUCTION_URL" "$DRILL_URL"; then
+  fail "SPARK_DRILL_DATABASE_URL aponta para o mesmo banco de produção (mesmo nome de banco, mesma URL, ou host pooled/direto do mesmo banco); o ensaio nunca restaura sobre produção"
 fi
 
 # Diretório de trabalho do ensaio. Configurável porque ele precisa ser um caminho **do host**
@@ -159,12 +163,14 @@ fi
 # `--network host` com `PORT` explícita: o processo precisa alcançar exatamente o endereço de
 # `SPARK_DRILL_DATABASE_URL` — que pode ser `127.0.0.1` numa máquina de desenvolvimento ou no CI.
 log "subindo o backend sobre o banco restaurado (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
-docker run -d --name "$CONTAINER" \
+# `-e DATABASE_URL` (sem valor) + `DATABASE_URL="$DRILL_URL"` no ambiente do comando (T18.0.3 P1):
+# a connection string do banco descartável não passa pela linha de comando do host.
+DATABASE_URL="$DRILL_URL" docker run -d --name "$CONTAINER" \
   --network host \
   --group-add "$DRILL_GID" \
   -v "${MEDIA_DIR}:/media" \
   -e "PORT=${PORT}" \
-  -e "DATABASE_URL=${DRILL_URL}" \
+  -e DATABASE_URL \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e NODE_ENV=production \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
