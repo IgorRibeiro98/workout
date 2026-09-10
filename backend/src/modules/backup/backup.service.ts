@@ -1,8 +1,11 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import { ObjectStorageUnavailableError } from '../../object-storage/object-storage.client';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
+import { BACKUP_PAYLOAD_STORE, type BackupPayloadStore } from './backup-payload.store';
 import type { BackupListResponse, BackupMetadataResponse } from './backup.contract';
 import { BackupErrors } from './backup.errors';
 import { BackupRateLimiter } from './backup.rate-limit';
@@ -10,11 +13,11 @@ import { BackupRepository, type StoredSnapshot } from './backup.repository';
 import { validateBackupRequest } from './backup.validator';
 
 /**
- * O caso de uso do backup (T16.4).
+ * O caso de uso do backup (T16.4, Object Storage desde a T18.1).
  *
  * ```text
  * auth → tamanho → forma canônica → schema → item a item → relações → hash
- *      → idempotência → transação → retenção
+ *      → idempotência → objeto no Object Storage → transação (metadata) → retenção
  * ```
  *
  * ## Ownership
@@ -23,15 +26,26 @@ import { validateBackupRequest } from './backup.validator';
  * requisição **não tem** campo de dono, e se tivesse seria ignorado: aceitar um `ownerUid` do
  * cliente "conferindo se bate com o token" já seria um caminho a mais para errar.
  *
+ * ## A ordem entre o Object Storage e o PostgreSQL (T18.1 §25/§26)
+ *
+ * Não existe transação distribuída entre os dois, então a ordem é deliberada: o objeto é gravado
+ * **antes** da metadata, e a metadata só é escrita depois de o objeto existir. O erro que essa
+ * ordem impede é o pior dos dois — uma linha em `backup_snapshots` apontando para um documento
+ * que nunca foi criado, que o restore descobriria como "backup corrompido". O erro que ela
+ * permite é o barato: um objeto sem linha, quando o processo morre entre os dois passos. Esse
+ * objeto é órfão, e a coleta de órfãos (`BackupPayloadCleaner`) o recolhe depois da carência.
+ *
  * ## O que este serviço não faz
  *
- * Não devolve conteúdo, não baixa, não mescla, não resolve conflito e não interpreta treino. Ele
- * guarda um snapshot imutável e devolve metadata. Restore é T16.5.
+ * Não interpreta treino, não mescla, não resolve conflito. Ele guarda um snapshot imutável,
+ * devolve metadata e, no restore, devolve o documento **byte a byte** — depois de conferir que
+ * ele ainda é o que a metadata descreve.
  */
 @Injectable()
 export class BackupService {
   constructor(
     private readonly repository: BackupRepository,
+    @Inject(BACKUP_PAYLOAD_STORE) private readonly payloads: BackupPayloadStore,
     private readonly logger: SparkLogger,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly rateLimiter: BackupRateLimiter,
@@ -76,51 +90,63 @@ export class BackupService {
       snapshot.clientBackupId,
     );
     if (existing) {
-      if (existing.payloadHash !== snapshot.payloadHash) {
-        // Mesma tentativa, conteúdo outro. Aceitar apagaria em silêncio o que a primeira
-        // significava; recusar deixa o cliente criar uma tentativa nova, que é o correto.
-        this.logger.warn('backup.idempotency.conflict', {
+      return this.replayOrConflict(existing, snapshot.payloadHash, requestId, principal.uid);
+    }
+
+    // A identidade nasce no servidor, e a chave do objeto deriva **dela** — nunca de
+    // `clientBackupId`, `deviceId` ou de qualquer valor que o cliente escolha (§21).
+    const backupId = randomUUID();
+    const storageKey = this.payloads.newStorageKey(backupId);
+
+    // Os mesmos bytes que o hash resume (§22/§23): `payloadHash` e `sizeBytes` foram calculados
+    // sobre este texto pelo validador, e é este texto que sobe — sem reserializar.
+    const bytes = Buffer.from(snapshot.canonicalText, 'utf8');
+
+    try {
+      await this.payloads.write(storageKey, bytes, { sha256: snapshot.payloadHash });
+    } catch (error) {
+      // Nenhuma linha foi escrita: a tentativa continua pendente no aparelho, e o reenvio com o
+      // mesmo `clientBackupId` é idempotente. `503`, para que o cliente saiba que é "depois", e
+      // não "nunca".
+      if (error instanceof ObjectStorageUnavailableError) {
+        this.logger.warn('backup.storage.write_failed', {
           requestId,
           uidPrefix: uidPrefix(principal.uid),
-          clientBackupId: snapshot.clientBackupId,
+          sizeBytes: bytes.length,
+          durationMs: Date.now() - startedAt,
         });
-        throw BackupErrors.idempotencyConflict();
+        throw BackupErrors.storageUnavailable();
       }
-      this.logger.info('backup.replayed', {
-        requestId,
-        uidPrefix: uidPrefix(principal.uid),
-        clientBackupId: snapshot.clientBackupId,
-        backupId: existing.backupId,
-      });
-      return { created: false, metadata: metadataOf(existing) };
+      throw error;
     }
 
     let stored: StoredSnapshot;
     try {
-      stored = await this.repository.insert(principal.uid, snapshot, Date.now());
+      stored = await this.repository.insert(principal.uid, snapshot, Date.now(), {
+        backupId,
+        storageKey,
+      });
     } catch (err: unknown) {
+      // O objeto já existe e a metadata não vai existir: apagar agora é o caminho barato. Se a
+      // remoção também falhar, o objeto é órfão — e a coleta de órfãos o recolhe (§26).
+      await this.payloads.remove(storageKey).catch(() => {
+        this.logger.warn('backup.storage.orphan_left', {
+          requestId,
+          uidPrefix: uidPrefix(principal.uid),
+        });
+      });
+
       const code = (err as { code?: string })?.code;
       if (code === '23505') {
+        // Corrida entre duas requisições da mesma tentativa (§27): quem chegou primeiro ao
+        // `UNIQUE (owner_uid, client_backup_id)` venceu, e só o objeto dele permanece. Este
+        // perdedor já apagou o seu acima e responde a partir do vencedor.
         const concurrent = await this.repository.findByClientBackupId(
           principal.uid,
           snapshot.clientBackupId,
         );
         if (concurrent) {
-          if (concurrent.payloadHash !== snapshot.payloadHash) {
-            this.logger.warn('backup.idempotency.conflict', {
-              requestId,
-              uidPrefix: uidPrefix(principal.uid),
-              clientBackupId: snapshot.clientBackupId,
-            });
-            throw BackupErrors.idempotencyConflict();
-          }
-          this.logger.info('backup.replayed', {
-            requestId,
-            uidPrefix: uidPrefix(principal.uid),
-            clientBackupId: snapshot.clientBackupId,
-            backupId: concurrent.backupId,
-          });
-          return { created: false, metadata: metadataOf(concurrent) };
+          return this.replayOrConflict(concurrent, snapshot.payloadHash, requestId, principal.uid);
         }
       }
       throw err;
@@ -139,6 +165,34 @@ export class BackupService {
     await this.pruneAfterCommit(principal.uid, requestId);
 
     return { created: true, metadata: metadataOf(stored) };
+  }
+
+  /**
+   * A tentativa já existe: mesmo conteúdo é replay; conteúdo outro é conflito (§27).
+   */
+  private replayOrConflict(
+    existing: StoredSnapshot,
+    payloadHash: string,
+    requestId: string,
+    uid: string,
+  ): { created: boolean; metadata: BackupMetadataResponse } {
+    if (existing.payloadHash !== payloadHash) {
+      // Mesma tentativa, conteúdo outro. Aceitar apagaria em silêncio o que a primeira
+      // significava; recusar deixa o cliente criar uma tentativa nova, que é o correto.
+      this.logger.warn('backup.idempotency.conflict', {
+        requestId,
+        uidPrefix: uidPrefix(uid),
+        clientBackupId: existing.clientBackupId,
+      });
+      throw BackupErrors.idempotencyConflict();
+    }
+    this.logger.info('backup.replayed', {
+      requestId,
+      uidPrefix: uidPrefix(uid),
+      clientBackupId: existing.clientBackupId,
+      backupId: existing.backupId,
+    });
+    return { created: false, metadata: metadataOf(existing) };
   }
 
   /** A metadata do backup mais recente da conta autenticada. Nunca de outra. */
@@ -183,13 +237,18 @@ export class BackupService {
   }
 
   /**
-   * O documento canônico do snapshot, verbatim, para o restore.
+   * O documento canônico do snapshot, verbatim, para o restore — **verificado** (T18.1 §24).
+   *
+   * Antes de qualquer byte sair, o documento lido é conferido contra a metadata: `size_bytes` e
+   * `payload_hash`. Um objeto ausente, truncado ou alterado responde `BACKUP_CONTENT_UNAVAILABLE`,
+   * nunca um JSON pela metade — o Android conferiria o hash e recusaria de qualquer jeito, mas
+   * dizer a verdade aqui é mais barato do que fazê-lo baixar 4 MiB para descobrir.
    */
   async content(
     principal: AuthenticatedPrincipal,
     requestId: string,
     backupId: string,
-  ): Promise<string> {
+  ): Promise<Buffer> {
     this.assertWithinReadLimit(principal.uid);
     const stored = await this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
@@ -202,12 +261,24 @@ export class BackupService {
       throw BackupErrors.notFound();
     }
 
-    const payload = await this.repository.findPayload(principal.uid, backupId);
-    if (payload === null) {
+    const bytes = await this.readDocument(stored, requestId);
+    if (bytes === null) {
       this.logger.warn('backup.content.unavailable', {
         requestId,
         uidPrefix: uidPrefix(principal.uid),
         backupId: stored.backupId,
+      });
+      throw BackupErrors.contentUnavailable();
+    }
+
+    if (bytes.length !== stored.sizeBytes || sha256OfBytes(bytes) !== stored.payloadHash) {
+      // Metadata operacional, e só: nunca o conteúdo, nunca a chave do objeto (§41).
+      this.logger.error('backup.content.integrity_failed', {
+        requestId,
+        uidPrefix: uidPrefix(principal.uid),
+        backupId: stored.backupId,
+        expectedBytes: stored.sizeBytes,
+        actualBytes: bytes.length,
       });
       throw BackupErrors.contentUnavailable();
     }
@@ -219,24 +290,81 @@ export class BackupService {
       itemCount: stored.itemCount,
       sizeBytes: stored.sizeBytes,
     });
-    return payload;
+    return bytes;
   }
 
   /**
-   * A retenção, **depois** do commit do backup novo.
+   * De onde o documento vem (T18.1 §31):
+   *
+   * ```text
+   * storage_key presente              → Object Storage
+   * storage_key ausente + payload     → o texto legado da T16.5, no PostgreSQL
+   * nenhum dos dois                   → não há documento (anterior à T16.5)
+   * ```
+   *
+   * Só a ausência vira `null`. O Object Storage fora do ar sobe como `503`: é "tente de novo", e
+   * não "este backup não pode ser restaurado".
+   */
+  private async readDocument(stored: StoredSnapshot, requestId: string): Promise<Buffer | null> {
+    const source = await this.repository.findPayloadSource(stored.ownerUid, stored.backupId);
+    if (!source) {
+      return null;
+    }
+    if (source.storageKey !== null) {
+      try {
+        return await this.payloads.read(source.storageKey);
+      } catch (error) {
+        if (error instanceof ObjectStorageUnavailableError) {
+          this.logger.warn('backup.storage.read_failed', {
+            requestId,
+            uidPrefix: uidPrefix(stored.ownerUid),
+            backupId: stored.backupId,
+          });
+          throw BackupErrors.storageUnavailable();
+        }
+        throw error;
+      }
+    }
+    if (source.legacyPayload !== null) {
+      return Buffer.from(source.legacyPayload, 'utf8');
+    }
+    return null;
+  }
+
+  /**
+   * A retenção, **depois** do commit do backup novo (T16.4 §10, T18.1 §28/§29).
+   *
+   * Primeiro a metadata sai do banco — é o commit que decide que aquele snapshot deixou de
+   * existir —, e só então os objetos são apagados. Um objeto que resista fica inacessível pela
+   * API (não há mais linha apontando para ele) e vira órfão, que a coleta recolhe depois. A
+   * retenção nunca é desfeita por causa disso: desfazê-la deixaria backup a mais, o que é
+   * aceitável, mas apagar o objeto antes do commit deixaria metadata apontando para o nada.
    */
   private async pruneAfterCommit(ownerUid: string, requestId: string): Promise<void> {
     const keep = this.config.backupRetentionCount;
     try {
-      const removed = await this.repository.pruneOlderThan(ownerUid, keep);
-      if (removed > 0) {
-        this.logger.info('backup.retention.pruned', {
-          requestId,
-          uidPrefix: uidPrefix(ownerUid),
-          removed,
-          keep,
-        });
+      const pruned = await this.repository.pruneOlderThan(ownerUid, keep);
+      if (pruned.count === 0) {
+        return;
       }
+      let objectsRemoved = 0;
+      let objectsLeft = 0;
+      for (const storageKey of pruned.storageKeys) {
+        try {
+          await this.payloads.remove(storageKey);
+          objectsRemoved += 1;
+        } catch {
+          objectsLeft += 1;
+        }
+      }
+      this.logger.info('backup.retention.pruned', {
+        requestId,
+        uidPrefix: uidPrefix(ownerUid),
+        removed: pruned.count,
+        keep,
+        objectsRemoved,
+        objectsLeft,
+      });
     } catch (error) {
       this.logger.error('backup.retention.failed', {
         requestId,
@@ -245,6 +373,14 @@ export class BackupService {
       });
     }
   }
+}
+
+/**
+ * SHA-256 dos **bytes** lidos — não de uma string decodificada e reencodada. Um objeto com UTF-8
+ * inválido precisa reprovar aqui, e uma decodificação com substituição esconderia isso.
+ */
+function sha256OfBytes(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 function metadataOf(stored: StoredSnapshot): BackupMetadataResponse {

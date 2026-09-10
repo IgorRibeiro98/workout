@@ -23,7 +23,9 @@ import { BackupService } from './backup.service';
  * `POST /v1/backups` e `GET /v1/backups/latest` (T16.4).
  *
  * ```text
- * Spark Android → snapshot completo → Bearer <Firebase ID Token> → aqui → PostgreSQL (imutável)
+ * Spark Android → snapshot completo → Bearer <Firebase ID Token> → aqui
+ *                                        ├── Object Storage: o documento canônico (T18.1)
+ *                                        └── PostgreSQL: metadata, hashes, ownership (imutável)
  * ```
  *
  * As duas rotas exigem Bearer, e o dono de tudo é `@Principal().uid`. Não existe rota de backup
@@ -127,8 +129,10 @@ export class BackupController {
     response
       .status(HttpStatus.OK)
       .type('application/json')
-      // O texto vai como está. `res.json(...)` reserializaria o documento e desfaria a forma
-      // canônica — e com ela o hash que o cliente vai conferir.
+      // Os bytes vão como estão — um `Buffer`, e não um texto reencodado. `res.json(...)`
+      // reserializaria o documento e desfaria a forma canônica — e com ela o hash que o cliente
+      // vai conferir. Desde a T18.1 o serviço já conferiu tamanho e SHA-256 contra a metadata
+      // antes de devolver (§24): nada corrompido chega aqui.
       .send(payload);
   }
 }

@@ -61,7 +61,11 @@ import { SocialMediaService } from './social-media.service';
 import { SocialMediaRepository } from './social-media.repository';
 import { SocialMediaProcessor } from './social-media.processor';
 import { SocialMediaCleaner } from './social-media.cleaner';
-import { LocalSocialMediaStore, SOCIAL_MEDIA_STORE } from './social-media.store';
+import { ObjectStorageSocialMediaStore, SOCIAL_MEDIA_STORE } from './social-media.store';
+import {
+  OBJECT_STORAGE_CLIENT,
+  type ObjectStorageClient,
+} from '../../object-storage/object-storage.client';
 import { ACCEPTED_IMAGE_FORMATS } from './social-media.limits';
 import { SocialGroupController } from './social-group.controller';
 import { SocialGroupService } from './social-group.service';
@@ -204,7 +208,14 @@ import { CheckInProjector } from './checkin.projector';
     SocialMediaProcessor,
     SocialMediaService,
     SocialMediaCleaner,
-    { provide: SOCIAL_MEDIA_STORE, useClass: LocalSocialMediaStore },
+    // T18.1 — os bytes vivem no Object Storage do processo (disco local ou bucket privado do
+    // GCS). Quem escolhe o provider é `object-storage.factory.ts`; aqui só existe o adaptador
+    // de domínio, que conhece a forma da chave e o namespace `social/` — e nada de bucket.
+    {
+      provide: SOCIAL_MEDIA_STORE,
+      useFactory: (client: ObjectStorageClient) => new ObjectStorageSocialMediaStore(client),
+      inject: [OBJECT_STORAGE_CLIENT],
+    },
     // T17.11 — Squads privados e feed de grupo. Eles reusam `FriendshipRepository` (a amizade é
     // quem pode ser convidado), `BlockRepository` (o bloqueio continua soberano),
     // `WorkoutCheckInRepository` (o feed do Squad é o **mesmo** check-in) e o
@@ -225,8 +236,8 @@ import { CheckInProjector } from './checkin.projector';
     BlockRepository,
     WorkoutShareService,
     WorkoutShareRepository,
-    // A exclusão de conta (T17.6) precisa apagar os **arquivos** de mídia (T17.9 §114): o
-    // `ON DELETE CASCADE` do PostgreSQL leva a metadata e não alcança o sistema de arquivos.
+    // A exclusão de conta (T17.6) precisa apagar os **objetos** de mídia (T17.9 §114): o
+    // `ON DELETE CASCADE` do PostgreSQL leva a metadata e não alcança o disco nem o bucket.
     SocialMediaRepository,
     SOCIAL_MEDIA_STORE,
     // A exclusão de conta e o bloqueio precisam alcançar o contexto de grupo (T17.11 §100/§105).

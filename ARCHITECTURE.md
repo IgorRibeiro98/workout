@@ -526,7 +526,7 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-10): T16.0 a T16.8.1 e T18.0 a T18.0.2 implementadas.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3 e T18.1 implementadas.** A T16.0 criou o backend em `backend/` com
 > configuração, banco (SQLite até a T17.13; **PostgreSQL desde a T18.0**), migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -558,7 +558,8 @@ Firebase e sem Gemini.
 | Autoridade | Responsabilidade |
 | --- | --- |
 | Android / Room + DataStore | autoridade **operacional local** (SQLite via Room) — treino, execução, histórico, templates, catálogo, gamificação, preferências |
-| Spark Backend (PostgreSQL / Neon) | autoridade de **persistência remota** (PostgreSQL desde T18.0/T18.0.1) — estado remoto da conta e convergência entre dispositivos |
+| Spark Backend (PostgreSQL / Neon) | autoridade de **persistência remota** (PostgreSQL desde T18.0/T18.0.1) — metadata, ownership, hashes, índices e estado transacional da conta; convergência entre dispositivos |
+| Object Storage (GCS privado; disco local com o provider `local`) | autoridade de **bytes** (T18.1) — fotos dos check-ins e o documento canônico de cada backup, sempre referenciados por `storage_key` no PostgreSQL. Nunca metadata, nunca estado |
 | Firebase | identidade/autenticação (`Firebase Auth`) |
 | Gemini | serviço probabilístico — nunca autoridade do domínio |
 
@@ -681,6 +682,10 @@ persistência do domínio        validação da resposta
 | T17.3 | Desafios entre amigos: pontuação canônica e consentimento próprio | **implementado** |
 | T17.4 | Atividade dos amigos e rankings contextuais | **implementado** |
 | T17.5 | Notificações sociais com Firebase Cloud Messaging | **implementado** |
+| T18.0 → T18.0.3 | Migração SQLite → PostgreSQL / Neon, hardening e fechamento | **implementado** |
+| T18.1 | Object Storage: fotos e documentos de backup no GCS privado (ADC); PostgreSQL só metadata | **implementado** (bucket real NOT VERIFIED sem ADC local) |
+| T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | pendente |
+| T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | pendente |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -1054,6 +1059,11 @@ Então `backup_snapshots.payload` guarda o texto exato, e o download o devolve v
 criados antes disso continuam válidos como backup e recusam o download com
 `BACKUP_CONTENT_UNAVAILABLE` — dizer a verdade sobre o que não dá para restaurar é melhor do que
 devolver uma reconstrução que talvez não feche o hash.
+
+**Desde a T18.1 o texto exato mora no Object Storage** (`backups/xx/yy/<backupId>.json`,
+referenciado por `backup_snapshots.storage_key`), e não mais na coluna: a mesma decisão — guardar
+o documento, nunca remontá-lo — com os bytes fora do PostgreSQL. O download continua verbatim, e
+passou a conferir tamanho e SHA-256 contra a metadata antes de devolver. Ver a seção da T18.1.
 
 #### Regras de conta
 
@@ -1568,6 +1578,125 @@ O resto da fase vive fora do app: `backend/docker-compose.prod.yml`, `backend/Ca
 - **Interruptor é pausa, nunca perda**: `503`, Outbox pendente, nada apagado.
 - **Tombstone, change log e ledger continuam intocados.**
 
+### Object Storage: o PostgreSQL guarda metadata, o bucket guarda bytes (T18.1)
+
+> **Status (verificado em 2026-09-10): implementado.** Backend com a migration
+> `0002_object_storage.sql` sobre a baseline `0001_t17_13_baseline.sql` (intocada), a camada
+> `src/object-storage/` e a dependência `@google-cloud/storage@8.1.0` por ADC. O bucket real
+> (`spark-private-assets-prod`, `southamerica-east1`) foi provisionado manualmente e tem um smoke
+> operacional próprio — **NOT VERIFIED** neste ambiente, que não tem ADC. Nada mudou no Android,
+> no contrato de backup nem no formato canônico. **Não existe** Cloud Run, Secret Manager, signed
+> URL, bucket público, segundo bucket ou acesso direto do aparelho ao bucket.
+
+```text
+                           ┌──────────────────────┐
+                           │ PostgreSQL / Neon    │  backup_snapshots: ownership · payload_hash ·
+Android ──▶ Spark Backend ─┤                      │    size_bytes · storage_key (payload = NULL)
+                           │                      │  backup_items: identidade · versão · content_hash
+                           │                      │  social_checkin_media: metadata · storage_key
+                           └──────────┬───────────┘
+                                      │ storageKey
+                           ┌──────────▼───────────┐
+                           │ Google Cloud Storage │  social/checkins/xx/yy/<uuid>.webp
+                           │ (bucket PRIVADO)     │  backups/xx/yy/<backupId>.json
+                           └──────────────────────┘
+```
+
+#### A composição
+
+```text
+ObjectStorageClient  (src/object-storage/ — camada neutra: write create-only, read, exists,
+        │             remove idempotente, list paginado por prefixo com createdAt)
+        │
+        ├── LocalObjectStorageClient   OBJECT_STORAGE_PROVIDER=local   disco sob SOCIAL_MEDIA_ROOT
+        └── GcsObjectStorageClient     OBJECT_STORAGE_PROVIDER=gcs     new Storage() por ADC, GCS_BUCKET_NAME
+                  ▲
+                  │  object-storage.factory.ts — o ÚNICO ponto que escolhe (módulo Nest e os 3 CLIs)
+                  │
+        ├── SocialMediaStore      (modules/social)   chave `checkins/…` ↔ objeto `social/checkins/…`
+        └── BackupPayloadStore    (modules/backup)   chave `backups/xx/yy/<backupId>.json`
+```
+
+`SocialModule` continua sem importar `BackupModule`: os dois recebem o mesmo cliente do módulo
+global `ObjectStorageModule` (como recebem `PostgresService` do `DatabaseModule`), e nenhum arquivo
+de um importa do outro — há teste estrutural. O provider `local` traduz `social/checkins/` para
+`SOCIAL_MEDIA_ROOT/checkins/` (o layout que existe desde a T17.9 e que os scripts de DR
+reconhecem); todo outro prefixo vive em `SOCIAL_MEDIA_ROOT/<nome>`, como no bucket.
+
+#### O fluxo de um backup novo, com a ordem que é o invariante
+
+```text
+validar → idempotência (clientBackupId) → backupId + storageKey gerados no servidor
+      → objeto gravado no Object Storage (create-only, CRC32C do SDK, metadata spark-sha256)
+      → transação PostgreSQL: backup_snapshots (metadata, hashes, storage_key)
+                              backup_items (identidade, versão, content_hash)   ← sem payload
+      → retenção: DELETE das linhas antigas RETURNING storage_key → commit → remove dos objetos
+```
+
+- INSERT falhou → o objeto recém-criado é removido; se a remoção também falhar, ele é órfão;
+- corrida entre duas requisições da mesma tentativa → cada uma sobe o próprio objeto, o `UNIQUE
+  (owner_uid, client_backup_id)` escolhe o vencedor, o perdedor apaga o seu e responde replay ou
+  conflito. O objeto do vencedor nunca é tocado;
+- `GET /v1/backups/{id}/content` lê o objeto (ou o `payload` legado), confere `size_bytes` e
+  `payload_hash`, e devolve um `Buffer` — byte a byte, sem reserialização. Divergência ou
+  ausência: `410 BACKUP_CONTENT_UNAVAILABLE`. Bucket fora do ar: `503 BACKUP_STORAGE_UNAVAILABLE`.
+
+#### Órfãos e carência
+
+Um objeto sem linha tem duas origens indistinguíveis numa listagem: um processo morto entre o
+upload e o commit (ou um delete que falhou), e um upload **em andamento** cuja transação ainda não
+commitou. `OBJECT_STORAGE_ORPHAN_GRACE_MS` (24 h) separa as duas: só objeto mais antigo que isso
+e sem linha é recolhido. As duas coletas (`SocialMediaCleaner`, `BackupPayloadCleaner`) listam por
+prefixo, uma página por vez, com cursor entre varreduras, e consultam o banco só pelas chaves da
+página — nunca o bucket inteiro, nunca todas as chaves do banco.
+
+#### Migração dos snapshots anteriores
+
+`node dist/cli/migrate-backup-payloads-to-object-storage.js`, idempotente e retomável: texto
+legado → hash conferido → objeto (ou convergência com um objeto idêntico já existente) → leitura de
+volta → transação que grava `storage_key` e esvazia `payload` nas duas tabelas. Objeto existente
+com outro conteúdo, ou texto que não fecha com o próprio hash: recusado e deixado como está.
+Snapshots anteriores à T16.5 (sem documento em lugar nenhum) continuam `410`.
+
+#### Componentes reais
+
+| Papel | Classe / arquivo |
+| --- | --- |
+| Contrato neutro | `src/object-storage/object-storage.client.ts` (`ObjectStorageClient`, erros, allowlist de nomes) |
+| Providers | `local-object-storage.client.ts`, `gcs-object-storage.client.ts` |
+| Composição | `object-storage.factory.ts` + `object-storage.module.ts` (`@Global`) |
+| Fronteira da mídia | `modules/social/social-media.store.ts` (`ObjectStorageSocialMediaStore`) |
+| Fronteira do backup | `modules/backup/backup-payload.store.ts` (`ObjectStorageBackupPayloadStore`) |
+| Coleta de órfãos | `modules/social/social-media.cleaner.ts`, `modules/backup/backup-payload.cleaner.ts` |
+| Migration | `backend/migrations/postgres/0002_object_storage.sql` |
+| Comandos | `cli/migrate-backup-payloads-to-object-storage.ts`, `cli/object-storage-smoke.ts`, `cli/reconcile-account-deletions.ts` (pela mesma factory) |
+| Configuração | `OBJECT_STORAGE_PROVIDER`, `GCS_BUCKET_NAME`, `OBJECT_STORAGE_TIMEOUT_MS`, `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` |
+
+#### Invariantes da T18.1
+
+1. **O PostgreSQL é a única autoridade de metadata, ownership, hashes e estado.** O bucket guarda
+   bytes referenciados por `storage_key`; nada nele é fonte de verdade sobre a conta.
+2. **ADC, e nenhuma credencial na aplicação.** `new Storage()` sem `credentials`/`keyFilename`;
+   nenhum JSON de service account no Git, na imagem ou em variável.
+3. **Bucket privado, e o Android nunca o alcança.** Sem `getSignedUrl`, `makePublic`, ACL pública
+   ou URL persistida — há teste estrutural. Todo byte sai do backend depois da autorização em SQL.
+4. **Um nome é um objeto imutável.** Escrita create-only, verificada pelo SDK; colisão é erro.
+5. **Chaves opacas, do servidor.** Derivadas de `backupId`/`mediaId`; nunca de identidade,
+   conteúdo ou valor do cliente; nunca em DTO.
+6. **Objeto antes da metadata; metadata some antes do objeto.** Nenhuma linha aponta para um
+   objeto que não foi criado; o que sobra sem linha é órfão, recolhido depois da carência.
+7. **Backup novo não duplica o documento no banco.** `payload` `NULL` nas duas tabelas; hashes
+   permanecem.
+8. **Byte a byte, verificado.** Sem reserialização entre upload e restore; tamanho e SHA-256
+   conferidos antes de devolver.
+9. **Falha de infraestrutura é `503`, ausência é `404`/`410`.** Nunca um bucket fora do ar
+   disfarçado de "não existe".
+10. **Um único ponto de composição.** Runtime e comandos operacionais montam o mesmo provider pela
+    mesma factory; a reconciliação de DR purga o bucket quando produção usa o bucket.
+11. **Social continua sem importar Backup.** Duas fronteiras, uma camada neutra.
+12. **Health não toca o bucket.** Configuração validada no startup; bucket real provado por smoke
+    explícito.
+
 ### Conta opcional e identidade (T16.1)
 
 > **Status (verificado em 2026-09-06): implementado.** Tudo desta seção existe no código e é
@@ -2057,8 +2186,10 @@ Invariantes bloqueantes que se somam aos de cima:
     re-encoda em WebP **sem** copiar metadata. É a ausência de `withMetadata()` que remove GPS,
     modelo do aparelho e data original. O original nunca encosta no disco.
 45. **A imagem não entra no banco de dados.** Metadata em `social_checkin_media`, bytes em
-    `SocialMediaStore` sob `SOCIAL_MEDIA_ROOT` — obrigatória em produção, sob pena de falha de
-    startup. Chave opaca gerada pelo servidor; path traversal com duas barreiras.
+    `SocialMediaStore` — desde a T18.1, no Object Storage do processo: bucket privado do GCS
+    (`social/checkins/…`) ou disco sob `SOCIAL_MEDIA_ROOT` (obrigatória em produção com o provider
+    `local`, sob pena de falha de startup). Chave opaca gerada pelo servidor; path traversal com
+    duas barreiras; escrita create-only.
 46. **`mediaId` não concede acesso.** `GET /v1/social/media/{id}` exige token e passa pela mesma
     política do Feed. Não existe URL pública, diretório estático, `ETag` ou `Cache-Control: public`.
 47. **Uma política de visibilidade, em um lugar** (`workout-checkin.access-policy.ts`), consumida
@@ -2076,17 +2207,21 @@ Invariantes bloqueantes que se somam aos de cima:
     conta nova. A foto de A reaparecendo para B é bloqueante.
 52. **Nada disso é evento de domínio.** Sem XP, sem conquista, sem missão, sem streak, sem ranking,
     sem Activity e **sem push**. Nenhuma preferência de notificação foi criada.
-53. **A mídia entra no backup.** `ops/backup.sh` manda `$SPARK_MEDIA_DIR` no mesmo snapshot restic;
-    o restore instala os dois; a reconciliação de tombstones purga banco **e** arquivos.
+53. **A mídia entra no backup — no provider `local`.** `ops/backup.sh` manda `$SPARK_MEDIA_DIR` no
+    mesmo snapshot restic; o restore instala os dois; a reconciliação de tombstones purga banco
+    **e** objetos — pelo mesmo provider do runtime (T18.1): com `gcs`, ela purga o bucket, e o
+    `restic` não leva mídia nenhuma, porque ela não está em disco.
 
 ### Exclusão de conta — resolvida na T17.6
 
 `DELETE /v1/account` faz o expurgo em cascata das tabelas sociais — inclusive
 `social_workout_checkins` (T17.8) e, desde a T17.9, legendas, mídia, comentários (também os feitos
 em posts alheios) e reações — e grava um tombstone HMAC contra ressurreição. As **chaves de
-armazenamento** da mídia são lidas antes do purge e os arquivos apagados depois do commit: o
-`ON DELETE CASCADE` do PostgreSQL não alcança o sistema de arquivos, e uma exclusão que apagasse só a
-metadata deixaria a foto da pessoa no disco de um servidor que jura tê-la apagado.
+armazenamento** da mídia **e dos documentos de backup** (T18.1) são lidas antes do purge e os
+objetos apagados depois do commit: o `ON DELETE CASCADE` do PostgreSQL não alcança o disco nem o
+bucket, e uma exclusão que apagasse só a metadata deixaria a foto e o backup da pessoa num servidor
+que jura tê-los apagado. Uma falha temporária do bucket não ressuscita a conta: o que resistir é
+órfão, e a coleta o recolhe.
 
 O dado **local** de treino continua no aparelho: excluir a conta é desfazer a identidade online,
 não apagar o histórico de quem treinou.

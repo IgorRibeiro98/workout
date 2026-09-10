@@ -667,6 +667,93 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   `-e "NOME=${url}"` — a segunda forma grava a senha no argv do processo `docker`, visível a
   qualquer `ps` da máquina.
 
+## 13.8.1 Object Storage: PostgreSQL guarda metadata, o bucket guarda bytes (T18.1)
+
+A T18.1 tirou do PostgreSQL o que nunca deveria ter pesado nele: as fotos dos check-ins e o
+documento canônico de cada backup. As regras abaixo são o que impede a divisão de virar perda de
+dado, bucket público ou um segundo domínio.
+
+- **Duas autoridades, por natureza do dado.** O PostgreSQL / Neon continua sendo a única autoridade
+  de metadata, ownership, hashes, índices e estado transacional. O Object Storage guarda bytes:
+  `social/checkins/xx/yy/<uuid>.webp` e `backups/xx/yy/<backupId>.json`, num único bucket privado
+  (`GCS_BUCKET_NAME`), separados por prefixo. Nenhuma tabela nova, nenhum bucket a mais.
+- **Um único ponto escolhe o provider.** `OBJECT_STORAGE_PROVIDER=local|gcs` é lido por
+  `object-storage.factory.ts`, e só por ele. `SocialModule`, `BackupModule`, os services, os
+  repositórios e os três comandos operacionais recebem um `ObjectStorageClient` pronto — nenhum
+  deles sabe qual é, e há teste estrutural. `gcs` sem `GCS_BUCKET_NAME` é falha de startup; um
+  bucket default no código e um fallback silencioso para o disco são os dois erros que essa falha
+  existe para impedir.
+- **Credencial é ADC, e só.** `new Storage()` sem `credentials`, sem `keyFilename`, sem chave
+  privada em variável, sem JSON de service account no Git, na imagem ou no `.env`. Em Cloud Run
+  (T18.2) a identidade é a service account anexada; na máquina do operador é o
+  `gcloud auth application-default login`. Há teste estrutural contra `GCS_PRIVATE_KEY`,
+  `GCS_CLIENT_EMAIL`, `GCS_SERVICE_ACCOUNT_JSON` e afins.
+- **O Android nunca fala com o bucket.** Sem credencial GCS no aparelho, sem URL pública, sem
+  `getSignedUrl`, sem `makePublic`, sem ACL — há teste estrutural sobre o código. Todo byte sai
+  de uma rota autenticada do backend, depois da autorização em SQL, com o hash conferido.
+- **Um nome é um objeto imutável.** A escrita é create-only (`ifGenerationMatch = 0` no GCS, `wx`
+  no disco) e verificada pelo SDK (CRC32C). Chave já ocupada é erro barulhento, nunca sobrescrita
+  — mesmo uma colisão improvável de UUID não pode substituir a foto ou o backup de outra pessoa.
+- **A chave é do servidor e opaca.** `backupId` e `mediaId` nascem no servidor; a chave deriva
+  deles e nunca de `clientBackupId`, `deviceId`, uid, `socialId`, `friendCode`, e-mail, nome,
+  legenda ou nome de arquivo. Nenhuma chave vem do cliente, e nenhuma sai em DTO.
+- **Objeto antes, metadata depois; metadata some antes, objeto depois.** Não há transação
+  distribuída, então a ordem é o invariante: o backup grava o objeto e **só então** insere a
+  metadata; a retenção, a exclusão de conta e a reconciliação de DR apagam linhas no commit e
+  **só então** apagam objetos. O erro que a ordem impede é a linha apontando para um objeto que não
+  existe. O erro que ela permite é um objeto sem linha — e esse tem nome: órfão.
+- **Órfão só é órfão depois da carência.** `OBJECT_STORAGE_ORPHAN_GRACE_MS` (24 h): um objeto sem
+  linha mais novo que isso pode ser um upload cuja transação ainda não commitou, e **nunca** é
+  recolhido — a varredura antiga, que confiava na ordem "lê o banco, depois lista o disco", tinha
+  exatamente essa janela. As duas coletas (`SocialMediaCleaner`, `BackupPayloadCleaner`) são
+  paginadas por prefixo, bounded por varredura, com cursor entre varreduras, e consultam o banco só
+  pelas chaves da página. Nada lista o bucket inteiro.
+- **Backup novo não duplica o documento no banco.** `backup_snapshots.payload` e
+  `backup_items.payload` são `NULL` em todo snapshot da T18.1; `backup_items` guarda identidade,
+  versão de schema e `content_hash`. Há teste estrutural sobre o `INSERT` e de comportamento sobre
+  a linha. Os snapshots anteriores continuam válidos e restauráveis a partir da coluna (`storage_key`
+  ausente + `payload` presente), até o migrador movê-los.
+- **O documento é byte a byte.** `canonicalText → UTF-8 → objeto → UTF-8 → o mesmo texto`. Nada de
+  `JSON.parse`/`stringify`, pretty print ou normalização entre o upload e o restore; o controller
+  devolve um `Buffer`. Antes de qualquer byte sair, `size_bytes` e `payload_hash` são conferidos
+  contra a metadata: divergência é `410 BACKUP_CONTENT_UNAVAILABLE`, nunca um JSON pela metade.
+- **Falha de infraestrutura não é ausência.** Só `404` vira `null`/`false`. Timeout, permissão,
+  quota e rede sobem como `ObjectStorageUnavailableError` e viram `503`
+  (`BACKUP_STORAGE_UNAVAILABLE`, `SOCIAL_UNAVAILABLE`) — que o Android já trata como "tente de
+  novo", com a tentativa de backup pendente e o reenvio idempotente. Um bucket fora do ar
+  escondido atrás de um `404` seria "este backup não pode ser restaurado" para quem mais precisa
+  dele.
+- **A migração legada é um comando, idempotente e fail closed.**
+  `migrate-backup-payloads-to-object-storage` verifica o hash do texto legado, sobe o objeto,
+  lê de volta, e só então esvazia `payload` nas duas tabelas — numa transação. Objeto já existente
+  com o mesmo conteúdo converge; com conteúdo diferente, ou texto que não fecha com o próprio
+  hash, é recusado e deixado como está. Nunca upload dentro de migration SQL.
+- **Exclusão de conta e DR conhecem o bucket.** As chaves de mídia **e** de backup são lidas antes
+  do purge e os objetos removidos depois do commit; uma falha temporária do bucket não ressuscita
+  a conta, e o que resistir é recolhido como órfão. `reconcile-account-deletions` monta o provider
+  pela mesma factory do runtime: com `gcs`, a reconciliação purga o bucket — um provider local
+  instanciado à mão ali purgaria um diretório vazio e deixaria as fotos no ar.
+- **Social continua sem importar Backup.** O bucket é o mesmo; as fronteiras são duas
+  (`SocialMediaStore`, `BackupPayloadStore`) sobre uma camada neutra em `src/object-storage/`.
+  Nenhum arquivo de `modules/social` importa de `modules/backup`, nem o inverso — há teste.
+- **Liveness e readiness não tocam o bucket.** `/health/live` diz que o processo está vivo;
+  `/health/ready` confere configuração, PostgreSQL e migrations. A configuração do Object Storage é
+  validada no startup, e o bucket real é provado por um smoke explícito
+  (`npm run smoke:object-storage`, sob `_smoke/`, com ADC, fora da suíte) — nunca por
+  `bucket.exists()` a cada probe.
+- **Logs.** `operation`, `provider`, `prefix`, `byteSize`, `durationMs`, `status`, contagens.
+  Nunca conteúdo, imagem, uid completo, URL, credencial, connection string — e a chave completa do
+  objeto também não aparece em log normal.
+- **Layout local preservado.** Com o provider `local`, a mídia continua em
+  `SOCIAL_MEDIA_ROOT/checkins/…` — é o diretório que `ops/restore.sh` e `ops/verify-backup.sh`
+  reconhecem — e os documentos de backup entram em `SOCIAL_MEDIA_ROOT/backups/…`. A tradução
+  `social/checkins/` ↔ `checkins/` mora no provider local, e só nele. Com `gcs`, nada disso vive em
+  disco e o `restic` não os leva: a durabilidade dos objetos é a do bucket (proteção do bucket
+  contra exclusão acidental é T18.3, junto com o DR do PostgreSQL gerenciado).
+- **Testes.** `npm test` em `backend/` continua sem GCS, sem ADC, sem projeto GCP e sem internet:
+  o provider `local` e o `InMemoryObjectStorageClient` (só em `test/`) cobrem a matriz de falhas.
+  O smoke do bucket real é operacional e opt-in.
+
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 
 O Spark ganhou identidade **pública**. As regras abaixo são o que impede essa identidade de

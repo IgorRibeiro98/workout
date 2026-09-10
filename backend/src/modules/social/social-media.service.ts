@@ -15,6 +15,7 @@ import { SocialContentRateLimiter } from './social-content.rate-limit';
 import { MEDIA_PENDING_TTL_MS } from './social-media.limits';
 import { ImageProcessingError, SocialMediaProcessor } from './social-media.processor';
 import { SocialMediaRepository, type StoredCheckInMedia } from './social-media.repository';
+import { ObjectStorageUnavailableError } from '../../object-storage/object-storage.client';
 import { SOCIAL_MEDIA_STORE, contentHashOf, type SocialMediaStore } from './social-media.store';
 import { SocialRepository } from './social.repository';
 import {
@@ -47,7 +48,7 @@ export interface UploadMediaCommand {
  *        ▼  rotate() aplica a orientação e descarta o EXIF inteiro (§16)
  *        ▼  resize 1600px + re-encode WebP (§15/§18)
  *        ▼  quota da conta (§29/§30)
- * SocialMediaStore.write          ← chave opaca gerada no servidor (§23/§24/§25)
+ * SocialMediaStore.write          ← chave opaca gerada no servidor (§23/§24/§25); disco ou bucket (T18.1)
  *        │
  *        ▼  linha PENDING com prazo de 1h (§38)
  * mediaId
@@ -152,7 +153,16 @@ export class SocialMediaService {
     }
 
     const storageKey = this.store.newStorageKey();
-    await this.store.write(storageKey, processed.bytes);
+    try {
+      await this.store.write(storageKey, processed.bytes);
+    } catch (error) {
+      // Armazenamento fora do ar é `503`, e o cliente tenta de novo com o mesmo `clientUploadId`
+      // (§36). Nenhuma linha foi escrita: não há o que limpar.
+      if (error instanceof ObjectStorageUnavailableError) {
+        throw WorkoutCheckInErrors.unavailable('não foi possível guardar a imagem agora');
+      }
+      throw error;
+    }
 
     const media: StoredCheckInMedia = {
       id: randomUUID(),
@@ -213,7 +223,18 @@ export class SocialMediaService {
       return null;
     }
 
-    const stream = await this.store.openRead(found.storageKey).catch(() => null);
+    // Só a **ausência** vira `null` (→ 404). Uma falha do armazenamento — bucket fora, timeout,
+    // permissão — sobe como `503`: transformá-la em "não encontrada" esconderia um incidente de
+    // infraestrutura atrás de um erro que o app trata como definitivo (T18.1 §40).
+    let stream: Readable | null;
+    try {
+      stream = await this.store.openRead(found.storageKey);
+    } catch (error) {
+      if (error instanceof ObjectStorageUnavailableError) {
+        throw WorkoutCheckInErrors.unavailable('a imagem não está disponível agora');
+      }
+      throw error;
+    }
     if (!stream) {
       this.logger.warn('social.media.file_missing', {
         uidPrefix: uidPrefix(viewerUid),

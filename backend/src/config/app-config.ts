@@ -1,6 +1,9 @@
 import { join } from 'node:path';
 import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
+/** Onde os bytes de mídia e de backup vivem (T18.1). A escolha mora em `object-storage.factory.ts`. */
+export type ObjectStorageProvider = SparkEnv['OBJECT_STORAGE_PROVIDER'];
+
 export class ConfigValidationError extends Error {
   constructor(readonly issues: string[]) {
     super(`Configuração inválida:\n${issues.map((i) => `  - ${i}`).join('\n')}`);
@@ -242,6 +245,28 @@ export class AppConfig {
     return this.env.SOCIAL_MEDIA_CLEANUP_INTERVAL_MS;
   }
 
+  // --- Object Storage (T18.1) -----------------------------------------------------------
+  //
+  // O provider é escolhido em **um** lugar (`object-storage.factory.ts`) a partir destes valores.
+  // Nenhum service, controller, repositório ou CLI decide entre `local` e `gcs` por conta própria.
+
+  get objectStorageProvider(): ObjectStorageProvider {
+    return this.env.OBJECT_STORAGE_PROVIDER;
+  }
+
+  /** O bucket do provider `gcs`. `undefined` fora dele — e falha de startup dentro dele. */
+  get gcsBucketName(): string | undefined {
+    return this.env.GCS_BUCKET_NAME;
+  }
+
+  get objectStorageTimeoutMs(): number {
+    return this.env.OBJECT_STORAGE_TIMEOUT_MS;
+  }
+
+  get backupPayloadCleanupIntervalMs(): number {
+    return this.env.BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS;
+  }
+
   /**
    * As exigências que o operador declarou e o ambiente não cumpre.
    *
@@ -270,10 +295,25 @@ export class AppConfig {
     // de trabalho do container, e um deploy que não montasse a mídia perderia todas as fotos na
     // primeira recriação de container — em silêncio, porque escrever num diretório efêmero
     // funciona perfeitamente até alguém reiniciar. Falhar no startup é visível.
-    if (this.isProduction && !this.socialMediaRootIsExplicit) {
+    //
+    // Desde a T18.1 a exigência é do provider `local`: com `gcs`, os bytes vivem no bucket e a
+    // raiz local não participa de nada — exigi-la seria pedir um volume que ninguém lê.
+    if (
+      this.isProduction &&
+      this.objectStorageProvider === 'local' &&
+      !this.socialMediaRootIsExplicit
+    ) {
       missing.push(
-        'NODE_ENV=production exige SOCIAL_MEDIA_ROOT apontando para um volume persistente',
+        'NODE_ENV=production com OBJECT_STORAGE_PROVIDER=local exige SOCIAL_MEDIA_ROOT apontando para um volume persistente',
       );
+    }
+    // T18.1 — o provider `gcs` sem bucket é configuração inconsistente, em qualquer ambiente.
+    //
+    // Um default no código apontaria produção para um bucket que ninguém revisou; um fallback
+    // silencioso para `local` gravaria foto e backup no disco efêmero de um container que jura
+    // estar usando o bucket. Os dois são piores do que não subir.
+    if (this.objectStorageProvider === 'gcs' && this.gcsBucketName === undefined) {
+      missing.push('OBJECT_STORAGE_PROVIDER=gcs exige GCS_BUCKET_NAME');
     }
     // T17.10 §136/§137 — a chave do tombstone não pode ser a de desenvolvimento em produção.
     //

@@ -15,6 +15,10 @@ firebase-adminsdk*.json
 # Diretório de dados local e arquivos de banco de testes legados (SQLite histórico em `test/`);
 # o runtime é PostgreSQL e nunca produz nenhum destes.
 data/
+# Raiz derivada do Object Storage local em desenvolvimento (`npm run start:dev` sem
+# SOCIAL_MEDIA_ROOT). Fotos e documentos de backup de uma máquina de desenvolvimento não são
+# código.
+.spark-media/
 *.db
 *.db-wal
 *.db-shm

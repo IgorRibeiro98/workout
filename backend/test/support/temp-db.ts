@@ -20,12 +20,23 @@ export interface TempDb {
   cleanup(): void;
 }
 
+/** A raiz de objetos de cada banco temporário, pelo schema — ver `objectRootFor`. */
+const OBJECT_ROOTS = new Map<string, string>();
+
+function objectRootFor(databaseUrl: string): string {
+  const match = /search_path(?:%3D|=)([^&]+)/i.exec(databaseUrl);
+  const schema = match ? decodeURIComponent(match[1]).trim() : undefined;
+  const known = schema !== undefined ? OBJECT_ROOTS.get(schema) : undefined;
+  return known ?? mkdtempSync(join(tmpdir(), 'spark-objects-'));
+}
+
 export function createTempDb(): TempDb {
   const directory = mkdtempSync(join(tmpdir(), 'spark-backend-test-'));
   const sqlitePath = join(directory, 'test.db');
   const schema =
     'test_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
   const baseDatabaseUrl = process.env.DATABASE_URL || DEFAULT_TEST_DATABASE_URL;
+  OBJECT_ROOTS.set(schema, join(directory, 'objects'));
 
   const databaseUrl = baseDatabaseUrl.includes('?')
     ? `${baseDatabaseUrl}&options=-csearch_path%3D${schema}`
@@ -88,6 +99,12 @@ export function configFor(
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     DATABASE_URL: databaseUrl,
+    // A raiz do Object Storage local (T18.1): o diretório temporário do banco de teste, e nunca o
+    // `.spark-media` derivado do diretório de trabalho — desde a T18.1 todo backup grava um
+    // objeto, e uma suíte que não declara a raiz deixaria documentos de backup na árvore do
+    // repositório. A mesma raiz para toda configuração do mesmo banco temporário, para que um
+    // teste que "reinicia" o app continue vendo os objetos que gravou antes.
+    SOCIAL_MEDIA_ROOT: objectRootFor(databaseUrl),
     ...overrides,
   });
 }

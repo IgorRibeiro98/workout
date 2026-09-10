@@ -10,6 +10,13 @@
 > Perder o **provedor do banco** (conta suspensa, credencial vazada, erro do provedor) é o cenário
 > que o `pg_dump` off-site cobre, e é por isso que ele continua existindo mesmo com PITR do
 > provedor. A política definitiva (PITR/branches) é a T18.3.
+>
+> Desde a T18.1, com `OBJECT_STORAGE_PROVIDER=gcs`, **a mídia e os documentos de backup do usuário
+> também não vivem na VPS**: eles estão no bucket privado do GCS, referenciados pelo banco. Perder a
+> VPS passa a perder só o ledger e os segredos; o que este documento diz sobre "restaurar a mídia"
+> descreve o provider `local`. A reconciliação de tombstones (`reconcile-account-deletions`) usa o
+> mesmo provider do runtime, então com `gcs` ela purga o bucket. A proteção do próprio bucket
+> (versionamento, retenção, soft delete) é a T18.3, junto com o PITR.
 
 ## O princípio
 

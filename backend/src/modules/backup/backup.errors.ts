@@ -6,6 +6,7 @@ import {
   HttpStatus,
   NotFoundException,
   PayloadTooLargeException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { BACKUP_ERROR_CODES, type BackupErrorCode } from './backup.contract';
 
@@ -37,6 +38,8 @@ function backupException(
       return new NotFoundException(body);
     case HttpStatus.GONE:
       return new GoneException(body);
+    case HttpStatus.SERVICE_UNAVAILABLE:
+      return new ServiceUnavailableException(body);
     default:
       return new BadRequestException(body);
   }
@@ -95,7 +98,17 @@ export const BackupErrors = {
     backupException(
       HttpStatus.GONE,
       BACKUP_ERROR_CODES.BACKUP_CONTENT_UNAVAILABLE,
-      'este backup foi criado por uma versão anterior do servidor e não pode ser restaurado',
+      'o conteúdo deste backup não está disponível para restauração',
+    ),
+
+  /**
+   * O armazenamento de objetos não respondeu (T18.1 §40). Recuperável: reenviar é idempotente.
+   */
+  storageUnavailable: () =>
+    backupException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      BACKUP_ERROR_CODES.BACKUP_STORAGE_UNAVAILABLE,
+      'o armazenamento de backups está indisponível no momento',
     ),
 
   /** Requisições demais desta conta em uma janela curta. Reenviar depois é seguro e idempotente. */

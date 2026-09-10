@@ -736,20 +736,30 @@ nos bytes armazenados.
 
 | | |
 | --- | --- |
-| Fronteira | `SocialMediaStore` (interface) |
-| Implementação | `LocalSocialMediaStore` (sistema de arquivos) |
-| Raiz | `SOCIAL_MEDIA_ROOT` — **obrigatória em produção** |
-| Volume | `/opt/spark/media` → `/media` no container |
-| Chave | `checkins/<2 hex>/<2 hex>/<uuid v4>.webp`, gerada no servidor |
+| Fronteira | `SocialMediaStore` (interface) — o domínio conhece `storageKey`, e só |
+| Implementação | `ObjectStorageSocialMediaStore` sobre a camada neutra `ObjectStorageClient` (T18.1) |
+| Providers | `local` (disco sob `SOCIAL_MEDIA_ROOT`) e `gcs` (bucket privado do Google Cloud Storage, autenticado por ADC) — escolhidos em **um** lugar, `object-storage.factory.ts` |
+| Chave (banco) | `checkins/<2 hex>/<2 hex>/<uuid v4>.webp`, gerada no servidor — inalterada desde a T17.9 |
+| Objeto (bucket) | `social/checkins/<2 hex>/<2 hex>/<uuid v4>.webp`; no provider `local`, `SOCIAL_MEDIA_ROOT/checkins/…` (o layout de sempre) |
+| Escrita | **create-only**: `ifGenerationMatch = 0` no GCS, `wx` no disco. Uma chave nunca é sobrescrita |
+| Raiz local | `SOCIAL_MEDIA_ROOT` — obrigatória em produção **com o provider `local`**; não participa de nada com `gcs` |
+| Volume (VPS, provider `local`) | `/opt/spark/media` → `/media` no container |
 | Path traversal | impossível: allowlist de forma + confinamento na raiz, duas barreiras |
 | Quota | 250 MB por conta (`PENDING` + `ATTACHED`), configurável |
 | Bytes no banco | **nunca** — o banco guarda metadata |
+| URL pública, URL assinada, ACL pública | **nunca** — há teste estrutural |
 
 A chave nunca deriva de uid, `socialId`, `friendCode`, `displayName` ou nome de arquivo original, e
-nunca vem do cliente. Em produção, subir sem `SOCIAL_MEDIA_ROOT` é **falha de startup**
-(`AppConfig.missingRequirements`): um default derivado acompanharia `DATABASE_PATH`, e um deploy
-que montasse o banco sem montar a mídia perderia todas as fotos na primeira recriação de
-container — em silêncio.
+nunca vem do cliente. Em produção com o provider `local`, subir sem `SOCIAL_MEDIA_ROOT` é **falha
+de startup** (`AppConfig.missingRequirements`): um deploy que montasse o banco sem montar a mídia
+perderia todas as fotos na primeira recriação de container — em silêncio. Com `gcs`, é a ausência
+de `GCS_BUCKET_NAME` que derruba o startup: nunca há bucket default no código, e nunca há fallback
+silencioso para o disco.
+
+O Android continua sem saber onde os bytes moram: ele nunca recebe credencial GCS e nunca fala com
+o bucket. `GET /v1/social/media/{id}` continua sendo o único caminho — token, autorização em SQL,
+e só então os bytes. Uma falha do bucket (timeout, permissão, quota) responde `503`, e não `404`:
+"não encontrada" continua significando ausência, nunca um incidente de infraestrutura escondido.
 
 ### 14.5 Ciclo de vida da mídia
 
@@ -927,7 +937,7 @@ de denunciar porque o servidor subiu.
 | mídia `PENDING` expirada | linha removida | removido pelo cleaner |
 | exclusão de conta | check-ins, legendas, mídia, comentários (inclusive em posts alheios) e reações | chaves lidas **antes** do purge, arquivos removidos depois do commit |
 | restore antigo + reconciliação | repurga o banco da conta com tombstone | purga os arquivos ressuscitados |
-| órfão (arquivo sem metadata) | — | recolhido pela varredura |
+| órfão (objeto sem metadata) | — | recolhido pela varredura, **só depois de 24 h de carência** (T18.1): um objeto recente pode ser um upload cuja linha ainda não commitou |
 
 ### 14.15 Backup e DR
 
@@ -941,6 +951,12 @@ PostgreSQL ──pg_dump --format=custom──▶ snapshot ──pg_restore --li
 
 A mídia entra como segundo caminho do mesmo `restic backup`: sem cópia extra em disco, deduplicada
 entre snapshots (as fotos são imutáveis depois de escritas) e criptografada antes de sair da VPS.
+
+**Isso descreve o provider `local`.** Com `OBJECT_STORAGE_PROVIDER=gcs` (T18.1) as fotos vivem no
+bucket privado, não em disco nenhum da VPS: `/opt/spark/media` fica vazio, o `restic` não as leva, e
+a durabilidade delas é a do bucket. O `pg_dump` continua levando a metadata (`storage_key`,
+`content_hash`), e a reconciliação de DR (`reconcile-account-deletions`) usa o **mesmo** provider
+do runtime — com `gcs`, ela purga o bucket. Proteção do bucket contra exclusão acidental é T18.3.
 
 Histórico: até a T18.0.2 o banco era um arquivo SQLite (`spark.db`), copiado por `VACUUM INTO` e
 verificado por `integrity_check`. Desde a T18.0 o banco do servidor é PostgreSQL (`DATABASE_URL`);

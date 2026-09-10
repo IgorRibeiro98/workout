@@ -63,13 +63,24 @@ export const BACKUP_ERROR_CODES = {
   /** Nenhum backup desta conta — ou nenhum com aquele `backupId`, que é a mesma resposta. */
   BACKUP_NOT_FOUND: 'BACKUP_NOT_FOUND',
   /**
-   * O snapshot existe, mas o servidor não tem o documento original dele (T16.5).
+   * O snapshot existe, mas o servidor não tem o documento original dele (T16.5, T18.1).
    *
-   * Acontece com backups criados antes de `0004_backup_payload.sql`. Eles continuam válidos como
-   * metadata e não podem ser restaurados: devolver uma reconstrução cujo hash talvez não feche
-   * seria pior do que dizer que não dá.
+   * Acontece com backups criados antes de `0004_backup_payload.sql`, e — desde a T18.1 — quando
+   * o objeto do Object Storage não existe ou não passa na verificação de integridade (tamanho e
+   * SHA-256 contra a metadata). Eles continuam válidos como metadata e não podem ser restaurados:
+   * devolver uma reconstrução, ou um documento cujo hash não fecha, seria pior do que dizer que
+   * não dá.
    */
   BACKUP_CONTENT_UNAVAILABLE: 'BACKUP_CONTENT_UNAVAILABLE',
+  /**
+   * O Object Storage não respondeu (T18.1 §40): timeout, permissão, quota, rede.
+   *
+   * `503`, e não `410`: a diferença entre "este backup não pode ser restaurado" e "o servidor não
+   * consegue alcançar o armazenamento agora" é a diferença entre desistir e tentar de novo. O
+   * Android já trata `5xx` como indisponibilidade recuperável — no upload, a tentativa continua
+   * pendente e o reenvio é idempotente; no download, nada local é alterado.
+   */
+  BACKUP_STORAGE_UNAVAILABLE: 'BACKUP_STORAGE_UNAVAILABLE',
   /**
    * Requisições de backup demais para esta conta em uma janela curta (T16.8).
    *

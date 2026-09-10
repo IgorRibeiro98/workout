@@ -278,6 +278,42 @@ jobs:
             echo "a falha não citou ACCOUNT_DELETION_HMAC_KEY"; cat /tmp/nohmac.log; exit 1; }
           echo "produção recusa subir com a chave HMAC de desenvolvimento"
 
+          # Object Storage (T18.1 §4): `gcs` sem bucket é configuração inconsistente e precisa
+          # **falhar no startup** — nunca cair em `local` em silêncio, nunca inventar um bucket.
+          if docker run --rm --network host -e NODE_ENV=production \
+               -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
+               -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
+               -e OBJECT_STORAGE_PROVIDER=gcs spark-backend:ci > /tmp/nobucket.log 2>&1; then
+            echo "o backend subiu com OBJECT_STORAGE_PROVIDER=gcs sem GCS_BUCKET_NAME"
+            cat /tmp/nobucket.log; exit 1
+          fi
+          grep -q 'GCS_BUCKET_NAME' /tmp/nobucket.log || {
+            echo "a falha não citou GCS_BUCKET_NAME"; cat /tmp/nobucket.log; exit 1; }
+          echo "produção recusa subir com gcs sem bucket"
+
+          # E o inverso (T18.1 §5/§43): com `gcs` **e** bucket, a imagem sobe e fica pronta sem
+          # ADC, sem projeto GCP e sem rede para o Google — a configuração é validada no startup, e
+          # o bucket só é tocado por requisição. Um `bucket.exists()` no boot ou no readiness
+          # quebraria este passo, que é o objetivo dele.
+          #
+          # `-e SOCIAL_MEDIA_ROOT` sem valor, com a variável ausente no runner, **remove** o `ENV`
+          # da imagem: é o deploy que a T18.2 vai fazer — nenhum volume de mídia, só o bucket.
+          docker run -d --name spark-ci-gcs --network host \
+            -e NODE_ENV=production -e PORT=8090 \
+            -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
+            -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
+            -e OBJECT_STORAGE_PROVIDER=gcs -e GCS_BUCKET_NAME=ci-only-bucket-that-does-not-exist \
+            -e SOCIAL_MEDIA_ROOT spark-backend:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/health/ready 2>/dev/null | grep -q '"status":"ok"'; then break; fi
+            if [ "$i" = "30" ]; then echo "o backend com provider gcs não ficou pronto"; docker logs spark-ci-gcs; exit 1; fi
+            sleep 2
+          done
+          docker logs spark-ci-gcs 2>&1 | grep -q '"provider":"gcs"' || {
+            echo "o log de startup não declarou o provider gcs"; docker logs spark-ci-gcs; exit 1; }
+          docker rm -f spark-ci-gcs > /dev/null
+          echo "produção com gcs sobe sem SOCIAL_MEDIA_ROOT e sem credencial; o bucket não é tocado no boot"
+
           # Schema do baseline e migrations aplicadas
           docker exec spark-ci-2 node -e "
             const { Pool } = require('pg');

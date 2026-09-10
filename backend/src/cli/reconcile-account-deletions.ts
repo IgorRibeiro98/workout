@@ -9,7 +9,9 @@ import {
   DeletionTombstoneLedger,
   DeletionTombstoneLedgerError,
 } from '../modules/account-deletion/deletion-tombstone.ledger';
-import { LocalSocialMediaStore } from '../modules/social/social-media.store';
+import { ObjectStorageSocialMediaStore } from '../modules/social/social-media.store';
+import { ObjectStorageBackupPayloadStore } from '../modules/backup/backup-payload.store';
+import { createObjectStorageClient } from '../object-storage/object-storage.factory';
 import type { AuthTokenVerifier } from '../modules/auth/auth-token-verifier';
 
 /**
@@ -71,11 +73,18 @@ export async function runReconciliation(): Promise<number> {
     await postgres.initialize();
 
     const repo = new AccountDeletionRepository(postgres);
-    const mediaStore = new LocalSocialMediaStore(config);
+    // O **mesmo** provider de Object Storage do runtime (T18.1 §38/§39): a escolha entre disco
+    // local e bucket mora na factory, e este comando a reutiliza em vez de instanciar um provider
+    // por conta própria. Com `OBJECT_STORAGE_PROVIDER=gcs`, a reconciliação purga o bucket —
+    // um `LocalSocialMediaStore` aqui purgaria um diretório vazio e deixaria as fotos no ar.
+    const objectStorage = await createObjectStorageClient(config, logger);
+    const mediaStore = new ObjectStorageSocialMediaStore(objectStorage);
+    const backupPayloads = new ObjectStorageBackupPayloadStore(objectStorage);
     // A reconciliação não fala com o provedor de autenticação: as contas do ledger já foram
-    // apagadas no Firebase quando foram excluídas. O que voltou foi o **arquivo do banco**, e é
-    // só ele (mais a mídia) que precisa ser purgado de novo. Um verificador que lançasse em
-    // qualquer uso é o que torna essa ausência de dependência verificável, em vez de assumida.
+    // apagadas no Firebase quando foram excluídas. O que voltou foi o **banco**, e é só ele (mais
+    // os objetos de mídia e de backup) que precisa ser purgado de novo. Um verificador que
+    // lançasse em qualquer uso é o que torna essa ausência de dependência verificável, em vez de
+    // assumida.
     const noAuthProvider: AuthTokenVerifier = {
       verify: () => {
         throw new Error('a reconciliação de DR não autentica ninguém');
@@ -87,6 +96,7 @@ export async function runReconciliation(): Promise<number> {
       config,
       new SystemClock(),
       mediaStore,
+      backupPayloads,
       ledger,
       logger,
     );

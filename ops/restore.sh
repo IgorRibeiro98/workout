@@ -105,8 +105,10 @@ else
 
   # A mídia (T17.9 §138). O restic reconstrói a árvore de caminhos original, então o diretório
   # aparece em `$TARGET_DIR` sob o caminho absoluto que ele tinha na VPS. Procuramos pelo
-  # subdiretório `checkins`, que é a estrutura que `LocalSocialMediaStore` cria — e não pelo nome
-  # do diretório de mídia, que é configurável e pode ter mudado entre o backup e a restauração.
+  # subdiretório `checkins`, que é a estrutura que o provider `local` de Object Storage cria
+  # (preservada na T18.1 justamente para isto) — e não pelo nome do diretório de mídia, que é
+  # configurável e pode ter mudado entre o backup e a restauração. Com o provider `gcs` não há
+  # mídia em disco nenhum: os objetos vivem no bucket e não passam por aqui (T18.1).
   RESTORED_MEDIA="$(find "$TARGET_DIR" -type d -name checkins | head -1)"
   if [ -n "$RESTORED_MEDIA" ]; then
     RESTORED_MEDIA="$(dirname "$RESTORED_MEDIA")"

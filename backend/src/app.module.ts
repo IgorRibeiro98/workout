@@ -7,6 +7,7 @@ import { MaintenanceMiddleware } from './common/maintenance.middleware';
 import { SecurityHeadersMiddleware } from './common/security-headers.middleware';
 import { RequestIdMiddleware } from './common/request-id.middleware';
 import { DatabaseModule } from './database/database.module';
+import { ObjectStorageModule } from './object-storage/object-storage.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BackupModule } from './modules/backup/backup.module';
@@ -25,11 +26,16 @@ import { AccountDeletionModule } from './modules/account-deletion/account-deleti
  * Estar no mesmo processo **não** os torna acoplados: `SocialModule` não importa `BackupModule`
  * nem `SyncModule`, e a fronteira entre o domínio privado e o social é a `SocialProjection`
  * (`modules/social/social.projection.ts`), não a proximidade dos arquivos.
+ *
+ * `ObjectStorageModule` (T18.1) é infraestrutura, como `DatabaseModule`: fotos e documentos de
+ * backup vivem no mesmo bucket, e é este módulo global — não um import de Social para Backup —
+ * que entrega o cliente aos dois.
  */
 @Module({
   imports: [
     CommonModule,
     DatabaseModule,
+    ObjectStorageModule,
     HealthModule,
     AuthModule,
     AiModule,
@@ -47,6 +53,7 @@ export class AppModule implements NestModule {
         ConfigModule.forRoot(config),
         CommonModule,
         DatabaseModule,
+        ObjectStorageModule,
         HealthModule,
         AuthModule,
         AiModule,

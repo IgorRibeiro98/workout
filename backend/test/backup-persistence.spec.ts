@@ -4,6 +4,7 @@ import { AppConfig } from '../src/config/app-config';
 import { PostgresService } from '../src/database/postgres.service';
 import { BackupRepository } from '../src/modules/backup/backup.repository';
 import type { ValidatedSnapshot } from '../src/modules/backup/backup.validator';
+import { randomUUID } from 'node:crypto';
 import { configFor, createTempDb, postgresFor, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
@@ -54,24 +55,39 @@ describe('Persistência do backup', () => {
         item('CUSTOM_EXERCISE', UUID_1),
       ]);
 
-      await expect(repository.insert(UID, duplicated, Date.now())).rejects.toThrow();
+      await expect(repository.insert(UID, duplicated, Date.now(), identity())).rejects.toThrow();
 
       expect(await repository.countFor(UID)).toBe(0);
       expect(await itemCount(postgres)).toBe(0);
       expect(await repository.findLatest(UID)).toBeNull();
     });
 
-    it('um snapshot válido grava todos os itens de uma vez', async () => {
+    it('um snapshot válido grava todos os itens de uma vez — sem payload no banco (T18.1)', async () => {
       const snapshot = snapshotWith([
         item('CUSTOM_EXERCISE', UUID_1),
         item('CUSTOM_EXERCISE', UUID_2),
       ]);
 
-      const stored = await repository.insert(UID, snapshot, 1_700_000_000_000);
+      const stored = await repository.insert(UID, snapshot, 1_700_000_000_000, identity());
 
       expect(stored.itemCount).toBe(2);
       expect(await itemCount(postgres)).toBe(2);
       expect(stored.createdAt).toBe(1_700_000_000_000);
+
+      // O documento canônico mora no Object Storage; o banco guarda metadata, hashes e a chave.
+      const rows = await postgres.query<{
+        payload: string | null;
+        storage_key: string | null;
+        item_payloads: number | string;
+      }>(
+        `SELECT s.payload, s.storage_key,
+                (SELECT COUNT(*) FROM backup_items i WHERE i.snapshot_id = s.id AND i.payload IS NOT NULL) AS item_payloads
+           FROM backup_snapshots s WHERE s.backup_id = $1`,
+        [stored.backupId],
+      );
+      expect(rows.rows[0].payload).toBeNull();
+      expect(rows.rows[0].storage_key).toBe(stored.storageKey);
+      expect(Number(rows.rows[0].item_payloads)).toBe(0);
     });
 
     it('a retenção preserva os mais recentes e nunca o recém-criado', async () => {
@@ -82,13 +98,19 @@ describe('Persistência do backup', () => {
             UID,
             snapshotWith([], `client-${index}`),
             1_700_000_000_000 + index,
+            identity(),
           ),
         );
       }
 
-      const removed = await repository.pruneOlderThan(UID, 5);
+      const pruned = await repository.pruneOlderThan(UID, 5);
 
-      expect(removed).toBe(2);
+      expect(pruned.count).toBe(2);
+      // As chaves dos objetos que ficaram sem linha saem junto: é com elas que o serviço apaga os
+      // documentos do Object Storage **depois** deste commit (T18.1 §28).
+      expect([...pruned.storageKeys].sort()).toEqual(
+        [stored[0].storageKey, stored[1].storageKey].sort(),
+      );
       expect(await repository.countFor(UID)).toBe(5);
       // O mais novo continua lá; os dois mais antigos foram embora.
       expect((await repository.findLatest(UID))?.backupId).toBe(stored.at(-1)?.backupId);
@@ -99,9 +121,19 @@ describe('Persistência do backup', () => {
 
     it('a retenção de uma conta não toca no backup de outra', async () => {
       for (const index of [1, 2, 3, 4, 5, 6]) {
-        await repository.insert(UID, snapshotWith([], `a-${index}`), 1_700_000_000_000 + index);
+        await repository.insert(
+          UID,
+          snapshotWith([], `a-${index}`),
+          1_700_000_000_000 + index,
+          identity(),
+        );
       }
-      await repository.insert('outra-conta', snapshotWith([], 'b-1'), 1_700_000_000_000);
+      await repository.insert(
+        'outra-conta',
+        snapshotWith([], 'b-1'),
+        1_700_000_000_000,
+        identity(),
+      );
 
       await repository.pruneOlderThan(UID, 5);
 
@@ -110,8 +142,13 @@ describe('Persistência do backup', () => {
     });
 
     it('apagar o snapshot leva os itens junto', async () => {
-      await repository.insert(UID, snapshotWith([item('CUSTOM_EXERCISE', UUID_1)], 'client-1'), 1);
-      await repository.insert(UID, snapshotWith([], 'client-2'), 2);
+      await repository.insert(
+        UID,
+        snapshotWith([item('CUSTOM_EXERCISE', UUID_1)], 'client-1'),
+        1,
+        identity(),
+      );
+      await repository.insert(UID, snapshotWith([], 'client-2'), 2, identity());
 
       await repository.pruneOlderThan(UID, 1);
 
@@ -207,6 +244,15 @@ function snapshotWith(
     payloadHash: `hash-${clientBackupId}`,
     sizeBytes: 42,
     canonicalText: `{"clientBackupId":"${clientBackupId}"}`,
+  };
+}
+
+/** A identidade que o serviço gera antes de gravar: `backupId` do servidor e a chave derivada dele. */
+function identity(): { backupId: string; storageKey: string } {
+  const backupId = randomUUID();
+  return {
+    backupId,
+    storageKey: `backups/${backupId.slice(0, 2)}/${backupId.slice(2, 4)}/${backupId}.json`,
   };
 }
 

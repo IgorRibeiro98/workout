@@ -269,6 +269,13 @@ Um snapshot criado antes da migration `0004_backup_payload.sql` tem metadata e n
 ele responde `410 BACKUP_CONTENT_UNAVAILABLE`. Devolver uma reconstrução cujo hash talvez não
 feche seria pior do que dizer que não dá.
 
+Desde a **T18.1** o documento canônico vive no Object Storage do servidor (um bucket privado), e
+não mais no PostgreSQL — o contrato não muda: o corpo continua sendo o documento, byte a byte. O
+que muda é que o servidor confere `sizeBytes` e `payloadHash` contra o objeto **antes** de
+responder: objeto ausente, truncado ou alterado é `410 BACKUP_CONTENT_UNAVAILABLE` (nunca um
+documento pela metade), e o armazenamento fora do ar é `503 BACKUP_STORAGE_UNAVAILABLE` — que o
+Android já trata como indisponibilidade recuperável, sem alterar nada local.
+
 ### Erros
 
 | Código | HTTP | Quando |
@@ -281,7 +288,8 @@ feche seria pior do que dizer que não dá.
 | `BACKUP_IDEMPOTENCY_CONFLICT` | 409 | mesmo `clientBackupId`, conteúdo diferente |
 | `BACKUP_TOO_LARGE` | 413 | corpo, número de itens ou item acima do teto |
 | `BACKUP_NOT_FOUND` | 404 | `GET latest` sem backup para aquela conta; `backupId` inexistente **ou de outra conta** |
-| `BACKUP_CONTENT_UNAVAILABLE` | 410 | o snapshot existe e o servidor não guardou o documento dele (criado antes da T16.5) |
+| `BACKUP_CONTENT_UNAVAILABLE` | 410 | o snapshot existe e o servidor não tem o documento dele: criado antes da T16.5, ou (T18.1) objeto ausente/corrompido na verificação de tamanho e SHA-256 |
+| `BACKUP_STORAGE_UNAVAILABLE` | 503 | (T18.1) o armazenamento de objetos não respondeu — timeout, permissão, rede. Recuperável: no upload a tentativa continua pendente e o reenvio é idempotente; no download nada local muda |
 
 Nenhuma mensagem de erro repete conteúdo do snapshot.
 

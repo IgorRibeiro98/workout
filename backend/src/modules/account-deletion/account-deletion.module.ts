@@ -7,17 +7,21 @@ import { AccountDeletionService } from './account-deletion.service';
 import { AccountDeletionReconciler } from './account-deletion.reconciler';
 import { AccountDeletionController } from './account-deletion.controller';
 import { SocialModule } from '../social/social.module';
+import { BackupModule } from '../backup/backup.module';
 
 /**
- * A exclusão de conta (T17.6), que desde a T17.9 também apaga **arquivos**.
+ * A exclusão de conta (T17.6), que desde a T17.9 também apaga **arquivos** — e desde a T18.1,
+ * **objetos**: fotos e documentos de backup, no disco ou no bucket.
  *
- * `SocialModule` entra nos imports por uma razão só: o `SOCIAL_MEDIA_STORE`. O purge do banco
- * remove a metadata da mídia; os bytes vivem no volume, e só o store sabe traduzir uma chave em
- * caminho (§25). Sem este import, "conta excluída" significaria "conta excluída, exceto as fotos"
- * — que §195 lista como bloqueante.
+ * `SocialModule` entra nos imports por uma razão só: o `SOCIAL_MEDIA_STORE`. `BackupModule`, pela
+ * razão simétrica: o `BACKUP_PAYLOAD_STORE`. O purge do banco remove a metadata; os bytes vivem
+ * no Object Storage, e só cada store sabe traduzir a sua chave em nome de objeto. Sem estes
+ * imports, "conta excluída" significaria "conta excluída, exceto as fotos e os backups" — que a
+ * T17.9 §195 e a T18.1 listam como bloqueante. É este módulo que conhece os dois; nenhum dos dois
+ * conhece o outro.
  */
 @Module({
-  imports: [DatabaseModule, AuthModule, SocialModule],
+  imports: [DatabaseModule, AuthModule, SocialModule, BackupModule],
   controllers: [AccountDeletionController],
   providers: [
     AccountDeletionRepository,

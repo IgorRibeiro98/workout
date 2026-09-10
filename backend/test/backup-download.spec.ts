@@ -293,9 +293,12 @@ describe('Download de backup (/v1/backups)', () => {
     const created = await post(fixtureText('backup-v1-complete'));
     const backupId = created.body.backupId as string;
 
-    // Simula exatamente o que existe numa VPS que rodou a T16.4: metadata sim, texto não.
+    // Simula exatamente o que existe numa VPS que rodou a T16.4: metadata sim, documento não —
+    // nem no banco (T16.5), nem no Object Storage (T18.1).
     withOpenDatabase(temp.path, (db) => {
-      db.prepare('UPDATE backup_snapshots SET payload = NULL WHERE backup_id = ?').run(backupId);
+      db.prepare(
+        'UPDATE backup_snapshots SET payload = NULL, storage_key = NULL WHERE backup_id = ?',
+      ).run(backupId);
     });
 
     const response = await content(backupId);

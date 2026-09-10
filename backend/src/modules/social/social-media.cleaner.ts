@@ -2,6 +2,10 @@ import { Inject, Injectable, OnApplicationShutdown, OnModuleInit } from '@nestjs
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import {
+  OBJECT_STORAGE_ORPHAN_GRACE_MS,
+  OBJECT_STORAGE_ORPHAN_SCAN_PAGES,
+} from '../../object-storage/object-storage.limits';
 import { MEDIA_CLEANUP_BATCH } from './social-media.limits';
 import { SocialMediaRepository } from './social-media.repository';
 import { SOCIAL_MEDIA_STORE, type SocialMediaStore } from './social-media.store';
@@ -18,10 +22,23 @@ import { SOCIAL_MEDIA_STORE, type SocialMediaStore } from './social-media.store'
  * 2. **`DELETED`** (§99/§100): a publicação foi excluída, ou a conta foi. A visibilidade já caiu
  *    no instante da exclusão — é o `status` que a política consulta —, e o arquivo sai aqui. É
  *    isto que permite ao `DELETE` responder sem esperar I/O de sistema de arquivos.
- * 3. **órfãos** (§140): arquivo no disco sem linha em metadata. Ele nasce da janela entre escrever
- *    o arquivo e inserir a linha — a ordem é deliberada (ver `SocialMediaService.upload`), porque
- *    o erro oposto seria metadata apontando para um arquivo que nunca existiu, e aí **toda**
+ * 3. **órfãos** (§140): objeto no armazenamento sem linha em metadata. Ele nasce da janela entre
+ *    gravar o objeto e inserir a linha — a ordem é deliberada (ver `SocialMediaService.upload`),
+ *    porque o erro oposto seria metadata apontando para um objeto que nunca existiu, e aí **toda**
  *    leitura precisaria tratar o caso. Sem esta varredura, os órfãos cresceriam indefinidamente.
+ *
+ * ## O período de carência (T18.1 §15/§16)
+ *
+ * A mesma janela que produz órfãos produz falsos órfãos: um upload que já gravou o objeto e
+ * ainda não commitou a linha é, para uma listagem, indistinguível de um resto de processo morto.
+ * Até a T18.1 a varredura lia o banco **antes** de listar o disco e confiava nessa ordem — que
+ * não fecha a janela: um upload que grava o objeto depois da leitura do banco e antes da
+ * listagem aparecia no disco, não aparecia no conjunto conhecido, e era apagado logo antes de a
+ * pessoa publicar a foto.
+ *
+ * Agora só é órfão o que não tem linha **e** é mais antigo que [OBJECT_STORAGE_ORPHAN_GRACE_MS].
+ * A ordem das leituras deixou de importar: um objeto recente nunca é recolhido, tenha ou não
+ * linha ainda — e um objeto antigo sem linha é, com certeza, resto.
  *
  * ## Por que não um scheduler novo
  *
@@ -31,13 +48,18 @@ import { SOCIAL_MEDIA_STORE, type SocialMediaStore } from './social-media.store'
  * externa seria infraestrutura nova para apagar arquivos.
  *
  * `isProcessing` impede sobreposição: uma varredura lenta não pode acumular execuções em cima de
- * si mesma. E toda passagem é **bounded** por [MEDIA_CLEANUP_BATCH] — se houver muito a recolher,
- * ela leva vários ciclos, em vez de um ciclo que segura o event loop.
+ * si mesma. E toda passagem é **bounded** — por [MEDIA_CLEANUP_BATCH] remoções e por
+ * [OBJECT_STORAGE_ORPHAN_SCAN_PAGES] páginas de listagem. Se houver muito a recolher, ela leva
+ * vários ciclos, em vez de um ciclo que segura o event loop; e a listagem de órfãos continua de
+ * onde parou (`orphanCursor`), em janela deslizante, para que um armazenamento grande seja
+ * percorrido inteiro ao longo das varreduras sem nunca ser carregado de uma vez.
  */
 @Injectable()
 export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   private timer?: NodeJS.Timeout;
   private isProcessing = false;
+  /** Onde a varredura de órfãos parou. Ausente = do começo do namespace. */
+  private orphanCursor?: string;
 
   constructor(
     private readonly repository: SocialMediaRepository,
@@ -64,7 +86,7 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
-   * Uma passagem. Devolve quantos arquivos foram removidos — é o que o teste observa.
+   * Uma passagem. Devolve quantos objetos foram removidos — é o que o teste observa.
    *
    * Pública de propósito: o teste a chama diretamente, com um relógio injetado, em vez de esperar
    * o intervalo. Um teste que dormisse para exercitar limpeza seria lento e instável.
@@ -80,7 +102,7 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
       return collected + orphans;
     } catch (error) {
       // Uma varredura que falha não pode derrubar o processo: ela é manutenção, e o Feed continua
-      // funcionando sem ela. A mensagem descreve a falha, nunca o caminho do arquivo (§161).
+      // funcionando sem ela. A mensagem descreve a falha, nunca a chave nem o caminho (§161).
       this.logger.warn('social.media.cleanup_failed', {
         error: error instanceof Error ? error.name : 'UNKNOWN',
       });
@@ -95,7 +117,7 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
     let removed = 0;
 
     for (const item of due) {
-      // O arquivo primeiro, a linha depois: a ordem inversa deixaria um arquivo sem metadata, que
+      // O objeto primeiro, a linha depois: a ordem inversa deixaria um objeto sem metadata, que
       // é o órfão que a segunda varredura teria de recolher — trabalho a mais para nada.
       await this.store.remove(item.storageKey).catch(() => undefined);
       await this.repository.deleteRow(item.id);
@@ -109,29 +131,45 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
-   * Arquivos sem metadata (§140).
+   * Objetos sem metadata (§140), mais antigos que o período de carência (T18.1 §16).
    *
    * Roda depois da coleta acima de propósito: as linhas que acabaram de sair já levaram os
-   * arquivos junto, então esta varredura só encontra o que realmente ficou órfão.
+   * objetos junto, então esta varredura só encontra o que realmente ficou órfão.
    *
-   * O conjunto de chaves conhecidas é lido **antes** de listar o disco. A ordem importa: listar o
-   * disco primeiro e consultar o banco depois criaria uma janela em que um upload concluído entre
-   * as duas leituras pareceria órfão — e seria apagado logo depois de a pessoa publicá-lo.
+   * Página a página, e por página: a listagem é prefixada (`social/checkins/`) e bounded, e o
+   * banco é consultado só pelas chaves daquela página — nunca "todas as chaves" de um lado ou do
+   * outro. O cursor sobrevive entre varreduras; quando o namespace acaba, a próxima recomeça.
    */
   private async collectOrphans(): Promise<number> {
-    const known = await this.repository.allStorageKeys();
-    const onDisk = await this.store.listKeys();
-
+    const now = this.clock.now();
     let removed = 0;
-    for (const key of onDisk) {
-      if (known.has(key)) {
-        continue;
+
+    for (let pages = 0; pages < OBJECT_STORAGE_ORPHAN_SCAN_PAGES; pages += 1) {
+      const page = await this.store.listObjects(this.orphanCursor);
+      const candidates = page.objects.filter(
+        (object) => now - object.createdAt >= OBJECT_STORAGE_ORPHAN_GRACE_MS,
+      );
+      const known = await this.repository.findExistingStorageKeys(
+        candidates.map((object) => object.storageKey),
+      );
+
+      for (const object of candidates) {
+        if (known.has(object.storageKey)) {
+          continue;
+        }
+        if (removed >= MEDIA_CLEANUP_BATCH) {
+          break;
+        }
+        await this.store.remove(object.storageKey).catch(() => undefined);
+        removed += 1;
       }
-      if (removed >= MEDIA_CLEANUP_BATCH) {
+
+      // A página inteira foi examinada (ou o lote encheu): o cursor avança de qualquer jeito —
+      // o que sobrou continua órfão e continua antigo, e a próxima passagem pelo namespace o pega.
+      this.orphanCursor = page.nextPageToken;
+      if (this.orphanCursor === undefined || removed >= MEDIA_CLEANUP_BATCH) {
         break;
       }
-      await this.store.remove(key).catch(() => undefined);
-      removed += 1;
     }
 
     if (removed > 0) {

@@ -337,6 +337,67 @@ export const envSchema = z.object({
     .min(10_000)
     .max(6 * 60 * 60 * 1000)
     .default(15 * 60 * 1000),
+
+  // --- Object Storage (T18.1) -----------------------------------------------------------
+  //
+  // Onde os **bytes** vivem: fotos dos check-ins (T17.9) e o documento canônico dos backups
+  // (T16.5). O PostgreSQL continua sendo a autoridade de metadata, ownership, hashes e estado;
+  // ele só deixa de carregar o conteúdo pesado. A escolha do provider acontece em **um** lugar
+  // (`object-storage.factory.ts`), e nenhum service, controller ou repositório sabe qual é.
+
+  /**
+   * `local` guarda os objetos no sistema de arquivos sob `SOCIAL_MEDIA_ROOT` — desenvolvimento,
+   * teste e CI, sem Google Cloud, sem ADC, sem rede. `gcs` usa o bucket privado do Google Cloud
+   * Storage com Application Default Credentials.
+   *
+   * Default `local` de propósito: a suíte e o CI não podem depender de projeto GCP, e um deploy
+   * que queira o bucket precisa dizê-lo explicitamente — junto com `GCS_BUCKET_NAME`.
+   */
+  OBJECT_STORAGE_PROVIDER: z.enum(['local', 'gcs']).default('local'),
+
+  /**
+   * O bucket do provider `gcs`. Obrigatório quando `OBJECT_STORAGE_PROVIDER=gcs`, e a ausência
+   * derruba o startup (`AppConfig.missingRequirements`) — nunca um bucket default no código.
+   *
+   * Vazio significa ausente, como `DATABASE_URL_DIRECT`: é o que o Compose injeta para uma
+   * variável não definida. A forma é a das regras de nome de bucket do GCS (minúsculas, dígitos,
+   * `-`, `_`, `.`; 3 a 222 caracteres).
+   *
+   * **Não existe credencial aqui.** Nenhuma `GCS_PRIVATE_KEY`, `GCS_CLIENT_EMAIL` ou JSON de
+   * service account: o SDK autentica por ADC — a service account anexada ao serviço (Cloud Run,
+   * T18.2) ou o `gcloud auth application-default login` do operador. Há teste estrutural.
+   */
+  GCS_BUCKET_NAME: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/, 'nome de bucket GCS inválido')
+      .optional(),
+  ),
+
+  /**
+   * Teto de tempo de **uma** requisição HTTP ao Object Storage (ms).
+   *
+   * I/O externo sem teto é requisição presa para sempre segurando um worker. O SDK aplica este
+   * valor por requisição e faz o retry dele por cima — bounded, sem laço manual. Só vale para o
+   * provider `gcs`; o sistema de arquivos local não tem rede para esperar.
+   */
+  OBJECT_STORAGE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+
+  /**
+   * Intervalo entre varreduras da limpeza de objetos órfãos de **backup** (`backups/`).
+   *
+   * Órfão de backup é raro — o processo morreu entre gravar o objeto e o commit do PostgreSQL, ou
+   * a retenção não conseguiu apagar um objeto —, e cada varredura é uma listagem paga no GCS.
+   * Seis horas por default: frequente o bastante para não acumular, raro o bastante para custar
+   * nada. O mínimo baixo existe para o teste, não para produção.
+   */
+  BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(24 * 60 * 60 * 1000)
+    .default(6 * 60 * 60 * 1000),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

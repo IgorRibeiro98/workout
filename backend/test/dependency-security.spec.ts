@@ -18,8 +18,13 @@ const BACKEND_ROOT = join(__dirname, '..');
  */
 describe('Postura de dependências', () => {
   it('apenas os arquivos autorizados importam firebase-admin, e apenas produtos estritos', () => {
-    // A cadeia moderada aberta hoje (@google-cloud/storage → teeny-request/retry-request → uuid)
-    // não é alcançável **porque** nada aqui importa `firebase-admin/storage`.
+    // A cadeia moderada de `firebase-admin` (`@google-cloud/storage@7` → teeny-request/
+    // retry-request → uuid) não é alcançável pelo caminho de identidade e de mensagens
+    // **porque** nada aqui importa `firebase-admin/storage`.
+    //
+    // Desde a T18.1 o backend depende de `@google-cloud/storage@8` **diretamente**, pelo seu
+    // próprio caminho (`object-storage/gcs-object-storage.client.ts`) — ver o teste seguinte e
+    // `object-storage-structure.spec.ts` para a justificativa do que continua aberto ali.
     // Na T16.1, apenas auth verifier importava firebase-admin.
     // Na T17.5, firebase-push-gateway também importa, restrito a messaging.
     const importers = collectSources(join(BACKEND_ROOT, 'src')).filter((file) =>
@@ -62,6 +67,41 @@ describe('Postura de dependências', () => {
     ]) {
       expect(pushSource).not.toContain(forbidden);
     }
+  });
+
+  it('a dependência direta do SDK de Storage é deliberada, fixada e justificada (T18.1)', () => {
+    // ## O que este teste protege
+    //
+    // `@google-cloud/storage@8` entrou na T18.1 como dependência **direta**, para o bucket
+    // privado das fotos e dos documentos de backup. O `npm audit --omit=dev --audit-level=high`
+    // do CI continua verde: o que a cadeia dele carrega hoje é **moderado** — `gaxios@6` → `uuid@9`
+    // (GHSA-w5hq-g745-h8pq: falta de checagem de limites em `uuid.v3/v5/v6` quando o chamador
+    // passa um `buf`). A justificativa verificável para aceitá-lo: `gaxios` só chama `uuid.v4()`,
+    // para gerar a fronteira de um corpo multipart — a função vulnerável nunca é invocada, e este
+    // backend não a invoca por conta própria.
+    //
+    // O que muda se alguém trocar a versão: a justificativa precisa ser revisada, e é isto que
+    // avisa. Uma versão da série `legacy-18` (7.x) traria de volta `teeny-request`/`retry-request`
+    // vulneráveis; uma major nova precisa ser lida antes de entrar.
+    const pkg = JSON.parse(
+      readFileSync(join(BACKEND_ROOT, 'package.json'), 'utf8'),
+    ) as PackageManifest;
+    expect(pkg.dependencies['@google-cloud/storage']).toBe('8.1.0');
+
+    const gaxios = readFileSync(
+      join(BACKEND_ROOT, 'node_modules', 'gaxios', 'build', 'src', 'gaxios.js'),
+      'utf8',
+    );
+    // Só `v4`: nenhuma das funções do aviso.
+    expect(gaxios).toMatch(/uuid_1\.v4\)\(\)/);
+    expect(gaxios).not.toMatch(/uuid_1\.v[356]\b/);
+
+    // E ninguém no backend usa `uuid` com `buf` por conta própria: os identificadores vêm de
+    // `node:crypto`.
+    const uuidImporters = collectSources(join(BACKEND_ROOT, 'src')).filter((file) =>
+      /from 'uuid'/.test(readFileSync(file, 'utf8')),
+    );
+    expect(uuidImporters).toEqual([]);
   });
 
   it('o caminho de identidade e de mensagens não carrega o SDK de Storage em runtime', () => {

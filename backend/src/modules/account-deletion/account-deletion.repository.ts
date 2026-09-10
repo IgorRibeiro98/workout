@@ -191,6 +191,22 @@ export class AccountDeletionRepository {
     return res.rows.map((row) => row.key);
   }
 
+  /**
+   * As chaves dos documentos de backup desta conta no Object Storage (T18.1 §36).
+   *
+   * Lidas **antes** do purge, como as de mídia: depois dele as linhas não existem mais. Snapshots
+   * anteriores à T18.1 ainda não migrados não têm chave — o documento deles mora na própria linha,
+   * e sai com ela.
+   */
+  async listBackupStorageKeys(ownerUid: string): Promise<string[]> {
+    const res = await this.db.query<{ key: string }>(
+      `SELECT storage_key AS key FROM backup_snapshots
+        WHERE owner_uid = $1 AND storage_key IS NOT NULL`,
+      [ownerUid],
+    );
+    return res.rows.map((row) => row.key);
+  }
+
   async insertTombstone(id: string, uidHash: string, now: number): Promise<void> {
     await this.db.query(
       `INSERT INTO account_deletion_tombstones (id, uid_hash, deleted_at)

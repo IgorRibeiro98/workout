@@ -283,10 +283,19 @@ export class SocialMediaRepository {
     await this.db.query(`DELETE FROM social_checkin_media WHERE id = $1`, [mediaId]);
   }
 
-  /** As chaves que **existem** em metadata, para a varredura de órfãos (§140). */
-  async allStorageKeys(): Promise<Set<string>> {
+  /**
+   * Quais destas chaves **existem** em metadata, para a varredura de órfãos (§140, T18.1 §14).
+   *
+   * Bounded pela página de objetos que o coletor está examinando — e não "todas as chaves do
+   * banco", que cresceria com a tabela e seria carregada inteira a cada varredura.
+   */
+  async findExistingStorageKeys(storageKeys: readonly string[]): Promise<Set<string>> {
+    if (storageKeys.length === 0) {
+      return new Set();
+    }
     const res = await this.db.query<{ key: string }>(
-      `SELECT storage_key AS key FROM social_checkin_media`,
+      `SELECT storage_key AS key FROM social_checkin_media WHERE storage_key = ANY($1::text[])`,
+      [storageKeys as string[]],
     );
     return new Set(res.rows.map((row) => row.key));
   }

@@ -13,6 +13,10 @@ import {
   type AiProviderGateway,
 } from '../../src/modules/ai/provider/ai-provider.gateway';
 import { PUSH_GATEWAY, type PushGateway } from '../../src/modules/social/push-gateway';
+import {
+  OBJECT_STORAGE_CLIENT,
+  type ObjectStorageClient,
+} from '../../src/object-storage/object-storage.client';
 
 /**
  * A aplicação real com os provedores de fronteira trocados: o verificador de token e, quando o
@@ -38,6 +42,12 @@ export async function createTestApp(
    * Gateway de Push (T17.5). Quando ausente, o `FirebasePushGateway` real é montado.
    */
   pushGateway?: PushGateway,
+  /**
+   * Cliente de Object Storage (T18.1). Quando ausente, o provider configurado é montado — que,
+   * na suíte, é sempre `local` (disco temporário). Um dublê aqui é o que permite injetar falha de
+   * infraestrutura (bucket fora, delete que falha) sem rede e sem GCP.
+   */
+  overrides: { objectStorageClient?: ObjectStorageClient } = {},
 ): Promise<INestApplication> {
   let builder = Test.createTestingModule({ imports: [AppModule.forRoot(config)] })
     .overrideProvider(AUTH_TOKEN_VERIFIER)
@@ -53,6 +63,12 @@ export async function createTestApp(
 
   if (pushGateway) {
     builder = builder.overrideProvider(PUSH_GATEWAY).useValue(pushGateway);
+  }
+
+  if (overrides.objectStorageClient) {
+    builder = builder
+      .overrideProvider(OBJECT_STORAGE_CLIENT)
+      .useValue(overrides.objectStorageClient);
   }
 
   const moduleRef = await builder.compile();

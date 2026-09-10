@@ -3,6 +3,7 @@ dist
 coverage
 test
 data
+.spark-media
 *.db
 *.db-wal
 *.db-shm

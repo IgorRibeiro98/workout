@@ -104,8 +104,9 @@ fi
 [ -f "$RESTORED" ] || fail "a restauração não produziu um arquivo"
 
 # A mídia restaurada, quando o snapshot a contém (T17.9 §138/§142). Procurada pelo subdiretório
-# `checkins`, que é a estrutura que `LocalSocialMediaStore` cria — e não pelo nome do diretório,
-# que é configurável e pode ter mudado entre o backup e a restauração.
+# `checkins`, que é a estrutura que o provider `local` de Object Storage cria (preservada na
+# T18.1) — e não pelo nome do diretório, que é configurável e pode ter mudado entre o backup e a
+# restauração. Com o provider `gcs` o snapshot não tem mídia: ela vive no bucket (T18.1).
 RESTORED_MEDIA=""
 MEDIA_ROOT_MARKER="$(find "${DRILL_DIR}/restored" -type d -name checkins 2> /dev/null | head -1)"
 [ -n "$MEDIA_ROOT_MARKER" ] && RESTORED_MEDIA="$(dirname "$MEDIA_ROOT_MARKER")"

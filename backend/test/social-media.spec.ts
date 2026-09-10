@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -37,6 +38,8 @@ import {
 } from '../src/modules/social/social-media.limits';
 import { SocialMediaCleaner } from '../src/modules/social/social-media.cleaner';
 import { assertSafeStorageKey } from '../src/modules/social/social-media.store';
+import { SocialMediaRepository } from '../src/modules/social/social-media.repository';
+import { OBJECT_STORAGE_ORPHAN_GRACE_MS } from '../src/object-storage/object-storage.limits';
 
 /**
  * T17.9 — mídia dos check-ins: pipeline, privacidade, autorização, quota e limpeza.
@@ -877,23 +880,91 @@ describe('T17.9 — mídia dos check-ins', () => {
       expect(filesOnDisk()).toEqual([]);
     });
 
-    it('arquivos órfãos não crescem indefinidamente (§140)', async () => {
+    it('arquivos órfãos antigos não crescem indefinidamente (§140, T18.1 §16)', async () => {
       const syncId = await setupAuthor();
       await upload(TOKEN_A, syncId, await jpeg()).expect(201);
 
       // Um arquivo com a forma correta, mas sem metadata — o que sobra se o processo morrer entre
-      // escrever o arquivo e inserir a linha.
+      // escrever o arquivo e inserir a linha. Antigo o bastante para não ser um upload em curso.
       const orphanDir = join(mediaRoot, 'checkins', 'ff', 'ee');
       mkdirSync(orphanDir, { recursive: true });
       const orphan = join(orphanDir, 'ffeed0d0-0000-4000-8000-000000000000.webp');
       writeFileSync(orphan, await webp(10, 10));
+      const old = new Date(NOW - OBJECT_STORAGE_ORPHAN_GRACE_MS - 1);
+      utimesSync(orphan, old, old);
 
       expect(filesOnDisk()).toHaveLength(2);
-      await app.get(SocialMediaCleaner).sweep();
+      expect(await app.get(SocialMediaCleaner).sweep()).toBe(1);
 
       // O órfão sai; o que tem metadata fica.
       expect(existsSync(orphan)).toBe(false);
       expect(filesOnDisk()).toHaveLength(1);
+    });
+
+    it('um objeto recém-gravado sem linha ainda NÃO é órfão — o upload pode estar em curso (T18.1 §15/§16)', async () => {
+      // A corrida que a T18.1 fecha:
+      //
+      //   cleaner lê o banco → upload grava o objeto → cleaner lista o armazenamento
+      //   → o objeto não estava no primeiro SELECT → "órfão" → apagado antes da linha commitar
+      //
+      // Aqui o objeto nasce **entre** a leitura do banco e a listagem, exatamente como num upload
+      // em andamento, e a linha só existe depois da varredura. Ele precisa sobreviver.
+      await setupAuthor();
+      const cleaner = app.get(SocialMediaCleaner);
+      const repository = app.get(SocialMediaRepository);
+
+      const key = 'checkins/ab/cd/abcd0000-0000-4000-8000-000000000000.webp';
+      const target = join(mediaRoot, key);
+      const bytes = await webp(10, 10);
+
+      const original = repository.findExistingStorageKeys.bind(repository);
+      const lookup = jest
+        .spyOn(repository, 'findExistingStorageKeys')
+        .mockImplementation(async (keys) => {
+          const known = await original(keys);
+          // O upload grava o objeto "agora": depois de a varredura ter olhado o banco.
+          mkdirSync(join(target, '..'), { recursive: true });
+          writeFileSync(target, bytes);
+          return known;
+        });
+      try {
+        // A listagem acontece antes da consulta ao banco; o objeto nasce durante a consulta. Uma
+        // segunda varredura vê o objeto listado e ausente do banco — o cenário perigoso.
+        await cleaner.sweep();
+        expect(await cleaner.sweep()).toBe(0);
+      } finally {
+        lookup.mockRestore();
+      }
+
+      // O objeto está lá, sem linha, e não foi apagado: ele é recente.
+      expect(existsSync(target)).toBe(true);
+      expect(await cleaner.sweep()).toBe(0);
+      expect(existsSync(target)).toBe(true);
+
+      // Quando envelhece sem nunca ganhar linha, aí sim é resto — e sai.
+      const old = new Date(NOW - OBJECT_STORAGE_ORPHAN_GRACE_MS - 1);
+      utimesSync(target, old, old);
+      expect(await cleaner.sweep()).toBe(1);
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it('a varredura de órfãos é prefixada: um objeto de backup no mesmo armazenamento nunca é tocado (T18.1 §14)', async () => {
+      await setupAuthor();
+      // Um documento de backup, antigo, sem linha em `backup_snapshots` — sob outro namespace.
+      const backupObject = join(
+        mediaRoot,
+        'backups',
+        'ab',
+        'cd',
+        'abcd0000-0000-4000-8000-000000000001.json',
+      );
+      mkdirSync(join(backupObject, '..'), { recursive: true });
+      writeFileSync(backupObject, '{}');
+      const old = new Date(NOW - OBJECT_STORAGE_ORPHAN_GRACE_MS - 1);
+      utimesSync(backupObject, old, old);
+
+      expect(await app.get(SocialMediaCleaner).sweep()).toBe(0);
+      expect(existsSync(backupObject)).toBe(true);
     });
   });
 

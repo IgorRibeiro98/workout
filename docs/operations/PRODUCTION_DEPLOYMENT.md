@@ -213,6 +213,13 @@ sudo chown -R spark:spark /opt/spark
 # backend **não sobe** em produção (`SOCIAL_MEDIA_ROOT`), que é o comportamento desejado: um deploy
 # que montasse o banco e esquecesse a mídia perderia todas as fotos na primeira recriação de
 # container, em silêncio.
+#
+# Isso descreve o provider `local` de Object Storage (o default). Desde a T18.1 a composição de
+# produção pretendida é `OBJECT_STORAGE_PROVIDER=gcs` + `GCS_BUCKET_NAME` (bucket privado, ADC):
+# nesse modo fotos e documentos de backup do usuário vivem no bucket, `/opt/spark/media` fica sem
+# uso e `SOCIAL_MEDIA_ROOT` deixa de ser exigida. A credencial do bucket NÃO é um arquivo aqui —
+# é a identidade do ambiente (service account anexada ao serviço, T18.2). Ver
+# `backend/.env.example`, seção "Object Storage".
 sudo chown spark:spark-data /opt/spark/data /opt/spark/media /opt/spark/secrets
 sudo chmod 2770 /opt/spark/data /opt/spark/media
 sudo chmod 2750 /opt/spark/secrets

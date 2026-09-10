@@ -307,8 +307,15 @@ com duas barreiras contra path traversal (allowlist de forma + confinamento na r
 `mediaId` não concede acesso: a rota exige token e passa pela mesma política do check-in. Não
 existe URL pública, diretório estático, URL assinada nem `Cache-Control: public`.
 
+Desde a T18.1 o `SocialMediaStore` grava no **Object Storage** do processo: o bucket privado do
+Google Cloud Storage em produção (`social/checkins/…`, autenticado por ADC, create-only) ou o disco
+local em desenvolvimento e CI. A chave no banco não mudou, o domínio continua sem saber onde os
+bytes moram, e o Android continua sem falar com o bucket — há teste estrutural contra
+`getSignedUrl`, `makePublic`, ACL pública e credencial no código.
+
 Quota por conta, TTL de mídia `PENDING`, e um `setInterval` bounded (`SocialMediaCleaner`) recolhe
-pendências expiradas, mídia `DELETED` e órfãos.
+pendências expiradas, mídia `DELETED` e órfãos — estes só depois de 24 h de carência, porque um
+objeto recente sem linha pode ser um upload cuja transação ainda não commitou (T18.1).
 
 No Android o cache de foto é **memória e só memória** — sem Coil `diskCache`, sem `cacheDir` —, com
 escopo de conta trocado **antes** da primeira requisição da conta nova.
@@ -344,7 +351,8 @@ nuvem.
 | `social_notification_*`, `social_push_devices` | apagado |
 | `workout_shares` (enviados e recebidos) | apagado |
 | `social_workout_checkins` e `social_checkin_media` (linhas) | apagado |
-| arquivos de mídia no `SocialMediaStore` | apagado (chaves lidas **antes** do purge) |
+| objetos de mídia no `SocialMediaStore` (disco ou bucket) | apagado (chaves lidas **antes** do purge, objetos removidos depois do commit; o que resistir vira órfão e é recolhido) |
+| objetos de backup do usuário no `BackupPayloadStore` (T18.1) | apagado (mesmo protocolo: chaves antes, objetos depois) |
 | `social_checkin_comments` / `_reactions` — próprios e **em posts alheios**, nas duas audiências | apagado |
 | `social_groups` de que a conta era dona (e todo o contexto deles) | apagado — o Squad vai junto |
 | `social_group_memberships` em Squads de terceiros | apagado — o Squad **permanece** |

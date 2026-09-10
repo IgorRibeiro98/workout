@@ -265,6 +265,33 @@ Nenhuma tabela do backend é uma tabela de domínio do Spark: o servidor guarda 
 payload e **não** desmonta treino em colunas consultáveis. Ele não é uma segunda autoridade
 operacional — com uma exceção deliberada e delimitada: o social (T17.0–T17.2).
 
+### Onde cada byte mora no servidor (T18.1)
+
+A partir da T18.1 o servidor tem **duas** autoridades de armazenamento, e a divisão é por natureza
+do dado, não por tabela:
+
+| Dado | PostgreSQL / Neon | Object Storage (GCS privado; disco local com o provider `local`) |
+| --- | --- | --- |
+| Backup do usuário (T16.4/T16.5) | `backup_snapshots`: ownership, `client_backup_id`, `payload_hash`, `size_bytes`, `item_count`, `storage_key`; `backup_items`: identidade do agregado, `entity_schema_version`, `content_hash` | `backups/xx/yy/<backupId>.json` — o documento canônico, byte a byte |
+| Foto do check-in (T17.9) | `social_checkin_media`: ownership, `storage_key`, `content_hash`, dimensões, status, ciclo de vida | `social/checkins/xx/yy/<uuid>.webp` — o WebP sanitizado |
+| Sync, social, quota, tombstones, ledger de exclusão | tudo | nada |
+
+Regras que esta divisão impõe:
+
+- **o PostgreSQL é a única autoridade de metadata, ownership, hashes e estado.** Um objeto sem
+  linha não existe para a API — é órfão, e a coleta o recolhe depois de 24 h de carência. Uma linha
+  nunca aponta para um objeto que não foi criado: o objeto é gravado antes, e a metadata só depois;
+- **backups novos não duplicam o documento no banco.** `backup_snapshots.payload` e
+  `backup_items.payload` ficam `NULL`; os snapshots anteriores continuam válidos a partir da coluna
+  até o migrador (`migrate-backup-payloads-to-object-storage`) movê-los, verificando o hash antes de
+  esvaziar o banco;
+- **a chave é do servidor e opaca.** `backups/…/<backupId>` e `checkins/…/<uuid>`: nunca uid,
+  `socialId`, `friendCode`, `clientBackupId`, `deviceId`, e-mail, nome ou legenda;
+- **o Android nunca fala com o bucket.** Sem credencial GCS no aparelho, sem URL pública, sem URL
+  assinada: os bytes saem do backend, depois da autorização em SQL, com o hash conferido;
+- **o social continua sem alcançar o backup, e vice-versa.** O bucket é o mesmo; as fronteiras são
+  duas (`SocialMediaStore`, `BackupPayloadStore`) sobre uma camada neutra (`ObjectStorageClient`).
+
 ### O social é a exceção, e ele não é dado de treino
 
 `social_profiles`, `social_privacy_settings` e `social_progress_settings` são as primeiras tabelas
@@ -292,8 +319,8 @@ domínio em TypeScript. Os dois foram recusados; os três campos respondem `UNSU
 
 A leitura que a projeção faz de `sync_entities` é um `COUNT(*)` por um adapter estreito
 (`SocialProgressSource`), com `owner_uid` na cláusula `WHERE` e **nenhum payload materializado**.
-`backup_snapshots`/`backup_items`/`backup_payloads` continuam inalcançáveis para o social, em
-qualquer forma. Ver [`social-profile-contract.md`](./social-profile-contract.md).
+`backup_snapshots`/`backup_items` e os objetos `backups/…` continuam inalcançáveis para o social,
+em qualquer forma. Ver [`social-profile-contract.md`](./social-profile-contract.md).
 
 E o social **não** entra na classificação local: ele não tem linha no Room, não entra no backup
 (T16.4), não é tocado pelo restore (T16.5), não entra na Outbox (T16.6) e não usa tombstone

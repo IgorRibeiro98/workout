@@ -3,8 +3,9 @@
 Fronteira online do Spark. Monólito modular em NestJS sobre PostgreSQL / Neon (migrado do SQLite na T18.0/T18.0.1), pensado para rodar em
 VPS com Docker Compose ou na nuvem com Neon Database.
 
-> **Estado (T18.0.1): fundação + identidade + Coach IA + backup + restore + sync + tombstones +
-> prontidão de produção com PostgreSQL hardened.**
+> **Estado (T18.1): fundação + identidade + Coach IA + backup + restore + sync + tombstones +
+> prontidão de produção com PostgreSQL hardened + Object Storage (GCS privado por ADC; provider
+> local para desenvolvimento e CI).**
 
 ## Stack
 
@@ -19,8 +20,29 @@ VPS com Docker Compose ou na nuvem com Neon Database.
 | Testes | Jest + Supertest | Padrão do NestJS; offline e determinístico |
 | Identidade | `firebase-admin` | Verificação oficial de Firebase ID Token; exige Node >= 22, que já é o runtime |
 | Modelo | `@google/genai` | SDK server-side oficial da Google para a Gemini API. O SDK do Firebase AI Logic é de cliente e não entra aqui |
+| Object Storage | `@google-cloud/storage` | SDK oficial do Google Cloud Storage, autenticado por ADC (T18.1). Bucket privado para fotos e documentos de backup; o provider `local` (disco) serve desenvolvimento, teste e CI |
 
 **Persistência:** O backend opera exclusivamente com PostgreSQL como autoridade de runtime. O Android continua utilizando Room / SQLite localmente, mantendo o funcionamento offline integral do aplicativo.
+
+**Bytes pesados (T18.1):** o PostgreSQL guarda metadata, índices, ownership, hashes e estado; as
+fotos dos check-ins e o documento canônico de cada backup vivem no **Object Storage** — um bucket
+privado do Google Cloud Storage em produção, o disco local em desenvolvimento e CI.
+
+```text
+                           ┌──────────────────────┐
+                           │ PostgreSQL / Neon    │  metadata · ownership · hashes · estado
+Android ──▶ Spark Backend ─┤                      │
+                           └──────────┬───────────┘
+                                      │ storageKey
+                           ┌──────────▼───────────┐
+                           │ Object Storage       │  social/checkins/…webp · backups/…json
+                           │ (GCS privado | disco)│
+                           └──────────────────────┘
+```
+
+O Android nunca recebe credencial do bucket e nunca fala com ele: todo byte passa pelo backend,
+depois da autorização em SQL. Não existe URL pública, URL assinada nem ACL pública — há teste
+estrutural.
 
 ## Rodar
 
@@ -62,10 +84,21 @@ npm test
 npm run build
 ```
 
-Nenhum teste toca rede, Firebase, Gemini ou VPS. A suíte de autenticação usa
-`FakeAuthTokenVerifier` e a do Coach usa `FakeAiProviderGateway` (ambos em `test/support/`, e só
-lá), então o CI roda sem service account, sem chave do Gemini, sem conta Google e sem internet —
-e sem gastar cota a cada commit.
+Nenhum teste toca rede, Firebase, Gemini, GCS ou VPS. A suíte de autenticação usa
+`FakeAuthTokenVerifier`, a do Coach usa `FakeAiProviderGateway` e a de Object Storage usa o
+provider `local` ou o `InMemoryObjectStorageClient` (todos em `test/support/`, e só lá), então o CI
+roda sem service account, sem chave do Gemini, sem projeto GCP, sem ADC e sem internet — e sem
+gastar cota a cada commit.
+
+O bucket real tem um smoke próprio, executado por uma pessoa com ADC válida, fora da suíte:
+
+```bash
+npm run build
+OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod npm run smoke:object-storage
+```
+
+Ele grava, lê, compara bytes e SHA-256, prova a recusa de sobrescrita, apaga e confirma a ausência
+— tudo sob `_smoke/`, nunca em `social/` ou `backups/`, e nunca deixa objeto para trás.
 
 ## Configuração
 
@@ -102,10 +135,20 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `AI_ENABLED` | não | `true` | `false` desliga o Coach sem tocar em backup e sync |
 | `SYNC_WRITE_ENABLED` | não | `true` | `false` pausa `POST /v1/sync/push`; o pull continua |
 | `MAINTENANCE_MODE` | não | `false` | `true` faz todo `/v1` responder `503`; `/health/*` continua |
+| `OBJECT_STORAGE_PROVIDER` | não | `local` | `local` (disco sob `SOCIAL_MEDIA_ROOT`) \| `gcs` (bucket privado, ADC). A escolha mora em `object-storage.factory.ts`, e só lá (T18.1) |
+| `GCS_BUCKET_NAME` | com `gcs` | — | Obrigatório quando `OBJECT_STORAGE_PROVIDER=gcs`; a ausência derruba o startup. Nunca há bucket default no código. Vazio = ausente |
+| `OBJECT_STORAGE_TIMEOUT_MS` | não | `30000` | Teto de uma requisição ao bucket; o retry do SDK é bounded por cima dele |
+| `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` | não | `21600000` | Coleta de objetos de backup órfãos (carência de 24 h). Longo: cada varredura é uma listagem paga |
+| `SOCIAL_MEDIA_ROOT` | produção com `local` | derivado fora de produção | Raiz do provider `local`: `checkins/…` (mídia, layout de sempre) e `backups/…`. Não participa de nada com `gcs` |
 
 Nenhuma credencial é versionada. `.env`, chaves, service accounts e Caddyfile real estão no
 `.gitignore` e no `.dockerignore`, e há teste que varre a árvore procurando chave privada,
 service account e API key.
+
+O bucket do GCS **não tem credencial na aplicação**: o SDK autentica por Application Default
+Credentials — a service account anexada ao serviço no Cloud Run (T18.2) ou o
+`gcloud auth application-default login` do operador. Não existe `GCS_PRIVATE_KEY`,
+`GCS_CLIENT_EMAIL` nem JSON de service account, e há teste estrutural sobre isso.
 
 A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive fora do repositório e
 é montado somente-leitura no container. Passo a passo em
@@ -283,6 +326,25 @@ Cinco decisões que valem ser sabidas antes de mexer aqui:
 5. **Retenção vem depois do commit.** O backup novo é gravado e confirmado antes de qualquer
    limpeza; uma limpeza que falhe deixa backup a mais, nunca a menos.
 
+Desde a **T18.1** o documento canônico não mora mais no PostgreSQL:
+
+```text
+validar → idempotência → backupId + storageKey (do servidor)
+       → objeto no Object Storage (create-only, CRC32C do SDK)
+       → transação: backup_snapshots (metadata, hashes, storage_key) + backup_items (identidade, hash)
+       → retenção: linhas antigas saem no commit; os objetos delas, depois
+```
+
+- `backup_snapshots.payload` e `backup_items.payload` ficam `NULL` em todo backup novo — há teste
+  estrutural e de comportamento. Os anteriores continuam válidos e restauráveis a partir da coluna
+  até o migrador (`npm run migrate:backup-payloads`) movê-los, um a um, verificando o hash antes de
+  esvaziar o banco;
+- `GET /v1/backups/{id}/content` confere `size_bytes` e `payload_hash` contra o objeto **antes** de
+  devolver: objeto ausente, truncado ou alterado é `410 BACKUP_CONTENT_UNAVAILABLE`, e bucket fora
+  do ar é `503 BACKUP_STORAGE_UNAVAILABLE` — que o Android trata como "tente de novo";
+- objeto sem linha (processo morto entre o upload e o commit; delete de retenção que falhou) é
+  órfão, e `BackupPayloadCleaner` o recolhe depois de 24 h de carência — nunca antes.
+
 Log: `requestId`, prefixo do uid, `clientBackupId`, `itemCount`, `sizeBytes`, duração e status.
 Corpo, payload, nome de treino, nota, medida e token **não** aparecem — e há teste que envia uma
 fixture com marcas reconhecíveis e varre a saída do logger procurando por elas.
@@ -296,6 +358,10 @@ backend/
 │   ├── bootstrap/create-app.ts  montagem (usada igual em produção e nos testes)
 │   ├── config/                  schema do ambiente + AppConfig
 │   ├── database/                conexão PostgreSQL (Pool), health check, runner de migrations
+│   ├── object-storage/          fronteira neutra de bytes: provider local (disco) e GCS (ADC);
+│   │                             a factory é o único ponto que escolhe entre os dois (T18.1)
+│   ├── cli/                     comandos operacionais: reconciliação de DR, migrador de payloads
+│   │                             legados, smoke do Object Storage real
 │   ├── common/                  logger, request ID, log de acesso, envelope de erro
 │   ├── modules/health/          liveness e readiness
 │   ├── modules/auth/            verificação de Firebase ID Token, guard e principal
@@ -313,7 +379,9 @@ Todos no mesmo processo e no mesmo banco. Não há `auth-service`, `sync-service
 Estar no mesmo processo **não** os torna acoplados: `SocialModule` não importa `BackupModule`,
 `SyncModule` nem `AiModule`, e há teste que varre os imports do módulo. A fronteira entre o domínio
 privado e o social é a `SocialProjection` (`modules/social/social.projection.ts`), não a
-proximidade dos arquivos.
+proximidade dos arquivos. Fotos e documentos de backup vivem no **mesmo** bucket sem que os dois
+domínios se conheçam: cada um tem a própria fronteira (`SocialMediaStore`, `BackupPayloadStore`)
+sobre a mesma camada neutra (`ObjectStorageClient`).
 
 O contrato de backup é compartilhado com o Android em
 [`contracts/backup/v1/`](../contracts/backup/v1/README.md): o README é a definição, e as fixtures
@@ -337,13 +405,16 @@ precisa de ownership, versionamento, idempotência e tombstones. Cada fase da T1
 Ver a [matriz de dados](../docs/architecture/data-classification-matrix.md).
 
 As tabelas de hoje: `server_metadata` (estado técnico), `ai_usage_daily` (contagem de uso do Coach,
-sem conteúdo), `backup_snapshots` + `backup_items` + `backup_payloads` (T16.4/T16.5),
-`sync_entities` + `sync_changes` + `sync_mutations` (T16.6/T16.7) e, desde a T17.0,
-`social_profiles` + `social_privacy_settings` + `friend_requests` + `friendships`.
+sem conteúdo), `backup_snapshots` + `backup_items` (T16.4/T16.5; desde a T18.1 só metadata,
+hashes e `storage_key` — o documento vive no Object Storage), `sync_entities` + `sync_changes` +
+`sync_mutations` (T16.6/T16.7) e, desde a T17.0, `social_profiles` + `social_privacy_settings` +
+`friend_requests` + `friendships`.
 
-As de backup e sync guardam o payload do agregado como texto — o servidor **não** desmonta treino
-em colunas consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que
-o Room já possui.
+As de sync guardam o payload do agregado como texto — o servidor **não** desmonta treino em colunas
+consultáveis, porque isso o tornaria uma segunda autoridade operacional sobre o dado que o Room já
+possui. As de backup deixaram de guardá-lo (T18.1): `backup_snapshots.payload` e
+`backup_items.payload` continuam existindo só para os snapshots anteriores, até o migrador
+esvaziá-las.
 
 As duas de social são a exceção deliberada, e ela é delimitada: o perfil social **é** do servidor
 (identidade pública não pode ser decidida por um aparelho offline), e por isso mesmo nenhum dado de
@@ -354,10 +425,17 @@ treino entra ali — nem XP, nem streak, nem contagem, nem peso, nem PR. Ver
 
 ```text
 Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ Spark Backend ──▶ PostgreSQL
-                                                                               │
-                                                           ops/backup.sh ──▶ pg_dump ──▶ off-site
-                                                                              (criptografado)
+                                                               │                │
+                                                               ▼            ops/backup.sh ──▶ pg_dump ──▶ off-site
+                                                        Object Storage                        (criptografado)
+                                                   (GCS privado, ou o volume
+                                                    de mídia com o provider local)
 ```
+
+Com `OBJECT_STORAGE_PROVIDER=gcs`, fotos e documentos de backup **não vivem no sistema de
+arquivos**: o volume de mídia e o `SPARK_MEDIA_DIR` do `ops/backup.sh` deixam de ter conteúdo, e a
+durabilidade desses objetos é a do bucket. Ver
+[`docs/operations/BACKUP_AND_RESTORE.md`](../docs/operations/BACKUP_AND_RESTORE.md).
 
 - [`docker-compose.prod.yml`](./docker-compose.prod.yml) — o backend **não publica porta nenhuma**;
   quem escuta na internet é o Caddy. Conexão com PostgreSQL via `DATABASE_URL`, rotação de log, limites de

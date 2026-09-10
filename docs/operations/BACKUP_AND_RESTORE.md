@@ -19,18 +19,21 @@
 ```text
 T16.4  BACKUP DO USUÁRIO          protege contra perder o APARELHO
        Android ──▶ Spark Backend  o dado do usuário passa a existir no servidor
+       (desde a T18.1: metadata e hashes no PostgreSQL; o documento canônico no Object Storage —
+        GCS privado em produção, disco local no provider `local`)
 
 T16.8  BACKUP DO SERVIDOR         protege contra perder a VPS (e a conta do provedor do banco)
        PostgreSQL ──▶ off-site     o banco do servidor passa a existir fora dos dois
+       (pg_dump + ledger + o volume de mídia do provider `local`; um bucket GCS NÃO passa por aqui)
 ```
 
 Confundir os dois dá falsa sensação de segurança nos dois sentidos (§48):
 
 - o backup da T16.4 **não** protege contra a perda da VPS. Antes da T16.8, um `docker compose
   down -v` destruía os backups de todo mundo;
-- restaurar o banco do servidor **não** restaura o Room de ninguém (§49). Ele recupera os
-  snapshots de backup remotos, o estado de sync, o change log, os tombstones e a metadata de uso
-  da IA. O aparelho continua sendo a autoridade operacional do treino, e o usuário restaura o
+- restaurar o banco do servidor **não** restaura o Room de ninguém (§49). Ele recupera a metadata
+  dos snapshots de backup remotos (e, com o provider `local`, os documentos deles junto com a
+  mídia), o estado de sync, o change log, os tombstones e a metadata de uso da IA. O aparelho continua sendo a autoridade operacional do treino, e o usuário restaura o
   aparelho dele pelo fluxo da T16.5.
 
 ## Como o snapshot é feito
@@ -116,6 +119,32 @@ as fotos são imutáveis depois de escritas, então o backup de amanhã não ree
 
 Um servidor que ainda não recebeu foto nenhuma não tem o diretório, e isso **não é erro**: o backup
 registra um aviso e segue com o banco.
+
+### Com o provider `gcs`, mídia e backup pessoal não vivem mais no sistema de arquivos (T18.1)
+
+Desde a T18.1 o backend escolhe onde os **bytes** moram por `OBJECT_STORAGE_PROVIDER`:
+
+```text
+OBJECT_STORAGE_PROVIDER=local   fotos em $SPARK_MEDIA_DIR/checkins/…  e  documentos de backup do
+                                usuário em $SPARK_MEDIA_DIR/backups/…  → os dois entram no restic
+                                exatamente como acima (mesmo diretório, mesmo snapshot)
+
+OBJECT_STORAGE_PROVIDER=gcs     fotos em  <bucket>/social/checkins/…  e  documentos de backup em
+                                <bucket>/backups/…  → NÃO estão em disco nenhum da VPS, NÃO entram
+                                no restic, e `ops/backup.sh` registra "mídia: 0 arquivos" com razão
+```
+
+Com `gcs`, o `pg_dump` continua levando **toda a metadata** (`backup_snapshots` com `storage_key`,
+`payload_hash` e `size_bytes`; `social_checkin_media` com `storage_key` e `content_hash`), e a
+durabilidade dos bytes passa a ser a do bucket — objetos imutáveis, nunca sobrescritos, apagados só
+depois do commit que os desreferencia. Restaurar o banco recupera as referências; os objetos nunca
+saíram do lugar. Um objeto que o banco restaurado referencie e o bucket não tenha (o bucket foi
+tocado por fora) responde `410 BACKUP_CONTENT_UNAVAILABLE` no restore do usuário e `404` na foto —
+nunca conteúdo corrompido, porque o hash é conferido antes de qualquer byte sair.
+
+O que este documento **não** redesenha: proteção do bucket contra exclusão acidental (versionamento
+de objetos, retenção, soft delete do GCS) e a estratégia de DR do PostgreSQL gerenciado. Os dois
+pertencem à T18.3.
 
 ### O ledger de exclusões entra desde a T17.13.1
 

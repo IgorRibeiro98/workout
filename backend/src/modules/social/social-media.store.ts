@@ -1,37 +1,40 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
 import type { Readable } from 'node:stream';
-import { isAbsolute, join, resolve, sep } from 'node:path';
-import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import type {
+  ObjectStorageClient,
+  StoredObjectSummary,
+} from '../../object-storage/object-storage.client';
+import { OBJECT_STORAGE_LIST_PAGE_SIZE } from '../../object-storage/object-storage.limits';
 import { OUTPUT_EXTENSION } from './social-media.limits';
 
 /**
- * A fronteira de armazenamento de mídia social (T17.9 §22).
+ * A fronteira de armazenamento de mídia social (T17.9 §22, T18.1).
  *
  * ## Por que ela existe como interface
  *
- * Porque "onde os bytes moram" é a decisão que mais provavelmente muda depois: hoje é o volume da
- * VPS (ADR-0001, um processo, uma máquina), amanhã pode ser um bucket. Uma interface estreita — dá
- * para gravar, ler, apagar e listar — é o que permite trocar isso sem tocar em autorização,
- * validação, quota ou DTO. E é o que garante que **nada** além desta fronteira monte caminho de
- * arquivo: o resto do módulo conhece `storageKey`, e só.
+ * Porque "onde os bytes moram" é a decisão que mais provavelmente muda depois — e mudou: na
+ * T17.9 era o volume da VPS, desde a T18.1 pode ser um bucket privado do Google Cloud Storage.
+ * Uma interface estreita — dá para gravar, ler, apagar e listar — é o que permitiu trocar isso
+ * sem tocar em autorização, validação, quota ou DTO. E é o que garante que **nada** além desta
+ * fronteira sabe traduzir uma chave em caminho ou em nome de objeto: o resto do módulo conhece
+ * `storageKey`, e só.
  *
  * ## O que ela nunca aceita
  *
  * Um caminho vindo do cliente (§24/§25). A chave é **gerada aqui** ([newStorageKey]), e toda
- * operação a valida antes de tocar no disco. Um `../../etc/passwd` que chegasse pela rede não
- * atravessa `assertSafeKey`, e mesmo que atravessasse, `resolve` fora da raiz é recusado — duas
- * barreiras, porque path traversal é a falha em que uma barreira sozinha historicamente falha.
+ * operação a valida antes de tocar no provider. Um `../../etc/passwd` que chegasse pela rede não
+ * atravessa `assertSafeStorageKey`, e mesmo que atravessasse, o provider local recusa qualquer
+ * caminho resolvido fora da raiz — duas barreiras, porque path traversal é a falha em que uma
+ * barreira sozinha historicamente falha.
  */
 export interface SocialMediaStore {
   /** Gera uma chave opaca nova. Nunca deriva de uid, nome, `friendCode` ou nome de arquivo (§23). */
   newStorageKey(): string;
 
+  /** Grava **uma vez**: uma chave já ocupada é erro, nunca sobrescrita (T18.1 §10). */
   write(storageKey: string, bytes: Buffer): Promise<void>;
 
-  /** `null` quando o arquivo não existe — restore inconsistente não pode derrubar o backend (§141). */
+  /** `null` quando o objeto não existe — restore inconsistente não pode derrubar o backend (§141). */
   openRead(storageKey: string): Promise<Readable | null>;
 
   exists(storageKey: string): Promise<boolean>;
@@ -39,14 +42,38 @@ export interface SocialMediaStore {
   /** Idempotente: apagar o que já não existe é sucesso. */
   remove(storageKey: string): Promise<void>;
 
-  /** Todas as chaves presentes no armazenamento, para a varredura de órfãos (§140). */
-  listKeys(): Promise<string[]>;
+  /**
+   * Uma página das chaves presentes no armazenamento, com a data de criação de cada uma — para a
+   * varredura de órfãos (§140), que precisa da data para respeitar o período de carência
+   * (T18.1 §16). Sempre bounded e sempre restrita ao namespace da mídia: um objeto de backup no
+   * mesmo bucket nunca aparece aqui.
+   */
+  listObjects(pageToken?: string): Promise<SocialMediaPage>;
+}
+
+export interface StoredMediaObject {
+  readonly storageKey: string;
+  readonly createdAt: number;
+}
+
+export interface SocialMediaPage {
+  readonly objects: readonly StoredMediaObject[];
+  readonly nextPageToken?: string;
 }
 
 export const SOCIAL_MEDIA_STORE = Symbol('SOCIAL_MEDIA_STORE');
 
-/** O prefixo de todos os arquivos desta fase. Um diretório por propósito (§23). */
+/** O prefixo de todas as chaves desta fase. Um diretório por propósito (§23). */
 const CHECKIN_PREFIX = 'checkins';
+
+/**
+ * O namespace da mídia dentro do bucket compartilhado (T18.1 §8/§9).
+ *
+ * A chave no PostgreSQL continua sendo `checkins/xx/yy/<uuid>.webp`; o objeto vive em
+ * `social/checkins/xx/yy/<uuid>.webp`. A tradução acontece **aqui**, e só aqui — nenhuma linha
+ * de `social_checkin_media` precisou mudar, e o domínio continua sem saber que existe um bucket.
+ */
+const OBJECT_NAMESPACE = 'social/';
 
 /**
  * A forma de uma chave válida: `checkins/<2 hex>/<2 hex>/<uuid v4>.webp`.
@@ -71,7 +98,7 @@ export class UnsafeStorageKeyError extends Error {
 /**
  * A validação de chave, isolada e pura — para que o teste possa provar §25 sem tocar em disco.
  *
- * Recusa tudo o que não for exatamente a forma gerada por [LocalSocialMediaStore.newStorageKey]:
+ * Recusa tudo o que não for exatamente a forma gerada por [ObjectStorageSocialMediaStore.newStorageKey]:
  * caminho absoluto, `..` em qualquer posição, separador do Windows, byte nulo, extensão diferente.
  * Uma allowlist estrita, e não uma blocklist de sequências perigosas — blocklist é o desenho em
  * que sempre falta uma codificação.
@@ -84,17 +111,15 @@ export function assertSafeStorageKey(storageKey: unknown): string {
 }
 
 /**
- * O armazenamento em disco do volume persistente da VPS (§22/§26).
+ * A mídia sobre o Object Storage do processo (T18.1 §6/§13).
  *
- * A raiz vem de `SOCIAL_MEDIA_ROOT`, obrigatória em produção (§28) — ver `AppConfig`.
+ * Uma implementação só, para os dois providers: quem decide entre o disco local e o bucket é o
+ * `ObjectStorageClient` injetado — escolhido em `object-storage.factory.ts`, nunca aqui. O que
+ * este adaptador acrescenta ao cliente é o que é **do domínio**: a forma da chave, o namespace
+ * `social/` e a garantia de que a listagem nunca sai dele.
  */
-@Injectable()
-export class LocalSocialMediaStore implements SocialMediaStore {
-  private readonly root: string;
-
-  constructor(@Inject(APP_CONFIG) config: AppConfig) {
-    this.root = resolve(config.socialMediaRoot);
-  }
+export class ObjectStorageSocialMediaStore implements SocialMediaStore {
+  constructor(private readonly client: ObjectStorageClient) {}
 
   newStorageKey(): string {
     const id = randomUUID();
@@ -104,85 +129,53 @@ export class LocalSocialMediaStore implements SocialMediaStore {
   }
 
   async write(storageKey: string, bytes: Buffer): Promise<void> {
-    const target = this.absolutePathOf(storageKey);
-    await mkdir(join(target, '..'), { recursive: true });
-    // `wx`: falhar se já existir. Uma chave é usada uma vez; reusá-la seria sobrescrever a foto de
-    // alguém, e prefiro que isso seja um erro barulhento a um silêncio.
-    await writeFile(target, bytes, { flag: 'wx', mode: 0o640 });
+    // A colisão sobe como está: quem chama gerou a chave agora, e uma chave já ocupada é um
+    // defeito a investigar — nunca um objeto a substituir.
+    await this.client.write(objectNameOf(storageKey), bytes, {
+      contentType: 'image/webp',
+      metadata: { 'spark-sha256': contentHashOf(bytes) },
+    });
   }
 
   async openRead(storageKey: string): Promise<Readable | null> {
-    const target = this.absolutePathOf(storageKey);
-    // `stat`, e não `existsSync`: além de ser assíncrono (esta é a única operação de leitura no
-    // caminho de uma requisição de imagem), ele confirma que o caminho é um **arquivo**. Um
-    // diretório com o nome certo abriria um stream que falha depois, no meio da resposta.
-    try {
-      const info = await stat(target);
-      if (!info.isFile()) {
-        return null;
-      }
-    } catch {
-      // §141 — metadata apontando para arquivo ausente (restore parcial) devolve ausência, e não
-      // uma exceção que derrubaria a requisição. Quem chama decide o que dizer ao cliente.
-      return null;
-    }
-    return createReadStream(target);
+    return this.client.openRead(objectNameOf(storageKey));
   }
 
   async exists(storageKey: string): Promise<boolean> {
-    try {
-      const info = await stat(this.absolutePathOf(storageKey));
-      return info.isFile();
-    } catch {
-      return false;
-    }
+    return this.client.exists(objectNameOf(storageKey));
   }
 
   async remove(storageKey: string): Promise<void> {
-    await rm(this.absolutePathOf(storageKey), { force: true });
+    await this.client.remove(objectNameOf(storageKey));
   }
 
-  async listKeys(): Promise<string[]> {
-    const base = join(this.root, CHECKIN_PREFIX);
-    const found: string[] = [];
-    await this.collect(base, CHECKIN_PREFIX, found);
-    return found;
+  async listObjects(pageToken?: string): Promise<SocialMediaPage> {
+    const page = await this.client.list(`${OBJECT_NAMESPACE}${CHECKIN_PREFIX}/`, {
+      pageSize: OBJECT_STORAGE_LIST_PAGE_SIZE,
+      pageToken,
+    });
+    return {
+      // Só o que tem a forma de uma chave de mídia. Um objeto estranho sob o prefixo — um upload
+      // manual, um resto de outra versão — não vira "órfão a apagar": ele não é nosso para apagar.
+      objects: page.objects.flatMap((object) => toStoredMedia(object)),
+      nextPageToken: page.nextPageToken,
+    };
   }
+}
 
-  private async collect(directory: string, prefix: string, out: string[]): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      // Raiz ainda não criada é um estado normal em um servidor que nunca recebeu foto.
-      return;
-    }
-    for (const entry of entries) {
-      const key = `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) {
-        await this.collect(join(directory, entry.name), key, out);
-      } else if (entry.isFile() && KEY_PATTERN.test(key)) {
-        out.push(key);
-      }
-    }
-  }
+function objectNameOf(storageKey: string): string {
+  return `${OBJECT_NAMESPACE}${assertSafeStorageKey(storageKey)}`;
+}
 
-  /**
-   * A tradução de chave para caminho — o **único** ponto do servidor que a faz (§25).
-   *
-   * Duas barreiras, de propósito. A primeira é a allowlist de forma; a segunda confere que o
-   * caminho resolvido continua dentro da raiz, o que pega qualquer coisa que a primeira deixasse
-   * passar (um symlink no meio do caminho, uma codificação que o regex não previu). Uma barreira
-   * só é o desenho em que path traversal reaparece na próxima refatoração.
-   */
-  private absolutePathOf(storageKey: string): string {
-    const safe = assertSafeStorageKey(storageKey);
-    const absolute = resolve(this.root, safe);
-    if (isAbsolute(safe) || (absolute !== this.root && !absolute.startsWith(this.root + sep))) {
-      throw new UnsafeStorageKeyError();
-    }
-    return absolute;
+function toStoredMedia(object: StoredObjectSummary): StoredMediaObject[] {
+  if (!object.name.startsWith(OBJECT_NAMESPACE)) {
+    return [];
   }
+  const storageKey = object.name.slice(OBJECT_NAMESPACE.length);
+  if (!KEY_PATTERN.test(storageKey)) {
+    return [];
+  }
+  return [{ storageKey, createdAt: object.createdAt }];
 }
 
 /** SHA-256 da representação **sanitizada** (§37). Integridade, nunca autorização. */
