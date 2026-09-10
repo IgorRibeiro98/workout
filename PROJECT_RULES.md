@@ -754,6 +754,66 @@ dado, bucket público ou um segundo domínio.
   o provider `local` e o `InMemoryObjectStorageClient` (só em `test/`) cobrem a matriz de falhas.
   O smoke do bucket real é operacional e opt-in.
 
+## 13.8.2 Endurecimento: fence de conta, migração de mídia legada e coleta honesta (T18.1.1)
+
+A T18.1 dividiu corretamente metadata (PostgreSQL) de bytes (Object Storage). A T18.1.1 fecha seis
+riscos que uma auditoria pós-T18.1 encontrou: nenhum deles muda a divisão acima — todos são sobre
+**quando** uma escrita pode persistir e **quando** um objeto pode ser removido.
+
+- **Existe um único Account Mutation Fence, e ele é transacional.** `src/database/account-mutation-fence.ts` exporta `lockAccountMutationFence`/`assertAccountMutable`/`fenceAccountMutation` —
+  `pg_advisory_xact_lock(hashtext('account_mutation_fence'), hashtext(ownerUid))` seguido de uma
+  releitura de `account_deletion_tombstones` **dentro** da mesma transação da escrita, na mesma
+  convenção de dois `hashtext` que `lockRelationshipPair` (T18.0.1) e o lock de `ai_usage_daily`
+  já usavam — nunca uma segunda convenção de lock. `AccountDeletionRepository.beginAccountDeletion`
+  adquire o mesmo lock antes do tombstone; toda escrita account-scoped nova que sobreviveria à
+  exclusão de forma visível o adquire antes de confirmar: `BackupRepository.insert`,
+  `SyncRepository.executeAtomicMutation`, `SocialMediaRepository.create` e
+  `WorkoutCheckInRepository.create` (via `WorkoutCheckInService.insertOrResolveRace`). **O
+  `BearerAuthGuard` sozinho não basta** — ele só recusa uma requisição nova; uma requisição que já
+  passou por ele antes do tombstone comitar precisa ser recusada de novo, dentro da própria
+  transação de escrita. `ai_usage_daily` e mutações sociais de baixo risco (reação, comentário,
+  amizade) foram investigadas e **deliberadamente não** ganharam o fence: nenhuma delas guarda
+  conteúdo capaz de "ressuscitar" a conta aos olhos de outra pessoa, e o purge já as alcança.
+- **`AccountMutationFencedError` sempre vira a mesma resposta que o guard já dava.**
+  `accountDeletedException()` (`bearer-auth.guard.ts`) é o único lugar que monta
+  `403 ACCOUNT_DELETED` — usado pelo guard na entrada e pelos serviços de escrita quando o fence
+  recusa no meio de uma transação já em voo.
+- **A mídia social legada tem um migrador explícito, manual e fail-closed.**
+  `migrate-social-media-to-object-storage` (`npm run migrate:social-media`) parte de
+  `social_checkin_media` (PostgreSQL, a autoridade) e do disco legado (`SOCIAL_MEDIA_ROOT`), nunca
+  de uma varredura do diretório. Por linha: ler o arquivo local, conferir SHA-256 contra
+  `content_hash`, checar o destino (ausente → upload create-only; idêntico → converge; diferente →
+  recusa sem sobrescrever), reler o destino para confirmar. `storage_key` nunca muda — ela já era
+  `checkins/xx/yy/<uuid>.webp` nos dois providers antes da T18.1.1, só os bytes se movem.
+  **A origem nunca é apagada automaticamente**: a remoção do volume legado é uma etapa operacional
+  posterior, depois do cutover validado. Idempotente e retomável por construção — não há cursor
+  próprio a manter, porque reconferir o destino a cada execução já é barato e sempre correto.
+- **`ObjectStorageClient.write` tem uma única semântica, documentada na interface: create-or-confirm-identical.** Nome livre grava; nome ocupado com os mesmos bytes converge **sem** regravar
+  (retry seguro); nome ocupado com bytes diferentes é `ObjectAlreadyExistsError`. `local`, `gcs` e o
+  `InMemoryObjectStorageClient` de teste seguem exatamente essa tabela — nenhuma diferença
+  silenciosa entre providers. No GCS, a decisão de um `412` mora em `resolvePreconditionConflict`
+  (função pura, testável sem o SDK): ela **nunca** troca uma falha de leitura por uma ausência —
+  antes disso acontecia (`.catch(() => null)`), e uma falha de infraestrutura durante a releitura
+  virava colisão em vez de `ObjectStorageUnavailableError`.
+- **Idade desconhecida nunca é idade zero.** `StoredObjectSummary.createdAt` é `number | null`;
+  `parseObjectCreatedAt` (GCS) devolve `null` quando `timeCreated` está ausente ou é ilegível, nunca
+  `0`. Os dois coletores de órfãos (`BackupPayloadCleaner`, `SocialMediaCleaner`) tratam
+  `createdAt === null` como "não provado, não remover" — nunca como "nasceu em 1970, remover
+  primeiro".
+- **Os coletores só contam remoção que de fato aconteceu.** `removed`/`failed` são contadores
+  separados nos dois coletores; uma falha de `remove()` não incrementa `removed` e não interrompe o
+  lote — o próximo objeto do mesmo lote continua sendo tentado, e o que falhou converge na próxima
+  varredura.
+- **A reivindicação de mídia `PENDING` expirada é um `UPDATE` atômico, não um `SELECT` seguido de
+  remoção.** `SocialMediaRepository.claimCollectable` seleciona e transiciona para `DELETED` numa
+  única instrução (`UPDATE ... WHERE id IN (SELECT ... FOR UPDATE)`); sob READ COMMITTED, um
+  `attach()` concorrente que dispute a mesma linha reavalia sua própria cláusula `WHERE` contra o
+  estado pós-commit ao desbloquear — não há janela em que o coletor apague uma mídia que acabou de
+  ser publicada, e nenhum lock consultivo adicional foi necessário para isso.
+- **Testes.** `npm test` em `backend/` cobre o fence com PostgreSQL real (`account-mutation-fence.spec.ts`), a migração de mídia (`social-media-migration.spec.ts`), a decisão pura do GCS
+  (`gcs-object-storage-client.spec.ts`) e a reivindicação atômica + contagem honesta
+  (`social-media-cleanup-hardening.spec.ts`, `backup-object-storage.spec.ts`).
+
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 
 O Spark ganhou identidade **pública**. As regras abaixo são o que impede essa identidade de

@@ -526,7 +526,7 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3 e T18.1 implementadas.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3, T18.1 e T18.1.1 implementadas.** A T16.0 criou o backend em `backend/` com
 > configuração, banco (SQLite até a T17.13; **PostgreSQL desde a T18.0**), migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -684,6 +684,7 @@ persistência do domínio        validação da resposta
 | T17.5 | Notificações sociais com Firebase Cloud Messaging | **implementado** |
 | T18.0 → T18.0.3 | Migração SQLite → PostgreSQL / Neon, hardening e fechamento | **implementado** |
 | T18.1 | Object Storage: fotos e documentos de backup no GCS privado (ADC); PostgreSQL só metadata | **implementado** (bucket real NOT VERIFIED sem ADC local) |
+| T18.1.1 | Endurecimento: Account Mutation Fence, migração de mídia legada, coleta honesta | **implementado** (bucket real NOT VERIFIED sem ADC local) |
 | T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | pendente |
 | T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | pendente |
 
@@ -1696,6 +1697,45 @@ Snapshots anteriores à T16.5 (sem documento em lugar nenhum) continuam `410`.
 11. **Social continua sem importar Backup.** Duas fronteiras, uma camada neutra.
 12. **Health não toca o bucket.** Configuração validada no startup; bucket real provado por smoke
     explícito.
+
+### Endurecimento: fence de conta, migração de mídia legada, coleta honesta (T18.1.1)
+
+> **Status (verificado em 2026-09-10): implementado.** Seis riscos encontrados numa auditoria
+> pós-T18.1, nenhum deles muda a divisão metadata/bytes da T18.1: quando uma escrita pode
+> persistir, e quando um objeto pode ser removido. Bucket real segue **NOT VERIFIED** neste
+> ambiente, sem ADC.
+
+```text
+escrita account-scoped nova              exclusão de conta
+──────────────────────────               ──────────────────
+BEGIN                                    BEGIN
+lockAccountMutationFence(uid) ◀────────▶ lockAccountMutationFence(uid)
+assertAccountMutable(uid)                INSERT tombstone
+INSERT/UPDATE …                          DELETE … (purge)
+COMMIT ou AccountMutationFencedError     COMMIT
+```
+
+- **Account Mutation Fence** (`src/database/account-mutation-fence.ts`): `pg_advisory_xact_lock`
+  por conta, mesma convenção de `lockRelationshipPair`, seguido de releitura do tombstone dentro da
+  transação. `BackupRepository.insert`, `SyncRepository.executeAtomicMutation`,
+  `SocialMediaRepository.create` e `WorkoutCheckInRepository.create` o adquirem antes de confirmar;
+  `AccountDeletionRepository.beginAccountDeletion` o adquire antes do tombstone. O `BearerAuthGuard`
+  continua sendo a primeira barreira — só não é mais a única.
+- **`migrate-social-media-to-object-storage`** (`npm run migrate:social-media`): comando manual,
+  `PostgreSQL + disco legado → GCS`, create-only, fail-closed, idempotente, sem apagar a origem.
+- **`ObjectStorageClient.write`** é create-or-confirm-identical nos três providers (`local`, `gcs`,
+  o dublê de teste); a decisão de um `412` no GCS é a função pura `resolvePreconditionConflict`, que
+  nunca troca uma falha de leitura por uma ausência.
+- **`StoredObjectSummary.createdAt` é `number | null`**; os dois coletores tratam `null` como "não
+  provado, não remover" — nunca como objeto de 1970.
+- **`removed`/`failed`** são contadores separados nos dois coletores; uma falha não interrompe o
+  lote nem infla a contagem de removidos.
+- **`SocialMediaRepository.claimCollectable`** reivindica mídia `PENDING` expirada com um único
+  `UPDATE` atômico — a mesma corrida que a T18.1 fechou para upload-vs-órfão agora está fechada
+  para publicação-vs-limpeza.
+
+Testes: `account-mutation-fence.spec.ts` (PostgreSQL real), `social-media-migration.spec.ts`,
+`gcs-object-storage-client.spec.ts`, `social-media-cleanup-hardening.spec.ts`.
 
 ### Conta opcional e identidade (T16.1)
 

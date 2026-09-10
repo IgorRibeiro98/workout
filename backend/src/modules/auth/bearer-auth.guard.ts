@@ -161,10 +161,7 @@ export class BearerAuthGuard implements CanActivate {
           requestId,
           uidPrefix: uidPrefix(principal.uid),
         });
-        throw new HttpException(
-          { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
-          HttpStatus.FORBIDDEN,
-        );
+        throw accountDeletedException();
       }
     }
 
@@ -244,6 +241,21 @@ export function extractBearerToken(header: string | string[] | undefined): strin
  */
 export function uidPrefix(uid: string): string {
   return uid.slice(0, 6);
+}
+
+/**
+ * A resposta de uma conta com tombstone — `403 ACCOUNT_DELETED`.
+ *
+ * O guard usa isto para uma requisição **nova**. Desde a T18.1.1, o mesmo formato é usado por
+ * `AccountMutationFencedError` (`src/database/account-mutation-fence.ts`), capturado dentro dos
+ * serviços de escrita account-scoped: a experiência do cliente é idêntica, esteja a requisição
+ * sendo recusada na entrada ou dentro da transação de uma escrita que já estava em voo.
+ */
+export function accountDeletedException(): HttpException {
+  return new HttpException(
+    { code: 'ACCOUNT_DELETED', message: 'Esta conta foi excluída.' },
+    HttpStatus.FORBIDDEN,
+  );
 }
 
 function unauthenticated(): UnauthorizedException {

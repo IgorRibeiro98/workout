@@ -383,6 +383,34 @@ describe('T18.1 — backup no Object Storage', () => {
       expect(await cleaner.sweep()).toBe(1);
       expect(fake.names().sort()).toEqual([referenced, 'backups/manual/anotacao.json'].sort());
     });
+
+    it(
+      'um lote com um órfão que remove com sucesso e outro cuja remoção falha: ' +
+        '`sweep()` só conta o que de fato saiu, e o que falhou continua lá (T18.1.1 §4)',
+      async () => {
+        const fake = new InMemoryObjectStorageClient();
+        await startWithFake(fake);
+
+        const removable = 'backups/aa/aa/aaaaaaaa-0000-4000-8000-000000000000.json';
+        const stuck = 'backups/bb/bb/bbbbbbbb-0000-4000-8000-000000000000.json';
+        for (const key of [removable, stuck]) {
+          await fake.write(key, Buffer.from('{}'), { contentType: 'application/json' });
+        }
+        clock.advance(OBJECT_STORAGE_ORPHAN_GRACE_MS + 1);
+        fake.failNextRemoveFor(stuck);
+
+        const cleaner = app.get(BackupPayloadCleaner);
+        // O retorno de `sweep()` é a contagem de **removidos de verdade** — nunca o tamanho do
+        // lote processado. Uma falha não derruba a varredura: o outro objeto do mesmo lote sai.
+        expect(await cleaner.sweep()).toBe(1);
+        expect(fake.names()).toEqual([stuck]);
+
+        // A falha não é permanente no dublê (só a próxima chamada falhava): a próxima varredura
+        // converge — o mesmo comportamento que o Object Storage real teria numa falha transiente.
+        expect(await cleaner.sweep()).toBe(1);
+        expect(fake.names()).toEqual([]);
+      },
+    );
   });
 
   // ================================================================ idempotência concorrente

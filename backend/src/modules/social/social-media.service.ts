@@ -2,11 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { PoolClient } from 'pg';
+import { hashAccountUid } from '../../common/account-uid-hash';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import { AccountMutationFencedError } from '../../database/account-mutation-fence';
 import { isPgConstraintError } from '../../database/database.errors';
-import { uidPrefix } from '../auth/bearer-auth.guard';
+import { accountDeletedException, uidPrefix } from '../auth/bearer-auth.guard';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
@@ -184,9 +186,17 @@ export class SocialMediaService {
     };
 
     try {
-      await this.repository.create(media);
+      await this.repository.create(media, hashAccountUid(this.config, ownerUid));
     } catch (error) {
       await this.store.remove(storageKey).catch(() => undefined);
+
+      // A conta foi excluída durante o processamento da imagem, entre o `BearerAuthGuard` e este
+      // `INSERT` (T18.1.1 §2): o Account Mutation Fence recusou a escrita, e o objeto que acabou de
+      // subir já foi removido acima.
+      if (error instanceof AccountMutationFencedError) {
+        throw accountDeletedException();
+      }
+
       if (!isPgConstraintError(error)) {
         throw error;
       }

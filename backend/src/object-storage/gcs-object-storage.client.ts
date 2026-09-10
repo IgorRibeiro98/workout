@@ -47,10 +47,16 @@ export interface GcsObjectStorageOptions {
  *
  * ## Falha é falha
  *
- * `404` vira ausência (`null`/`false`); `412` vira [ObjectAlreadyExistsError]; **todo o resto**
- * — timeout, permissão negada, quota, rede — sobe como [ObjectStorageUnavailableError], com um
- * log de metadata (operação, nome do erro, status, duração). Nunca nome de objeto, nunca bytes,
- * nunca URL.
+ * `404` vira ausência (`null`/`false`); `412` com o mesmo conteúdo converge (retry seguro); `412`
+ * com conteúdo diferente ou com uma releitura que não confirma nada vira [ObjectAlreadyExistsError]
+ * ([resolvePreconditionConflict]); **todo o resto** — timeout, permissão negada, quota, rede — sobe
+ * como [ObjectStorageUnavailableError], com um log de metadata (operação, nome do erro, status,
+ * duração). Nunca nome de objeto, nunca bytes, nunca URL.
+ *
+ * A releitura que decide um `412` (T18.1.1 §5) nunca escamoteia sua própria falha: se ela não
+ * conseguir responder — por indisponibilidade, não por ausência —, a falha sobe como
+ * [ObjectStorageUnavailableError], nunca como "o objeto já existe". Um bucket momentaneamente fora
+ * do ar durante essa releitura não pode virar uma colisão inventada.
  */
 export class GcsObjectStorageClient implements ObjectStorageClient {
   readonly provider = 'gcs' as const;
@@ -90,14 +96,12 @@ export class GcsObjectStorageClient implements ObjectStorageClient {
     } catch (error) {
       if (statusOf(error) === 412) {
         // A precondição falhou por um de dois motivos: o nome já era de outro objeto, ou **esta**
-        // escrita já tinha vencido e a resposta se perdeu antes de o SDK tentar de novo. Os bytes
-        // distinguem os dois: conteúdo idêntico é a segunda, e ela é sucesso — o retry seguro que
-        // a precondição existe para permitir. Qualquer diferença é colisão, e colisão é erro.
-        const existing = await this.read(name).catch(() => null);
-        if (existing !== null && existing.equals(bytes)) {
-          return;
-        }
-        throw new ObjectAlreadyExistsError();
+        // escrita já tinha vencido e a resposta se perdeu antes de o SDK tentar de novo (T18.1.1
+        // §5). `resolvePreconditionConflict` decide entre convergência e colisão — e propaga, sem
+        // engolir, uma falha de **leitura** que não seja simplesmente "o objeto não existe": um
+        // `read` que não conseguiu responder não pode virar "está tudo bem, é colisão".
+        await resolvePreconditionConflict(() => this.read(name), bytes);
+        return;
       }
       throw this.unavailable('write', error, startedAt, bytes.length);
     }
@@ -162,7 +166,7 @@ export class GcsObjectStorageClient implements ObjectStorageClient {
       });
       const objects: StoredObjectSummary[] = files.map((file) => ({
         name: file.name,
-        createdAt: Date.parse(file.metadata.timeCreated ?? '') || 0,
+        createdAt: parseObjectCreatedAt(file.metadata.timeCreated),
         size: Number(file.metadata.size ?? 0),
       }));
       const token = (nextQuery as { pageToken?: string } | undefined)?.pageToken;
@@ -198,4 +202,46 @@ function statusOf(error: unknown): number | undefined {
   }
   const code = (error as { code: unknown }).code;
   return typeof code === 'number' ? code : undefined;
+}
+
+/**
+ * A decisão de `412` (T18.1.1 §5/§6): convergência, colisão real, ou indisponibilidade.
+ *
+ * Extraída como função pura — parametrizada pela leitura em vez de chamar `this.read` diretamente
+ * — para que a decisão seja testável sem o SDK do GCS: um `read` fake pode devolver bytes, `null`
+ * ou lançar exatamente como o cliente real.
+ *
+ * ```text
+ * read() → bytes idênticos     → resolve (convergência: retry seguro da mesma escrita)
+ * read() → bytes diferentes    → ObjectAlreadyExistsError (colisão real)
+ * read() → null (ausente)      → ObjectAlreadyExistsError (a única leitura coerente com um 412)
+ * read() → lança                → propaga SEM tocar — nunca vira "está tudo bem"
+ * ```
+ *
+ * A terceira linha importa: um `412` seguido de `404` na releitura é uma inconsistência transiente
+ * do provider, não uma prova de ausência. Tratá-la como sucesso seria pior que o erro barulhento —
+ * então ela cai no mesmo balde que "objeto diferente": colisão, não convergência.
+ */
+export async function resolvePreconditionConflict(
+  read: () => Promise<Buffer | null>,
+  bytes: Buffer,
+): Promise<void> {
+  const existing = await read();
+  if (existing !== null && existing.equals(bytes)) {
+    return;
+  }
+  throw new ObjectAlreadyExistsError();
+}
+
+/**
+ * `timeCreated` do GCS, convertido para epoch millis — ou `null` quando ele está ausente ou não é
+ * uma data válida (T18.1.1 §9). Nunca `0`: um objeto sem idade provada não pode parecer o mais
+ * antigo do bucket para um coletor de órfãos.
+ */
+export function parseObjectCreatedAt(timeCreated: string | undefined): number | null {
+  if (!timeCreated) {
+    return null;
+  }
+  const parsed = Date.parse(timeCreated);
+  return Number.isFinite(parsed) ? parsed : null;
 }

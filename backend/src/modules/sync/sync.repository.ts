@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { fenceAccountMutation } from '../../database/account-mutation-fence';
 import { PostgresService, type PoolClient } from '../../database/postgres.service';
 import { sha256Hex } from '../backup/canonical-json';
 import {
@@ -176,14 +177,21 @@ export class SyncRepository {
 
   /**
    * Executa a decisão de revisão e mutação de forma estritamente atômica e serializada.
+   *
+   * Adquire o **Account Mutation Fence** (T18.1.1 §2) antes de qualquer outro lock: um push que já
+   * passou pelo `BearerAuthGuard` antes de uma exclusão de conta commitar seu tombstone não pode
+   * gravar `sync_entities`/`sync_changes`/`sync_mutations` depois desse commit.
    */
   async executeAtomicMutation(
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
     now: number,
+    uidHash: string,
   ): Promise<SyncMutationResult> {
     return this.db.transaction(async (client) => {
+      await fenceAccountMutation(client, ownerUid, uidHash);
+
       // 1. Serializa chamadas concorrentes com o mesmo clientMutationId
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
         ownerUid,

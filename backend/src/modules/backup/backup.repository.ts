@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { fenceAccountMutation } from '../../database/account-mutation-fence';
 import { PostgresService } from '../../database/postgres.service';
 import type { BackupMetadataResponse } from './backup.contract';
 import type { ValidatedSnapshot } from './backup.validator';
@@ -146,16 +147,24 @@ export class BackupRepository {
    * objeto que ainda não foi criado. O documento canônico não entra aqui — nem em
    * `backup_snapshots.payload`, nem em `backup_items.payload`, que ficam `NULL` de propósito. Há
    * teste estrutural e de comportamento sobre isso.
+   *
+   * Adquire o **Account Mutation Fence** (T18.1.1 §2) antes do lock específico de backup: uma
+   * exclusão de conta que já commitou o tombstone faz este `INSERT` se recusar
+   * ([AccountMutationFencedError]("../../database/account-mutation-fence")), mesmo que a requisição
+   * tenha passado pelo `BearerAuthGuard` antes da exclusão começar.
    */
   async insert(
     ownerUid: string,
     snapshot: ValidatedSnapshot,
     now: number,
     identity: { readonly backupId: string; readonly storageKey: string },
+    uidHash: string,
   ): Promise<StoredSnapshot> {
     const { backupId, storageKey } = identity;
 
     const sequence = await this.db.transaction(async (client) => {
+      await fenceAccountMutation(client, ownerUid, uidHash);
+
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
         ownerUid,
         `backup:${snapshot.clientBackupId}`,

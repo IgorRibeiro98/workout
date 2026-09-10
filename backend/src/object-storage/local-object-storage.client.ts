@@ -61,6 +61,13 @@ export class LocalObjectStorageClient implements ObjectStorageClient {
       await writeFile(target, bytes, { flag: 'wx', mode: 0o640 });
     } catch (error) {
       if (codeOf(error) === 'EEXIST') {
+        // Create-or-confirm-identical (T18.1.1 §6/§7): mesmos bytes é o retry da mesma escrita —
+        // sucesso, sem regravar. Bytes diferentes é colisão real, e continua nunca sobrescrevendo.
+        // A mesma decisão que o provider GCS toma sobre `412`; nenhum provider diverge em silêncio.
+        const existing = await this.read(name);
+        if (existing !== null && existing.equals(bytes)) {
+          return;
+        }
         throw new ObjectAlreadyExistsError();
       }
       throw new ObjectStorageUnavailableError('write', error);

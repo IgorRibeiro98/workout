@@ -345,6 +345,20 @@ validar → idempotência → backupId + storageKey (do servidor)
 - objeto sem linha (processo morto entre o upload e o commit; delete de retenção que falhou) é
   órfão, e `BackupPayloadCleaner` o recolhe depois de 24 h de carência — nunca antes.
 
+Mídia social legada (arquivos que ainda só existem em `SOCIAL_MEDIA_ROOT`, de antes do cutover
+`local → gcs`) tem o próprio migrador manual: `npm run migrate:social-media`
+(`migrate-social-media-to-object-storage`). Ele parte de `social_checkin_media` (o PostgreSQL
+continua sendo a autoridade) e do disco legado — nunca de uma varredura do diretório —, confere
+SHA-256 contra `content_hash`, sobe create-only e nunca apaga a origem: a remoção do volume legado é
+uma etapa operacional posterior, depois do cutover validado. `storage_key` não muda — só os bytes se
+movem.
+
+Desde a **T18.1.1**, toda escrita account-scoped nova (`POST /v1/backups`, push de sync, upload de
+mídia, criação de check-in) adquire o **Account Mutation Fence**
+(`src/database/account-mutation-fence.ts`) dentro da própria transação, antes de confirmar: uma
+requisição que já tinha passado pelo `BearerAuthGuard` antes de `DELETE /v1/account` comitar o
+tombstone não consegue persistir depois dele — o guard sozinho só protegia requisições novas.
+
 Log: `requestId`, prefixo do uid, `clientBackupId`, `itemCount`, `sizeBytes`, duração e status.
 Corpo, payload, nome de treino, nota, medida e token **não** aparecem — e há teste que envia uma
 fixture com marcas reconhecíveis e varre a saída do logger procurando por elas.
@@ -357,11 +371,13 @@ backend/
 │   ├── main.ts                  entrada: config → banco → HTTP, e graceful shutdown
 │   ├── bootstrap/create-app.ts  montagem (usada igual em produção e nos testes)
 │   ├── config/                  schema do ambiente + AppConfig
-│   ├── database/                conexão PostgreSQL (Pool), health check, runner de migrations
+│   ├── database/                conexão PostgreSQL (Pool), health check, runner de migrations,
+│   │                             Account Mutation Fence (T18.1.1)
 │   ├── object-storage/          fronteira neutra de bytes: provider local (disco) e GCS (ADC);
 │   │                             a factory é o único ponto que escolhe entre os dois (T18.1)
 │   ├── cli/                     comandos operacionais: reconciliação de DR, migrador de payloads
-│   │                             legados, smoke do Object Storage real
+│   │                             legados de backup, migrador de mídia social legada, smoke do
+│   │                             Object Storage real
 │   ├── common/                  logger, request ID, log de acesso, envelope de erro
 │   ├── modules/health/          liveness e readiness
 │   ├── modules/auth/            verificação de Firebase ID Token, guard e principal

@@ -195,14 +195,22 @@ describe('T18.1 — invariantes estruturais do Object Storage', () => {
       const instantiators = sources.filter((file) =>
         /new (LocalObjectStorageClient|GcsObjectStorageClient)\(/.test(read(file)),
       );
-      expect(instantiators.map(relative)).toEqual([
+      // `migrate-social-media-to-object-storage.ts` é a exceção deliberada (T18.1.1): a migração
+      // **é**, por definição, a ponte entre o disco legado e o bucket configurado, então ela
+      // precisa construir a origem `local` explicitamente — a origem nunca é "o que a factory
+      // escolher", só o destino é. Nenhum outro arquivo de domínio ganha essa liberdade.
+      expect(instantiators.map(relative).sort()).toEqual([
+        '/src/cli/migrate-social-media-to-object-storage.ts',
         '/src/object-storage/object-storage.factory.ts',
       ]);
 
-      // Os comandos operacionais usam a factory — nunca um provider escolhido à mão.
+      // Os comandos operacionais usam a factory (para o destino, quando aplicável) — nunca um
+      // provider escolhido à mão para onde os bytes finais moram, e nunca um `if` sobre a variável
+      // de ambiente.
       for (const cli of [
         'reconcile-account-deletions.ts',
         'migrate-backup-payloads-to-object-storage.ts',
+        'migrate-social-media-to-object-storage.ts',
         'object-storage-smoke.ts',
       ]) {
         const source = stripComments(read(join(SRC, 'cli', cli)));
@@ -215,6 +223,11 @@ describe('T18.1 — invariantes estruturais do Object Storage', () => {
     it('nenhum arquivo de domínio decide entre `local` e `gcs`', () => {
       const deciders = sources
         .filter((file) => !file.includes('/object-storage/') && !file.includes('/config/'))
+        // `migrate-social-media-to-object-storage.ts` é a mesma exceção deliberada de acima: ele
+        // lê `objectStorageProvider` só para **recusar rodar** sem `gcs` configurado (uma
+        // pré-condição da migração), nunca para escolher entre construir um cliente `local` ou
+        // `gcs` — a origem é sempre `local`, construída à mão; o destino sempre vem da factory.
+        .filter((file) => !file.endsWith('/cli/migrate-social-media-to-object-storage.ts'))
         .filter((file) =>
           /objectStorageProvider|OBJECT_STORAGE_PROVIDER/.test(stripComments(read(file))),
         );

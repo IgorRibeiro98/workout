@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { fenceAccountMutation } from '../../database/account-mutation-fence';
 import { DbClient, PostgresService } from '../../database/postgres.service';
 import { viewerScopeCte, groupShareVisibleSql } from './workout-checkin.access-policy';
 
@@ -29,6 +30,15 @@ export interface CheckInMediaProjection {
   readonly mediaId: string;
   readonly width: number;
   readonly height: number;
+}
+
+/** O recorte que o migrador `local → GCS` precisa de cada linha (T18.1.1). */
+export interface MediaMigrationRow {
+  readonly id: string;
+  readonly ownerUid: string;
+  readonly storageKey: string;
+  readonly contentHash: string;
+  readonly byteSize: number;
 }
 
 interface MediaRow {
@@ -92,32 +102,41 @@ function toDomain(row: MediaRow): StoredCheckInMedia {
 export class SocialMediaRepository {
   constructor(private readonly db: PostgresService) {}
 
-  async create(item: StoredCheckInMedia): Promise<void> {
-    await this.db.query(
-      `INSERT INTO social_checkin_media (
-         id, owner_uid, source_session_sync_id, client_upload_id, storage_key, mime_type,
-         byte_size, width, height, content_hash, input_content_hash, status, created_at,
-         expires_at, attached_checkin_id, deleted_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-      [
-        item.id,
-        item.ownerUid,
-        item.sourceSessionSyncId,
-        item.clientUploadId,
-        item.storageKey,
-        item.mimeType,
-        item.byteSize,
-        item.width,
-        item.height,
-        item.contentHash,
-        item.inputContentHash,
-        item.status,
-        item.createdAt,
-        item.expiresAt,
-        item.attachedCheckInId,
-        item.deletedAt,
-      ],
-    );
+  /**
+   * Insere a linha `PENDING`, dentro do **Account Mutation Fence** (T18.1.1 §2): a conta pode ter
+   * sido excluída enquanto o upload processava a imagem (a etapa cara do fluxo, entre o
+   * `BearerAuthGuard` e este `INSERT`), e a escrita do objeto já aconteceu antes disto — o
+   * chamador (`SocialMediaService.upload`) apaga o objeto quando esta função recusa.
+   */
+  async create(item: StoredCheckInMedia, uidHash: string): Promise<void> {
+    await this.db.transaction(async (client) => {
+      await fenceAccountMutation(client, item.ownerUid, uidHash);
+      await client.query(
+        `INSERT INTO social_checkin_media (
+           id, owner_uid, source_session_sync_id, client_upload_id, storage_key, mime_type,
+           byte_size, width, height, content_hash, input_content_hash, status, created_at,
+           expires_at, attached_checkin_id, deleted_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        [
+          item.id,
+          item.ownerUid,
+          item.sourceSessionSyncId,
+          item.clientUploadId,
+          item.storageKey,
+          item.mimeType,
+          item.byteSize,
+          item.width,
+          item.height,
+          item.contentHash,
+          item.inputContentHash,
+          item.status,
+          item.createdAt,
+          item.expiresAt,
+          item.attachedCheckInId,
+          item.deletedAt,
+        ],
+      );
+    });
   }
 
   /** A idempotência de §36: mesmo dono, mesmo `clientUploadId` → a mesma mídia. */
@@ -262,18 +281,48 @@ export class SocialMediaRepository {
 
   // ------------------------------------------------------------------ limpeza (§39/§140)
 
-  /** Mídia `PENDING` cujo prazo passou, e mídia já marcada `DELETED`. Bounded, sempre. */
-  async findCollectable(
+  /**
+   * Reivindica, atomicamente, a mídia `PENDING` cujo prazo passou e a mídia já `DELETED` — bounded,
+   * sempre (T18.1.1 §8).
+   *
+   * ## Por que uma reivindicação, e não um `SELECT` seguido de `DELETE`
+   *
+   * Um `SELECT` que decide o que é "expirado" e um `DELETE`/`remove()` posteriores deixam uma
+   * janela: entre os dois, `attach()` pode publicar exatamente a mídia que o coletor já decidiu
+   * apagar (`SELECT` viu `PENDING` expirada; `attach()` transiciona para `ATTACHED` antes do
+   * `DELETE`). O coletor então apagaria o arquivo e a linha de um check-in recém-publicado.
+   *
+   * Este `UPDATE` é a reivindicação inteira: a subconsulta seleciona e **bloqueia** (`FOR UPDATE`)
+   * as linhas candidatas, e o `UPDATE` externo só as transiciona para `DELETED` enquanto ainda
+   * estiverem no estado que ele espera. Sob READ COMMITTED, uma `UPDATE` concorrente que dispute a
+   * mesma linha (o `attach()`) espera o lock e, ao liberar, **reavalia sua própria cláusula
+   * `WHERE`** contra a versão recém-commitada — é assim que o Postgres garante, sem lock consultivo
+   * nenhum, que só um dos dois vence: ou a reivindicação transiciona a linha para `DELETED` antes
+   * (e o `attach()` que chegar depois não encontra mais `status = 'PENDING'`, e falha), ou o
+   * `attach()` já publicou (e a reivindicação, ao reavaliar, não encontra mais `PENDING` nem
+   * `DELETED` — encontra `ATTACHED` — e não a inclui).
+   *
+   * Uma mídia já `DELETED` é reivindicada de novo, sem problema: `COALESCE` preserva o
+   * `deleted_at` original, e reprocessá-la é o que torna a limpeza convergente quando a remoção do
+   * objeto falhou numa varredura anterior (§4/§8) — a linha continua `DELETED` até o objeto
+   * realmente sair do armazenamento e a linha ser apagada.
+   */
+  async claimCollectable(
     now: number,
     limit: number,
   ): Promise<Array<{ id: string; storageKey: string }>> {
     const res = await this.db.query<{ id: string; storageKey: string }>(
-      `SELECT id, storage_key AS "storageKey"
-         FROM social_checkin_media
-        WHERE (status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= $1)
-           OR status = 'DELETED'
-        ORDER BY created_at ASC
-        LIMIT $2`,
+      `UPDATE social_checkin_media
+          SET status = 'DELETED', deleted_at = COALESCE(deleted_at, $1)
+        WHERE id IN (
+          SELECT id FROM social_checkin_media
+           WHERE (status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= $1)
+              OR status = 'DELETED'
+           ORDER BY created_at ASC
+           LIMIT $2
+           FOR UPDATE
+        )
+        RETURNING id, storage_key AS "storageKey"`,
       [now, limit],
     );
     return res.rows;
@@ -309,5 +358,39 @@ export class SocialMediaRepository {
       [ownerUid],
     );
     return res.rows.map((row) => row.key);
+  }
+
+  // ------------------------------------------------------------------ migração legada (T18.1.1)
+
+  /**
+   * Uma página de mídia, em ordem estável por `id`, para o migrador `local → GCS`.
+   *
+   * O PostgreSQL continua sendo a autoridade sobre o que existe (T18.1.1 requisito 4): a fonte da
+   * migração é esta consulta, nunca uma listagem do sistema de arquivos. `id` é UUID aleatório —
+   * não é ordem cronológica, mas é uma ordem total estável, suficiente para paginar sem pular nem
+   * repetir entre execuções.
+   */
+  async listForMigration(afterId: string | null, limit: number): Promise<MediaMigrationRow[]> {
+    const res = await this.db.query<{
+      id: string;
+      owner_uid: string;
+      storage_key: string;
+      content_hash: string;
+      byte_size: string | number;
+    }>(
+      `SELECT id, owner_uid, storage_key, content_hash, byte_size
+         FROM social_checkin_media
+        WHERE ($1::text IS NULL OR id > $1)
+        ORDER BY id ASC
+        LIMIT $2`,
+      [afterId, limit],
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      ownerUid: row.owner_uid,
+      storageKey: row.storage_key,
+      contentHash: row.content_hash,
+      byteSize: Number(row.byte_size),
+    }));
   }
 }

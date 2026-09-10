@@ -17,6 +17,7 @@
     "test": "jest --runInBand",
     "smoke:object-storage": "node dist/cli/object-storage-smoke.js",
     "migrate:backup-payloads": "node dist/cli/migrate-backup-payloads-to-object-storage.js",
+    "migrate:social-media": "node dist/cli/migrate-social-media-to-object-storage.js",
     "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js"
   },
   "dependencies": {

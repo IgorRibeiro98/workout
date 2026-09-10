@@ -1,8 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { hashAccountUid } from '../../common/account-uid-hash';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
-import { uidPrefix } from '../auth/bearer-auth.guard';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import {
+  AccountMutationFencedError,
+  fenceAccountMutation,
+} from '../../database/account-mutation-fence';
+import { accountDeletedException, uidPrefix } from '../auth/bearer-auth.guard';
 import { BlockRepository } from './block.repository';
 import {
   CANONICAL_TRAINING_SOURCE,
@@ -64,6 +70,7 @@ export class WorkoutCheckInService {
     @Inject(CANONICAL_TRAINING_SOURCE)
     private readonly canonicalTraining: CanonicalTrainingSource,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
     private readonly logger: SparkLogger,
   ) {}
 
@@ -450,11 +457,23 @@ export class WorkoutCheckInService {
     }
   }
 
+  /**
+   * Insere o check-in dentro do **Account Mutation Fence** (T18.1.1 §2): a conta pode ter sido
+   * excluída entre o `BearerAuthGuard` e este `INSERT` — a mesma proteção que backup e sync já
+   * adquirem antes de confirmar a própria escrita.
+   */
   private async insertOrResolveRace(item: StoredWorkoutCheckIn): Promise<StoredWorkoutCheckIn> {
     try {
-      await this.repository.create(item);
+      const uidHash = hashAccountUid(this.config, item.authorUid);
+      await this.repository.transaction(async (client) => {
+        await fenceAccountMutation(client, item.authorUid, uidHash);
+        await this.repository.create(item, client);
+      });
       return item;
     } catch (error) {
+      if (error instanceof AccountMutationFencedError) {
+        throw accountDeletedException();
+      }
       // `23505` (unique_violation): o outro lado da corrida publicou primeiro.
       if ((error as { code?: unknown }).code !== '23505') {
         throw error;

@@ -1,5 +1,6 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { hashAccountUid } from '../../common/account-uid-hash';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import { SparkLogger } from '../../common/logger';
 import { CLOCK, type Clock } from '../../common/clock';
@@ -29,9 +30,15 @@ export class AccountDeletionService {
     private readonly logger: SparkLogger,
   ) {}
 
-  /** Calcula hash irreversível HMAC-SHA256 para o Firebase UID. */
+  /**
+   * Calcula hash irreversível HMAC-SHA256 para o Firebase UID.
+   *
+   * Delega para `hashAccountUid` (`src/common/account-uid-hash.ts`) — a mesma função que o Account
+   * Mutation Fence (T18.1.1 §2) usa em backup, sync e mídia social para relerem o mesmo tombstone.
+   * Uma única implementação evita duas convenções de hash divergirem uma da outra.
+   */
   hashUid(uid: string): string {
-    return createHmac('sha256', this.config.accountDeletionHmacKey).update(uid).digest('hex');
+    return hashAccountUid(this.config, uid);
   }
 
   /** Confere se o UID já foi excluído anteriormente (barreira de autenticação). */

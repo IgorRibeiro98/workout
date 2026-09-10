@@ -37,6 +37,13 @@ export interface SocialMediaStore {
   /** `null` quando o objeto não existe — restore inconsistente não pode derrubar o backend (§141). */
   openRead(storageKey: string): Promise<Readable | null>;
 
+  /**
+   * Os bytes inteiros, ou `null` quando o objeto não existe (T18.1.1). Usado pelo migrador de
+   * mídia legada (`migrate-social-media-to-object-storage`), que precisa dos bytes inteiros — de
+   * origem e de destino — para o SHA-256, não de um stream.
+   */
+  read(storageKey: string): Promise<Buffer | null>;
+
   exists(storageKey: string): Promise<boolean>;
 
   /** Idempotente: apagar o que já não existe é sucesso. */
@@ -53,7 +60,8 @@ export interface SocialMediaStore {
 
 export interface StoredMediaObject {
   readonly storageKey: string;
-  readonly createdAt: number;
+  /** `null` quando o provider não conseguiu provar a idade do objeto (T18.1.1 §9) — nunca `0`. */
+  readonly createdAt: number | null;
 }
 
 export interface SocialMediaPage {
@@ -139,6 +147,10 @@ export class ObjectStorageSocialMediaStore implements SocialMediaStore {
 
   async openRead(storageKey: string): Promise<Readable | null> {
     return this.client.openRead(objectNameOf(storageKey));
+  }
+
+  async read(storageKey: string): Promise<Buffer | null> {
+    return this.client.read(objectNameOf(storageKey));
   }
 
   async exists(storageKey: string): Promise<boolean> {

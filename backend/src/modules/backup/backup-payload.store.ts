@@ -57,7 +57,8 @@ export interface BackupPayloadStore {
 
 export interface StoredBackupObject {
   readonly storageKey: string;
-  readonly createdAt: number;
+  /** `null` quando o provider não conseguiu provar a idade do objeto (T18.1.1 §9) — nunca `0`. */
+  readonly createdAt: number | null;
 }
 
 export interface BackupPayloadPage {

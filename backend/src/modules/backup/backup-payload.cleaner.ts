@@ -96,11 +96,16 @@ export class BackupPayloadCleaner implements OnModuleInit, OnApplicationShutdown
   private async collectOrphans(): Promise<number> {
     const now = this.clock.now();
     let removed = 0;
+    let failed = 0;
 
     for (let pages = 0; pages < OBJECT_STORAGE_ORPHAN_SCAN_PAGES; pages += 1) {
       const page = await this.payloads.listObjects(this.cursor);
+      // `createdAt === null` (T18.1.1 §9): o provider não provou a idade do objeto, e "não provado"
+      // nunca vira "antigo o suficiente". Ele fica de fora desta varredura — não é apagado, e não é
+      // reprocessado como se fosse recente: a próxima varredura o revê com o mesmo provider.
       const candidates = page.objects.filter(
-        (object) => now - object.createdAt >= OBJECT_STORAGE_ORPHAN_GRACE_MS,
+        (object) =>
+          object.createdAt !== null && now - object.createdAt >= OBJECT_STORAGE_ORPHAN_GRACE_MS,
       );
       const known = await this.repository.findExistingStorageKeys(
         candidates.map((object) => object.storageKey),
@@ -110,22 +115,28 @@ export class BackupPayloadCleaner implements OnModuleInit, OnApplicationShutdown
         if (known.has(object.storageKey)) {
           continue;
         }
-        if (removed >= BACKUP_ORPHAN_BATCH) {
+        if (removed + failed >= BACKUP_ORPHAN_BATCH) {
           break;
         }
-        await this.payloads.remove(object.storageKey).catch(() => undefined);
-        removed += 1;
+        // `removed` só conta remoção que **de fato** aconteceu (T18.1.1 §4): uma falha aqui não
+        // pode inflar a métrica com um objeto que continua no armazenamento.
+        try {
+          await this.payloads.remove(object.storageKey);
+          removed += 1;
+        } catch {
+          failed += 1;
+        }
       }
 
       this.cursor = page.nextPageToken;
-      if (this.cursor === undefined || removed >= BACKUP_ORPHAN_BATCH) {
+      if (this.cursor === undefined || removed + failed >= BACKUP_ORPHAN_BATCH) {
         break;
       }
     }
 
-    if (removed > 0) {
+    if (removed > 0 || failed > 0) {
       // Contagem, nunca chave (§41).
-      this.logger.info('backup.storage.orphans_collected', { removed });
+      this.logger.info('backup.storage.orphans_collected', { removed, failed });
     }
     return removed;
   }

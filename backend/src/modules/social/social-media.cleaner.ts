@@ -113,19 +113,32 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   }
 
   private async collectExpiredAndDeleted(): Promise<number> {
-    const due = await this.repository.findCollectable(this.clock.now(), MEDIA_CLEANUP_BATCH);
+    // A reivindicação é atômica (T18.1.1 §8): ela já transicionou estas linhas para `DELETED` sob
+    // a garantia do Postgres, então a mídia que `attach()` publicou concorrentemente nunca aparece
+    // aqui — ver `SocialMediaRepository.claimCollectable`.
+    const claimed = await this.repository.claimCollectable(this.clock.now(), MEDIA_CLEANUP_BATCH);
     let removed = 0;
+    let failed = 0;
 
-    for (const item of due) {
+    for (const item of claimed) {
       // O objeto primeiro, a linha depois: a ordem inversa deixaria um objeto sem metadata, que
       // é o órfão que a segunda varredura teria de recolher — trabalho a mais para nada.
-      await this.store.remove(item.storageKey).catch(() => undefined);
+      //
+      // `removed` só conta remoção que **de fato** aconteceu (T18.1.1 §4): se o armazenamento
+      // falhar, a linha reivindicada continua `DELETED` (a reivindicação é idempotente) e a
+      // próxima varredura tenta de novo — nunca contamos como removido algo que ainda está lá.
+      try {
+        await this.store.remove(item.storageKey);
+        removed += 1;
+      } catch {
+        failed += 1;
+        continue;
+      }
       await this.repository.deleteRow(item.id);
-      removed += 1;
     }
 
-    if (removed > 0) {
-      this.logger.info('social.media.collected', { removed });
+    if (removed > 0 || failed > 0) {
+      this.logger.info('social.media.collected', { removed, failed });
     }
     return removed;
   }
@@ -143,11 +156,15 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   private async collectOrphans(): Promise<number> {
     const now = this.clock.now();
     let removed = 0;
+    let failed = 0;
 
     for (let pages = 0; pages < OBJECT_STORAGE_ORPHAN_SCAN_PAGES; pages += 1) {
       const page = await this.store.listObjects(this.orphanCursor);
+      // `createdAt === null` (T18.1.1 §9): idade não provada nunca é "antiga o suficiente". O
+      // objeto fica de fora desta varredura, e a próxima o revê pelo mesmo critério.
       const candidates = page.objects.filter(
-        (object) => now - object.createdAt >= OBJECT_STORAGE_ORPHAN_GRACE_MS,
+        (object) =>
+          object.createdAt !== null && now - object.createdAt >= OBJECT_STORAGE_ORPHAN_GRACE_MS,
       );
       const known = await this.repository.findExistingStorageKeys(
         candidates.map((object) => object.storageKey),
@@ -157,24 +174,29 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
         if (known.has(object.storageKey)) {
           continue;
         }
-        if (removed >= MEDIA_CLEANUP_BATCH) {
+        if (removed + failed >= MEDIA_CLEANUP_BATCH) {
           break;
         }
-        await this.store.remove(object.storageKey).catch(() => undefined);
-        removed += 1;
+        // `removed` só conta remoção que **de fato** aconteceu (T18.1.1 §4).
+        try {
+          await this.store.remove(object.storageKey);
+          removed += 1;
+        } catch {
+          failed += 1;
+        }
       }
 
       // A página inteira foi examinada (ou o lote encheu): o cursor avança de qualquer jeito —
       // o que sobrou continua órfão e continua antigo, e a próxima passagem pelo namespace o pega.
       this.orphanCursor = page.nextPageToken;
-      if (this.orphanCursor === undefined || removed >= MEDIA_CLEANUP_BATCH) {
+      if (this.orphanCursor === undefined || removed + failed >= MEDIA_CLEANUP_BATCH) {
         break;
       }
     }
 
-    if (removed > 0) {
+    if (removed > 0 || failed > 0) {
       // Contagem, nunca chave nem caminho (§161/§162).
-      this.logger.info('social.media.orphans_collected', { removed });
+      this.logger.info('social.media.orphans_collected', { removed, failed });
     }
     return removed;
   }

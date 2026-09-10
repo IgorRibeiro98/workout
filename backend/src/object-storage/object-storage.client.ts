@@ -37,13 +37,29 @@ import type { Readable } from 'node:stream';
  * - **`remove` de objeto ausente é sucesso** — a limpeza e a exclusão de conta repetem remoções;
  * - **a listagem é bounded.** Uma página por chamada, sempre com prefixo, com `createdAt` de cada
  *   objeto — é o que permite ao coletor de órfãos respeitar um período de carência sem uma
- *   segunda requisição por objeto.
+ *   segunda requisição por objeto;
+ * - **idade desconhecida nunca é idade zero** (T18.1.1). Quando o provider não consegue provar
+ *   quando um objeto nasceu — metadata ausente ou ilegível —, `createdAt` é `null`, nunca `0`. Um
+ *   coletor de órfãos lê "mais antigo que a carência"; `0` mentiria "nasceu em 1970" e tornaria o
+ *   objeto elegível para remoção imediatamente. `null` é a única resposta honesta, e a única que
+ *   um algoritmo destrutivo pode tratar como "não provado, não remover".
  */
 export interface ObjectStorageClient {
   readonly provider: 'local' | 'gcs';
 
   /**
-   * Cria o objeto. Falha se [name] já existir — nunca sobrescreve.
+   * Cria o objeto — **imutável, create-or-confirm-identical** (T18.1.1 §6/§7, Opção B).
+   *
+   * ```text
+   * nome livre                       → grava, sucesso
+   * nome ocupado, bytes idênticos    → sucesso, SEM sobrescrever (retry da mesma escrita)
+   * nome ocupado, bytes diferentes   → ObjectAlreadyExistsError — nunca sobrescreve
+   * ```
+   *
+   * A segunda linha é o que torna o retry automático do cliente HTTP seguro: repetir a mesma
+   * gravação depois de uma resposta perdida não pode virar `ObjectAlreadyExistsError` só porque a
+   * primeira tentativa já tinha vencido. Os três providers (`local`, `gcs`, o dublê de teste)
+   * seguem exatamente esta tabela — nenhuma diferença silenciosa entre eles.
    *
    * A implementação verifica a integridade dos bytes gravados quando o provider oferece isso
    * (CRC32C no GCS). [WriteObjectOptions.metadata] é anotação segura do objeto — hash, versão —
@@ -83,8 +99,12 @@ export interface ListObjectsOptions {
 
 export interface StoredObjectSummary {
   readonly name: string;
-  /** Quando o objeto foi criado, em epoch millis. É o que o período de carência dos órfãos lê. */
-  readonly createdAt: number;
+  /**
+   * Quando o objeto foi criado, em epoch millis — ou `null` quando o provider não pôde provar a
+   * idade (T18.1.1 §6). É o que o período de carência dos órfãos lê; `null` nunca é tratado como
+   * "antigo o suficiente para remover".
+   */
+  readonly createdAt: number | null;
   readonly size: number;
 }
 

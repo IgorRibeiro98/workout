@@ -12,6 +12,9 @@ import { fixture, withClientBackupId } from './support/backup-fixtures';
 
 const TOKEN = 'token-da-conta';
 const UID = 'uid-da-conta';
+/** O fence de conta (T18.1.1) exige um hash; nenhum destes testes grava tombstone, então o valor
+ * exato não importa — só precisa ser um argumento válido para a consulta. */
+const UID_HASH = 'uid-hash-para-teste-sem-tombstone';
 
 /**
  * Persistência do backup: transação, retenção e sobrevivência a restart (T16.4).
@@ -55,7 +58,9 @@ describe('Persistência do backup', () => {
         item('CUSTOM_EXERCISE', UUID_1),
       ]);
 
-      await expect(repository.insert(UID, duplicated, Date.now(), identity())).rejects.toThrow();
+      await expect(
+        repository.insert(UID, duplicated, Date.now(), identity(), UID_HASH),
+      ).rejects.toThrow();
 
       expect(await repository.countFor(UID)).toBe(0);
       expect(await itemCount(postgres)).toBe(0);
@@ -68,7 +73,13 @@ describe('Persistência do backup', () => {
         item('CUSTOM_EXERCISE', UUID_2),
       ]);
 
-      const stored = await repository.insert(UID, snapshot, 1_700_000_000_000, identity());
+      const stored = await repository.insert(
+        UID,
+        snapshot,
+        1_700_000_000_000,
+        identity(),
+        UID_HASH,
+      );
 
       expect(stored.itemCount).toBe(2);
       expect(await itemCount(postgres)).toBe(2);
@@ -99,6 +110,7 @@ describe('Persistência do backup', () => {
             snapshotWith([], `client-${index}`),
             1_700_000_000_000 + index,
             identity(),
+            UID_HASH,
           ),
         );
       }
@@ -126,6 +138,7 @@ describe('Persistência do backup', () => {
           snapshotWith([], `a-${index}`),
           1_700_000_000_000 + index,
           identity(),
+          UID_HASH,
         );
       }
       await repository.insert(
@@ -133,6 +146,7 @@ describe('Persistência do backup', () => {
         snapshotWith([], 'b-1'),
         1_700_000_000_000,
         identity(),
+        UID_HASH,
       );
 
       await repository.pruneOlderThan(UID, 5);
@@ -147,8 +161,9 @@ describe('Persistência do backup', () => {
         snapshotWith([item('CUSTOM_EXERCISE', UUID_1)], 'client-1'),
         1,
         identity(),
+        UID_HASH,
       );
-      await repository.insert(UID, snapshotWith([], 'client-2'), 2, identity());
+      await repository.insert(UID, snapshotWith([], 'client-2'), 2, identity(), UID_HASH);
 
       await repository.pruneOlderThan(UID, 1);
 

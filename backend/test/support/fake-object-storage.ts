@@ -16,7 +16,7 @@ interface StoredObject {
   readonly bytes: Buffer;
   readonly contentType: string;
   readonly metadata: Readonly<Record<string, string>>;
-  createdAt: number;
+  createdAt: number | null;
 }
 
 /**
@@ -35,10 +35,57 @@ export class InMemoryObjectStorageClient implements ObjectStorageClient {
   private readonly failing = new Set<Operation>();
   /** A "hora" em que os próximos objetos nascem. Controlável para simular objetos antigos. */
   private clock: () => number = () => Date.now();
+  /** Uma trava de uso único por operação, para corridas reais e deterministas (T18.1.1). */
+  private readonly pendingGates = new Map<
+    Operation,
+    { gate: Promise<void>; markEntered: () => void }
+  >();
+  /** Chaves cuja **próxima** `remove` falha — uma vez só, para provar um lote com falha parcial. */
+  private readonly failingKeys = new Set<string>();
+
+  /**
+   * Faz a **próxima** chamada de [operation] esperar até que [release] seja chamado — e devolve
+   * [entered], que resolve no instante em que a chamada **chegou** na trava.
+   *
+   * Existe para orquestrar deterministicamente a corrida entre uma escrita account-scoped já em
+   * voo e uma exclusão de conta concorrente. Sem [entered], um teste que dispara a requisição
+   * gated e a exclusão concorrente por `Promise.all`/sequência não tem garantia de que a primeira
+   * já passou pelo `BearerAuthGuard` e chegou ao ponto certo antes de a segunda começar — o Node
+   * pode processar a exclusão inteira primeiro, e aí o `BearerAuthGuard` da própria requisição
+   * gated a rejeitaria na entrada, testando o guard em vez do fence. Aguardar `entered` fecha essa
+   * janela: só depois dele o teste sabe que a escrita está **presa depois do guard**, exatamente
+   * onde a corrida real acontece.
+   */
+  gateNext(operation: Operation): { release: () => void; entered: Promise<void> } {
+    let release!: () => void;
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.pendingGates.set(operation, { gate, markEntered });
+    return { release, entered };
+  }
+
+  private async awaitGate(operation: Operation): Promise<void> {
+    const entry = this.pendingGates.get(operation);
+    if (entry) {
+      this.pendingGates.delete(operation);
+      entry.markEntered();
+      await entry.gate;
+    }
+  }
 
   /** Faz [operation] falhar como infraestrutura indisponível até [restore]. */
   fail(operation: Operation): void {
     this.failing.add(operation);
+  }
+
+  /** Faz a próxima `remove(name)` falhar, sem afetar as demais chaves do mesmo lote. */
+  failNextRemoveFor(name: string): void {
+    this.failingKeys.add(name);
   }
 
   restore(operation?: Operation): void {
@@ -53,8 +100,11 @@ export class InMemoryObjectStorageClient implements ObjectStorageClient {
     this.clock = clock;
   }
 
-  /** Reescreve a data de criação de um objeto existente — para simular um órfão antigo. */
-  setCreatedAt(name: string, createdAt: number): void {
+  /**
+   * Reescreve a data de criação de um objeto existente — para simular um órfão antigo, ou (com
+   * `null`) um objeto cujo provider não conseguiu provar a idade (T18.1.1 §9).
+   */
+  setCreatedAt(name: string, createdAt: number | null): void {
     const object = this.objects.get(name);
     if (!object) {
       throw new Error(`objeto inexistente no dublê: ${name}`);
@@ -82,7 +132,14 @@ export class InMemoryObjectStorageClient implements ObjectStorageClient {
   async write(name: string, bytes: Buffer, options: WriteObjectOptions): Promise<void> {
     assertSafeObjectName(name);
     this.maybeFail('write');
-    if (this.objects.has(name)) {
+    const existing = this.objects.get(name);
+    if (existing) {
+      // Create-or-confirm-identical (T18.1.1 §6/§7): o mesmo contrato que `local` e `gcs` — o
+      // dublê existe para provar que os três convergem igual, não para ter uma regra própria.
+      if (existing.bytes.equals(bytes)) {
+        await Promise.resolve();
+        return;
+      }
       throw new ObjectAlreadyExistsError();
     }
     this.objects.set(name, {
@@ -91,7 +148,9 @@ export class InMemoryObjectStorageClient implements ObjectStorageClient {
       metadata: { ...options.metadata },
       createdAt: this.clock(),
     });
-    await Promise.resolve();
+    // O objeto já está gravado quando a trava segura: exatamente o estado real de uma requisição
+    // presa entre o upload e o `INSERT` da metadata.
+    await this.awaitGate('write');
   }
 
   async read(name: string): Promise<Buffer | null> {
@@ -117,6 +176,9 @@ export class InMemoryObjectStorageClient implements ObjectStorageClient {
   async remove(name: string): Promise<void> {
     assertSafeObjectName(name);
     this.maybeFail('remove');
+    if (this.failingKeys.delete(name)) {
+      throw new ObjectStorageUnavailableError('remove', new Error('falha injetada para a chave'));
+    }
     this.objects.delete(name);
     await Promise.resolve();
   }

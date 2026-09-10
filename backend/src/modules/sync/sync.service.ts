@@ -1,8 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { hashAccountUid } from '../../common/account-uid-hash';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import { AccountMutationFencedError } from '../../database/account-mutation-fence';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
-import { uidPrefix } from '../auth/bearer-auth.guard';
+import { accountDeletedException, uidPrefix } from '../auth/bearer-auth.guard';
 import {
   type SyncEntityStateResponse,
   type SyncMutationResult,
@@ -224,7 +226,22 @@ export class SyncService {
     deviceId: string,
     mutation: ParsedMutation,
   ): Promise<SyncMutationResult> {
-    return this.repository.executeAtomicMutation(ownerUid, deviceId, mutation, Date.now());
+    try {
+      return await this.repository.executeAtomicMutation(
+        ownerUid,
+        deviceId,
+        mutation,
+        Date.now(),
+        hashAccountUid(this.config, ownerUid),
+      );
+    } catch (error) {
+      // A conta foi excluída entre o `BearerAuthGuard` e este push (T18.1.1 §2): o Account
+      // Mutation Fence recusou a escrita. A resposta é a mesma que uma requisição nova receberia.
+      if (error instanceof AccountMutationFencedError) {
+        throw accountDeletedException();
+      }
+      throw error;
+    }
   }
 }
 

@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { hashAccountUid } from '../../common/account-uid-hash';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import { AccountMutationFencedError } from '../../database/account-mutation-fence';
 import { ObjectStorageUnavailableError } from '../../object-storage/object-storage.client';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
-import { uidPrefix } from '../auth/bearer-auth.guard';
+import { accountDeletedException, uidPrefix } from '../auth/bearer-auth.guard';
 import { BACKUP_PAYLOAD_STORE, type BackupPayloadStore } from './backup-payload.store';
 import type { BackupListResponse, BackupMetadataResponse } from './backup.contract';
 import { BackupErrors } from './backup.errors';
@@ -122,10 +124,13 @@ export class BackupService {
 
     let stored: StoredSnapshot;
     try {
-      stored = await this.repository.insert(principal.uid, snapshot, Date.now(), {
-        backupId,
-        storageKey,
-      });
+      stored = await this.repository.insert(
+        principal.uid,
+        snapshot,
+        Date.now(),
+        { backupId, storageKey },
+        hashAccountUid(this.config, principal.uid),
+      );
     } catch (err: unknown) {
       // O objeto já existe e a metadata não vai existir: apagar agora é o caminho barato. Se a
       // remoção também falhar, o objeto é órfão — e a coleta de órfãos o recolhe (§26).
@@ -135,6 +140,17 @@ export class BackupService {
           uidPrefix: uidPrefix(principal.uid),
         });
       });
+
+      // A conta foi excluída entre o `BearerAuthGuard` e este `INSERT` (T18.1.1 §2): o Account
+      // Mutation Fence recusou a escrita, e o objeto que acabou de subir já foi removido acima —
+      // nada fica referenciado, e a resposta é a mesma que uma requisição nova receberia.
+      if (err instanceof AccountMutationFencedError) {
+        this.logger.warn('backup.account_deleted_in_flight', {
+          requestId,
+          uidPrefix: uidPrefix(principal.uid),
+        });
+        throw accountDeletedException();
+      }
 
       const code = (err as { code?: string })?.code;
       if (code === '23505') {

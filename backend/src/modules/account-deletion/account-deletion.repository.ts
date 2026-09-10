@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { lockAccountMutationFence } from '../../database/account-mutation-fence';
 import { PostgresService } from '../../database/postgres.service';
 import { allAccountUidsQuery } from './account-uid-inventory';
 
@@ -152,6 +153,13 @@ export class AccountDeletionRepository {
 
   /**
    * O início da exclusão de conta, como **uma** transação atômica durável.
+   *
+   * Adquire o **Account Mutation Fence** (T18.1.1 §2, `src/database/account-mutation-fence.ts`)
+   * antes de gravar o tombstone — o mesmo lock que toda escrita account-scoped nova (backup, push
+   * de sync, upload de mídia social, criação de check-in) adquire antes de confirmar sua própria
+   * escrita. É essa disputa pelo mesmo lock que impede uma escrita já em voo de commitar depois
+   * deste purge: ou ela chega primeiro e a exclusão espera atrás dela, ou a exclusão chega primeiro
+   * e a escrita, ao adquirir o lock depois, relê o tombstone recém-gravado e se recusa.
    */
   async beginAccountDeletion(input: {
     readonly firebaseUid: string;
@@ -161,6 +169,8 @@ export class AccountDeletionRepository {
     readonly now: number;
   }): Promise<void> {
     await this.db.transaction(async (client) => {
+      await lockAccountMutationFence(client, input.firebaseUid);
+
       await client.query(
         `INSERT INTO account_deletion_tombstones (id, uid_hash, deleted_at)
          VALUES ($1, $2, $3)
