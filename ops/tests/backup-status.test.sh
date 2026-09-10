@@ -22,24 +22,30 @@
 # restic é substituído por um dublê via `SPARK_RESTIC_CMD` — que é o mesmo mecanismo de indireção
 # que existe para rodar o restic em container, e não um seam criado para teste.
 #
-# Uso:  ops/tests/backup-status.test.sh <diretório-de-dados-com-spark.db>
+# Uso:  SPARK_IMAGE=... SPARK_TEST_DATABASE_URL=postgresql://... ops/tests/backup-status.test.sh
+#
+# O banco é o PostgreSQL de `SPARK_TEST_DATABASE_URL` (T18.0.2), já migrado — o snapshot exige
+# `schema_migrations`. O "banco indisponível" do desfecho [3/7] é um endereço em que nada escuta.
 
 set -euo pipefail
 
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE_DATA_DIR="${1:?uso: backup-status.test.sh <diretório-de-dados-com-spark.db>}"
 : "${SPARK_IMAGE:?SPARK_IMAGE é obrigatório}"
-
-[ -f "${SOURCE_DATA_DIR}/spark.db" ] \
-  || { echo "não há spark.db em ${SOURCE_DATA_DIR}"; exit 1; }
+: "${SPARK_TEST_DATABASE_URL:?SPARK_TEST_DATABASE_URL é obrigatório (PostgreSQL migrado, alcançável pela rede do host)}"
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT" 2> /dev/null || true' EXIT
 
 STATE="${ROOT}/state"
 STAGING="${ROOT}/backups"
-EMPTY_DATA="${ROOT}/sem-banco"
-mkdir -p "$STATE" "$STAGING" "$EMPTY_DATA"
+# O diretório de dados só carrega o ledger de exclusões desde a T18.0; para este teste ele pode
+# estar vazio (um servidor onde ninguém excluiu conta ainda), e isso não é erro.
+SOURCE_DATA_DIR="${ROOT}/data"
+mkdir -p "$STATE" "$STAGING" "$SOURCE_DATA_DIR"
+
+# Um endereço em que nenhum PostgreSQL escuta: `pg_dump` falha ao conectar, que é o mesmo caminho
+# de um banco fora do ar, de credencial revogada ou de firewall fechado.
+UNREACHABLE_DATABASE_URL="postgresql://spark:spark@127.0.0.1:1/indisponivel"
 
 STATUS_FILE="${STATE}/backup-status.json"
 
@@ -92,10 +98,11 @@ check() {
 
 # Roda o backup e devolve o código de saída, sem deixar `set -e` derrubar o teste.
 run_backup() {
-  local data_dir="$1" staging="$2" mode="$3" repository="$4"
+  local database_url="$1" staging="$2" mode="$3" repository="$4"
   set +e
   env \
-    SPARK_DATA_DIR="$data_dir" \
+    SPARK_DATA_DIR="$SOURCE_DATA_DIR" \
+    SPARK_DATABASE_URL="$database_url" \
     SPARK_STAGING_DIR="$staging" \
     SPARK_STATE_DIR="$STATE" \
     SPARK_COMPOSE_DIR="${ROOT}/sem-compose" \
@@ -115,7 +122,7 @@ echo "=== estado do backup em todos os desfechos ==="
 
 # --- 1. sucesso, que é a linha de base ---------------------------------------------------------
 echo "[1/7] sucesso"
-code="$(run_backup "$SOURCE_DATA_DIR" "$STAGING" ok "$FAKE_REPOSITORY")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$STAGING" ok "$FAKE_REPOSITORY")"
 check "sai com 0"                    "0"         "$code"
 check "outcome"                      "SUCCESS"   "$(field outcome)"
 check "snapshotId do restic"         "abc123def456" "$(field snapshotId)"
@@ -144,20 +151,20 @@ expect_failure() {
 
 # --- 2. credencial de storage ausente ----------------------------------------------------------
 echo "[2/7] credencial ausente"
-code="$(run_backup "$SOURCE_DATA_DIR" "$STAGING" ok "")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$STAGING" ok "")"
 expect_failure "credencial ausente" "$code" "config"
 
 # --- 3. falha do snapshot ----------------------------------------------------------------------
 #
-# Um diretório de dados sem `spark.db`: `VACUUM INTO` a partir de `fileMustExist` não tem o que
-# copiar. É o mesmo caminho de falha de um banco corrompido ou de uma montagem que sumiu.
+# Um PostgreSQL que não responde: `pg_dump` não conecta e não tem o que copiar. É o mesmo caminho
+# de falha de um banco fora do ar, de uma credencial revogada ou de um firewall fechado.
 echo "[3/7] snapshot"
-code="$(run_backup "$EMPTY_DATA" "$STAGING" ok "$FAKE_REPOSITORY")"
+code="$(run_backup "$UNREACHABLE_DATABASE_URL" "$STAGING" ok "$FAKE_REPOSITORY")"
 expect_failure "snapshot" "$code" "snapshot"
 
 # --- 4. falha do envio off-site ----------------------------------------------------------------
 echo "[4/7] envio off-site"
-code="$(run_backup "$SOURCE_DATA_DIR" "$STAGING" falha-backup "$FAKE_REPOSITORY")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$STAGING" falha-backup "$FAKE_REPOSITORY")"
 expect_failure "envio off-site" "$code" "offsite-upload"
 
 # --- 5. restic aceita mas não devolve snapshot -------------------------------------------------
@@ -165,7 +172,7 @@ expect_failure "envio off-site" "$code" "offsite-upload"
 # Sai com 0 e não identifica o snapshot: sem esta verificação, o backup seria dado como bem-sucedido
 # sem que exista prova de que algo chegou ao storage.
 echo "[5/7] restic sem snapshot_id"
-code="$(run_backup "$SOURCE_DATA_DIR" "$STAGING" sem-snapshot-id "$FAKE_REPOSITORY")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$STAGING" sem-snapshot-id "$FAKE_REPOSITORY")"
 expect_failure "restic sem snapshot_id" "$code" "offsite-upload"
 
 # --- 6. falha da retenção ----------------------------------------------------------------------
@@ -173,7 +180,7 @@ expect_failure "restic sem snapshot_id" "$code" "offsite-upload"
 # O snapshot subiu, mas o repositório está crescendo sem limite. É falha: precisa aparecer agora,
 # e não quando o storage encher.
 echo "[6/7] retenção"
-code="$(run_backup "$SOURCE_DATA_DIR" "$STAGING" falha-forget "$FAKE_REPOSITORY")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$STAGING" falha-forget "$FAKE_REPOSITORY")"
 expect_failure "retenção" "$code" "offsite-retention"
 
 # --- 7. disco/área de trabalho indisponível ----------------------------------------------------
@@ -192,7 +199,7 @@ READONLY_STAGING="${ROOT}/staging-somente-leitura"
 mkdir -p "$READONLY_STAGING"
 docker run --rm --user 0 -v "${READONLY_STAGING}:/alvo" --entrypoint sh "$SPARK_IMAGE" -c   'chown 0:0 /alvo && chmod 500 /alvo' > /dev/null
 
-code="$(run_backup "$SOURCE_DATA_DIR" "$READONLY_STAGING" ok "$FAKE_REPOSITORY")"
+code="$(run_backup "$SPARK_TEST_DATABASE_URL" "$READONLY_STAGING" ok "$FAKE_REPOSITORY")"
 expect_failure "área de trabalho" "$code" "workdir"
 
 # Devolvido ao dono original para que a limpeza do teste consiga removê-lo.

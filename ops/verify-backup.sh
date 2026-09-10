@@ -1,32 +1,41 @@
 #!/usr/bin/env bash
 #
-# Ensaio de restauração (T16.8 §43/§112/§161).
+# Ensaio de restauração (T16.8 §43/§112/§161; PostgreSQL desde a T18.0.2).
 #
-#   backup off-site ──▶ restauração ──▶ integrity_check ──▶ backend sobe sobre a cópia ──▶ ready
+#   backup off-site ──▶ restauração ──▶ pg_restore num banco DESCARTÁVEL ──▶ backend sobe sobre ele ──▶ ready
 #                                    └─▶ mídia social restaurada e legível pelo processo
 #
 # ## Por que este script existe
 #
-# Um backup só está validado quando alguém o restaurou. "O job saiu com código 0" e "o arquivo
-# apareceu no storage" não provam que o banco abre, que o schema está aplicado ou que a senha de
-# criptografia que o operador tem é a que o repositório usa (§113). Este ensaio prova as quatro
-# coisas de uma vez, e não toca em produção em momento nenhum.
+# Um backup só está validado quando alguém o restaurou. "O job saiu com código 0", "o arquivo
+# apareceu no storage" e "`pg_restore --list` leu o índice" não provam que o conteúdo restaura,
+# que o schema está aplicado ou que a senha de criptografia que o operador tem é a que o
+# repositório usa (§113). Este ensaio prova tudo isso de uma vez, e não toca em produção em momento
+# nenhum.
 #
-# Sobe o backend real sobre a **cópia restaurada**, em uma porta separada, e exige
-# `/health/ready` — é o mesmo processo de produção lendo o mesmo arquivo que uma recuperação
-# de verdade produziria.
+# ## O banco descartável
+#
+# O dump é restaurado em `SPARK_DRILL_DATABASE_URL` — um banco **separado**, que o operador cria
+# para isto (`CREATE DATABASE spark_drill`, ou um branch no Neon) e pode apagar depois. O script
+# recusa rodar se ele for o mesmo banco de produção: um ensaio que sobrescrevesse produção seria o
+# desastre que ele existe para prevenir. O conteúdo anterior do banco descartável é substituído
+# (`--clean --if-exists`): ele é do ensaio, e só do ensaio.
+#
+# Sobe o backend real sobre o banco restaurado, em uma porta separada, e exige `/health/ready` —
+# é o mesmo processo de produção lendo o mesmo conteúdo que uma recuperação de verdade produziria.
 #
 # Uso:
-#   ops/verify-backup.sh                              # ensaia o snapshot mais recente do off-site
-#   ops/verify-backup.sh --snapshot <id>
-#   ops/verify-backup.sh --from-file /caminho/spark.db  # ensaio local, sem credencial de storage
-#   ops/verify-backup.sh --from-file /caminho/spark.db --media-from /caminho/media
+#   SPARK_DRILL_DATABASE_URL=postgresql://... ops/verify-backup.sh              # snapshot mais recente
+#   SPARK_DRILL_DATABASE_URL=... ops/verify-backup.sh --snapshot <id>
+#   SPARK_DRILL_DATABASE_URL=... ops/verify-backup.sh --from-file /caminho/spark.dump   # local, sem storage
+#   SPARK_DRILL_DATABASE_URL=... ops/verify-backup.sh --from-file /caminho/spark.dump --media-from /caminho/media
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 load_env_file
+require_cmd docker
 
 SNAPSHOT="latest"
 FROM_FILE=""
@@ -57,6 +66,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+DRILL_URL="${SPARK_DRILL_DATABASE_URL:-}"
+[ -n "$DRILL_URL" ] || fail "SPARK_DRILL_DATABASE_URL é obrigatório: o banco DESCARTÁVEL onde o dump será restaurado"
+if PRODUCTION_URL="$(spark_database_url)" && [ "$PRODUCTION_URL" = "$DRILL_URL" ]; then
+  fail "SPARK_DRILL_DATABASE_URL é o mesmo banco de produção; o ensaio nunca restaura sobre produção"
+fi
+
 # Diretório de trabalho do ensaio. Configurável porque ele precisa ser um caminho **do host**
 # quando o restic roda em container (`SPARK_RESTIC_CMD`): o alvo da restauração tem de estar
 # montado, ou o restic escreve dentro de um container efêmero e o arquivo somem com ele.
@@ -74,7 +89,7 @@ trap cleanup EXIT
 
 log "=== ensaio de restauração ==="
 
-# --- 1. restaurar e verificar integridade --------------------------------------------------
+# --- 1. restaurar o arquivo e verificar o índice --------------------------------------------
 if [ -n "$FROM_FILE" ]; then
   MEDIA_ARGS=()
   [ -n "$FROM_MEDIA" ] && MEDIA_ARGS=(--media-from "$FROM_MEDIA")
@@ -91,32 +106,42 @@ RESTORED_MEDIA=""
 MEDIA_ROOT_MARKER="$(find "${DRILL_DIR}/restored" -type d -name checkins 2> /dev/null | head -1)"
 [ -n "$MEDIA_ROOT_MARKER" ] && RESTORED_MEDIA="$(dirname "$MEDIA_ROOT_MARKER")"
 
-# --- 2. subir o backend real sobre a cópia -------------------------------------------------
+# --- 2. restaurar o conteúdo no banco descartável ------------------------------------------
 #
-# Um diretório separado, e uma cópia do arquivo: o container escreve `-wal` e `-shm`, e o ensaio
-# não pode alterar o artefato que acabou de ser verificado.
-DATA_DIR="${DRILL_DIR}/data"
-mkdir -p "$DATA_DIR"
+# As mesmas opções de `restore.sh --install`: é a restauração de verdade, só que no banco do
+# ensaio. Uma opção que só existisse aqui faria o ensaio provar um caminho que a produção não usa.
+RESTORED_DIR="$(cd "$(dirname "$RESTORED")" && pwd)"
+RESTORED_NAME="$(basename "$RESTORED")"
+log "restaurando o dump no banco descartável (transação única)"
+pg_run "$DRILL_URL" "
+  set -e
+  pg_restore -d \"\$SPARK_PG_CONN\" --clean --if-exists --no-owner --no-privileges \\
+    --single-transaction --exit-on-error '/restore/${RESTORED_NAME}'
+" -v "${RESTORED_DIR}:/restore:ro" \
+  || fail "pg_restore falhou no banco descartável: o dump não restaura"
 
-# O ensaio usa **o mesmo modelo de permissão da produção** (T16.8.1 §3), e não `777`/`666`.
+# O que um dump do Spark precisa ter depois de restaurado: o histórico de migrations e a tabela
+# de metadata do servidor. Contagens, nunca conteúdo (§161).
+RESTORED_STATE="$(pg_run "$DRILL_URL" "
+  psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 -c \"
+    SELECT 'schema_version=' || COALESCE(MAX(version), 0) || ' migrations=' || COUNT(*) FROM schema_migrations
+  \"
+  psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 -c \"
+    SELECT 'server_metadata_rows=' || COUNT(*) FROM server_metadata
+  \"
+" | tr '\n' ' ')" || fail "o banco restaurado não tem schema_migrations/server_metadata"
+log "conteúdo restaurado: ${RESTORED_STATE}"
+printf '%s' "$RESTORED_STATE" | grep -Eq 'migrations=[1-9]' \
+  || fail "o banco restaurado não tem nenhuma migration registrada"
+
+# --- 3. subir o backend real sobre o banco restaurado ---------------------------------------
 #
-# A versão anterior abria tudo para todo mundo. Além de ser o que a T16.8 proíbe em produção, isso
-# tornava o ensaio inútil justamente na parte que mais quebra: um `777` passa com qualquer
-# combinação de uid, inclusive as que a produção real não teria. O ensaio deixava de provar que o
-# container consegue abrir o banco e passava a provar apenas que o container existe.
-#
-# Aqui: `2770` (setgid) no diretório, `660` no arquivo, dono é quem roda o script, e o container
-# entra no grupo por `--group-add`. O uid do container (1000, `node`) e o do operador podem ser
-# diferentes — e no CI **são**, que é exatamente o caso que precisava de cobertura.
+# A mídia entra no ensaio com o **mesmo modelo de permissão da produção** (T16.8.1 §3, T17.9
+# §142), e não `777`/`666`: `2770` (setgid) no diretório, `660` nos arquivos, dono é quem roda o
+# script, e o container entra no grupo por `--group-add`. O ponto do ensaio não é só "os arquivos
+# vieram": é que o processo que roda como `node`, com uid diferente do operador, consegue
+# **abri-los** depois da restauração. Um `chmod 777` aqui provaria apenas que o container existe.
 DRILL_GID="$(id -g)"
-chmod 2770 "$DATA_DIR"
-cp "$RESTORED" "${DATA_DIR}/${DB_FILENAME}"
-chmod 660 "${DATA_DIR}/${DB_FILENAME}"
-
-# A mídia entra no ensaio com o **mesmo** modelo de permissão (T17.9 §142). O ponto do ensaio não é
-# só "os arquivos vieram": é que o processo que roda como `node`, com uid diferente do operador,
-# consegue **abri-los** depois da restauração. Um `chmod 777` aqui provaria apenas que o container
-# existe.
 MEDIA_DIR="${DRILL_DIR}/media"
 mkdir -p "$MEDIA_DIR"
 chmod 2770 "$MEDIA_DIR"
@@ -131,13 +156,15 @@ else
   log "aviso: o snapshot não trouxe mídia; o ensaio verifica apenas o banco"
 fi
 
-log "subindo o backend sobre a cópia restaurada (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
+# `--network host` com `PORT` explícita: o processo precisa alcançar exatamente o endereço de
+# `SPARK_DRILL_DATABASE_URL` — que pode ser `127.0.0.1` numa máquina de desenvolvimento ou no CI.
+log "subindo o backend sobre o banco restaurado (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
 docker run -d --name "$CONTAINER" \
-  -p "127.0.0.1:${PORT}:8080" \
+  --network host \
   --group-add "$DRILL_GID" \
-  -v "${DATA_DIR}:/data" \
   -v "${MEDIA_DIR}:/media" \
-  -e DATABASE_PATH="/data/${DB_FILENAME}" \
+  -e "PORT=${PORT}" \
+  -e "DATABASE_URL=${DRILL_URL}" \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e NODE_ENV=production \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
@@ -165,7 +192,7 @@ for path in /v1/backups /v1/sync/pull; do
   [ "$status" = "401" ] || fail "rota ${path} respondeu ${status} no banco restaurado; esperado 401"
 done
 
-# --- 3. a mídia restaurada é legível **pelo processo** (T17.9 §142) --------------------------
+# --- 4. a mídia restaurada é legível **pelo processo** (T17.9 §142) --------------------------
 #
 # O container roda como `node` (uid 1000) e o operador tem outro uid: este passo é o que prova que
 # o modelo de grupo compartilhado sobreviveu à restauração. Ler o byte a byte de um arquivo pelo
@@ -191,4 +218,4 @@ else
   log "aviso: sem mídia no snapshot, a verificação de leitura foi pulada"
 fi
 
-log "=== ensaio APROVADO: restauração íntegra, backend ready, rotas protegidas, mídia legível ==="
+log "=== ensaio APROVADO: dump restaurado, backend ready, rotas protegidas, mídia legível ==="

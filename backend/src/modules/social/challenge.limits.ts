@@ -33,7 +33,7 @@ export const CHALLENGE_NAME = {
  * lembra de ter feito, e a janela de pontuação passa a cobrir mudanças de rotina inteiras.
  *
  * O teto também limita o custo da consulta de `ACTIVE_DAYS`, que monta uma faixa por dia
- * (`challenge-progress.source.ts`): 90 é pequeno para o SQLite e grande para o produto.
+ * (`challenge-progress.source.ts`): 90 é pequeno para o banco e grande para o produto.
  */
 export const CHALLENGE_DURATION_DAYS = {
   min: 1,

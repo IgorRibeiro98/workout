@@ -1,7 +1,7 @@
 import BetterSqlite3, { type Database } from 'better-sqlite3';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { loadMigrations, runMigrations } from './support/legacy-sqlite-migration-runner';
 import { canonicalPair } from '../src/modules/social/friendship.repository';
 import { configFor, createTempDb, MIGRATIONS_DIR, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';

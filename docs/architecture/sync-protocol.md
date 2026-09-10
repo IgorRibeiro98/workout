@@ -345,7 +345,7 @@ reenviar tudo para sempre. Cada mutação recebe o desfecho dela na resposta:
 ```
 
 O que **é** atômico é cada aplicação: `sync_entities`, `sync_changes` e `sync_mutations` entram na
-mesma transação SQLite. Atualizar a entidade e falhar ao anexar a mudança deixaria os outros
+mesma transação do banco. Atualizar a entidade e falhar ao anexar a mudança deixaria os outros
 aparelhos sem nunca saber da alteração; gravar o ledger sem aplicar faria um reenvio devolver um
 resultado que não existe. Há teste que derruba cada uma das três tabelas e confirma que nada sobra.
 
@@ -704,7 +704,7 @@ servidor exatamente o que o usuário apagou.
 ### Retenção
 
 `SYNC_TOMBSTONE_RETENTION_DAYS` declara a retenção pretendida e **nada a executa**. O custo é
-assimétrico: guardar um tombstone custa uma linha estreita em SQLite; apagá-lo cedo demais custa
+assimétrico: guardar um tombstone custa uma linha estreita no banco; apagá-lo cedo demais custa
 ressurreição para todo aparelho que ficou offline mais tempo do que a retenção. Uma limpeza segura
 precisaria conhecer o **menor cursor entre os aparelhos ativos da conta** — informação que o
 servidor não guarda, porque o cursor é durável no aparelho.
@@ -862,6 +862,7 @@ peça foi usada como estava:
 - versionamento de API configurado — o `@Controller('sync')` da T16.6 responde em `/v1/sync` sem
   ninguém ter escrito o prefixo;
 - migrations versionadas e transacionais, para o schema remoto nascer por fase;
-- SQLite com `foreign_keys=ON`, para que as tabelas de sync possam recusar órfãos de verdade;
+- banco com chaves estrangeiras ativas (SQLite `foreign_keys=ON` até a T17.13; PostgreSQL desde a
+  T18.0), para que as tabelas de sync possam recusar órfãos de verdade;
 - envelope de erro e request ID, para que um conflito seja diagnosticável;
 - fronteira de autenticação desenhada, para que ownership não seja retrofit.

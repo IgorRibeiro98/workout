@@ -57,7 +57,7 @@ export const SYNC_RATE_LIMIT = {
  * que a retenção pretendida seja explícita e localizável no dia em que alguém for escrever a
  * limpeza; enquanto ela não existir, o servidor guarda.
  *
- * O motivo é o custo assimétrico. Guardar um tombstone custa uma linha estreita em SQLite; apagá-lo
+ * O motivo é o custo assimétrico. Guardar um tombstone custa uma linha estreita no banco; apagá-lo
  * cedo demais custa **ressurreição**: um aparelho que ficou offline mais tempo do que a retenção
  * volta com a cópia antiga, não encontra a evidência da exclusão e reenvia o que o usuário apagou.
  * Na escala do Spark — um grupo pequeno de usuários (ADR-0001) — o volume nunca justifica correr

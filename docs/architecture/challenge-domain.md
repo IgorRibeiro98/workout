@@ -106,8 +106,8 @@ resto dele seria concordar em parte.
 
 Os dois métodos devolvem **um número**. Não existe — e não pode existir — `getSessions()`,
 `List<RawSyncEntity>` ou qualquer coisa que materialize uma linha de treino em JavaScript.
-`json_extract` aparece só na cláusula `WHERE`: carga, exercício, nota e horário nunca saem do
-SQLite. Há teste estrutural (`social-logging.spec.ts`) que lê o que as consultas selecionam.
+A extração de JSON aparece só na cláusula `WHERE`: carga, exercício, nota e horário nunca saem do
+banco. Há teste estrutural (`social-logging.spec.ts`) que lê o que as consultas selecionam.
 
 ### 3.3 A divergência resolvida: `startedAt`, e não `completedAt`
 
@@ -406,8 +406,8 @@ desafios alheios.
 - **Não força sincronização.** Abrir um desafio não pede push nem pull de ninguém.
 - **Não tem tempo real.** Sem WebSocket, sem SSE, sem FCM, sem polling.
 
-O backup do servidor (T16.8) protege as tabelas de desafio naturalmente, porque elas estão no mesmo
-SQLite da VPS. Não há um segundo mecanismo.
+O backup do servidor (T16.8; `pg_dump` desde a T18.0.2) protege as tabelas de desafio naturalmente,
+porque elas estão no mesmo PostgreSQL. Não há um segundo mecanismo.
 
 ---
 

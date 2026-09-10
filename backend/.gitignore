@@ -12,7 +12,8 @@ coverage/
 service-account*.json
 firebase-adminsdk*.json
 
-# Banco local e artefatos do SQLite.
+# Diretório de dados local e arquivos de banco de testes legados (SQLite histórico em `test/`);
+# o runtime é PostgreSQL e nunca produz nenhum destes.
 data/
 *.db
 *.db-wal

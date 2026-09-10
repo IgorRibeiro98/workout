@@ -77,7 +77,7 @@ async function bootstrap(): Promise<void> {
 
   // Um erro que escapou de todo tratamento deixa o processo em estado desconhecido. Continuar
   // servindo a partir daí é pior que morrer: a política de restart do Docker sobe um processo
-  // limpo em segundos, e o SQLite fica consistente porque cada transação já é atômica.
+  // limpo em segundos, e o PostgreSQL fica consistente porque cada transação já é atômica.
   const fatal = (event: string) => (error: unknown) => {
     logger.error(event, {
       errorName: error instanceof Error ? error.name : 'UnknownError',

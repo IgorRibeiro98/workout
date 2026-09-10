@@ -23,7 +23,7 @@ import { BackupService } from './backup.service';
  * `POST /v1/backups` e `GET /v1/backups/latest` (T16.4).
  *
  * ```text
- * Spark Android → snapshot completo → Bearer <Firebase ID Token> → aqui → SQLite (imutável)
+ * Spark Android → snapshot completo → Bearer <Firebase ID Token> → aqui → PostgreSQL (imutável)
  * ```
  *
  * As duas rotas exigem Bearer, e o dono de tudo é `@Principal().uid`. Não existe rota de backup

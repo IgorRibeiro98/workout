@@ -9,7 +9,7 @@
 #   a internet chega até ele?      → SPARK_PUBLIC_HEALTH_URL, quando houver domínio e TLS
 #   o último backup funcionou?     → estado gravado por ops/backup.sh
 #   quanto disco resta?            → df da partição de dados
-#   o banco está crescendo demais? → tamanho de spark.db e do WAL
+#   o operador alcança o banco?    → pg_database_size pelas ferramentas do backup
 #
 # ## Por que não Prometheus
 #
@@ -29,7 +29,7 @@ load_env_file
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1
 
-# Limiares. Deliberadamente conservadores: SQLite numa VPS pequena falha por disco cheio antes de
+# Limiares. Deliberadamente conservadores: uma VPS pequena falha por disco cheio antes de
 # falhar por qualquer outra coisa, e ele falha de forma silenciosa até deixar de ser silenciosa.
 DISK_WARN_PERCENT="${SPARK_DISK_WARN_PERCENT:-80}"
 DISK_FAIL_PERCENT="${SPARK_DISK_FAIL_PERCENT:-90}"
@@ -95,16 +95,28 @@ if [ -d "$SPARK_DATA_DIR" ]; then
     note "ATENÇÃO: disco em ${USED_PERCENT}%"
   fi
 
-  DB_PATH="${SPARK_DATA_DIR}/${DB_FILENAME}"
-  if [ -f "$DB_PATH" ]; then
-    # Tamanho, nunca conteúdo. Um WAL persistentemente grande indica checkpoint que não fecha —
-    # normalmente um leitor de longa duração segurando a janela.
-    note "spark.db: $(du -h "$DB_PATH" | cut -f1); wal: $(du -h "${DB_PATH}-wal" 2> /dev/null | cut -f1 || echo 0)"
-  else
-    problem "o arquivo do banco não existe em ${DB_PATH}"
-  fi
 else
   problem "o diretório de dados não existe: ${SPARK_DATA_DIR}"
+fi
+
+# --- banco (PostgreSQL, T18.0.2) ------------------------------------------------------------
+#
+# O readiness acima já provou que o **backend** alcança o banco. Esta verificação responde outra
+# pergunta: o **operador** alcança o banco com as ferramentas do backup? É por este caminho que o
+# `pg_dump` da madrugada vai — e uma connection string que só o container conhece, ou um
+# `pg_hba`/firewall que só o container atravessa, apareceria aqui à tarde em vez de no journal do
+# backup às 03:15. Tamanho, nunca conteúdo.
+if DATABASE_URL_RESOLVED="$(spark_database_url)"; then
+  if DB_SIZE="$(pg_run "$DATABASE_URL_RESOLVED" "
+      psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 \\
+        -c 'SELECT pg_size_pretty(pg_database_size(current_database()))'
+    " 2> /dev/null | tr -d '[:space:]')"; then
+    note "banco: ${DB_SIZE} (pg_database_size), alcançável pelas ferramentas do operador"
+  else
+    problem "as ferramentas do operador não alcançam o PostgreSQL de DATABASE_URL — o backup vai falhar na etapa 'snapshot'"
+  fi
+else
+  problem "DATABASE_URL não encontrada para o operador (nem SPARK_DATABASE_URL, nem ${SPARK_COMPOSE_DIR}/.env) — o backup não tem o que copiar"
 fi
 
 # --- disco da mídia social (T17.9 / T17.10 §92) -----------------------------------------------

@@ -101,7 +101,7 @@ import { CheckInProjector } from './checkin.projector';
  *
  * A parte que merece atenção é a fonte de progresso. `SyncedSocialProgressSource` lê **estado
  * sincronizado** (`sync_entities`) para responder uma pergunta agregada — quantas sessões
- * concluídas nesta semana. Ela faz isso pelo `SqliteService`, que é infraestrutura do processo, e
+ * concluídas nesta semana. Ela faz isso pelo `PostgresService`, que é infraestrutura do processo, e
  * **não** por `SyncModule`/`SyncRepository`: os imports proibidos continuam proibidos, e o teste
  * estrutural sobre eles continua valendo. `BackupModule` e `AiModule` permanecem inalcançáveis em
  * qualquer forma — nenhuma projeção social lê snapshot ou payload de backup.
@@ -226,7 +226,7 @@ import { CheckInProjector } from './checkin.projector';
     WorkoutShareService,
     WorkoutShareRepository,
     // A exclusão de conta (T17.6) precisa apagar os **arquivos** de mídia (T17.9 §114): o
-    // `ON DELETE CASCADE` do SQLite leva a metadata e não alcança o sistema de arquivos.
+    // `ON DELETE CASCADE` do PostgreSQL leva a metadata e não alcança o sistema de arquivos.
     SocialMediaRepository,
     SOCIAL_MEDIA_STORE,
     // A exclusão de conta e o bloqueio precisam alcançar o contexto de grupo (T17.11 §100/§105).

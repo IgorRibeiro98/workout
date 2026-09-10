@@ -22,7 +22,7 @@
  *
  * O `Intl.DateTimeFormat` do Node carrega o banco de fusos do ICU, que o runtime já atualiza. Uma
  * dependência nova traria uma segunda tabela de fusos para manter, e o Spark Backend não tem
- * nenhuma hoje (`package.json`: nest, better-sqlite3, firebase-admin, pino, zod). Isto **não** é
+ * nenhuma hoje (`package.json`: nest, pg, firebase-admin, pino, zod). Isto **não** é
  * um parser de fuso escrito à mão — a proibição de §204: quem responde "que horas são em São
  * Paulo" é o ICU, e o que está aqui é só a aritmética de calendário em volta da resposta dele.
  */

@@ -29,7 +29,7 @@ import { FirebaseAuthTokenVerifier } from './firebase-auth-token-verifier';
 export class AuthModule implements OnApplicationShutdown {
   constructor(private readonly firebaseVerifier: FirebaseAuthTokenVerifier) {}
 
-  /** Libera o app do Admin SDK junto com o resto do processo, como o SQLite já faz. */
+  /** Libera o app do Admin SDK junto com o resto do processo, como o pool do PostgreSQL já faz. */
   async onApplicationShutdown(): Promise<void> {
     await this.firebaseVerifier.dispose();
   }

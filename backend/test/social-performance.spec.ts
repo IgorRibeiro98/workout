@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTempDb, type TempDb } from './support/temp-db';
-import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { loadMigrations, runMigrations } from './support/legacy-sqlite-migration-runner';
 import {
   viewerBlockedCte,
   viewerScopeCte,

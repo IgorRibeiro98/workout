@@ -1,3 +1,12 @@
+/**
+ * Runner de migrations do SQLite **legado** (T16.0 → T17.13), fora do runtime desde a T18.0.2.
+ *
+ * O backend não abre SQLite: o runtime é o PostgreSQL (`src/database/postgres-migration-runner.ts`,
+ * `migrations/postgres/`). Este arquivo existe só para os testes históricos que provam que a
+ * sequência `migrations/0001..0023` (SQLite) continua íntegra e que a baseline PostgreSQL foi
+ * derivada dela — e por isso vive em `test/support/`, e não em `src/`: nada dele entra em `dist/`
+ * nem na imagem Docker. Se esses testes forem aposentados, este arquivo vai junto.
+ */
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

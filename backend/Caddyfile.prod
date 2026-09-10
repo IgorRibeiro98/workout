@@ -1,6 +1,6 @@
 # Spark Backend — reverse proxy de produção (T16.8 §4/§5/§89).
 #
-#   Internet ──443──▶ Caddy (TLS Let's Encrypt) ──▶ backend:8080 (rede interna) ──▶ SQLite
+#   Internet ──443──▶ Caddy (TLS Let's Encrypt) ──▶ backend:8080 (rede interna) ──▶ PostgreSQL
 #
 # Copiado para `Caddyfile` na VPS (`docker-compose.prod.yml` o monta somente-leitura). O domínio
 # **não** está escrito aqui: `{$SPARK_DOMAIN}` vem do ambiente, porque o domínio real é

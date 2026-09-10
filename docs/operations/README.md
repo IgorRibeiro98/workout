@@ -24,14 +24,15 @@ Estes documentos distinguem quatro estados, e a distinção não é decorativa:
 | `VERIFIED` | Comprovado com evidência no ambiente real. |
 | `NOT VERIFIED` | Não foi comprovado. Não é o mesmo que "não funciona" — é "ninguém provou". |
 
-**Estado atual da T16.8:**
+**Estado atual (T16.8 → T18.0.2):**
 
 ```text
-CODE                        ✅ READY
-LOCAL DOCKER                ✅ VERIFIED    (persistência, snapshot, backup, restore drill, Caddy+TLS)
+CODE                        ✅ READY        (runtime exclusivamente PostgreSQL desde a T18.0)
+CI (DOCKER + POSTGRESQL)    ✅ VERIFIED     (persistência, topologia, pg_dump sob escrita, restore drill, Caddy)
 REAL VPS / DNS / TLS        ❌ NOT VERIFIED — não há VPS provisionada
+REAL POSTGRESQL GERENCIADO  ❌ NOT VERIFIED — não há Neon/banco de produção provisionado (T18.3)
 REAL FIREBASE / GEMINI      ❌ NOT VERIFIED — sem credencial de produção
 REAL OFF-SITE BACKUP        ❌ NOT VERIFIED — sem storage contratado
 ```
 
-Nada aqui pode dizer que produção está verificada enquanto essas três últimas linhas não mudarem.
+Nada aqui pode dizer que produção está verificada enquanto essas quatro últimas linhas não mudarem.

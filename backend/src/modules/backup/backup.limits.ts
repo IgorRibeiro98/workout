@@ -15,7 +15,7 @@
  *
  * Ordem de grandeza real: um histórico de alguns anos com sessões, séries, treinos e medidas fica
  * na casa de centenas de kilobytes na forma canônica. 4 MiB deixa folga larga e ainda recusa um
- * payload absurdo antes de ele virar trabalho — e antes de virar linha no SQLite.
+ * payload absurdo antes de ele virar trabalho — e antes de virar linha no banco.
  *
  * Acima disso o cliente recebe `BACKUP_TOO_LARGE`. A T16.4 **não** introduz chunking, upload em
  * sessão, streaming nem object storage: um snapshot, uma requisição.

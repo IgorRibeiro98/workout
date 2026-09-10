@@ -560,28 +560,37 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
 - **O endereço de release é HTTPS em host público.** `SparkBackendEndpoint` recusa em runtime, e
   `build.gradle.kts` falha o build de release antes de o APK existir. Vazio continua sendo válido
   e significa "nuvem desligada" — nunca fallback para `localhost`, `10.0.2.2` ou rede privada.
-- **`cp spark.db` com o banco ativo é proibido.** Em WAL, o arquivo principal não contém o que
-  ainda está no `-wal`. O snapshot é `VACUUM INTO` a partir de uma conexão **somente leitura**,
-  seguido de `integrity_check` e `foreign_key_check` **sobre a cópia** — é ela que vai para o
-  off-site, e é ela que precisa provar que serve.
+- **O snapshot do banco é um `pg_dump` consistente, nunca uma cópia de arquivo** (T18.0.2). O
+  banco é o PostgreSQL de `DATABASE_URL` desde a T18.0; não existe arquivo de banco na VPS. O
+  snapshot é `pg_dump --format=custom` (uma transação de leitura: ponto único no tempo, sem
+  bloquear escritores), verificado por `pg_restore --list` e pela presença de `schema_migrations`
+  **sobre o arquivo** — é ele que vai para o off-site, e é ele que precisa provar que serve. As
+  ferramentas rodam por container (`SPARK_PG_TOOLS_IMAGE`), com major ≥ a do servidor, e a
+  connection string nunca é impressa nem passa pela linha de comando do host.
 - **Uma cópia na mesma VPS não é backup.** O destino é off-site e criptografado (restic), e a
   senha existe fora da VPS. Backup criptografado cuja senha só existe na máquina perdida é backup
   perdido.
 - **Backup nunca é validado por exit code.** Só está validado o que foi restaurado:
-  `ops/verify-backup.sh` restaura, verifica integridade e **sobe o backend real sobre a cópia**
-  exigindo `/health/ready`.
+  `ops/verify-backup.sh` restaura o dump num banco **descartável** (`SPARK_DRILL_DATABASE_URL`,
+  nunca produção — o script recusa) e **sobe o backend real sobre ele** exigindo `/health/ready`.
+  `ops/restore.sh --install` preserva um dump do estado atual antes de restaurar, e restaura em
+  transação única: ou tudo entra, ou nada muda.
 - **Migration de produção não roda sem ponto de recuperação.** `ops/deploy.sh` faz backup antes, e
   aborta se ele falhar. E **rollback de aplicação não desfaz migration**: mudança incompatível
   segue *expand → deploy → contract em release posterior*.
 - **A imagem é identificável.** Tag por SHA do commit, nunca `latest` em produção, e nunca deploy
   com árvore suja — a tag precisa descrever exatamente o que sobe.
-- **`synchronous = FULL` é a escolha, não o default herdado.** O aparelho só libera a Outbox com
-  confirmação do servidor: uma transação confirmada e depois perdida é dado que o cliente
-  considera salvo e que ninguém vai reenviar. `NORMAL` existe como configuração; trocar é decisão
-  explícita.
-- **Readiness é sobre servir, não sobre terceiros.** `/health/ready` verifica configuração, SQLite
-  e migrations. Ele **não** consulta Firebase nem Gemini, e não vai consultar: o Coach fora não
-  pode derrubar backup e sync. `/health/live` prova só que o processo está vivo.
+- **Durabilidade é do PostgreSQL, com `synchronous_commit` no default (`on`).** O aparelho só
+  libera a Outbox com confirmação do servidor: uma transação confirmada e depois perdida é dado que
+  o cliente considera salvo e que ninguém vai reenviar. Baixar `synchronous_commit` é decisão
+  explícita, nunca default herdado. (Até a T18.0 isto era o `synchronous = FULL` do SQLite.)
+- **Readiness é sobre servir, não sobre terceiros.** `/health/ready` verifica configuração,
+  PostgreSQL (`SELECT 1`) e migrations. Ele **não** consulta Firebase nem Gemini, e não vai
+  consultar: o Coach fora não pode derrubar backup e sync. `/health/live` prova só que o processo
+  está vivo. E é o **único** lugar em que "banco indisponível" vira valor (`reachable: false`):
+  em todo o resto, `PostgresService.query()` e `transaction()` **lançam** com o pool ausente ou
+  encerrando — nunca devolvem `[]`. Um repositório não pode confundir "não achou" com "não havia
+  banco" (T18.0.2).
 - **Interruptor é pausa, nunca perda.** `AI_ENABLED`, `SYNC_WRITE_ENABLED` e `MAINTENANCE_MODE`
   respondem `503` — que o Android já trata como indisponibilidade recuperável desde a T16.2, sem
   APK novo. Com o push pausado, a Outbox **permanece pendente** e nada é apagado. Um interruptor
@@ -590,11 +599,13 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   (rede móvel e NAT compartilham endereço, e o Caddy à frente faria todo mundo parecer o mesmo
   cliente). Eles existem para conter laço, e são calibrados ordens de grandeza acima do uso real.
 - **Log continua sem conteúdo.** `Authorization`, corpo, payload de backup, payload de sync,
-  prompt e resposta do modelo não vão para log — nem do backend, nem do Caddy. Rotação é
-  obrigatória: log não pode ser causa provável de disco cheio, e disco cheio derruba o SQLite.
+  prompt e resposta do modelo não vão para log — nem do backend, nem do Caddy. `DATABASE_URL`
+  também não: nem no log, nem em `backup-status.json`, nem em argumento de processo. Rotação é
+  obrigatória: log não pode ser causa provável de disco cheio, e disco cheio derruba a mídia, o
+  ledger e o backup.
 - **Nada é apagado para liberar espaço.** Disco cheio é incidente, e a resposta nunca é remover
-  banco, backup ou o arquivo corrompido. `integrity_check` falhando significa **preservar** o
-  arquivo e restaurar por cima de uma cópia — nunca `rm spark.db`.
+  backup, ledger, mídia ou o dump `pre-restore-*`. Um banco que o provedor reporta como corrompido
+  é **preservado** (PITR/branch do provedor primeiro, dump off-site depois) — nunca descartado.
 - **Tombstone, change log e ledger continuam intocados.** A T16.8 não limpa nenhum dos três
   (§13.5 continua valendo): tombstone apagado cedo demais é ressurreição, e change log compactado
   força rebaseline sem necessidade.
@@ -606,7 +617,31 @@ endurecimento de virar dependência de rede — e a operação de virar perda de
   houver VPS, DNS, TLS, credencial e backup off-site reais.
 - **Testes.** Toda mudança de hardening roda `npm test` em `backend/` e
   `shellcheck ops/*.sh`. O CI normal continua sem Firebase real, sem Gemini, sem VPS e sem
-  credencial de storage.
+  credencial de storage — mas **com** um PostgreSQL real de serviço: o ensaio de backup
+  (`backup-drill`) e a topologia de produção rodam contra ele.
+
+## 13.8 PostgreSQL como único runtime de persistência (T18.0 → T18.0.2)
+
+- **Só existe um modelo de persistência no servidor: PostgreSQL.** `DATABASE_URL` é obrigatória e
+  sem default; `DATABASE_URL_DIRECT` é opcional e **vazio significa ausente** (é como o Compose
+  representa "não definido"), caindo em `DATABASE_URL`. Não existe `DATABASE_PATH`, `spark.db`,
+  `better-sqlite3` nem `VACUUM INTO` em runtime, imagem, compose ou script operacional ativo.
+  SQLite sobrevive em dois lugares, e só neles: o Room do Android (§13, autoridade local) e os
+  testes históricos das migrations legadas (`backend/test/support/legacy-sqlite-migration-runner.ts`,
+  `better-sqlite3` como devDependency).
+- **Migrations são serializadas por advisory lock, e o primeiro boot concorrente está coberto.**
+  Dois runners sobre um schema vazio aplicam a baseline exatamente uma vez, sem `CREATE` duplicado,
+  sem migration parcial e sem lock esquecido — e é isso que o teste prova, não dois runners sobre um
+  banco já migrado.
+- **Toda mudança de relação de um par de contas passa pelo mesmo lock.** Enviar, aceitar, rejeitar
+  e cancelar pedido de amizade tomam `pg_advisory_xact_lock` sobre o par canônico
+  `(min(uid), max(uid))` e **releem o estado depois** do lock. Um `UPDATE ... WHERE status =
+  'PENDING'` que afeta 0 linhas aborta a transação — nunca segue criando amizade de um pedido que
+  não foi aceito. O invariante testado em corrida real: nunca existe pedido `REJECTED`/`CANCELLED`
+  **e** amizade nascida daquele pedido.
+- **Indisponibilidade do banco é erro, nunca resultado vazio.** `PostgresService.query()`,
+  `transaction()` e `appliedVersions()` lançam `PostgresUnavailableError` com o pool ausente,
+  encerrado ou encerrando. `checkHealth()` é a única exceção, e é o readiness.
 
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 
@@ -1028,15 +1063,15 @@ canal em que o bloqueio deixa de proteger.
   orientação EXIF aos **pixels** e re-encoda em WebP **sem** `withMetadata()`. É a ausência dessa
   chamada que remove GPS, modelo do aparelho e data original — a foto de um treino tirada em casa
   carrega a coordenada da casa da pessoa. O original nunca encosta no disco.
-- **A imagem não entra no SQLite, e a chave é do servidor.** Metadata em `social_checkin_media`,
+- **A imagem não entra no banco, e a chave é do servidor.** Metadata em `social_checkin_media`,
   bytes em `SocialMediaStore` sob `SOCIAL_MEDIA_ROOT`. A chave é opaca
   (`checkins/xx/yy/<uuid>.webp`), nunca deriva de uid, `socialId`, `friendCode`, `displayName` ou
   nome de arquivo, e **nunca** vem do cliente. Path traversal tem duas barreiras: allowlist de
   forma e confinamento na raiz.
 - **Produção sem volume de mídia não sobe.** `SOCIAL_MEDIA_ROOT` é obrigatória quando
-  `NODE_ENV=production` (`AppConfig.missingRequirements`). Um default derivado acompanharia
-  `DATABASE_PATH`, e um deploy que montasse o banco sem montar a mídia perderia todas as fotos na
-  primeira recriação de container — em silêncio.
+  `NODE_ENV=production` (`AppConfig.missingRequirements`). Um default derivado cairia na camada
+  efêmera do container, e um deploy que não montasse a mídia perderia todas as fotos na primeira
+  recriação de container — em silêncio.
 - **Upload exige sessão elegível.** `POST /v1/social/checkin-media` não é armazenamento genérico:
   ele exige `sessionSyncId` de uma sessão canônica, `COMPLETED`, do dono autenticado, dentro da
   janela — a mesma verificação do check-in, pela mesma `CanonicalTrainingSource`. `mediaId` é
@@ -1242,9 +1277,9 @@ restrição caiu.
 - **Uma reação por pessoa, por publicação, por audiência.** A mesma pessoa pode ter 🔥 no Feed de
   amigos e 💪 no Squad X sobre o mesmo check-in: são interações independentes, e trocar ou remover
   uma não toca a outra. A garantia é do banco, por **dois índices únicos parciais** — um por
-  partição de audiência. Uma `UNIQUE` comum não serviria: no SQLite cada `NULL` é distinto de
-  qualquer outro, e duas reações `FRIEND` da mesma pessoa (as duas com `group_id IS NULL`) passariam
-  sem conflito.
+  partição de audiência. Uma `UNIQUE` comum não serviria: em SQL (SQLite e PostgreSQL) cada `NULL`
+  é distinto de qualquer outro, e duas reações `FRIEND` da mesma pessoa (as duas com
+  `group_id IS NULL`) passariam sem conflito.
 - **Contagens e listas são por audiência _e_ por viewer.** As duas filtragens são independentes: a
   primeira impede que a conversa do Squad X apareça em Y ou no Feed de amigos; a segunda mantém o
   bloqueio viewer-safe da T17.9 — quem está em bloqueio não transparece nem como número, e some para
@@ -1280,21 +1315,21 @@ Fechamento pós-auditoria do Social. Nenhuma funcionalidade nova; sete regras qu
   mesmo `BEGIN`/`COMMIT`. Um `DELETE` que falhe no meio faz `ROLLBACK` de tudo. Não existe estado
   "conta bloqueada com dados pela metade" — ele não seria visível para ninguém e nada saberia
   interpretá-lo. **A mídia fica fora da transação**: as chaves são lidas antes, os arquivos saem
-  depois do commit, e I/O de sistema de arquivos nunca segura o SQLite.
+  depois do commit, e I/O de sistema de arquivos nunca segura uma transação do banco.
 - **Depois do commit do purge, os dados nunca voltam.** Falha de arquivo, de ledger ou do Firebase
   não desfazem a exclusão. O que elas adiam é a *declaração* de término.
 - **O registro anti-ressurreição é obrigatório, e a falha dele é visível.** `deletion_tombstones.tsv`
   é escrito com `append` + `fsync`; se a escrita falhar, a resposta é `DELETION_PENDING` — nunca
   `DELETED`. Dizer que terminou sem esse registro é prometer o que o servidor não pode cumprir: é
   exatamente o restore seguinte que traria a conta de volta. O que falta tem nome durável em
-  `account_deletion_jobs.phase` e sobrevive a restart, porque é uma linha do SQLite.
+  `account_deletion_jobs.phase` e sobrevive a restart, porque é uma linha do banco.
 - **Recuperação de desastre não termina em lembrete.** A reconciliação é um comando
   (`dist/cli/reconcile-account-deletions.js`) e **uma** autoridade — não há reconciliação no startup
   nem gatilho no readiness. `ops/restore.sh --install` o executa antes de declarar a restauração
   completa. Ledger ausente ou malformado **falha fechado**: nunca "nenhuma conta excluída", porque
   as duas leituras não apagam nada e uma delas ressuscita contas.
 - **O inventário de colunas de uid é declarado, e um teste o defende.** Ele vive em
-  `account-uid-inventory.ts` e é confrontado com o schema real do SQLite. Uma tabela nova com coluna
+  `account-uid-inventory.ts` e é confrontado com o schema real do banco. Uma tabela nova com coluna
   de uid não passa em silêncio: ela reprova o teste até alguém declarar a política — reconciliar, ou
   justificar por que não. O sufixo `_uid` é a heurística que **encontra**, nunca a que decide.
 - **Verificação de estado de conta falha fechada.** Não conseguir avaliar o tombstone responde

@@ -44,7 +44,7 @@ export interface LedgerContents {
  *
  * ## O que este arquivo é
  *
- * `deletion_tombstones.tsv` é um append-only fora do SQLite que guarda o HMAC de cada conta
+ * `deletion_tombstones.tsv` é um append-only fora do banco que guarda o HMAC de cada conta
  * excluída. Ele existe por um motivo que o tombstone do banco não cobre: numa restauração de
  * desastre o **arquivo do banco inteiro** é substituído por uma cópia anterior, e com ela voltam
  * as contas que já tinham sido excluídas — inclusive o próprio `account_deletion_tombstones`, que

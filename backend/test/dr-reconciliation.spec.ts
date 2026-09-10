@@ -70,7 +70,6 @@ describe('T17.13.1 — reconciliação de DR pelo comando operacional', () => {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       DATABASE_URL: temp.databaseUrl,
-      DATABASE_PATH: temp.path,
       SOCIAL_MEDIA_ROOT: mediaRoot,
       DELETION_TOMBSTONES_FILE_PATH: ledgerPath,
       ACCOUNT_DELETION_HMAC_KEY: HMAC_KEY,

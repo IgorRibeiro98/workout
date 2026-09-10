@@ -406,7 +406,7 @@ e Solicitações no Android). O desenho completo dela vive em
 - **Expurgo Cascata Completo**:
   Remove registros em todas as tabelas vinculadas ao `uid` do usuário. A lista canônica de colunas
   que carregam um uid de conta vive em `src/modules/account-deletion/account-uid-inventory.ts` (35
-  colunas), e um teste a confronta com o schema real do SQLite — uma tabela nova com coluna de uid
+  colunas), e um teste a confronta com o schema real do banco — uma tabela nova com coluna de uid
   não passa sem política declarada. Desde a T17.13.1 o expurgo, o tombstone e o job de exclusão
   pertencem à **mesma transação**: uma falha no meio faz `ROLLBACK` de tudo.
 - **Tombstones Criptográficos (HMAC-SHA256)**:
@@ -743,7 +743,7 @@ nos bytes armazenados.
 | Chave | `checkins/<2 hex>/<2 hex>/<uuid v4>.webp`, gerada no servidor |
 | Path traversal | impossível: allowlist de forma + confinamento na raiz, duas barreiras |
 | Quota | 250 MB por conta (`PENDING` + `ATTACHED`), configurável |
-| Bytes no SQLite | **nunca** — o banco guarda metadata |
+| Bytes no banco | **nunca** — o banco guarda metadata |
 
 A chave nunca deriva de uid, `socialId`, `friendCode`, `displayName` ou nome de arquivo original, e
 nunca vem do cliente. Em produção, subir sem `SOCIAL_MEDIA_ROOT` é **falha de startup**
@@ -948,7 +948,7 @@ em `media.pre-restore-<timestamp>`. `ops/verify-backup.sh` sobe o backend real s
 restauração, e "o arquivo está lá" não prova que ele abre.
 
 Depois de um restore antigo, a reconciliação de tombstones (T17.6) purga banco **e** arquivos da
-conta excluída. Purgar só o SQLite deixaria as fotos ressuscitadas no disco, sem metadata que as
+conta excluída. Purgar só o banco deixaria as fotos ressuscitadas no disco, sem metadata que as
 revogue.
 
 ### 14.16 Android

@@ -42,7 +42,7 @@ services:
       - backend
     logging: &json-logs
       # Rotação obrigatória (§65/§132). Sem isto, o log é o candidato mais provável a encher o
-      # disco de uma VPS pequena — e disco cheio derruba o SQLite.
+      # disco de uma VPS pequena — e disco cheio derruba a mídia, o ledger e o backup.
       driver: json-file
       options:
         max-size: "10m"
@@ -67,7 +67,7 @@ services:
     # recém-criada, 1001 ou outro qualquer numa VPS onde já exista um usuário. A T16.8 documentava
     # `/opt/spark/data` como `1000:1000` e a service account como `spark:spark` — um arranjo que só
     # funcionava enquanto os dois números coincidissem **por acaso**. Na primeira VPS em que não
-    # coincidissem, ou o backend não abriria o banco, ou o operador não leria o snapshot.
+    # coincidissem, ou o backend não escreveria o ledger em `/data`, ou o operador não o leria.
     #
     # `group_add` remove o acaso: o container entra no grupo compartilhado e alcança
     # `/opt/spark/data` (2770) e `firebase-admin.json` (640) **pelo grupo**, com uid diferente do
@@ -82,6 +82,10 @@ services:
       NODE_ENV: production
       PORT: 8080
       DATABASE_URL: "${DATABASE_URL:?defina DATABASE_URL no .env}"
+      # Opcional: a conexão direta (sem pooler) para migrations. Quando o `.env` não a define, o
+      # Compose entrega **string vazia** — e o backend trata vazio como ausente, caindo em
+      # `DATABASE_URL` (T18.0.2). Esta linha fica assim de propósito: é o caminho real de produção,
+      # e o smoke de topologia do CI o exercita sem a variável definida.
       DATABASE_URL_DIRECT: "${DATABASE_URL_DIRECT:-}"
       # T17.9 §26/§28 — a mídia social vive em volume persistente, e o caminho é **obrigatório**
       # em produção: `AppConfig.missingRequirements()` derruba o startup se ele faltar. Um default

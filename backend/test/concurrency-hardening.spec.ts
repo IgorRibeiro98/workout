@@ -17,6 +17,7 @@ import * as aiFixtures from './support/ai-fixtures';
 import { programPayload, pushBody, uuid } from './support/sync-fixtures';
 import { withClientBackupId } from './support/backup-fixtures';
 import { FriendshipRepository } from '../src/modules/social/friendship.repository';
+import { MIGRATION_ADVISORY_LOCK_KEY } from '../src/database/database.constants';
 
 const TOKEN_A = 'token-user-a';
 const UID_A = 'uid-user-a';
@@ -59,6 +60,113 @@ describe('T18.0.1 Concurrency Hardening Suite', () => {
         await pool1.end();
         await pool2.end();
         await postgres.close();
+      }
+    });
+
+    // O cenário que importa (T18.0.2): o **primeiro** boot de dois processos ao mesmo tempo —
+    // duas réplicas subindo juntas sobre um banco recém-criado. Rodar dois runners sobre um banco
+    // já migrado (o teste acima) prova só a idempotência; este prova que a baseline é aplicada
+    // exatamente uma vez, sem `CREATE` duplicado, sem migration parcial e sem lock esquecido.
+    it('dois runners sobre um schema VAZIO aplicam a baseline exatamente uma vez', async () => {
+      const config = configFor(temp.path);
+      const cleanUrl = config.databaseUrl.replace(/[?&]options=[^&]+/g, '');
+      const admin = new Pool({ connectionString: cleanUrl, max: 1 });
+      await admin.query(`CREATE SCHEMA "${temp.schema}"`);
+
+      const pool1 = new Pool({ connectionString: config.databaseUrl, max: 2 });
+      const pool2 = new Pool({ connectionString: config.databaseUrl, max: 2 });
+
+      try {
+        const migrations = loadMigrations(MIGRATIONS_DIR);
+        expect(migrations.length).toBeGreaterThan(0);
+
+        const settled = await Promise.allSettled([
+          runMigrations(pool1, migrations),
+          runMigrations(pool2, migrations),
+        ]);
+
+        // Ambos os chamadores terminam bem: nenhum `relation already exists`, nenhum timeout.
+        for (const outcome of settled) {
+          if (outcome.status === 'rejected') {
+            throw outcome.reason;
+          }
+        }
+        const applied = settled.map((o) => (o.status === 'fulfilled' ? o.value.length : -1));
+        // Exatamente um runner aplicou tudo; o outro chegou depois do lock e não aplicou nada.
+        expect([...applied].sort((a, b) => a - b)).toEqual([0, migrations.length]);
+
+        // `schema_migrations` consistente: uma linha por migration, com nome e checksum.
+        const rows = await pool1.query<{ version: number; name: string; checksum: string | null }>(
+          'SELECT version, name, checksum FROM schema_migrations ORDER BY version',
+        );
+        expect(rows.rows.map((r) => r.version)).toEqual(migrations.map((m) => m.version));
+        expect(rows.rows.map((r) => r.name)).toEqual(migrations.map((m) => m.name));
+        expect(
+          rows.rows.every((r) => typeof r.checksum === 'string' && r.checksum.length === 64),
+        ).toBe(true);
+
+        // Nenhuma migration parcialmente aplicada: as tabelas da baseline existem — inclusive as
+        // últimas do arquivo, que é onde uma aplicação interrompida deixaria buraco.
+        const tables = await pool1.query<{ table_name: string }>(
+          `SELECT table_name FROM information_schema.tables WHERE table_schema = $1`,
+          [temp.schema],
+        );
+        const names = new Set(tables.rows.map((r) => r.table_name));
+        for (const expected of [
+          'server_metadata',
+          'sync_entities',
+          'sync_changes',
+          'sync_mutations',
+          'friend_requests',
+          'friendships',
+          'social_group_memberships',
+          'social_checkin_comments',
+          'account_deletion_tombstones',
+        ]) {
+          expect(names.has(expected)).toBe(true);
+        }
+
+        // Nenhum advisory lock vazado: com os dois runners terminados (e as conexões ainda
+        // abertas nos pools), não pode restar lock de migration no servidor.
+        const locks = await admin.query<{ total: string | number }>(
+          `SELECT COUNT(*) AS total FROM pg_locks WHERE locktype = 'advisory' AND classid = $1`,
+          [MIGRATION_ADVISORY_LOCK_KEY],
+        );
+        expect(Number(locks.rows[0].total)).toBe(0);
+
+        // E rodar de novo, depois da corrida, não reaplica nada.
+        expect(await runMigrations(pool2, migrations)).toEqual([]);
+      } finally {
+        await pool1.end();
+        await pool2.end();
+        await admin.end();
+      }
+    });
+
+    // Mais cedo ainda que o schema vazio: o schema **não existe**. O `CREATE SCHEMA IF NOT EXISTS`
+    // do PostgreSQL não é atômico entre sessões, e dois runners que não o veem tentam criá-lo ao
+    // mesmo tempo — antes do advisory lock, que mora dentro dele. Um dos dois perde com
+    // `duplicate_schema`, e isso não pode derrubar um boot.
+    it('dois runners sobre um schema INEXISTENTE também convergem sem erro', async () => {
+      const config = configFor(temp.path);
+      const pool1 = new Pool({ connectionString: config.databaseUrl, max: 2 });
+      const pool2 = new Pool({ connectionString: config.databaseUrl, max: 2 });
+
+      try {
+        const migrations = loadMigrations(MIGRATIONS_DIR);
+        const [a, b] = await Promise.all([
+          runMigrations(pool1, migrations),
+          runMigrations(pool2, migrations),
+        ]);
+        expect([a.length, b.length].sort((x, y) => x - y)).toEqual([0, migrations.length]);
+
+        const rows = await pool1.query<{ total: string | number }>(
+          'SELECT COUNT(*) AS total FROM schema_migrations',
+        );
+        expect(Number(rows.rows[0].total)).toBe(migrations.length);
+      } finally {
+        await pool1.end();
+        await pool2.end();
       }
     });
   });
@@ -454,6 +562,271 @@ describe('T18.0.1 Concurrency Hardening Suite', () => {
         "SELECT COUNT(*) AS count FROM friend_requests WHERE status = 'PENDING'",
       );
       expect(Number(pendingRes.rows[0].count)).toBe(0);
+    });
+
+    // --- a matriz de races do par (T18.0.2) ---------------------------------------------------
+    //
+    // Todo caminho que muda a relação de um par — enviar, aceitar, rejeitar, cancelar — precisa
+    // passar pelo mesmo lock do par canônico e decidir sobre estado lido **depois** dele. O
+    // invariante final, em qualquer interleaving:
+    //
+    //   nunca existe um pedido REJECTED/CANCELLED **e** uma amizade nascida daquele pedido.
+    //
+    // Cada cenário roda várias vezes com contas novas, porque a corrida é de verdade (duas
+    // transações em `Promise.all`) e o interleaving muda de execução para execução.
+
+    interface PairState {
+      readonly requests: ReadonlyArray<{
+        request_id: string;
+        requester_uid: string;
+        recipient_uid: string;
+        status: string;
+      }>;
+      readonly friends: boolean;
+    }
+
+    async function seedPair(postgres: PostgresService, uidA: string, uidB: string) {
+      const now = Date.now();
+      await postgres.query(
+        `INSERT INTO social_profiles (owner_uid, social_id, friend_code, display_name, status, created_at, updated_at)
+         VALUES ($1, $2, $3, 'A', 'ACTIVE', $7, $7), ($4, $5, $6, 'B', 'ACTIVE', $7, $7)`,
+        [
+          uidA,
+          `soc-${uidA}`,
+          `SPK-${uidA.slice(-8).toUpperCase()}`,
+          uidB,
+          `soc-${uidB}`,
+          `SPK-${uidB.slice(-8).toUpperCase()}`,
+          now,
+        ],
+      );
+      await postgres.query(
+        `INSERT INTO social_privacy_settings (owner_uid, discoverability, friend_requests_enabled, activity_sharing_enabled, updated_at)
+         VALUES ($1, 'FRIEND_CODE_ONLY', TRUE, TRUE, $3), ($2, 'FRIEND_CODE_ONLY', TRUE, TRUE, $3)`,
+        [uidA, uidB, now],
+      );
+    }
+
+    async function pairState(
+      postgres: PostgresService,
+      repo: FriendshipRepository,
+      uidA: string,
+      uidB: string,
+    ): Promise<PairState> {
+      const res = await postgres.query<PairState['requests'][number]>(
+        `SELECT request_id, requester_uid, recipient_uid, status FROM friend_requests
+         WHERE (requester_uid = $1 AND recipient_uid = $2) OR (requester_uid = $2 AND recipient_uid = $1)
+         ORDER BY created_at, request_id`,
+        [uidA, uidB],
+      );
+      return { requests: res.rows, friends: await repo.areFriends(uidA, uidB) };
+    }
+
+    /** O invariante que nenhuma corrida pode violar. */
+    function expectNoContradiction(state: PairState) {
+      const resolvedAgainst = state.requests.filter(
+        (r) => r.status === 'REJECTED' || r.status === 'CANCELLED',
+      );
+      const accepted = state.requests.filter((r) => r.status === 'ACCEPTED');
+      if (state.friends) {
+        // Amizade só existe por um pedido ACCEPTED — nunca por um REJECTED/CANCELLED.
+        expect(accepted.length).toBeGreaterThanOrEqual(1);
+      } else {
+        expect(accepted).toHaveLength(0);
+      }
+      // Um pedido rejeitado/cancelado nunca coexiste com uma amizade sem um pedido aceito por trás.
+      if (resolvedAgainst.length > 0 && state.friends) {
+        expect(accepted.length).toBeGreaterThanOrEqual(1);
+      }
+      // No máximo um pedido PENDING por direção, e nunca PENDING com amizade existente.
+      const pending = state.requests.filter((r) => r.status === 'PENDING');
+      expect(pending.length).toBeLessThanOrEqual(1);
+      if (state.friends) {
+        expect(pending).toHaveLength(0);
+      }
+    }
+
+    const ROUNDS = 6;
+
+    it('send A→B concorrendo com reject B→A: ou o pedido morre e nasce outro, ou vira amizade — nunca os dois', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+      const outcomes = new Set<string>();
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const inverse = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: b,
+          recipientUid: a,
+          now,
+        });
+        expect(inverse.kind).toBe('CREATED');
+        const inverseId = inverse.kind === 'CREATED' ? inverse.request.requestId : '';
+
+        const [send, rejected] = await Promise.all([
+          repo.sendRequest({ requestId: uuid(), requesterUid: a, recipientUid: b, now: now + 1 }),
+          repo.resolveRequest(inverseId, 'REJECTED', now + 1),
+        ]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expectNoContradiction(state);
+        const inverseRow = state.requests.find((r) => r.request_id === inverseId);
+        expect(inverseRow).toBeDefined();
+
+        if (rejected) {
+          // O reject venceu: o pedido inverso morreu, o envio criou um pedido novo A→B, sem amizade.
+          expect(inverseRow?.status).toBe('REJECTED');
+          expect(send.kind).toBe('CREATED');
+          expect(state.friends).toBe(false);
+          outcomes.add('reject-first');
+        } else {
+          // O envio venceu: o cruzamento virou amizade, e o reject não mudou nada.
+          expect(inverseRow?.status).toBe('ACCEPTED');
+          expect(send.kind).toBe('FRIENDSHIP_CREATED');
+          expect(state.friends).toBe(true);
+          outcomes.add('send-first');
+        }
+      }
+      expect(outcomes.size).toBeGreaterThanOrEqual(1);
+    });
+
+    it('send A→B concorrendo com cancel B→A: nunca CANCELLED + amizade', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const inverse = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: b,
+          recipientUid: a,
+          now,
+        });
+        const inverseId = inverse.kind === 'CREATED' ? inverse.request.requestId : '';
+
+        const [send, cancelled] = await Promise.all([
+          repo.sendRequest({ requestId: uuid(), requesterUid: a, recipientUid: b, now: now + 1 }),
+          repo.resolveRequest(inverseId, 'CANCELLED', now + 1),
+        ]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expectNoContradiction(state);
+        const inverseRow = state.requests.find((r) => r.request_id === inverseId);
+        if (cancelled) {
+          expect(inverseRow?.status).toBe('CANCELLED');
+          expect(send.kind).toBe('CREATED');
+          expect(state.friends).toBe(false);
+        } else {
+          expect(inverseRow?.status).toBe('ACCEPTED');
+          expect(send.kind).toBe('FRIENDSHIP_CREATED');
+          expect(state.friends).toBe(true);
+        }
+      }
+    });
+
+    it('accept concorrendo com reject do mesmo pedido: exatamente um vence, e o banco reflete só ele', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const sent = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: b,
+          recipientUid: a,
+          now,
+        });
+        const requestId = sent.kind === 'CREATED' ? sent.request.requestId : '';
+
+        const [accept, rejected] = await Promise.all([
+          repo.acceptRequest(requestId, now + 1),
+          repo.resolveRequest(requestId, 'REJECTED', now + 1),
+        ]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expectNoContradiction(state);
+        const row = state.requests.find((r) => r.request_id === requestId);
+        // Exclusão mútua: ou ACCEPTED + amizade, ou REJECTED + sem amizade.
+        expect((accept.kind === 'ACCEPTED') !== rejected).toBe(true);
+        if (rejected) {
+          expect(row?.status).toBe('REJECTED');
+          expect(accept.kind).toBe('NOT_PENDING');
+          expect(state.friends).toBe(false);
+        } else {
+          expect(row?.status).toBe('ACCEPTED');
+          expect(state.friends).toBe(true);
+        }
+      }
+    });
+
+    it('accept concorrendo com cancel do mesmo pedido: exatamente um vence', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+        const sent = await repo.sendRequest({
+          requestId: uuid(),
+          requesterUid: b,
+          recipientUid: a,
+          now,
+        });
+        const requestId = sent.kind === 'CREATED' ? sent.request.requestId : '';
+
+        const [accept, cancelled] = await Promise.all([
+          repo.acceptRequest(requestId, now + 1),
+          repo.resolveRequest(requestId, 'CANCELLED', now + 1),
+        ]);
+
+        const state = await pairState(postgres, repo, a, b);
+        expectNoContradiction(state);
+        const row = state.requests.find((r) => r.request_id === requestId);
+        expect((accept.kind === 'ACCEPTED') !== cancelled).toBe(true);
+        if (cancelled) {
+          expect(row?.status).toBe('CANCELLED');
+          expect(state.friends).toBe(false);
+        } else {
+          expect(row?.status).toBe('ACCEPTED');
+          expect(state.friends).toBe(true);
+        }
+      }
+    });
+
+    it('send A→B concorrendo com send B→A, repetido: sempre uma amizade e zero pendências', async () => {
+      const repo = app.get(FriendshipRepository);
+      const postgres = app.get(PostgresService);
+
+      for (let round = 0; round < ROUNDS; round++) {
+        const a = `uid-a-${round}-${uuid().slice(0, 8)}`;
+        const b = `uid-b-${round}-${uuid().slice(0, 8)}`;
+        await seedPair(postgres, a, b);
+        const now = Date.now();
+
+        const [x, y] = await Promise.all([
+          repo.sendRequest({ requestId: uuid(), requesterUid: a, recipientUid: b, now }),
+          repo.sendRequest({ requestId: uuid(), requesterUid: b, recipientUid: a, now: now + 1 }),
+        ]);
+
+        expect([x.kind, y.kind].sort()).toEqual(['CREATED', 'FRIENDSHIP_CREATED']);
+        const state = await pairState(postgres, repo, a, b);
+        expectNoContradiction(state);
+        expect(state.friends).toBe(true);
+        expect(state.requests).toHaveLength(1);
+        expect(state.requests[0].status).toBe('ACCEPTED');
+      }
     });
   });
 

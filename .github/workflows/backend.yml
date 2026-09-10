@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -135,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -327,7 +327,7 @@ jobs:
 
           # O comando operacional de DR, exercitado no artefato construído
           if docker exec spark-ci-2 sh -c \
-               'DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/ausente.tsv node dist/cli/reconcile-account-deletions.js' \
+               'DATABASE_URL=postgresql://spark:spark@127.0.0.1:5432/spark_dev DELETION_TOMBSTONES_FILE_PATH=/media/ausente.tsv node dist/cli/reconcile-account-deletions.js' \
                > /tmp/dr-ausente.log 2>&1; then
             echo "a reconciliação passou sem ledger — ela precisa falhar fechada"
             cat /tmp/dr-ausente.log; exit 1
@@ -338,7 +338,7 @@ jobs:
 
           if docker exec spark-ci-2 sh -c \
                'printf "naoehumhash\t123\n" > /media/ruim.tsv &&
-                DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/ruim.tsv node dist/cli/reconcile-account-deletions.js' \
+                DATABASE_URL=postgresql://spark:spark@127.0.0.1:5432/spark_dev DELETION_TOMBSTONES_FILE_PATH=/media/ruim.tsv node dist/cli/reconcile-account-deletions.js' \
                > /tmp/dr-ruim.log 2>&1; then
             echo "a reconciliação aceitou um ledger malformado"; cat /tmp/dr-ruim.log; exit 1
           fi
@@ -347,7 +347,7 @@ jobs:
           echo "reconciliação de DR recusa ledger malformado"
 
           docker exec spark-ci-2 sh -c \
-            'printf "" > /media/deletion_tombstones.tsv && DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/deletion_tombstones.tsv node dist/cli/reconcile-account-deletions.js' \
+            'printf "" > /media/deletion_tombstones.tsv && DATABASE_URL=postgresql://spark:spark@127.0.0.1:5432/spark_dev DELETION_TOMBSTONES_FILE_PATH=/media/deletion_tombstones.tsv node dist/cli/reconcile-account-deletions.js' \
             | grep -q 'integridade referencial e verificação ok' || {
               echo "a reconciliação não validou a integridade"; exit 1; }
           echo "reconciliação de DR roda e valida integridade"
@@ -486,7 +486,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -786,27 +786,58 @@ jobs:
   backup-drill:
     name: ensaio de backup e restauração
     runs-on: ubuntu-latest
+    # O PostgreSQL do ensaio (T18.0.2). Publicado em 5432 no host: os containers deste job rodam
+    # com `--network host`, e `127.0.0.1:5432` é este serviço. Dois bancos vivem nele — `spark_dev`,
+    # o "de produção" do ensaio, e `spark_drill`, o descartável em que o dump é restaurado.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: spark
+          POSTGRES_DB: spark_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         # A raiz, explicitamente: este job opera `ops/` e o contexto de build `backend/`. Era o
         # `defaults` global apontando para `backend` que fazia `docker build ... backend` procurar
         # `backend/backend` e o job inteiro morrer antes do primeiro ensaio (T16.8.1 §6).
         working-directory: .
+    env:
+      SPARK_TEST_DATABASE_URL: postgresql://spark:spark@127.0.0.1:5432/spark_dev
+      SPARK_DRILL_DATABASE_URL: postgresql://spark:spark@127.0.0.1:5432/spark_drill
     steps:
       - uses: actions/checkout@v4
 
       - name: Build image
         run: docker build -t spark-backend:local backend
 
+      # O banco descartável do ensaio, criado **vazio**: `ops/verify-backup.sh` restaura o dump nele
+      # e sobe o backend real por cima. Ele nunca é o mesmo banco de onde o dump saiu — o script
+      # recusa isso — porque um ensaio que restaurasse sobre produção seria o desastre que ele
+      # existe para prevenir.
+      - name: Banco descartável do ensaio
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -e PGPASSWORD=spark postgres:17-alpine \
+            psql -h 127.0.0.1 -U spark -d spark_dev -v ON_ERROR_STOP=1 -c 'CREATE DATABASE spark_drill'
+
       # O modelo de permissão host ↔ container, com o desencontro de uid construído de propósito
       # (T16.8.1 §3). Roda antes do ensaio porque é a pré-condição dele: um backup que não consegue
-      # ler o arquivo que o container escreveu não é um backup.
+      # ler o ledger que o container escreveu não é um backup. Também é o primeiro processo a
+      # migrar `spark_dev`: o backend sobe e aplica a baseline.
       - name: Permissões com uid diferente entre host e container
         run: SPARK_IMAGE=spark-backend:local ops/tests/permissions.test.sh
 
-      # O ensaio que importa (T16.8 §43/§161/§163): snapshot consistente com o banco **ativo**
-      # recebendo escrita, verificação de integridade, restauração e o backend real subindo sobre
-      # a cópia restaurada.
+      # O ensaio que importa (T16.8 §43/§161/§163; PostgreSQL desde a T18.0.2): snapshot consistente
+      # com o banco **ativo** recebendo escrita, verificação do arquivo, restauração num banco
+      # descartável e o backend real subindo sobre a cópia restaurada — com a mídia.
       #
       # Sem credencial de storage real: o CI normal não pode depender de um provedor pago, e não
       # deve guardar segredo para isso (§164). O que é exercitado aqui é a parte que quebra em
@@ -831,13 +862,19 @@ jobs:
           export SPARK_COMPOSE_DIR="$WORK/sem-compose"
           export SPARK_IMAGE=spark-backend:local
           export SPARK_BACKUP_ENV_FILE=/dev/null
+          # A connection string do "banco de produção" do ensaio, pelo mesmo canal que a VPS usa
+          # quando não há `.env` do compose: a variável do operador.
+          export SPARK_DATABASE_URL="$SPARK_TEST_DATABASE_URL"
 
           echo "uid do host: $(id -u) | grupo compartilhado: $(stat -c %g "$SPARK_DATA_DIR")"
 
-          docker run -d --name drill-backend -p 127.0.0.1:8080:8080 \
+          # O backend "de produção" do ensaio, sobre `spark_dev`. `--network host` com `PORT`:
+          # `127.0.0.1:5432` na URL é o serviço do job.
+          docker run -d --name drill-backend --network host \
             --group-add "$(stat -c %g "$SPARK_DATA_DIR")" \
             -v "$SPARK_DATA_DIR:/data" -v "$SPARK_MEDIA_DIR:/media" \
-            -e DATABASE_PATH=/data/spark.db -e SOCIAL_MEDIA_ROOT=/media -e NODE_ENV=production \
+            -e PORT=8080 -e DATABASE_URL="$SPARK_TEST_DATABASE_URL" \
+            -e SOCIAL_MEDIA_ROOT=/media -e NODE_ENV=production \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:local
           for i in $(seq 1 30); do
@@ -846,87 +883,81 @@ jobs:
             sleep 2
           done
 
-          docker exec drill-backend node -e "
-            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
-            db.prepare('INSERT INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
-              .run('drill','presente',Date.now()); db.close();"
-
-          # Um check-in com foto, semeado pelo caminho real do pipeline de imagem (T17.9 §142).
+          # Um dado reconhecível, e um check-in com foto semeado pelo caminho real do pipeline de
+          # imagem (T17.9 §142).
           #
-          # O ponto do ensaio é que o backup passou a ter **duas** coisas: o banco e os arquivos.
-          # Um snapshot que levasse só `spark.db` restauraria um Feed apontando para fotos que não
-          # existem — íntegro pelo `integrity_check` e quebrado na tela de quem abrisse.
+          # O ponto do ensaio é que o backup tem **duas** coisas: o banco e os arquivos. Um snapshot
+          # que levasse só o dump restauraria um Feed apontando para fotos que não existem —
+          # íntegro na restauração e quebrado na tela de quem abrisse.
           docker exec drill-backend node -e "
-            const D=require('better-sqlite3'); const sharp=require('sharp');
+            const { Pool } = require('pg'); const sharp=require('sharp');
             const fs=require('node:fs'); const path=require('node:path');
             (async()=>{
-              const db=new D('/data/spark.db'); db.pragma('foreign_keys = ON');
+              const pool = new Pool({ connectionString: process.env.DATABASE_URL });
               const now=Date.now();
-              db.prepare('INSERT INTO social_profiles (owner_uid, social_id, display_name, friend_code, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
-                .run('uid-drill','11111111-1111-4111-8111-111111111111','Drill','SPK-DRILL01','ACTIVE',now,now);
-              db.prepare('INSERT INTO social_workout_checkins (id, author_uid, source_session_sync_id, client_request_id, status, caption, created_at, deleted_at) VALUES (?,?,?,?,?,?,?,NULL)')
-                .run('checkin-drill','uid-drill','sessao-drill','req-drill','PUBLISHED','legenda do ensaio',now);
+              await pool.query('INSERT INTO server_metadata (key,value,updated_at) VALUES (\$1,\$2,\$3)', ['drill','presente',now]);
+              await pool.query('INSERT INTO social_profiles (owner_uid, social_id, display_name, friend_code, status, created_at, updated_at) VALUES (\$1,\$2,\$3,\$4,\$5,\$6,\$7)',
+                ['uid-drill','11111111-1111-4111-8111-111111111111','Drill','SPK-DRILL01','ACTIVE',now,now]);
+              await pool.query('INSERT INTO social_workout_checkins (id, author_uid, source_session_sync_id, client_request_id, status, caption, created_at, deleted_at) VALUES (\$1,\$2,\$3,\$4,\$5,\$6,\$7,NULL)',
+                ['checkin-drill','uid-drill','sessao-drill','req-drill','PUBLISHED','legenda do ensaio',now]);
               const bytes=await sharp({create:{width:64,height:64,channels:3,background:{r:9,g:9,b:9}}}).webp().toBuffer();
               const key='checkins/aa/bb/aabb0000-0000-4000-8000-000000000001.webp';
               fs.mkdirSync(path.dirname('/media/'+key),{recursive:true});
               fs.writeFileSync('/media/'+key,bytes,{mode:0o640});
-              db.prepare('INSERT INTO social_checkin_media (id,owner_uid,source_session_sync_id,client_upload_id,storage_key,mime_type,byte_size,width,height,content_hash,status,created_at,expires_at,attached_checkin_id,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,NULL)')
-                .run('media-drill','uid-drill','sessao-drill','upload-drill',key,'image/webp',bytes.length,64,64,'hash','ATTACHED',now,'checkin-drill');
-              db.close();
+              await pool.query('INSERT INTO social_checkin_media (id,owner_uid,source_session_sync_id,client_upload_id,storage_key,mime_type,byte_size,width,height,content_hash,status,created_at,expires_at,attached_checkin_id,deleted_at) VALUES (\$1,\$2,\$3,\$4,\$5,\$6,\$7,\$8,\$9,\$10,\$11,\$12,NULL,\$13,NULL)',
+                ['media-drill','uid-drill','sessao-drill','upload-drill',key,'image/webp',bytes.length,64,64,'hash','ATTACHED',now,'checkin-drill']);
+              await pool.end();
               console.log('check-in com foto semeado:', bytes.length, 'bytes');
-            })();"
+            })().catch(e => { console.error(e); process.exit(1); });"
 
-          # Escrita concorrente durante o snapshot: em WAL, VACUUM INTO não pode bloquear o
-          # servidor, e um snapshot rasgado por escrita concorrente é exatamente o defeito que
-          # `cp spark.db` produziria.
+          # Escrita concorrente durante o snapshot: o `pg_dump` roda numa transação de leitura e
+          # não pode bloquear o servidor — e um snapshot que não capturasse um ponto único no tempo
+          # é exatamente o defeito que uma cópia ingênua produziria.
           #
           # Um processo só, escrevendo em laço por tempo determinado, e não um `docker exec` por
           # iteração: o custo de subir um processo por escrita fazia a carga terminar antes de o
           # snapshot começar, e a sobreposição — que é o ponto do ensaio — acontecia por sorte.
           docker exec -d drill-backend node -e "
-            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
-            const insert=db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)');
-            const fim=Date.now()+20000;
-            let n=0;
-            while (Date.now() < fim) { insert.run('carga_'+(n++),'x',Date.now()); }
-            db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
-              .run('carga_total', String(n), Date.now());
-            db.close();"
+            const { Pool } = require('pg');
+            (async()=>{
+              const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+              const fim=Date.now()+20000; let n=0;
+              while (Date.now() < fim) {
+                await pool.query('INSERT INTO server_metadata (key,value,updated_at) VALUES (\$1,\$2,\$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', ['carga_'+(n++),'x',Date.now()]);
+              }
+              await pool.query('INSERT INTO server_metadata (key,value,updated_at) VALUES (\$1,\$2,\$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', ['carga_total',String(n),Date.now()]);
+              await pool.end();
+            })().catch(e => { console.error(e); process.exit(1); });"
 
           sleep 2
           SNAP="$(ops/snapshot.sh)"
           test -s "$SNAP"
           echo "SPARK_SNAPSHOT=$SNAP" >> "$GITHUB_ENV"
+          # O snapshot nasce `600` e do operador: é dado pessoal do servidor esperando o envio
+          # off-site (T16.8.1 §3).
+          test "$(stat -c %a "$SNAP")" = "600"
 
-          # O snapshot foi tirado com escrita em curso, e precisa estar íntegro assim mesmo.
-          # `--user` de novo pelo mesmo motivo: `ops/snapshot.sh` grava o snapshot com `600` e dono
-          # do operador — deliberadamente, porque é dado pessoal do servidor esperando o envio
-          # off-site. Quem o inspeciona precisa ser o dono, não o `node` da imagem.
-          docker run --rm --user "$(id -u):$(id -g)" \
-            -v "$(dirname "$SNAP"):/s" --entrypoint node spark-backend:local -e "
-            const D=require('better-sqlite3');
-            const db=new D('/s/$(basename "$SNAP")',{readonly:true});
-            const integridade=db.pragma('integrity_check',{simple:true});
-            if (integridade !== 'ok') { console.error('integrity_check: '+integridade); process.exit(1); }
-            const orfaos=db.pragma('foreign_key_check');
-            if (orfaos.length > 0) { console.error('foreign_key_check: '+orfaos.length); process.exit(1); }
-            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('drill');
-            if (!row || row.value !== 'presente') { console.error('o snapshot não tem o dado'); process.exit(1); }
-            // T17.9 §142 — a metadata da mídia veio no snapshot do banco. Os **bytes** são
-            // verificados depois, pelo ensaio de restauração, que sobe o backend sobre a cópia.
-            const media=db.prepare('SELECT COUNT(*) n FROM social_checkin_media').get().n;
-            if (media !== 1) { console.error('a metadata de mídia não entrou no snapshot'); process.exit(1); }
-            const carga=db.prepare(\"SELECT COUNT(*) n FROM server_metadata WHERE key LIKE 'carga\_%' ESCAPE '\\\\'\").get().n;
-            if (carga < 1) { console.error('nenhuma escrita concorrente foi capturada'); process.exit(1); }
-            console.log('snapshot íntegro sob escrita concorrente; linhas de carga:', carga);
-            db.close();"
-
-          # Restauração + integrity_check + backend real ready sobre a cópia, **com a mídia**
+          # Restauração num banco descartável + backend real ready sobre a cópia, **com a mídia**
           # (T17.9 §142/§190). O último passo do ensaio lê os bytes de dentro do container, como o
           # processo de produção leria: o modelo de grupo compartilhado precisa sobreviver à
           # restauração, e "o arquivo está lá" não prova que ele abre.
           SPARK_DRILL_DIR="$WORK/drill" ops/verify-backup.sh \
             --from-file "$SNAP" --media-from "$SPARK_MEDIA_DIR" --port 18082
+
+          # O que o ensaio genérico não sabe: **este** dado precisava estar lá. O snapshot foi
+          # tirado com escrita em curso, e precisa ter o dado semeado, a metadata da mídia e pelo
+          # menos uma linha da carga concorrente — restaurados no banco descartável.
+          docker run --rm --network host -e PGPASSWORD=spark postgres:17-alpine sh -c '
+            set -e
+            q() { psql -h 127.0.0.1 -U spark -d spark_drill -X -q -t -A -v ON_ERROR_STOP=1 -c "$1"; }
+            [ "$(q "SELECT value FROM server_metadata WHERE key = '"'"'drill'"'"'")" = "presente" ] \
+              || { echo "o snapshot restaurado não tem o dado semeado"; exit 1; }
+            [ "$(q "SELECT COUNT(*) FROM social_checkin_media")" = "1" ] \
+              || { echo "a metadata de mídia não entrou no snapshot"; exit 1; }
+            carga="$(q "SELECT COUNT(*) FROM server_metadata WHERE key LIKE '"'"'carga\_%'"'"'")"
+            [ "$carga" -ge 1 ] || { echo "nenhuma escrita concorrente foi capturada"; exit 1; }
+            echo "snapshot íntegro sob escrita concorrente; linhas de carga restauradas: $carga"
+          '
 
           docker rm -f drill-backend
 
@@ -934,4 +965,4 @@ jobs:
       # falha que não escrevesse `backup-status.json` deixaria o monitoramento afirmando que existe
       # backup quando não existe — que é pior que não ter backup, porque dá confiança.
       - name: Todo desfecho do backup vira estado (sucesso e todas as falhas)
-        run: SPARK_IMAGE=spark-backend:local ops/tests/backup-status.test.sh "$SPARK_WORK/data"
+        run: SPARK_IMAGE=spark-backend:local ops/tests/backup-status.test.sh

@@ -5,7 +5,7 @@
 
 ## Modelo de ameaças
 
-Curto de propósito (§Etapa 2). O que está listado é o que uma VPS com um backend, um SQLite e dados
+Curto de propósito (§Etapa 2). O que está listado é o que uma VPS com um backend, um PostgreSQL gerenciado e dados
 pessoais de um grupo pequeno realmente enfrenta.
 
 | Ameaça | Consequência | Mitigação |
@@ -13,7 +13,7 @@ pessoais de um grupo pequeno realmente enfrenta.
 | **Vazamento de credencial** | Acesso ao Firebase, ao Gemini ou aos backups | Nada versionado; teste varre a árvore; `.gitignore`/`.dockerignore`; credencial por caminho montado somente-leitura; `600` nos segredos só do host e `640` no grupo compartilhado na service account |
 | **Acesso entre contas** | Um usuário lê o dado de outro | `uid` vem **só** do token verificado; corpo e query não influenciam identidade; dado de outra conta é `404`, nunca `403` |
 | **Perda do banco** | Backups, sync e change log de todo mundo | Snapshot consistente diário + off-site criptografado + ensaio de restauração |
-| **Disco cheio** | SQLite para de escrever; falha silenciosa | Rotação de log (10 MB × 5 por container); `check-health.sh` alerta em 80 % e falha em 90 % |
+| **Disco cheio** | Mídia e ledger param de ser escritos; backup falha na área de trabalho | Rotação de log (10 MB × 5 por container); `check-health.sh` alerta em 80 % e falha em 90 % |
 | **Deploy ruim** | Servidor fora | Tag por commit + healthcheck obrigatório + rollback automático |
 | **Migration ruim** | Schema inconsistente | Backup pré-deploy obrigatório; migration antes de escutar a porta; readiness exige schema aplicado |
 | **Backend exposto** | API sem TLS na internet | `docker-compose.prod.yml` não publica a porta do backend; só o Caddy escuta 80/443 |
@@ -33,6 +33,7 @@ provedor, e DDoS volumétrico (uma VPS pessoal não se defende disso; o Caddy li
 | --- | --- | --- | --- |
 | Service account do Firebase Admin | `/opt/spark/secrets/firebase-admin.json` (`640`, `spark:spark-data`) | Bind mount **somente leitura** em `/run/secrets/firebase-admin.json`; `GOOGLE_APPLICATION_CREDENTIALS` aponta o caminho | **Não** |
 | Chave do Gemini | `/opt/spark/secrets/backend.env` (`600`) | `env_file` do Compose → `GEMINI_API_KEY` | **Não** |
+| `DATABASE_URL` do PostgreSQL (carrega a senha do banco) | `/opt/spark/repo/backend/.env` (`600`, fora do Git) | `${DATABASE_URL:?}` no Compose; `ops/lib.sh` a lê do mesmo arquivo para `pg_dump`, por variável de ambiente do container de ferramentas — nunca por argumento, nunca em log ou em `backup-status.json` | **Não** |
 | Senha do repositório de backup | `/opt/spark/secrets/restic-password` (`600`) + cópia fora da VPS | `RESTIC_PASSWORD_FILE` lido por `ops/lib.sh` | **Não** |
 | Credencial do storage off-site | `/opt/spark/secrets/backup.env` (`600`) | `EnvironmentFile` da unidade systemd | **Não** |
 | Chave privada de TLS | Volume `caddy-data` (gerenciada pelo Caddy) | Nunca sai de lá; o Node não a vê | **Não** |
@@ -210,7 +211,7 @@ no aparelho, e o leitor **não executa** o que a câmera capturou — nada de `I
 `WebView`. Ler QR também **não custa permissão de câmera**: o Google Code Scanner abre a câmera na
 UI do Play Services, e `android.permission.CAMERA` não existe no manifesto do Spark (há teste).
 
-**Onde fica.** No SQLite da VPS, como texto opaco por agregado — o servidor não desmonta treino em
+**Onde fica.** No PostgreSQL de `DATABASE_URL`, como texto opaco por agregado — o servidor não desmonta treino em
 colunas consultáveis. E, criptografado, no storage de backup off-site.
 
 **Como é protegido.** HTTPS em trânsito (Caddy/Let's Encrypt); `2770` no diretório de dados e

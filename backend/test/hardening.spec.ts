@@ -31,7 +31,6 @@ const UID = 'uid-da-conta-a';
 describe('Configuração de produção', () => {
   const base = {
     NODE_ENV: 'test',
-    DATABASE_PATH: '/tmp/spark-hardening.db',
     DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
   };
 
@@ -104,7 +103,7 @@ describe('Configuração de produção', () => {
 
   it('produção sem SOCIAL_MEDIA_ROOT é falha de startup, e nunca um diretório derivado (T17.9 §28)', () => {
     // O derivado é seguro em desenvolvimento e desastroso em produção: ele acompanha
-    // `DATABASE_PATH`, e um deploy que monte o banco sem montar a mídia perderia todas as fotos na
+    // `DATABASE_URL`, e um deploy que não montasse a mídia perderia todas as fotos na
     // primeira recriação de container — em silêncio, porque escrever num diretório efêmero
     // funciona perfeitamente até alguém reiniciar.
     const production = AppConfig.fromEnv({ ...base, NODE_ENV: 'production' });
@@ -450,7 +449,7 @@ describe('Artefatos de produção', () => {
     expect(compose).not.toMatch(/-----BEGIN/);
     expect(compose).not.toMatch(/private_key/);
     // Rotação de log: sem ela, o log é o candidato mais provável a encher o disco — e disco cheio
-    // derruba o SQLite.
+    // derruba a mídia, o ledger e o backup.
     expect(compose).toContain('max-size:');
     expect(compose).toContain('max-file:');
   });

@@ -1,38 +1,45 @@
 #!/usr/bin/env bash
 #
-# Restauração do SQLite do servidor a partir do backup off-site (T16.8 §43/§44/§130).
+# Restauração do servidor a partir do backup off-site (T16.8 §43/§44/§130; PostgreSQL desde a
+# T18.0.2).
 #
-#   restic (off-site) ──▶ diretório temporário ──▶ integrity_check ──▶ [--install] ──▶ /data
-#                                                └─▶ mídia social  ──▶ [--install] ──▶ /media
+#   restic (off-site) ──▶ diretório temporário ──▶ pg_restore --list ──▶ [--install] ──▶ PostgreSQL
+#                                                └─▶ mídia social  ────▶ [--install] ──▶ /media
+#                                                └─▶ ledger de exclusões ▶ [--install] ──▶ /data
 #
 # ## O banco **e** a mídia (T17.9 §138)
 #
-# Desde a T17.9 o Feed tem fotos, e elas vivem fora do SQLite. Restaurar só o banco produz um Feed
-# que aponta para arquivos que não existem: `integrity_check` passa, `/health/ready` responde, e
-# cada card com foto fica sem imagem. O runbook só pode declarar o Feed recuperado quando os dois
+# Desde a T17.9 o Feed tem fotos, e elas vivem fora do banco. Restaurar só o banco produz um Feed
+# que aponta para arquivos que não existem: a restauração passa, `/health/ready` responde, e cada
+# card com foto fica sem imagem. O runbook só pode declarar o Feed recuperado quando os dois
 # voltaram — e é por isso que este script extrai, verifica e (com `--install`) instala os dois.
 #
 # ## O que ele nunca faz
 #
-# Ele **não** apaga o banco atual. Instalar move o arquivo existente para
-# `spark.db.pre-restore-<timestamp>` antes de qualquer coisa: se a restauração for a errada, o
-# estado anterior ainda está lá. "Restaurar destruindo o que existia sem validar" é exatamente o
-# modo de falha que transforma um incidente recuperável em perda definitiva (§21/§130).
+# Ele **não** descarta o estado atual do banco sem antes preservá-lo. `--install` tira um dump do
+# banco de produção (`pre-restore-<timestamp>.dump`, em `$SPARK_STAGING_DIR`) **antes** de tocar em
+# qualquer coisa: se a restauração for a errada, o estado anterior ainda está lá. "Restaurar
+# destruindo o que existia sem validar" é exatamente o modo de falha que transforma um incidente
+# recuperável em perda definitiva (§21/§130).
 #
-# Também não instala sobre um backend em execução: dois processos escrevendo no mesmo arquivo
-# durante a troca é como se corrompe um SQLite de propósito.
+# Também não instala com o backend em execução: o processo tem conexões abertas e migrations que
+# rodam no startup — o `pg_restore` precisa ser o único escritor.
+#
+# A restauração do banco é `--single-transaction --exit-on-error`: ou o dump inteiro entra, ou
+# nada entra. Não existe "restaurou pela metade".
 #
 # Uso:
-#   ops/restore.sh --to /tmp/drill                      # só extrai e verifica (padrão seguro)
+#   ops/restore.sh --to /tmp/drill                          # só extrai e verifica (padrão seguro)
 #   ops/restore.sh --snapshot <id> --to /tmp/drill
-#   ops/restore.sh --from-file /caminho/spark.db --media-from /caminho/media --to /tmp/drill
-#   ops/restore.sh --to /tmp/drill --install            # troca o banco e a mídia de produção
+#   ops/restore.sh --from-file /caminho/spark.dump --media-from /caminho/media --to /tmp/drill
+#   ops/restore.sh --to /tmp/drill --install                # troca o banco e a mídia de produção
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
 
 load_env_file
+require_cmd docker
 
 SNAPSHOT="latest"
 TARGET_DIR=""
@@ -66,7 +73,7 @@ if [ -n "$FROM_FILE" ]; then
   # Caminho sem off-site: usado pelo ensaio local e pelo CI, onde não há — e não deve haver —
   # credencial de storage real (§163/§164).
   [ -f "$FROM_FILE" ] || fail "arquivo não encontrado: ${FROM_FILE}"
-  RESTORED_DB="${TARGET_DIR}/${DB_FILENAME}"
+  RESTORED_DB="${TARGET_DIR}/${DUMP_FILENAME}"
   cp "$FROM_FILE" "$RESTORED_DB"
   log "restaurado de arquivo local: ${FROM_FILE}"
   # O ensaio local pode trazer a mídia junto, por `--media-from`.
@@ -81,9 +88,9 @@ else
   require_restic_env
   log "restaurando o snapshot '${SNAPSHOT}' do repositório off-site"
   restic_cmd restore "$SNAPSHOT" --host spark --tag "spark-db" --target "$TARGET_DIR" > /dev/null
-  # O restic reconstrói a árvore de caminhos original; o banco pode estar em qualquer profundidade.
-  RESTORED_DB="$(find "$TARGET_DIR" -name "$DB_FILENAME" -type f | head -1)"
-  [ -n "$RESTORED_DB" ] || fail "o snapshot não contém ${DB_FILENAME}"
+  # O restic reconstrói a árvore de caminhos original; o dump pode estar em qualquer profundidade.
+  RESTORED_DB="$(find "$TARGET_DIR" -name "$DUMP_FILENAME" -type f | head -1)"
+  [ -n "$RESTORED_DB" ] || fail "o snapshot não contém ${DUMP_FILENAME}"
   MANIFEST="$(find "$TARGET_DIR" -name manifest.json -type f | head -1)"
   [ -n "$MANIFEST" ] && log "manifesto: $(tr -d '\n ' < "$MANIFEST")"
 
@@ -112,86 +119,73 @@ fi
 
 # --- verificação obrigatória (§44) ---------------------------------------------------------
 #
-# Um arquivo que apareceu no storage não é um backup validado. Só é backup o que abre, passa no
-# `integrity_check` e tem schema aplicado.
-log "verificando o banco restaurado"
-# `--user` é quem está rodando o script, e não o `node` da imagem (T16.8.1 §3).
-#
-# O arquivo restaurado pertence ao operador e nasce com o modo do snapshot (`600`) — de propósito:
-# é dado pessoal do servidor, e a área de restauração não é compartilhada com o container. Um
-# container rodando como uid 1000 só conseguiria abri-lo em uma VPS onde o operador fosse, por
-# acaso, o uid 1000. Aqui não há grupo compartilhado a usar: o dono é quem lê, e o dono é quem
-# chamou o script.
-#
-# Este era um defeito de verdade no caminho de recuperação, e ele estava escondido: o ensaio de
-# backup do CI nunca chegou a executar (o job morria antes, por um erro de working-directory), e a
-# máquina de desenvolvimento tem uid 1000.
-VERIFICATION="$(docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -v "$(cd "$(dirname "$RESTORED_DB")" && pwd):/restore" \
-  --entrypoint node "$SPARK_IMAGE" -e "
-    const Database = require('better-sqlite3');
-    const db = new Database('/restore/$(basename "$RESTORED_DB")', { readonly: true, fileMustExist: true });
-    const integrity = db.pragma('integrity_check', { simple: true });
-    if (integrity !== 'ok') { console.error('integrity_check: ' + integrity); process.exit(1); }
-    if (db.pragma('foreign_key_check').length > 0) {
-      console.error('foreign_key_check encontrou violações'); process.exit(1);
-    }
-    const version = db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v;
-    // Contagens, nunca conteúdo: provam que o banco restaurado tem dado, sem registrar qual.
-    const counts = {};
-    for (const table of ['backup_snapshots', 'sync_entities', 'sync_changes', 'sync_mutations']) {
-      const found = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name=?\").get(table);
-      counts[table] = found ? db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n : null;
-    }
-    db.close();
-    console.log(JSON.stringify({ integrity, schemaVersion: version, counts }));
-  ")"
+# Um arquivo que apareceu no storage não é um backup validado. `pg_restore --list` lê o índice do
+# arquivo inteiro e falha em arquivo truncado, corrompido ou que não é um dump; a presença de
+# `schema_migrations` prova que é um dump **do Spark**, com schema aplicado. O que este passo não
+# prova — que o conteúdo restaura e que o backend sobe sobre ele — é o que `ops/verify-backup.sh`
+# prova, restaurando num banco descartável.
+log "verificando o dump restaurado"
+RESTORED_DB_DIR="$(cd "$(dirname "$RESTORED_DB")" && pwd)"
+RESTORED_DB_NAME="$(basename "$RESTORED_DB")"
+VERIFICATION="$(pg_run "" "
+  set -e
+  toc=\"\$(pg_restore --list '/restore/${RESTORED_DB_NAME}')\"
+  entries=\"\$(printf '%s\n' \"\$toc\" | grep -c -v '^;' || true)\"
+  has_migrations=false
+  printf '%s\n' \"\$toc\" | grep -q 'TABLE DATA .* schema_migrations ' && has_migrations=true
+  # Contagem de tabelas, nunca conteúdo: prova que o dump tem estrutura, sem registrar qual.
+  tables=\"\$(printf '%s\n' \"\$toc\" | grep -c ' TABLE ' || true)\"
+  [ \"\$entries\" -gt 0 ] || { echo 'dump sem entradas' >&2; exit 1; }
+  echo \"{\\\"archive\\\":\\\"ok\\\",\\\"tocEntries\\\":\$entries,\\\"tables\\\":\$tables,\\\"hasSchemaMigrations\\\":\$has_migrations}\"
+" -v "${RESTORED_DB_DIR}:/restore:ro")"
 
 log "verificação: ${VERIFICATION}"
-printf '%s' "$VERIFICATION" | grep -q '"integrity":"ok"' || fail "integrity_check não retornou ok"
+printf '%s' "$VERIFICATION" | grep -q '"archive":"ok"' || fail "o dump não passou em pg_restore --list"
+printf '%s' "$VERIFICATION" | grep -q '"hasSchemaMigrations":true' \
+  || fail "o dump não contém schema_migrations: não é um snapshot do Spark"
 
 if [ "$INSTALL" -eq 0 ]; then
   log "restauração verificada em ${RESTORED_DB} (sem --install: a produção não foi tocada)"
   [ -n "$RESTORED_MEDIA" ] && log "mídia verificada em ${RESTORED_MEDIA}"
-  # stdout continua carregando **só** o caminho do banco: é isso que `ops/verify-backup.sh`
-  # captura. A mídia sai em `SPARK_RESTORED_MEDIA`, para quem precisar dela.
+  # stdout continua carregando **só** o caminho do dump: é isso que `ops/verify-backup.sh`
+  # captura.
   printf '%s\n' "$RESTORED_DB"
   exit 0
 fi
 
 # --- instalação em produção ----------------------------------------------------------------
 compose_running && fail "o backend está de pé; pare-o antes de instalar (docker compose down)"
+require_database_url
+PRODUCTION_URL="$(spark_database_url)"
 
-PREVIOUS="${SPARK_DATA_DIR}/${DB_FILENAME}"
-if [ -f "$PREVIOUS" ]; then
-  KEEP="${PREVIOUS}.pre-restore-$(timestamp)"
-  # Preservar, nunca apagar (§130): o arquivo anterior pode ser a única cópia de alguma coisa que
-  # ninguém percebeu que faltava no backup. Removê-lo é decisão humana, depois da validação.
-  mv "$PREVIOUS" "$KEEP"
-  log "banco anterior preservado em ${KEEP}"
-fi
+# Preservar, nunca apagar (§130): o estado atual pode ser a única cópia de alguma coisa que ninguém
+# percebeu que faltava no backup. O dump pré-restauração fica em `$SPARK_STAGING_DIR`, e removê-lo
+# é decisão humana, depois da validação.
+KEEP="${SPARK_STAGING_DIR}/pre-restore-$(timestamp).dump"
+log "preservando o estado atual do banco em ${KEEP}"
+"${SCRIPT_DIR}/snapshot.sh" "$KEEP" > /dev/null \
+  || fail "não foi possível preservar o banco atual; a restauração NÃO começou"
 
-# `-wal` e `-shm` do banco antigo não podem sobreviver ao arquivo novo: eles descrevem transações
-# de outro banco, e o SQLite tentaria aplicá-las.
-rm -f "${PREVIOUS}-wal" "${PREVIOUS}-shm"
+# `--clean --if-exists`: os objetos do dump são recriados do zero; `--single-transaction
+# --exit-on-error`: tudo ou nada. `--no-owner --no-privileges` pelo mesmo motivo do dump: o papel
+# do destino é quem manda. Objetos que existam no banco e **não** no dump (uma migration mais nova
+# que a do snapshot) permanecem — o runner de migrations, no próximo startup, parte de
+# `schema_migrations` restaurada e reaplica o que faltar.
+log "restaurando o dump no PostgreSQL de produção (transação única)"
+pg_run "$PRODUCTION_URL" "
+  set -e
+  pg_restore -d \"\$SPARK_PG_CONN\" --clean --if-exists --no-owner --no-privileges \\
+    --single-transaction --exit-on-error '/restore/${RESTORED_DB_NAME}'
+" -v "${RESTORED_DB_DIR}:/restore:ro" \
+  || fail "pg_restore falhou; o banco não foi alterado (transação única). O estado anterior está em ${KEEP}"
 
-# O banco restaurado precisa ser aberto pelo processo do container — que roda como `node`, com um
-# uid que **não** é o do operador (T16.8.1 §3).
-#
-# A versão anterior fazia `chown 1000:1000`, e isso estava errado por dois motivos ao mesmo tempo:
-# `chown` exige root, então o comando falhava em silêncio para o usuário `spark` (o `|| log` só
-# avisava), e o número 1000 presumia que o uid do container fosse fixo e que o do host coincidisse.
-# O resultado era um banco instalado que o backend não conseguia abrir — descoberto no pior momento
-# possível, que é durante uma recuperação.
-#
-# O acesso vem do **grupo compartilhado**, o mesmo mecanismo do resto do modelo: `660` no grupo do
-# diretório de dados. Nada de `chown`, nada de `sudo`, nada de uid combinado.
+INSTALLED_VERSION="$(pg_schema_version "$PRODUCTION_URL")"
+log "banco restaurado: schema_version=${INSTALLED_VERSION}"
+
+# O grupo compartilhado do diretório de dados (T16.8.1 §3): é por ele que o container e o operador
+# se encontram, com uids diferentes, no ledger e na mídia.
 DATA_GID="$(spark_data_gid)" \
   || fail "não foi possível ler o grupo de ${SPARK_DATA_DIR} — o diretório de dados existe?"
-
-install -m 660 -g "$DATA_GID" "$RESTORED_DB" "$PREVIOUS" \
-  || fail "não foi possível instalar o banco com o grupo ${DATA_GID}; o usuário atual pertence a ele? (ver docs/operations/PRODUCTION_DEPLOYMENT.md, 'usuários, grupos e permissões')"
 
 # --- mídia social (T17.9 §138) ---------------------------------------------------------------
 #
@@ -223,9 +217,9 @@ fi
 # ## União, e nunca substituição
 #
 # O ledger do snapshot é **mais antigo** que o do disco. Numa restauração em que a máquina
-# sobreviveu (banco corrompido, migration ruim, restauração para um ponto anterior), o arquivo
-# local conhece exclusões que o snapshot não conhece, e sobrescrevê-lo apagaria exatamente os
-# registros que impedem aquelas contas de voltar.
+# sobreviveu (migration ruim, restauração para um ponto anterior), o arquivo local conhece
+# exclusões que o snapshot não conhece, e sobrescrevê-lo apagaria exatamente os registros que
+# impedem aquelas contas de voltar.
 #
 # Por isso os dois são unidos, e a união é feita por concatenação: o leitor consome os hashes como
 # conjunto (§13), então um hash repetido não custa nada e reconciliá-lo duas vezes é a mesma
@@ -252,15 +246,10 @@ fi
 #
 # ## Por que ela roda **aqui**, e não num lembrete
 #
-# Até esta fase, este script terminava imprimindo "rode a reconciliação depois" e apontando para o
-# runbook — que descrevia um comando que não existia. Na prática, uma restauração de um snapshot
-# anterior a uma exclusão devolvia a conta excluída ao ar, e a única defesa era a memória de quem
-# estava de plantão.
-#
-# Agora a restauração **não está completa** antes disto. O comando é o mesmo que o runbook manda
-# rodar (`dist/cli/reconcile-account-deletions.js`), roda sobre o banco recém-instalado, e uma
-# falha aqui falha o `--install` inteiro: ledger ausente, ledger malformado, chave HMAC errada ou
-# `foreign_key_check` violado impedem que esta restauração seja declarada boa.
+# A restauração **não está completa** antes disto. O comando é o mesmo que o runbook manda rodar
+# (`dist/cli/reconcile-account-deletions.js`), roda sobre o banco recém-restaurado, e uma falha
+# aqui falha o `--install` inteiro: ledger ausente, ledger malformado, chave HMAC errada ou
+# integridade referencial violada impedem que esta restauração seja declarada boa.
 #
 # ## A chave HMAC
 #
@@ -280,7 +269,20 @@ else
   Ver docs/runbooks/account-deletion-dr.md."
 fi
 
-docker run --rm   --group-add "$DATA_GID"   -v "${SPARK_DATA_DIR}:/data"   -v "${SPARK_MEDIA_DIR}:/media"   -e NODE_ENV=production   -e "DATABASE_PATH=/data/${DB_FILENAME}"   -e SOCIAL_MEDIA_ROOT=/media   -e "DELETION_TOMBSTONES_FILE_PATH=/data/${TOMBSTONES_FILENAME}"   "${RECONCILE_ENV[@]}"   --entrypoint node   "$SPARK_IMAGE" dist/cli/reconcile-account-deletions.js   || fail "a reconciliação de exclusões falhou; a restauração NÃO está completa (ver docs/runbooks/account-deletion-dr.md)"
+# `--network host` pelo mesmo motivo de `pg_run`: o comando precisa alcançar exatamente o endereço
+# de `DATABASE_URL`, que não passa pela linha de comando do host.
+docker run --rm --network host \
+  --group-add "$DATA_GID" \
+  -v "${SPARK_DATA_DIR}:/data" \
+  -v "${SPARK_MEDIA_DIR}:/media" \
+  -e NODE_ENV=production \
+  -e "DATABASE_URL=${PRODUCTION_URL}" \
+  -e SOCIAL_MEDIA_ROOT=/media \
+  -e "DELETION_TOMBSTONES_FILE_PATH=/data/${TOMBSTONES_FILENAME}" \
+  "${RECONCILE_ENV[@]}" \
+  --entrypoint node \
+  "$SPARK_IMAGE" dist/cli/reconcile-account-deletions.js \
+  || fail "a reconciliação de exclusões falhou; a restauração NÃO está completa (ver docs/runbooks/account-deletion-dr.md)"
 
 log "restauração completa: banco, mídia e ledger instalados, e a reconciliação passou."
 log "Suba o backend e confira /health/ready."

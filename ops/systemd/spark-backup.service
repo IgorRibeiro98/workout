@@ -1,4 +1,4 @@
-# Backup off-site do SQLite do Spark (T16.8 §41).
+# Backup off-site do servidor do Spark (T16.8 §41; PostgreSQL via pg_dump desde a T18.0.2).
 #
 # systemd timer em vez de cron por três razões concretas: `OnCalendar` com `Persistent=true`
 # recupera a execução perdida enquanto a VPS estava desligada, `OnFailure=` dá um lugar honesto
@@ -10,7 +10,7 @@
 #   sudo systemctl enable --now spark-backup.timer
 
 [Unit]
-Description=Spark — backup off-site do SQLite do servidor
+Description=Spark — backup off-site do servidor (pg_dump + mídia + ledger)
 Documentation=file:///opt/spark/repo/docs/operations/BACKUP_AND_RESTORE.md
 # O backup fala com o Docker; sem isto ele pode rodar antes de o daemon existir no boot.
 After=docker.service network-online.target

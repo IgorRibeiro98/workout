@@ -3,7 +3,7 @@ import { join } from 'path';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
 import { SparkLogger } from '../src/common/logger';
-import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { loadMigrations, runMigrations } from './support/legacy-sqlite-migration-runner';
 import { PostgresService } from '../src/database/postgres.service';
 import {
   FriendCodeCollisionError,

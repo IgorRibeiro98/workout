@@ -77,7 +77,7 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `NODE_ENV` | não | `development` | `development` \| `test` \| `production` |
 | `PORT` | não | `8080` | TLS é do Caddy, não deste processo |
 | `DATABASE_URL` | **sim** | — | Connection string do PostgreSQL (pooled / Neon). Obrigatório, sem default. |
-| `DATABASE_URL_DIRECT` | não | — | Connection string direta para migrations e operações administrativas (Neon direct connection) |
+| `DATABASE_URL_DIRECT` | não | `DATABASE_URL` | Connection string direta para migrations e operações administrativas (Neon direct connection). Vazia = ausente (é como o Compose representa "não definido"). |
 | `DATABASE_POOL_MIN` | não | `2` | Mínimo de conexões no pool pg |
 | `DATABASE_POOL_MAX` | não | `10` | Máximo de conexões no pool pg |
 | `DATABASE_STATEMENT_TIMEOUT_MS` | não | `30000` | Timeout por instrução SQL |
@@ -355,7 +355,7 @@ treino entra ali — nem XP, nem streak, nem contagem, nem peso, nem PR. Ver
 ```text
 Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ Spark Backend ──▶ PostgreSQL
                                                                                │
-                                                           ops/backup.sh ──▶ pg_dump/WAL ──▶ off-site
+                                                           ops/backup.sh ──▶ pg_dump ──▶ off-site
                                                                               (criptografado)
 ```
 
@@ -364,11 +364,13 @@ Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ 
   recurso e credencial montada somente-leitura.
 - [`Caddyfile.prod`](./Caddyfile.prod) — o domínio vem de `{$SPARK_DOMAIN}`, porque domínio real é
   configuração operacional e não código.
-- [`../ops/`](../ops/) — snapshot consistente, backup off-site, restauração, ensaio de restauração,
-  verificação operacional, deploy com rollback e unidades systemd.
+- [`../ops/`](../ops/) — snapshot consistente (`pg_dump`, T18.0.2), backup off-site, restauração
+  (`pg_restore` em transação única), ensaio de restauração num banco descartável, verificação
+  operacional, deploy com rollback e unidades systemd.
 
-> **Nada disso foi verificado em VPS real.** Não há domínio, DNS, certificado nem storage
-> contratado: o que existe é `CODE READY`, exercitado localmente com Docker. Ver
+> **Nada disso foi verificado em VPS real.** Não há domínio, DNS, certificado, PostgreSQL
+> gerenciado nem storage contratado: o que existe é `CODE READY`, exercitado no CI com Docker e um
+> PostgreSQL de serviço. Ver
 > [`docs/operations/PRODUCTION_DEPLOYMENT.md`](../docs/operations/PRODUCTION_DEPLOYMENT.md).
 
 > **Backup do usuário ≠ backup do servidor.** A T16.4 protege contra a perda do **aparelho**: o

@@ -1,10 +1,11 @@
 /**
  * Testes do Spark Backend.
  *
- * `runInBand` porque os testes de SQLite abrem arquivos temporários reais e verificam PRAGMAs e
- * persistência — paralelismo aqui só traria concorrência de disco sem ganho.
+ * `runInBand` porque cada suíte cria e derruba um schema próprio no PostgreSQL de teste
+ * (`DATABASE_URL`, default `postgresql://spark:spark@localhost:5432/spark_dev`), e paralelismo aqui
+ * só traria disputa por conexões sem ganho.
  *
- * Nenhum teste toca rede, Firebase, Gemini ou VPS. Tudo é determinístico e offline.
+ * Nenhum teste toca rede além do PostgreSQL local, nem Firebase, Gemini ou VPS.
  */
 module.exports = {
   moduleFileExtensions: ['js', 'json', 'ts'],
@@ -29,6 +30,13 @@ module.exports = {
   testEnvironment: 'node',
   testTimeout: 60000,
   setupFiles: ['<rootDir>/test/setup-env.ts'],
+  /**
+   * `better-sqlite3` é devDependency e só existe para os testes históricos das migrations SQLite
+   * (`social-migrations.spec.ts` e afins). O shim redireciona qualquer "abertura" que na verdade
+   * aponta para o PostgreSQL de teste (connection string / schema `test_*`) para um adaptador
+   * síncrono sobre `psql`, e deixa os arquivos `.db` legados irem para a biblioteca real. Nada
+   * disso entra em `dist/` nem na imagem.
+   */
   moduleNameMapper: {
     '^better-sqlite3$': '<rootDir>/test/support/better-sqlite3-shim.ts',
   },

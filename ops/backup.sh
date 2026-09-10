@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Backup off-site do SQLite do servidor (T16.8 §26–§42; T16.8.1 §9).
+# Backup off-site do servidor (T16.8 §26–§42; T16.8.1 §9; PostgreSQL desde a T18.0.2).
 #
-#   spark.db ──▶ snapshot consistente ──▶ integrity_check ──▶ manifesto ──┐
-#                                                                          ├─▶ restic ──▶ off-site
-#   /opt/spark/media (fotos dos check-ins, T17.9) ───────────────────────────┘
+#   PostgreSQL ──▶ pg_dump (snapshot consistente) ──▶ pg_restore --list ──▶ manifesto ──┐
+#   deletion_tombstones.tsv (ledger anti-ressurreição, T17.13.1) ─────────────────────────┼─▶ restic ──▶ off-site
+#   /opt/spark/media (fotos dos check-ins, T17.9) ─────────────────────────────────────────┘
 #
 # ## O que este backup NÃO é
 #
@@ -15,9 +15,9 @@
 #
 # ## A mídia entra no mesmo snapshot (T17.9 §135/§136/§137)
 #
-# Desde a T17.9, o Feed tem fotos, e elas **não** estão no SQLite (§21): o banco guarda metadata, e
-# os bytes vivem em `$SPARK_MEDIA_DIR`. Um backup que copiasse só `spark.db` restauraria um Feed
-# que aponta para arquivos que não existem — íntegro pelo `integrity_check` e quebrado na tela.
+# Desde a T17.9, o Feed tem fotos, e elas **não** estão no banco (§21): o PostgreSQL guarda
+# metadata, e os bytes vivem em `$SPARK_MEDIA_DIR`. Um backup que levasse só o dump restauraria um
+# Feed que aponta para arquivos que não existem — íntegro na restauração e quebrado na tela.
 #
 # O diretório de mídia entra no **mesmo** `restic backup`, como um segundo caminho. Não é uma cópia
 # extra em disco (§137): o restic lê o diretório de origem direto, deduplica entre snapshots — as
@@ -154,14 +154,17 @@ trap finalize EXIT
 
 require_cmd docker
 require_restic_env
+# A connection string precisa existir antes de qualquer trabalho: sem ela não há o que copiar, e
+# descobrir isso na etapa `snapshot` diria ao operador que o dump falhou, não que falta configuração.
+require_database_url
 
 STAGE="workdir"
 WORK_DIR="$(mktemp -d "${SPARK_STAGING_DIR}/work-XXXXXX")"
 chmod 700 "$WORK_DIR"
 
-# --- 1. snapshot consistente + integridade ------------------------------------------------
+# --- 1. snapshot consistente + verificação do arquivo ---------------------------------------
 STAGE="snapshot"
-SNAPSHOT="${WORK_DIR}/${DB_FILENAME}"
+SNAPSHOT="${WORK_DIR}/${DUMP_FILENAME}"
 "${SCRIPT_DIR}/snapshot.sh" "$SNAPSHOT" > /dev/null
 SIZE_BYTES="$(stat -c %s "$SNAPSHOT")"
 
@@ -177,6 +180,10 @@ SIZE_BYTES="$(stat -c %s "$SNAPSHOT")"
 # continuamente pelo backend e copiá-lo primeiro dá um arquivo estável ao restic. Ele é
 # append-only, então a cópia pode perder uma exclusão feita durante o próprio backup — que a
 # execução seguinte captura, e que o tombstone do banco cobre nesse intervalo.
+#
+# Desde a T18.0 ele é o **único** arquivo em `$SPARK_DATA_DIR`: o banco saiu de lá para o
+# PostgreSQL, e o ledger ficou, porque é justamente o registro que precisa sobreviver à
+# substituição do conteúdo do banco.
 TOMBSTONES_ROWS=0
 if [ -f "$SPARK_TOMBSTONES_FILE" ]; then
   cp "$SPARK_TOMBSTONES_FILE" "${WORK_DIR}/${TOMBSTONES_FILENAME}"
@@ -196,12 +203,7 @@ fi
 # O que **não** acompanha: nenhum segredo (§35). Service account, chave do Gemini e senha do
 # repositório não entram aqui nem no snapshot — eles vivem fora do banco por construção.
 STAGE="manifest"
-SCHEMA_VERSION="$(sqlite_node "
-  const Database = require('better-sqlite3');
-  const db = new Database('/data/${DB_FILENAME}', { readonly: true, fileMustExist: true });
-  console.log(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v);
-  db.close();
-" | tr -d '\r\n')"
+SCHEMA_VERSION="$(pg_schema_version "$(spark_database_url)")"
 
 # Contagem e tamanho da mídia, para o manifesto (§34). Números, nunca nomes de arquivo (§161).
 MEDIA_FILES=0
@@ -222,6 +224,8 @@ cat > "${WORK_DIR}/manifest.json" <<JSON
   "createdAt": "${STARTED_AT}",
   "tag": "${TAG}",
   "schemaVersion": ${SCHEMA_VERSION:-0},
+  "databaseEngine": "postgresql",
+  "dumpFormat": "pg_dump-custom",
   "databaseBytes": ${SIZE_BYTES},
   "backendImageId": "${IMAGE_REF}",
   "mediaDir": "${SPARK_MEDIA_DIR}",

@@ -33,7 +33,7 @@ import type {
  * compartilhada. Pedidos de amizade nascem habilitados porque receber convite é o caminho
  * pretendido do produto — e quem não quiser desliga, antes de a T17.1 existir.
  *
- * Ficam aqui, e não numa coluna `DEFAULT` do SQLite, porque um default de schema é invisível para
+ * Ficam aqui, e não numa coluna `DEFAULT` do banco, porque um default de schema é invisível para
  * quem lê o código e silencioso quando muda: uma migration futura poderia trocá-lo sem que
  * nenhum teste de comportamento notasse.
  */

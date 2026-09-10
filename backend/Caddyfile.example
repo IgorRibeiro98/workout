@@ -10,7 +10,7 @@
 # Copie para `Caddyfile` (ignorado pelo Git), troque o domínio e só então coloque na frente do
 # backend.
 #
-#   Internet -> Caddy (TLS / Let's Encrypt) -> Spark Backend -> SQLite
+#   Internet -> Caddy (TLS / Let's Encrypt) -> Spark Backend -> PostgreSQL
 #
 # O Caddy é quem termina o TLS. O processo Node fala HTTP puro e nunca vê certificado.
 

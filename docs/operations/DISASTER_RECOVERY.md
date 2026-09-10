@@ -1,8 +1,15 @@
 # Spark — Recuperação de desastre
 
-> **Estado:** `IMPLEMENTED` (procedimento e scripts) · `NOT VERIFIED` em VPS real — não há VPS
-> provisionada. O ensaio equivalente (`ops/verify-backup.sh`) foi executado localmente e passou:
-> restauração do off-site → `integrity_check` → backend real subindo sobre a cópia → `/health/ready`.
+> **Estado:** `IMPLEMENTED` (procedimento e scripts; PostgreSQL desde a T18.0.2) · `NOT VERIFIED`
+> em VPS real — não há VPS nem PostgreSQL gerenciado provisionados. O ensaio equivalente
+> (`ops/verify-backup.sh`) roda no CI contra um PostgreSQL real: restauração → `pg_restore` num
+> banco descartável → backend real subindo sobre a cópia → `/health/ready`.
+>
+> Desde a T18.0 o banco **não vive na VPS**: ele é o PostgreSQL de `DATABASE_URL` (Neon ou outro
+> gerenciado). Perder a VPS não perde o banco — perde a mídia, o ledger de exclusões e os segredos.
+> Perder o **provedor do banco** (conta suspensa, credencial vazada, erro do provedor) é o cenário
+> que o `pg_dump` off-site cobre, e é por isso que ele continua existindo mesmo com PITR do
+> provedor. A política definitiva (PITR/branches) é a T18.3.
 
 ## O princípio
 
@@ -16,11 +23,12 @@ Este documento existe para responder a uma pergunta com um procedimento, e não 
 
 | Cenário | O que recupera | Onde está |
 | --- | --- | --- |
-| Container removido | O bind mount sobrevive | `PRODUCTION_DEPLOYMENT.md` |
+| Container removido | O bind mount (mídia, ledger) sobrevive; o banco está fora da VPS | `PRODUCTION_DEPLOYMENT.md` |
 | Deploy ruim | Rollback de imagem por tag | `ops/deploy.sh --rollback <sha>` |
-| Migration ruim | Backup pré-deploy | [RUNBOOK.md](./RUNBOOK.md), "migration falhou" |
-| Disco corrompido | Backup off-site | Este documento |
-| **VPS perdida** | **Backup off-site** | **Este documento** |
+| Migration ruim | Backup pré-deploy (`pg_dump`) | [RUNBOOK.md](./RUNBOOK.md), "migration falhou" |
+| Disco da VPS corrompido | Backup off-site (mídia + ledger); o banco está fora da VPS | Este documento |
+| **VPS perdida** | **Backup off-site + o banco gerenciado continua no ar** | **Este documento** |
+| **Banco (provedor) perdido ou corrompido** | **`pg_dump` off-site, restaurado num PostgreSQL novo** | **Este documento** |
 | Erro operacional / exclusão acidental | Backup off-site, snapshot anterior | `ops/restore.sh --snapshot <id>` |
 
 ## RPO — quanto se pode perder
@@ -66,6 +74,7 @@ pessoal (§47). O maior risco de atraso não é técnico — é não encontrar o
 [ ] a senha do repositório restic
 [ ] a credencial de acesso ao storage off-site
 [ ] a service account do Firebase Admin (ou acesso ao console para gerar outra)
+[ ] a DATABASE_URL do PostgreSQL (ou acesso ao provedor para criar um banco novo)
 ```
 
 **Sem a senha do restic, o backup é irrecuperável.** Nenhum procedimento neste documento contorna
@@ -85,6 +94,7 @@ firebase-admin.json     do gerenciador de segredos, ou gerada de novo no console
 backend.env             GEMINI_API_KEY + ACCOUNT_DELETION_HMAC_KEY
 restic-password         do gerenciador de segredos / cópia física
 backup.env              RESTIC_REPOSITORY + credencial do storage
+backend/.env            DATABASE_URL (a do banco que sobreviveu, ou a do banco novo do passo 4)
 ```
 
 **`ACCOUNT_DELETION_HMAC_KEY` é tão insubstituível quanto a senha do restic.** Ela é o que liga cada
@@ -100,7 +110,16 @@ sudo -u spark git clone <url-do-repo> /opt/spark/repo
 cd /opt/spark/repo/backend && cp Caddyfile.prod Caddyfile
 ```
 
-### 4. Restaurar o banco
+### 4. Restaurar o banco, a mídia e o ledger
+
+Decida primeiro **qual banco** é o destino:
+
+- **a VPS morreu, o banco gerenciado está no ar** — o cenário mais provável. O banco não precisa
+  ser restaurado: aponte `DATABASE_URL` para ele. O que falta na VPS nova é a mídia e o ledger, e
+  eles vêm do snapshot (ver "só a mídia e o ledger", abaixo). Só restaure o dump por cima se a
+  intenção for **voltar o banco** ao ponto do snapshot;
+- **o banco foi perdido ou corrompido** — crie um PostgreSQL novo (um projeto/branch no Neon, ou
+  qualquer PostgreSQL 17), coloque a `DATABASE_URL` dele em `backend/.env` e restaure o dump.
 
 ```bash
 cd /opt/spark/repo
@@ -108,11 +127,18 @@ set -a; . /opt/spark/secrets/backup.env; set +a
 
 restic snapshots --host spark --tag spark-db     # veja o que existe e escolha
 ops/restore.sh --to /tmp/dr                      # extrai e VERIFICA, sem tocar em nada
-ops/restore.sh --to /tmp/dr --install            # instala em /opt/spark/data
+ops/restore.sh --to /tmp/dr --install            # pg_restore em DATABASE_URL + mídia + ledger
 ```
 
-`--install` só age depois de `integrity_check` e `foreign_key_check` passarem, e preserva qualquer
-banco que já exista no destino. Ele recusa rodar com o backend de pé.
+`--install` só age depois de `pg_restore --list` passar e de `schema_migrations` existir no dump.
+Antes de tocar no banco ele tira um dump do estado atual (`/opt/spark/backups/pre-restore-*.dump`)
+e restaura em transação única — ou tudo entra, ou nada muda. Ele recusa rodar com o backend de pé.
+
+Para restaurar **só a mídia e o ledger** (banco gerenciado intacto e mais novo que o snapshot):
+extraia com `ops/restore.sh --to /tmp/dr`, copie a árvore `media` restaurada para
+`/opt/spark/media` e una o ledger a `/opt/spark/data/deletion_tombstones.tsv`, com o mesmo modelo
+de permissão (`2770`/`640` no grupo `spark-data`, ver PRODUCTION_DEPLOYMENT.md) — e rode a
+reconciliação (`node dist/cli/reconcile-account-deletions.js`) antes de subir.
 
 Ele também **instala o ledger de exclusões e roda a reconciliação anti-ressurreição** antes de
 declarar a restauração completa (T17.13.1). Numa recuperação a partir do zero o ledger vem do
@@ -132,6 +158,7 @@ SPARK_ACME_EMAIL=voce@seudominio.com
 # O gid do grupo compartilhado NESTA máquina — ele quase certamente não é o mesmo da VPS antiga,
 # e não precisa ser: o modelo é por grupo, nunca por número fixo.
 SPARK_DATA_GID=$(getent group spark-data | cut -d: -f3)
+DATABASE_URL=postgresql://...            # o banco do passo 4
 EOF
 SPARK_IMAGE_TAG=recuperacao docker compose -f docker-compose.prod.yml up -d
 ```
@@ -216,8 +243,8 @@ sync_mutations       o ledger de idempotência
 ai_usage_daily       contagem de uso do Coach, sem conteúdo
 ```
 
-E, ao lado do banco, o ledger de exclusões (`deletion_tombstones.tsv`) — que não é dado de usuário,
-e sim a lista de quem **não** pode voltar.
+E, fora do banco, na VPS, o ledger de exclusões (`deletion_tombstones.tsv`) — que não é dado de
+usuário, e sim a lista de quem **não** pode voltar — e a mídia dos check-ins.
 
 O treino de cada pessoa continua no aparelho dela. Quem perdeu o **aparelho** usa o restore da
 T16.5, dentro do app.
@@ -233,9 +260,11 @@ no momento da recuperação*:
 | Credencial do storage off-site | Sim | Não dá para baixar o backup |
 | Service account do Firebase Admin | Não — pode ser gerada de novo no console | Rota autenticada responde 503 |
 | Chave do Gemini | Não — pode ser gerada de novo | Coach indisponível; o resto funciona |
+| `DATABASE_URL` / acesso ao provedor do banco | Sim — ou a capacidade de criar um banco novo e restaurar o dump | Sem banco não há servidor |
+| `ACCOUNT_DELETION_HMAC_KEY` | **Sim, obrigatoriamente** | Contas excluídas voltam ao ar numa restauração |
 
-Um gerenciador de senhas resolve os quatro. A senha do restic merece também uma cópia física em
-lugar seguro: ela é a única cujo esquecimento é definitivo.
+Um gerenciador de senhas resolve todos. A senha do restic e a chave HMAC merecem também uma cópia
+física em lugar seguro: são as duas cujo esquecimento é definitivo.
 
 ## Ensaio periódico
 

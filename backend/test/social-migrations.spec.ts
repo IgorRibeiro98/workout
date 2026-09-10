@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { createTempDb, type TempDb } from './support/temp-db';
-import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { loadMigrations, runMigrations } from './support/legacy-sqlite-migration-runner';
 
 /**
  * T17.10 §111–§115 — o ciclo de vida das migrations sociais.

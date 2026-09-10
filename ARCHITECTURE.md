@@ -526,8 +526,8 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-07): T16.0 a T16.7.1 implementadas.** A T16.0 criou o backend em `backend/` com
-> configuração, SQLite, migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
+> **Status (verificado em 2026-09-10): T16.0 a T16.8.1 e T18.0 a T18.0.2 implementadas.** A T16.0 criou o backend em `backend/` com
+> configuração, banco (SQLite até a T17.13; **PostgreSQL desde a T18.0**), migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
 > `POST /v1/ai/coach`, prompt/modelo/credencial server-side, quota e validação no servidor. A T16.3
@@ -1558,9 +1558,11 @@ O resto da fase vive fora do app: `backend/docker-compose.prod.yml`, `backend/Ca
   app, executa treino, registra série, conclui e consulta histórico. Nenhum interruptor, limite ou
   timeout pode mudar isso.
 - **Produção é HTTPS**, e o backend não publica porta — há gate de CI.
-- **`cp spark.db` ativo é proibido**: o snapshot é `VACUUM INTO` a partir de conexão somente
-  leitura, verificado por `integrity_check` e `foreign_key_check` sobre a cópia.
-- **Backup só está validado depois de restaurado**, com o backend real subindo sobre a cópia.
+- **O snapshot do banco é um `pg_dump` consistente** (PostgreSQL desde a T18.0; scripts migrados
+  na T18.0.2): uma transação de leitura, sem bloquear escritores, verificado por
+  `pg_restore --list` sobre o arquivo. Não existe arquivo de banco na VPS para copiar.
+- **Backup só está validado depois de restaurado**, com o backend real subindo sobre a cópia — num
+  banco descartável, nunca sobre produção.
 - **Migration de produção não roda sem ponto de recuperação**, e rollback de aplicação não desfaz
   migration.
 - **Interruptor é pausa, nunca perda**: `503`, Outbox pendente, nada apagado.
@@ -1752,7 +1754,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > (Squad ativo ∧ compartilhamento ∧ participação dos dois lados ∧ ¬bloqueio); contexto inválido é
 > `404`, nunca um rebaixamento para `FRIEND`. Contagens e listas passam a ser por audiência **e**
 > por viewer, com o bloqueio viewer-safe da T17.9 intacto. Uma reação por pessoa/publicação/audiência,
-> garantida por **dois índices únicos parciais** — uma `UNIQUE` comum não serviria, porque no SQLite
+> garantida por **dois índices únicos parciais** — uma `UNIQUE` comum não serviria, porque em SQL
 > cada `NULL` é distinto de qualquer outro. O dono do Squad passa a moderar comentários daquela
 > audiência, e o privilégio não atravessa para o Feed de amigos. Migration
 > `0020_social_interaction_audience.sql` (rebuild em 12 passos, backfill de todo o histórico como

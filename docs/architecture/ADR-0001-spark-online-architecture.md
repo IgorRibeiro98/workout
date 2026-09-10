@@ -2,8 +2,19 @@
 
 - **Status:** aceito e **em vigor**
 - **Data da decisão:** 2026-09-06 (T16.0 — Fundação do Spark Backend)
-- **Estado revisado em:** 2026-09-07 (T16.8 — hardening, backup do servidor e prontidão de produção)
+- **Estado revisado em:** 2026-09-10 (T18.0.2 — fechamento da migração para PostgreSQL)
 - **Substitui:** nada. Complementa `ARCHITECTURE.md`, que continua sendo a autoridade sobre o app Android.
+
+> **Emenda (T18.0 → T18.0.2, 2026-09-10).** A decisão de 2026-09-06 escolheu **SQLite num arquivo da
+> VPS** como persistência do servidor. Essa parte foi **substituída**: desde a T18.0 o backend usa
+> exclusivamente **PostgreSQL** (`DATABASE_URL`, Neon ou outro gerenciado), e a T18.0.2 aposentou o
+> último resíduo operacional — o backup do servidor passou de `VACUUM INTO` para `pg_dump`, e não
+> existe mais `spark.db`, `DATABASE_PATH` nem `better-sqlite3` em runtime, imagem ou script ativo.
+> As menções a SQLite, WAL, `synchronous = FULL`, `integrity_check` e `VACUUM INTO` abaixo são o
+> registro histórico da decisão original e **não descrevem o estado atual**. Tudo o mais — as
+> autoridades, o local-first, a fronteira do Coach, a política de custo, o Caddy à frente, o backup
+> off-site criptografado — continua em vigor. O estado atual está em `ARCHITECTURE.md` §17,
+> `PROJECT_RULES.md` §13.8 e `docs/operations/`.
 
 > **Como ler este documento.** A **decisão** (contexto, autoridades, invariantes, política de custo)
 > é de 2026-09-06 e não mudou. A seção *Estado: implementado x planejado* descreve o que existe

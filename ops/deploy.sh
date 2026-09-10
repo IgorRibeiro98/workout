@@ -12,7 +12,7 @@
 # 2. **A imagem é identificável** (§23). Nada de `latest` em produção: a tag é o SHA do commit, o
 #    que torna "qual código está no ar?" uma pergunta com resposta — e o rollback, uma troca de tag.
 #
-# O deploy não é blue/green (§22): para um backend, uma VPS e um SQLite, a complexidade de duas
+# O deploy não é blue/green (§22): para um backend, uma VPS e um banco gerenciado, a complexidade de duas
 # pilhas paralelas custaria mais do que os poucos segundos de indisponibilidade que ela evitaria.
 # O app é local-first: durante esses segundos o usuário continua treinando.
 #

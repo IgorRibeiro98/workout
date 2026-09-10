@@ -29,6 +29,22 @@ const booleanFlag = (defaultValue: boolean) =>
  */
 export const DEVELOPMENT_DELETION_HMAC_KEY = 'spark-dev-deletion-hmac-key-not-for-production';
 
+/**
+ * Uma string opcional em que **vazio significa ausente**.
+ *
+ * Ferramentas de infraestrutura representam "não definido" como string vazia: o Compose expande
+ * `${DATABASE_URL_DIRECT:-}` para `""` quando a variável não existe no `.env`, e um `-e VAR=` no
+ * `docker run` faz o mesmo. Um `z.string().min(1).optional()` aceita `undefined` e recusa `""` —
+ * e foi exatamente isso que derrubou a topologia de produção na T18.0.1 (`DATABASE_URL_DIRECT:
+ * Too small`). Aqui, vazio e só-espaços viram `undefined` **antes** da validação, e a variável
+ * segue o caminho de ausente: o fallback documentado, e não uma falha de startup.
+ */
+const optionalString = () =>
+  z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().min(1).optional(),
+  );
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -44,13 +60,11 @@ export const envSchema = z.object({
 
   /**
    * Connection string direta (não-pooled), usada para migrations e administração.
-   * Opcional: quando ausente, faz fallback para DATABASE_URL.
-   * Nunca é logado.
+   *
+   * Opcional: quando ausente — ou vazia, que é como o Compose representa ausência (T18.0.2) —
+   * o backend usa `DATABASE_URL` para tudo. Nunca é logado.
    */
-  DATABASE_URL_DIRECT: z.string().min(1).optional(),
-
-  /** Caminho legado do arquivo de banco (para compatibilidade e derivação de caminhos locais). */
-  DATABASE_PATH: z.string().optional(),
+  DATABASE_URL_DIRECT: optionalString(),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
@@ -278,7 +292,7 @@ export const envSchema = z.object({
    * Raiz do armazenamento de mídia social (T17.9 §22/§26/§27/§28).
    *
    * **Sem default, e opcional aqui de propósito.** Em produção ela é obrigatória e a ausência
-   * derruba o startup (`AppConfig.missingRequirements`), pela mesma razão de `DATABASE_PATH` não
+   * derruba o startup (`AppConfig.missingRequirements`), pela mesma razão de `DATABASE_URL` não
    * ter default: um valor silencioso apontaria para a camada efêmera do container ou para `/tmp`,
    * e a foto de todo mundo sumiria no próximo `docker compose up` — sem erro, sem log, sem
    * ninguém perceber até alguém abrir o Feed.

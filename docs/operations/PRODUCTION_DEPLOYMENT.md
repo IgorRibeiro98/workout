@@ -207,7 +207,7 @@ sudo chown -R spark:spark /opt/spark
 # Compartilhados com o container, pelo grupo — e com setgid, para que o que o container criar
 # herde o grupo em vez do grupo primário de quem criou.
 #
-# `/opt/spark/media` é o volume da T17.9: as fotos dos check-ins vivem nele, fora do SQLite. Ele é
+# `/opt/spark/media` é o volume da T17.9: as fotos dos check-ins vivem nele, fora do banco. Ele é
 # **separado** de `/opt/spark/data` de propósito — o snapshot do banco é uma cópia completa a cada
 # backup, e a mídia é grande, imutável e deduplicada pelo restic. Sem este diretório montado, o
 # backend **não sobe** em produção (`SOCIAL_MEDIA_ROOT`), que é o comportamento desejado: um deploy

@@ -612,11 +612,8 @@ export class SocialGroupService {
           createdAt: now,
         });
       } catch (error) {
-        const code = (error as { code?: unknown }).code;
-        if (
-          code !== '23505' &&
-          (typeof code !== 'string' || !code.startsWith('SQLITE_CONSTRAINT'))
-        ) {
+        // `23505` (unique_violation): o outro lado da corrida compartilhou primeiro.
+        if ((error as { code?: unknown }).code !== '23505') {
           throw error;
         }
         if (!(await this.repository.findShare(groupId, checkInId))) {

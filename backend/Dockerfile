@@ -49,7 +49,10 @@ RUN mkdir -p /media \
 
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
-COPY --chown=node:node migrations ./migrations
+# Só as migrations do PostgreSQL (T18.0.2): `migrations/*.sql` na raiz são a sequência SQLite
+# histórica, mantida para os testes de migração legada, e não têm o que fazer numa imagem cujo
+# runtime é exclusivamente PostgreSQL (`MIGRATIONS_DIRNAME`).
+COPY --chown=node:node migrations/postgres ./migrations/postgres
 COPY --chown=node:node package.json ./
 
 USER node

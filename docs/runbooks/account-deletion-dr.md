@@ -2,7 +2,7 @@
 
 - **Tarefa:** T17.6 (origem) · T17.9 (mídia) · T17.11/T17.12 (Squads e audiências) · **T17.13.1** (durabilidade e comando operacional)
 - **Componente:** `AccountDeletionService` · `account_deletion_tombstones` · `account_deletion_jobs` · `deletion_tombstones.tsv`
-- **Ambiente:** Backend Node.js / NestJS / SQLite / Docker
+- **Ambiente:** Backend Node.js / NestJS / PostgreSQL / Docker
 
 > **Mudou na T17.13.1.** A reconciliação passou a ter um **comando executável**
 > (`dist/cli/reconcile-account-deletions.js`), o `ops/restore.sh --install` o executa sozinho, e o
@@ -68,9 +68,10 @@ reconciliar — e, como a reconciliação falha fechada, toda recuperação vira
 ops/restore.sh --to /tmp/restauracao --install
 ```
 
-O script, nesta ordem: restaura o banco e a mídia, valida `integrity_check`/`foreign_key_check`,
-instala os dois, **une** o ledger do snapshot ao que houver no disco, roda a reconciliação e só
-então declara a restauração completa. Uma falha na reconciliação falha o `--install` inteiro.
+O script, nesta ordem: verifica o dump (`pg_restore --list`), preserva um dump do banco atual,
+restaura o dump no PostgreSQL de `DATABASE_URL` em transação única, instala a mídia, **une** o
+ledger do snapshot ao que houver no disco, roda a reconciliação e só então declara a restauração
+completa. Uma falha na reconciliação falha o `--install` inteiro.
 
 A união (e não substituição) do ledger é deliberada: numa restauração em que a máquina sobreviveu,
 o arquivo local conhece exclusões que o snapshot não conhece. Concatenar é seguro porque o leitor
@@ -81,7 +82,7 @@ consome hashes como conjunto.
 Só é necessário quando o banco foi restaurado por fora do `ops/restore.sh`.
 
 ```bash
-docker run --rm \
+docker run --rm --network host \
   --group-add "$(stat -c %g /opt/spark/data)" \
   -v /opt/spark/data:/data \
   -v /opt/spark/media:/media \
@@ -103,7 +104,7 @@ Saída esperada:
 ```text
 ledger de exclusões: 42 registro(s), 41 conta(s) distinta(s)
 contas reconciliadas (purgadas de novo): 3
-foreign_key_check e integrity_check ok
+integridade referencial e verificação ok
 ```
 
 ### Códigos de saída
@@ -113,7 +114,7 @@ foreign_key_check e integrity_check ok
 | `0` | reconciliação concluída, integridade validada | seguir com o restore |
 | `1` | configuração inválida ou erro inesperado | ler a mensagem; normalmente falta variável de ambiente |
 | `2` | **ledger ausente, ilegível ou malformado** | ver abaixo — não prossiga |
-| `3` | `foreign_key_check`/`integrity_check` falhou depois do purge | o snapshot restaurado não presta; escolher outro |
+| `3` | a verificação de integridade falhou depois do purge | o snapshot restaurado não presta; escolher outro |
 
 ### Ledger ausente ou malformado: falha fechada
 
@@ -124,7 +125,7 @@ ar contas que já tinham sido excluídas.
 Se o comando sair com `2`:
 
 1. procure o ledger em outro backup (`restic` guarda o arquivo dentro do snapshot, ao lado de
-   `spark.db` e `manifest.json`);
+   `spark.dump` e `manifest.json`);
 2. se ele estiver corrompido no meio, **não edite às cegas**: cada linha é um bloqueio de conta, e
    remover uma reativa aquela conta. Recupere a versão íntegra mais recente;
 3. só depois rode a reconciliação de novo.
@@ -167,12 +168,12 @@ exponencial. Uma linha `LEDGER_PENDING` parada por muito tempo aponta problema d
 `FIREBASE_PENDING` parada aponta problema de **credencial ou rede** com o Firebase Admin. `attempts`
 e `last_error` dizem qual dos dois.
 
-O estado sobrevive a restart do processo porque é uma linha do SQLite.
+O estado sobrevive a restart do processo porque é uma linha do banco.
 
 ### 3.2 A mídia da conta excluída (T17.9)
 
 Uma conta tem conteúdo **fora** do banco: as fotos vivem em `/opt/spark/media`, e o
-`ON DELETE CASCADE` do SQLite não alcança o sistema de arquivos.
+`ON DELETE CASCADE` do PostgreSQL não alcança o sistema de arquivos.
 
 A reconciliação cobre isso: para cada conta ressuscitada pelo restore cujo HMAC bate com um
 tombstone, ela lê as chaves de armazenamento **antes** do purge e apaga os arquivos depois do
@@ -228,7 +229,7 @@ rastro de uma conta (um comentário, uma reação, um convite de Squad, um dispo
 `social_profiles` correspondente. Um inventário incompleto deixaria esse rastro de pé.
 
 Uma tabela nova com coluna de uid não passa despercebida: um teste confronta o inventário com o
-schema real do SQLite e reprova até alguém declarar a política daquela coluna.
+schema real do banco e reprova até alguém declarar a política daquela coluna.
 
 ---
 

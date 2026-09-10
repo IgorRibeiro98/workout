@@ -44,7 +44,7 @@ export class SystemClock implements Clock {
  *
  * Interface no ponto de injeção, e não a classe concreta: é o que permite a um teste fixar o
  * instante sem tocar no relógio global do processo — `jest.useFakeTimers()` alcançaria também o
- * `better-sqlite3`, o logger e qualquer `setTimeout` do Nest, e um teste que congela o mundo
+ * o driver `pg`, o logger e qualquer `setTimeout` do Nest, e um teste que congela o mundo
  * inteiro para verificar uma regra de domínio é um teste que quebra por motivos que não têm nada
  * a ver com a regra.
  */

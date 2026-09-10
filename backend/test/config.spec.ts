@@ -29,6 +29,45 @@ describe('AppConfig (bootstrap de configuração)', () => {
     );
   });
 
+  // --- DATABASE_URL_DIRECT (T18.0.2) ---------------------------------------------------------
+  //
+  // O contrato: `DATABASE_URL` obrigatória; `DATABASE_URL_DIRECT` opcional, com fallback para
+  // `DATABASE_URL`. E "opcional" precisa incluir a forma como a infraestrutura representa
+  // ausência: o Compose expande `${DATABASE_URL_DIRECT:-}` para `""`, e foi isso que derrubou a
+  // topologia de produção na T18.0.1 (`DATABASE_URL_DIRECT: Too small`).
+
+  it('DATABASE_URL_DIRECT ausente faz fallback para DATABASE_URL', () => {
+    const config = AppConfig.fromEnv(validEnv);
+    expect(config.databaseUrlDirect).toBe(validEnv.DATABASE_URL);
+  });
+
+  it('DATABASE_URL_DIRECT vazia é tratada como ausente — o backend sobe e usa DATABASE_URL', () => {
+    const config = AppConfig.fromEnv({ ...validEnv, DATABASE_URL_DIRECT: '' });
+    expect(config.databaseUrlDirect).toBe(validEnv.DATABASE_URL);
+  });
+
+  it('DATABASE_URL_DIRECT só com espaços também é ausente', () => {
+    const config = AppConfig.fromEnv({ ...validEnv, DATABASE_URL_DIRECT: '   ' });
+    expect(config.databaseUrlDirect).toBe(validEnv.DATABASE_URL);
+  });
+
+  it('DATABASE_URL_DIRECT válida é preservada para o caminho de migration/admin', () => {
+    const direct = 'postgresql://spark:spark@direct.localhost:5432/spark_dev';
+    const config = AppConfig.fromEnv({ ...validEnv, DATABASE_URL_DIRECT: direct });
+    expect(config.databaseUrlDirect).toBe(direct);
+    expect(config.databaseUrl).toBe(validEnv.DATABASE_URL);
+  });
+
+  it('DATABASE_URL vazia continua sendo erro mesmo com DATABASE_URL_DIRECT válida', () => {
+    expect(() =>
+      AppConfig.fromEnv({
+        ...validEnv,
+        DATABASE_URL: '',
+        DATABASE_URL_DIRECT: 'postgresql://spark:spark@direct.localhost:5432/spark_dev',
+      }),
+    ).toThrow(ConfigValidationError);
+  });
+
   it('falha quando PORT não é uma porta válida', () => {
     expect(() => AppConfig.fromEnv({ ...validEnv, PORT: '70000' })).toThrow(ConfigValidationError);
     expect(() => AppConfig.fromEnv({ ...validEnv, PORT: 'abc' })).toThrow(ConfigValidationError);

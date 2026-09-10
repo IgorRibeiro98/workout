@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
-import { loadMigrations, runMigrations } from '../src/database/migration-runner';
+import { loadMigrations, runMigrations } from './support/legacy-sqlite-migration-runner';
 import {
   account,
   acceptChallenge,

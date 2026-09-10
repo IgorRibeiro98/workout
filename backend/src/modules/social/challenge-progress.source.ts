@@ -53,7 +53,7 @@ import {
  *    e não pode haver — `getSessions()`, `List<RawSyncEntity>` ou qualquer coisa que materialize
  *    uma linha de treino em JavaScript (§79). As duas consultas abaixo selecionam `COUNT(*)`, e
  *    `json_extract` aparece só na cláusula `WHERE`: o conteúdo de nenhuma sessão — carga,
- *    exercício, nota, horário — sai do SQLite;
+ *    exercício, nota, horário — sai do banco;
  * 2. **`SINGLE_AUTHORITY`**. A definição de "treino que conta" não foi escolhida aqui: ela é a do
  *    schema canônico (`workoutSessionSchema` só aceita `status: 'COMPLETED'`), e a de "em que dia
  *    o treino aconteceu" é a do `ConsistencyCalculator`, que agrupa por `startedAt`. O Social não

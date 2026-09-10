@@ -6,6 +6,11 @@
 #                                    ├─ grupo compartilhado ─▶ /data (2770) + service account (640)
 #   container: node (uid 1000)      ─┘
 #
+# Desde a T18.0 o banco não está em `/data`: ele é o PostgreSQL de `DATABASE_URL`. O que continua
+# em `/data` — e continua precisando do modelo de grupo — é o que é arquivo: o ledger de exclusões
+# (`deletion_tombstones.tsv`), que o container escreve e o backup lê. Este teste precisa de um
+# PostgreSQL alcançável em `SPARK_TEST_DATABASE_URL` (o do CI, ou o `docker-compose.yml` local).
+#
 # ## O que este teste existe para impedir
 #
 # A T16.8 documentava `/opt/spark/data` como `1000:1000` e a service account como `spark:spark`
@@ -13,8 +18,9 @@
 # acontece numa VPS recém-criada e **não** acontece numa VPS onde já exista um usuário. Na
 # segunda, uma das duas coisas quebra:
 #
-#   - o backend (uid 1000) não abre `/opt/spark/data` de `spark` (uid 1001), modo 700;
-#   - ou o operador (uid 1001) não lê o `firebase-admin.json` de modo 600 do uid 1000.
+#   - o backend (uid 1000) não lê a service account de `spark` (uid 1001), modo 600, e não
+#     escreve o ledger em `/opt/spark/data`, modo 700;
+#   - ou o operador (uid 1001) não lê o ledger que o container (uid 1000) criou.
 #
 # Nenhuma das duas aparece em revisão de código, e a segunda só aparece na primeira requisição
 # autenticada. Uma configuração que funciona porque dois usuários receberam o mesmo uid não é uma
@@ -29,11 +35,14 @@
 # Nenhuma credencial real: a service account é sintética, gerada aqui, com uma chave RSA
 # descartável. Ela é estruturalmente válida para o Admin SDK e não existe em projeto nenhum.
 #
-# Uso:  ops/tests/permissions.test.sh
+# Uso:  SPARK_IMAGE=... SPARK_TEST_DATABASE_URL=postgresql://... ops/tests/permissions.test.sh
 
 set -euo pipefail
 
 : "${SPARK_IMAGE:?SPARK_IMAGE é obrigatório}"
+# O PostgreSQL do teste. `--network host` nos containers abaixo, para que `127.0.0.1` na URL
+# signifique a máquina que roda o teste — o serviço do CI ou o compose local.
+: "${SPARK_TEST_DATABASE_URL:?SPARK_TEST_DATABASE_URL é obrigatório (PostgreSQL alcançável pela rede do host)}"
 
 # A chave HMAC dos tombstones de exclusão de conta (T17.13.1 §4).
 #
@@ -128,13 +137,15 @@ check "service account é 640" "640" "$MODO_SEGREDO"
 #
 # `REQUIRE_FIREBASE_ADMIN=true`: com a verificação de startup da T16.8.1 §8, uma credencial que o
 # container não conseguisse ler **derrubaria** o processo. Chegar a `/health/ready` prova as duas
-# coisas de uma vez — o banco abre e a service account é legível.
+# coisas de uma vez — o banco responde e a service account é legível pelo grupo.
 echo "[1/4] backend sobe no grupo compartilhado"
 docker run -d --name "${PREFIX}-backend" \
   --group-add "$SHARED_GID" \
-  -p "127.0.0.1:${PORT}:8080" \
+  --network host \
   -v "${VOLUME}:/srv" \
-  -e DATABASE_PATH=/srv/data/spark.db \
+  -e "PORT=${PORT}" \
+  -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
+  -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
@@ -152,7 +163,7 @@ done
 if [ "$pronto" != "sim" ]; then
   docker logs "${PREFIX}-backend" >&2 || true
 fi
-check "backend fica ready (abre o banco e lê a credencial)" "sim" "$pronto"
+check "backend fica ready (alcança o banco e lê a credencial)" "sim" "$pronto"
 
 UID_CONTAINER="$(docker exec "${PREFIX}-backend" id -u 2> /dev/null || echo desconhecido)"
 check "o container não roda como root" "sim" \
@@ -162,33 +173,48 @@ check "o uid do container difere do operador" "sim" \
 
 # --- 2. o operador alcança o que o container escreveu ------------------------------------------
 #
-# É o que `ops/snapshot.sh` e `ops/backup.sh` precisam: ler o arquivo que o container criou e
-# removê-lo do diretório de dados depois de copiá-lo.
+# É o que `ops/backup.sh` precisa: ler o ledger que o container criou em `/data` e copiá-lo para o
+# snapshot. O ledger é criado pelo processo com `O_APPEND` na primeira exclusão de conta; aqui ele
+# é criado **pelo mesmo processo**, do mesmo jeito (`appendFileSync`), sem depender de um fluxo
+# autenticado de exclusão para provar a permissão.
 echo "[2/4] o operador lê e move o que o container criou"
+if [ "$pronto" = "sim" ]; then
+  docker exec "${PREFIX}-backend" node -e "
+    require('node:fs').appendFileSync('/srv/data/deletion_tombstones.tsv', '');
+  " > /dev/null 2>&1 || true
+fi
 OPERADOR_OK="$(docker run --rm --user "${OPERATOR_UID}:${OPERATOR_GID}" --group-add "$SHARED_GID" \
   -v "${VOLUME}:/srv" --entrypoint sh "$SPARK_IMAGE" -c '
     set -e
-    # ler o banco que o container criou
-    head -c 16 /srv/data/spark.db > /dev/null
+    # ler o ledger que o container criou (o grupo vem do setgid do diretório)
+    head -c 16 /srv/data/deletion_tombstones.tsv > /dev/null
     # criar, copiar e remover no diretório de dados — o ciclo do snapshot
     printf "snapshot" > /srv/data/.teste-snapshot
     install -m 600 /srv/data/.teste-snapshot /tmp/recolhido
     rm -f /srv/data/.teste-snapshot
     echo sim
   ' 2> /dev/null || echo nao)"
-check "o operador lê o banco e recolhe um snapshot" "sim" "$OPERADOR_OK"
+check "o operador lê o ledger que o container criou e recolhe um snapshot" "sim" "$OPERADOR_OK"
 
 # --- 3. controle negativo: sem o grupo, não há acesso ------------------------------------------
 #
 # Sem isto, o teste passaria mesmo se as permissões fossem `777` — e provaria apenas que o
-# container existe. É esta verificação que impede a "solução" proibida.
+# container existe. É esta verificação que impede a "solução" proibida. O mesmo container de [1/4],
+# com a mesma credencial obrigatória, **sem** `--group-add`: a service account (`640` no grupo
+# compartilhado, dentro de um diretório `2750`) fica ilegível, e `REQUIRE_FIREBASE_ADMIN=true`
+# transforma isso em falha de startup.
 echo "[3/4] controle negativo: sem o grupo compartilhado, não sobe"
 docker run -d --name "${PREFIX}-sem-grupo" \
+  --network host \
   -v "${VOLUME}:/srv" \
-  -e DATABASE_PATH=/srv/data/spark.db \
+  -e "PORT=$((PORT + 1))" \
+  -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
+  -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
+  -e REQUIRE_FIREBASE_ADMIN=true \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/srv/secrets/firebase-admin.json \
   "$SPARK_IMAGE" > /dev/null 2>&1 || true
 sleep 6
 SEM_GRUPO_RODANDO="$(docker inspect -f '{{.State.Running}}' "${PREFIX}-sem-grupo" 2> /dev/null || echo false)"
@@ -205,8 +231,11 @@ docker run --rm --user 0 -v "${VOLUME}:/srv" --entrypoint chmod "$SPARK_IMAGE" \
 
 docker run -d --name "${PREFIX}-segredo-600" \
   --group-add "$SHARED_GID" \
+  --network host \
   -v "${VOLUME}:/srv" \
-  -e DATABASE_PATH=/srv/data/spark.db \
+  -e "PORT=$((PORT + 2))" \
+  -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
+  -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \

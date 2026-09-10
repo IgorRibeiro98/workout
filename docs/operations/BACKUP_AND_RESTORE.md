@@ -1,11 +1,18 @@
 # Spark — Backup e restauração do servidor
 
-> **Estado:** `IMPLEMENTED` (scripts, agendamento, ensaio) · `MANUAL SETUP REQUIRED` (destino
-> off-site) · `NOT VERIFIED` em produção real — nenhum storage foi contratado por esta tarefa.
+> **Estado:** `IMPLEMENTED` (scripts, agendamento, ensaio; PostgreSQL desde a T18.0.2) ·
+> `MANUAL SETUP REQUIRED` (destino off-site) · `NOT VERIFIED` em produção real — nenhum storage foi
+> contratado, e nenhum PostgreSQL gerenciado foi provisionado por esta tarefa.
 >
-> O fluxo inteiro foi exercitado localmente com Docker e um repositório restic real: snapshot com
-> o banco ativo recebendo escrita → `integrity_check` → envio criptografado → restauração →
-> backend subindo sobre a cópia → `/health/ready`.
+> O fluxo é exercitado no CI (`backend.yml`, job `backup-drill`) contra um PostgreSQL real:
+> `pg_dump` com o banco ativo recebendo escrita → verificação do arquivo → restauração num banco
+> descartável → backend real subindo sobre a cópia → `/health/ready` → mídia legível pelo processo.
+> O envio off-site (restic) continua sem credencial no CI e é validado manualmente.
+>
+> **O que este documento não é:** o desenho definitivo de backup do PostgreSQL gerenciado (PITR,
+> branches do Neon, retenção do provedor). Isso é a T18.3. O que existe aqui é o backup lógico
+> completo que substitui o snapshot do SQLite com as mesmas garantias — e que continua necessário
+> mesmo com PITR do provedor, porque vive **fora** da conta do provedor.
 
 ## Duas coisas diferentes com o mesmo nome
 
@@ -13,47 +20,47 @@
 T16.4  BACKUP DO USUÁRIO          protege contra perder o APARELHO
        Android ──▶ Spark Backend  o dado do usuário passa a existir no servidor
 
-T16.8  BACKUP DO SERVIDOR         protege contra perder a VPS
-       SQLite ──▶ storage off-site o banco do servidor passa a existir fora dela
+T16.8  BACKUP DO SERVIDOR         protege contra perder a VPS (e a conta do provedor do banco)
+       PostgreSQL ──▶ off-site     o banco do servidor passa a existir fora dos dois
 ```
 
 Confundir os dois dá falsa sensação de segurança nos dois sentidos (§48):
 
 - o backup da T16.4 **não** protege contra a perda da VPS. Antes da T16.8, um `docker compose
   down -v` destruía os backups de todo mundo;
-- restaurar o SQLite do servidor **não** restaura o Room de ninguém (§49). Ele recupera os
+- restaurar o banco do servidor **não** restaura o Room de ninguém (§49). Ele recupera os
   snapshots de backup remotos, o estado de sync, o change log, os tombstones e a metadata de uso
   da IA. O aparelho continua sendo a autoridade operacional do treino, e o usuário restaura o
   aparelho dele pelo fluxo da T16.5.
 
 ## Como o snapshot é feito
 
-> **Nota de migração (T18.0/T18.0.1):** O Spark Backend foi migrado para PostgreSQL / Neon.
-> No PostgreSQL, backups lógicos utilizam `pg_dump` com transação consistente snapshot e backups
-> contínuos utilizam streaming/WAL archiving (ou PITR nativo no Neon). O fluxo abaixo registra a
-> fundamentação de consistência e o princípio de que o backup do servidor captura os dados relacionais,
-> os arquivos operacionais/ledgers (`deletion_tombstones.tsv`) e a mídia (`/opt/spark/media`).
-
 ```text
-spark (ativo, transacional) ──pg_dump / snapshot──▶ cópia consistente ──▶ manifesto
+PostgreSQL (ativo, DATABASE_URL) ──pg_dump --format=custom──▶ spark.dump ──pg_restore --list──▶ manifesto
 ```
 
-**`cp spark.db backup.db` com o banco ativo é proibido** (§26). Em WAL, o arquivo principal não
-contém as transações que ainda estão no `-wal`: a cópia abre, parece íntegra e está desatualizada —
-ou rasgada no meio de uma transação, se a cópia levar tempo. É o pior tipo de backup, o que só
-falha no dia em que é usado.
+`ops/snapshot.sh` roda `pg_dump` **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:17-alpine`,
+`--network host`), contra a `DATABASE_URL` que ele lê de `SPARK_DATABASE_URL`, do ambiente ou do
+`.env` do compose — o mesmo arquivo de onde o serviço a lê. A connection string nunca é impressa e
+nunca passa pela linha de comando do host.
 
-`VACUUM INTO` é o mecanismo oficial do SQLite para copiar um banco **em uso**: roda dentro de uma
-transação de leitura, enxerga um ponto único no tempo e escreve um arquivo novo já compactado. Em
-WAL ele **não bloqueia escritores** (§28) — o servidor continua atendendo durante o backup, e isso
-é verificado no smoke local com escrita concorrente.
+**Por que `pg_dump`, e por que o formato custom.** `pg_dump` roda dentro de **uma** transação de
+leitura (`REPEATABLE READ`): ele enxerga um ponto único no tempo, e o servidor continua aceitando
+escrita enquanto ele copia — o mesmo invariante que o `VACUUM INTO` dava no SQLite (§28), agora
+garantido pelo próprio banco. O CI prova isso com um escritor em laço durante o snapshot. O formato
+custom é comprimido, carrega o índice do que contém e é o único que permite `--single-transaction`
+na restauração. `--no-owner --no-privileges`: o dump restaura em um servidor cujo papel tenha outro
+nome (Neon, local, CI) — dono e GRANT são configuração do destino, não conteúdo do backup.
 
-A alternativa considerada foi a Backup API (`db.backup()` do `better-sqlite3`), igualmente correta.
-`VACUUM INTO` venceu por ser uma instrução única e síncrona e por entregar um arquivo menor — o que
-importa quando ele sobe pela rede de uma VPS.
+**O que a verificação do arquivo prova, e o que não prova.** `pg_restore --list` lê o índice do
+arquivo inteiro e falha em arquivo truncado ou corrompido, e o snapshot exige que a entrada
+`schema_migrations` exista — é o que distingue um dump do Spark de qualquer outro arquivo. Ela
+**não** prova que o conteúdo restaura nem que o backend sobe sobre ele: isso é o ensaio de
+restauração, abaixo, que restaura de verdade num banco descartável.
 
-A conexão que gera o snapshot é aberta **somente leitura**: o caminho de backup não consegue
-escrever no banco de produção, nem por um erro futuro.
+**Versão das ferramentas.** A major do `pg_dump` precisa ser **maior ou igual** à do servidor; é
+por isso que a ferramenta roda por imagem fixada, e não pelo pacote do host. Ao subir a major do
+PostgreSQL, suba `SPARK_PG_TOOLS_IMAGE` junto.
 
 ## Off-site e criptografia
 
@@ -79,10 +86,10 @@ A senha do repositório:
 
 | Vai | Não vai |
 | --- | --- |
-| `spark.db` (snapshot consistente e verificado) | Service account do Firebase |
+| `spark.dump` (`pg_dump` consistente, formato custom, verificado) | Service account do Firebase |
 | `$SPARK_MEDIA_DIR` — as fotos dos check-ins (T17.9) | Chave do Gemini |
 | `deletion_tombstones.tsv` — o ledger anti-ressurreição (T17.13.1) | `ACCOUNT_DELETION_HMAC_KEY` |
-| `manifest.json`: versão do schema, imagem do backend, tamanho, horário, host, contagem e bytes de mídia, linhas do ledger | Senha do restic, chaves TLS, chave SSH |
+| `manifest.json`: versão do schema, engine e formato do dump, imagem do backend, tamanho, horário, host, contagem e bytes de mídia, linhas do ledger | Senha do restic, chaves TLS, chave SSH, `DATABASE_URL` |
 
 Segredo nenhum entra no banco (§35) e, portanto, nenhum entra no backup. Eles vivem fora dele por
 construção: a credencial do Admin é um **caminho** montado somente-leitura, e a do Gemini é
@@ -90,17 +97,17 @@ variável de runtime a partir de um arquivo `600`.
 
 ### A mídia entra desde a T17.9
 
-Desde a T17.9 o Feed tem fotos, e elas **não** estão no SQLite: o banco guarda metadata
-(`social_checkin_media`) e os bytes vivem em `/opt/spark/media`. Um backup que copiasse só
-`spark.db` restauraria um Feed que aponta para arquivos que não existem — íntegro pelo
-`integrity_check`, e quebrado na tela de quem abrisse.
+Desde a T17.9 o Feed tem fotos, e elas **não** estão no banco: o PostgreSQL guarda metadata
+(`social_checkin_media`) e os bytes vivem em `/opt/spark/media`. Um backup que levasse só o dump
+restauraria um Feed que aponta para arquivos que não existem — íntegro na restauração, e quebrado
+na tela de quem abrisse.
 
 O diretório entra como **segundo caminho do mesmo `restic backup`**:
 
 ```text
-spark.db ──VACUUM INTO──▶ snapshot ──integrity_check──▶ manifesto ──┐
-                                                                     ├──▶ restic ──▶ off-site
-/opt/spark/media ───────────────────────────────────────────────────┘
+PostgreSQL ──pg_dump──▶ spark.dump ──pg_restore --list──▶ manifesto ──┐
+deletion_tombstones.tsv ────────────────────────────────────────────────┼──▶ restic ──▶ off-site
+/opt/spark/media ──────────────────────────────────────────────────────┘
 ```
 
 Não há cópia extra em disco. O restic lê o diretório de origem direto e deduplica entre snapshots —
@@ -114,8 +121,8 @@ registra um aviso e segue com o banco.
 
 `deletion_tombstones.tsv` é o que impede uma conta excluída de voltar à vida quando um backup
 anterior à exclusão é restaurado — ele é a única memória da exclusão que sobrevive à substituição do
-arquivo do banco. Ele vive **ao lado** de `spark.db`, em `$SPARK_DATA_DIR`, e por isso não estava
-sendo capturado: o snapshot leva só o `VACUUM INTO` do banco.
+conteúdo do banco. Ele vive **fora** do banco, em `$SPARK_DATA_DIR` (desde a T18.0, é o único
+arquivo lá), e por isso não estava sendo capturado até a T17.13.1: o snapshot levava só o banco.
 
 Uma perda total da VPS deixava o operador com o banco e a mídia de volta e **nenhum** registro de
 quem já tinha sido excluído. E como a reconciliação pós-restore falha fechada quando o ledger não
@@ -182,7 +189,7 @@ A `message` carrega a etapa, de um vocabulário fechado:
 | --- | --- |
 | `config` | Credencial do storage (`RESTIC_REPOSITORY`, senha) |
 | `workdir` | Criando a área de trabalho em `/opt/spark/backups` |
-| `snapshot` | `VACUUM INTO` + `integrity_check` + `foreign_key_check` |
+| `snapshot` | `pg_dump` + `pg_restore --list` (ou `DATABASE_URL` inalcançável) |
 | `manifest` | Lendo a versão do schema e a imagem no ar |
 | `offsite-upload` | `restic backup` |
 | `offsite-retention` | `restic forget --prune` |
@@ -197,25 +204,30 @@ de 36 h significa pelo menos uma execução perdida sem ninguém notar.
 ## Ensaio de restauração — obrigatório
 
 ```bash
-ops/verify-backup.sh                       # do off-site
-ops/verify-backup.sh --from-file /caminho/spark.db   # local, sem credencial de storage
+export SPARK_DRILL_DATABASE_URL=postgresql://.../spark_drill   # um banco DESCARTÁVEL, nunca produção
+ops/verify-backup.sh                                            # do off-site
+ops/verify-backup.sh --from-file /caminho/spark.dump            # local, sem credencial de storage
 ```
 
 ```text
-backup off-site ──▶ restauração ──▶ integrity_check + foreign_key_check
-                ──▶ backend real sobe sobre a cópia ──▶ /health/ready
+backup off-site ──▶ restauração ──▶ pg_restore --list
+                ──▶ pg_restore --single-transaction num banco DESCARTÁVEL
+                ──▶ backend real sobe sobre ele ──▶ /health/ready
                 ──▶ /v1/backups e /v1/sync/pull respondem 401 (nascem fechadas)
+                ──▶ a mídia restaurada é lida byte a byte pelo processo
 ```
 
 **"O job saiu com código 0" e "o arquivo apareceu no storage" não são validação** (§43/§112). O
-ensaio prova quatro coisas de uma vez: o repositório abre com a senha que o operador tem, o banco
-restaurado é íntegro, o schema está aplicado, e o processo de produção sobe sobre ele.
+ensaio prova quatro coisas de uma vez: o repositório abre com a senha que o operador tem, o dump
+restaura, o schema está aplicado, e o processo de produção sobe sobre ele.
 
-Ele não toca em produção em momento nenhum: sobe um container separado, em porta separada, sobre
-uma cópia — e com o **mesmo modelo de permissão da produção** (diretório `2770`, arquivo `660`,
-container no grupo por `--group-add`). Até a T16.8.1 o ensaio usava `chmod 777`, o que além de ser
-o que a T16.8 proíbe tornava o ensaio incapaz de detectar o problema que ele deveria detectar: com
-`777`, qualquer combinação de uid passa, inclusive as que a produção real não teria.
+Ele não toca em produção em momento nenhum: o dump é restaurado em `SPARK_DRILL_DATABASE_URL` — um
+banco separado que o operador cria para isto (`CREATE DATABASE spark_drill`, ou um branch no Neon)
+— e o script **recusa rodar** se essa URL for a de produção. O backend do ensaio sobe em porta
+separada, sobre a mídia restaurada com o **mesmo modelo de permissão da produção** (diretório
+`2770`, arquivo `660`, container no grupo por `--group-add`). Até a T16.8.1 o ensaio usava
+`chmod 777`, o que além de ser o que a T16.8 proíbe tornava o ensaio incapaz de detectar o problema
+que ele deveria detectar: com `777`, qualquer combinação de uid passa.
 
 **Faça o ensaio depois do primeiro backup e sempre que a senha, o destino ou o schema mudarem.**
 
@@ -231,8 +243,16 @@ ops/check-health.sh                                     # health interno: não d
 curl -s https://api.<dominio>/health/ready              # e o público, quando houver domínio
 ```
 
+`--install` restaura o dump **no PostgreSQL de `DATABASE_URL`** com `pg_restore --clean --if-exists
+--single-transaction --exit-on-error`: ou o dump inteiro entra, ou nada muda. Antes de tocar no
+banco ele tira um dump do estado atual (`$SPARK_STAGING_DIR/pre-restore-<timestamp>.dump`) — é o
+equivalente do `spark.db.pre-restore-*` de antes, e removê-lo é decisão humana depois da validação.
+Objetos que existam no banco e não no dump (uma migration mais nova que a do snapshot) permanecem;
+o runner de migrations, no próximo startup, parte da `schema_migrations` restaurada e reaplica o
+que faltar.
+
 **O Feed só está recuperado quando os dois voltaram.** `--install` instala o banco **e** a mídia:
-restaurar só o SQLite deixa `/health/ready` respondendo e cada card com foto sem imagem. A mídia
+restaurar só o banco deixa `/health/ready` respondendo e cada card com foto sem imagem. A mídia
 anterior é preservada em `/opt/spark/media.pre-restore-<timestamp>` pelo mesmo motivo do banco — se
 a restauração for a errada, o que existia ainda está lá.
 
@@ -256,22 +276,21 @@ Duas consequências operacionais:
 
 Ver [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
-`--install` grava o banco com modo `660` no **grupo compartilhado** do diretório de dados, e não
-com `chown 1000:1000` — que era o que ele fazia até a T16.8.1 e que estava errado duas vezes:
-`chown` exige root (o comando falhava em silêncio para o usuário `spark`, deixando só um aviso) e o
-número 1000 presumia que o uid do operador e o do container coincidissem. O resultado era um banco
-instalado que o backend não conseguia abrir — descoberto no pior momento possível, que é durante
-uma recuperação. Ver [PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md), "Usuários, grupos e
+A mídia e o ledger são instalados com modo `660`/`640` no **grupo compartilhado** do diretório de
+dados, e não com `chown 1000:1000` — que era o que o script fazia até a T16.8.1 e que estava errado
+duas vezes: `chown` exige root e o número 1000 presumia que o uid do operador e o do container
+coincidissem. Ver [PRODUCTION_DEPLOYMENT.md](./PRODUCTION_DEPLOYMENT.md), "Usuários, grupos e
 permissões".
 
 O que `restore.sh` **nunca** faz (§130):
 
-- não apaga o banco atual — move para `spark.db.pre-restore-<timestamp>`. Se a restauração for a
-  errada, o estado anterior ainda está lá;
+- não descarta o estado atual do banco sem preservá-lo — tira `pre-restore-<timestamp>.dump`
+  antes. Se a restauração for a errada, o estado anterior ainda está lá;
 - não apaga a mídia atual — move para `media.pre-restore-<timestamp>`, pelo mesmo motivo;
-- não instala sobre um backend em execução — dois processos escrevendo no mesmo arquivo durante a
-  troca é como se corrompe um SQLite de propósito;
-- não instala sem `integrity_check` passar.
+- não instala sobre um backend em execução — o processo tem conexões abertas e migrations que
+  rodam no startup, e o `pg_restore` precisa ser o único escritor;
+- não deixa restauração pela metade — `--single-transaction --exit-on-error`;
+- não instala sem `pg_restore --list` passar e sem `schema_migrations` no dump.
 
 Listar o que existe no repositório:
 
@@ -281,10 +300,11 @@ restic snapshots --host spark --tag spark-db
 
 ## Snapshot do provedor não substitui isto
 
-Um snapshot da VPS pelo painel do provedor é uma camada adicional útil e barata — e **não** é uma
-estratégia de recuperação sozinho (§38): ele vive na conta do mesmo provedor, é um retrato do disco
-inteiro (não um backup lógico verificado do banco), e não passa por `integrity_check`. Use os dois;
-não troque um pelo outro.
+Um snapshot da VPS pelo painel do provedor — ou o PITR/branch do provedor do PostgreSQL (Neon) — é
+uma camada adicional útil e barata, e **não** é uma estratégia de recuperação sozinho (§38): vive
+na conta do mesmo provedor, e uma conta suspensa, uma credencial vazada ou um erro do provedor leva
+o banco e a "cópia" juntos. O `pg_dump` off-site é o que existe **fora** dessa conta. Use os dois;
+não troque um pelo outro. A política definitiva com PITR é a T18.3.
 
 ## RPO e RTO
 

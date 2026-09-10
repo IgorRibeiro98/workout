@@ -117,7 +117,10 @@ describe('Retenção de backups', () => {
 
   it('a configuração é validada no startup, como todo o resto', () => {
     expect(() =>
-      AppConfig.fromEnv({ DATABASE_PATH: ':memory:', BACKUP_RETENTION_COUNT: 'muitos' }),
+      AppConfig.fromEnv({
+        DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+        BACKUP_RETENTION_COUNT: 'muitos',
+      }),
     ).toThrow();
   });
 });

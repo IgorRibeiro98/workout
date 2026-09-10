@@ -13,7 +13,7 @@ import type { Clock } from '../../src/common/clock';
  *
  * Deliberadamente pobre: um instante e um `set`. Sem `tick()` automático, sem agendamento e sem
  * interceptar `setTimeout` — congelar o mundo inteiro (`jest.useFakeTimers()`) alcançaria o
- * `better-sqlite3`, o logger e o Nest, e um teste que quebra por causa disso quebra por um motivo
+ * o driver `pg`, o logger e o Nest, e um teste que quebra por causa disso quebra por um motivo
  * que não tem nada a ver com a regra que ele afirma.
  */
 export class FakeClock implements Clock {

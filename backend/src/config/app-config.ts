@@ -212,10 +212,10 @@ export class AppConfig {
    * Onde os arquivos de mídia social vivem (§22/§26/§28).
    *
    * Em produção o valor **precisa** vir do ambiente, e `missingRequirements()` derruba o startup
-   * quando ele não vem. Fora de produção, o padrão é um diretório ao lado do banco: teste e
+   * quando ele não vem. Fora de produção, o padrão é um diretório local: teste e
    * desenvolvimento precisam funcionar sem configuração nenhuma, e ali o armazenamento efêmero é
-   * exatamente o que se quer. `:memory:` não tem diretório — nesse caso o fallback é um diretório
-   * de trabalho local, que é onde o teste já escreve.
+   * exatamente o que se quer: o fallback é um diretório de trabalho local, que é onde o teste já
+   * escreve.
    */
   get socialMediaRoot(): string {
     const configured = this.env.SOCIAL_MEDIA_ROOT;
@@ -266,10 +266,10 @@ export class AppConfig {
     }
     // T17.9 §28 — produção não pode cair num diretório derivado para guardar mídia.
     //
-    // O derivado é seguro em desenvolvimento e desastroso em produção: ele acompanharia
-    // `DATABASE_PATH`, e um deploy que montasse o banco sem montar a mídia perderia todas as
-    // fotos na primeira recriação de container — em silêncio, porque escrever num diretório
-    // efêmero funciona perfeitamente até alguém reiniciar. Falhar no startup é visível.
+    // O derivado é seguro em desenvolvimento e desastroso em produção: ele cairia no diretório
+    // de trabalho do container, e um deploy que não montasse a mídia perderia todas as fotos na
+    // primeira recriação de container — em silêncio, porque escrever num diretório efêmero
+    // funciona perfeitamente até alguém reiniciar. Falhar no startup é visível.
     if (this.isProduction && !this.socialMediaRootIsExplicit) {
       missing.push(
         'NODE_ENV=production exige SOCIAL_MEDIA_ROOT apontando para um volume persistente',

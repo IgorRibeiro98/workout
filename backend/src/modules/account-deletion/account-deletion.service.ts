@@ -16,7 +16,7 @@ export class AccountDeletionService {
     @Inject(AUTH_TOKEN_VERIFIER) private readonly authVerifier: AuthTokenVerifier,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     @Inject(CLOCK) private readonly clock: Clock,
-    // T17.9 §114 — o purge do SQLite não alcança o sistema de arquivos. As fotos da conta
+    // T17.9 §114 — o purge do banco não alcança o sistema de arquivos. As fotos da conta
     // excluída precisam sair do disco, e é este colaborador que faz isso.
     @Inject(SOCIAL_MEDIA_STORE) private readonly mediaStore: SocialMediaStore,
     // T17.13.1 §8 — o registro anti-ressurreição deixou de ser um `appendFileSync` best-effort e

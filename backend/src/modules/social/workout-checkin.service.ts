@@ -455,8 +455,8 @@ export class WorkoutCheckInService {
       await this.repository.create(item);
       return item;
     } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      if (code !== '23505' && (typeof code !== 'string' || !code.startsWith('SQLITE_CONSTRAINT'))) {
+      // `23505` (unique_violation): o outro lado da corrida publicou primeiro.
+      if ((error as { code?: unknown }).code !== '23505') {
         throw error;
       }
 

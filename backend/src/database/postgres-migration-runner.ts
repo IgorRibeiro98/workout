@@ -93,7 +93,7 @@ export async function runMigrations(
       firstConfiguredSchema && firstConfiguredSchema !== '$user' ? firstConfiguredSchema : 'public';
 
     if (currentSchema !== 'public') {
-      await client.query(`CREATE SCHEMA IF NOT EXISTS "${currentSchema}"`);
+      await createSchemaIfMissing(client, currentSchema);
       await client.query(`SET search_path TO "${currentSchema}"`);
     }
 
@@ -181,6 +181,26 @@ export async function runMigrations(
   } finally {
     if (ownsClient) {
       client.release();
+    }
+  }
+}
+
+/**
+ * `CREATE SCHEMA IF NOT EXISTS`, tolerante à corrida entre dois runners (T18.0.2).
+ *
+ * O `IF NOT EXISTS` do PostgreSQL não é atômico entre sessões: duas conexões que não veem o schema
+ * e o criam ao mesmo tempo fazem uma delas falhar com `duplicate_schema` (42P06) ou com violação
+ * de unicidade em `pg_namespace` (23505). Isso acontece **antes** do advisory lock — é ele que
+ * serializa o resto, mas ele mora dentro do schema que ainda não existe. O erro é o único sinal de
+ * que o outro runner venceu, e o resultado desejado (o schema existe) já foi alcançado.
+ */
+async function createSchemaIfMissing(client: PoolClient, schema: string): Promise<void> {
+  try {
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code !== '42P06' && code !== '23505') {
+      throw error;
     }
   }
 }

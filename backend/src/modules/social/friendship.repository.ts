@@ -182,6 +182,27 @@ export class FriendshipRepository {
     return row ? toRequest(row) : null;
   }
 
+  // ------------------------------------------------------------------------------- protocolo
+
+  /**
+   * Serializa **toda** mudança de relação de um par de contas (T18.0.1, fechado na T18.0.2).
+   *
+   * O lock é transacional (`pg_advisory_xact_lock`) sobre o par canônico `(min(uid), max(uid))`:
+   * A→B e B→A disputam o mesmo lock, e ele solta sozinho no COMMIT/ROLLBACK. Todo caminho que
+   * altera `friend_requests` ou `friendships` para um par — enviar, aceitar, rejeitar, cancelar —
+   * passa por aqui, e **relê o estado depois** de adquirir o lock. Uma decisão tomada sobre uma
+   * leitura anterior ao lock é uma decisão sobre um estado que outra transação pode já ter
+   * mudado — foi assim que "rejeitar B→A" e "enviar A→B" conseguiam terminar com o pedido
+   * `REJECTED` e a amizade criada.
+   */
+  private async lockPair(client: PoolClient, uidA: string, uidB: string): Promise<void> {
+    const [uidMin, uidMax] = canonicalPair(uidA, uidB);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+      uidMin,
+      uidMax,
+    ]);
+  }
+
   // ------------------------------------------------------------------------------- envio
 
   /**
@@ -194,11 +215,7 @@ export class FriendshipRepository {
     readonly now: number;
   }): Promise<SendRequestOutcome> {
     return await this.db.transaction(async (client): Promise<SendRequestOutcome> => {
-      const [uidMin, uidMax] = canonicalPair(input.requesterUid, input.recipientUid);
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-        uidMin,
-        uidMax,
-      ]);
+      await this.lockPair(client, input.requesterUid, input.recipientUid);
 
       if (await this.areFriends(input.requesterUid, input.recipientUid, client)) {
         return { kind: 'ALREADY_FRIENDS' };
@@ -215,11 +232,19 @@ export class FriendshipRepository {
 
       const inverse = await this.findPendingRequest(input.recipientUid, input.requesterUid, client);
       if (inverse) {
-        await client.query(
+        // O `UPDATE` condicional é a transição que **justifica** criar a amizade. Ele foi lido
+        // como `PENDING` sob o lock, então 0 linhas aqui é um invariante quebrado — e a resposta
+        // é abortar a transação, nunca seguir criando a amizade de um pedido que não foi aceito.
+        const accepted = await client.query(
           `UPDATE friend_requests SET status = 'ACCEPTED', updated_at = $1
            WHERE request_id = $2 AND status = 'PENDING'`,
           [input.now, inverse.requestId],
         );
+        if ((accepted.rowCount ?? 0) !== 1) {
+          throw new Error(
+            `friend_requests ${inverse.requestId} deixou de ser PENDING sob o lock do par; amizade não criada`,
+          );
+        }
         await this.insertFriendship(input.requesterUid, input.recipientUid, input.now, client);
 
         if (this.notificationService) {
@@ -274,16 +299,16 @@ export class FriendshipRepository {
    */
   async acceptRequest(requestId: string, now: number): Promise<AcceptOutcome> {
     return await this.db.transaction(async (client): Promise<AcceptOutcome> => {
-      const request = await this.findRequestById(requestId, client);
-      if (!request) {
+      // A primeira leitura só serve para descobrir **qual par** travar. Tudo o que decide o
+      // desfecho é relido depois do lock.
+      const located = await this.findRequestById(requestId, client);
+      if (!located) {
         return { kind: 'NOT_PENDING' };
       }
 
-      const [uidMin, uidMax] = canonicalPair(request.requesterUid, request.recipientUid);
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-        uidMin,
-        uidMax,
-      ]);
+      await this.lockPair(client, located.requesterUid, located.recipientUid);
+
+      const request = (await this.findRequestById(requestId, client)) ?? located;
 
       const res = await client.query(
         `UPDATE friend_requests SET status = 'ACCEPTED', updated_at = $1
@@ -320,19 +345,33 @@ export class FriendshipRepository {
   }
 
   /**
-   * Muda o status de um pedido pendente. `true` quando **esta** chamada foi a que mudou.
+   * Muda o status de um pedido pendente (rejeitar/cancelar). `true` quando **esta** chamada foi a
+   * que mudou.
+   *
+   * Sob o lock do par, como `sendRequest` e `acceptRequest`: rejeitar B→A concorrendo com enviar
+   * A→B precisa serializar, senão o envio lê o pedido inverso como `PENDING`, o rejeita-se no
+   * meio, e a amizade nasce de um pedido `REJECTED`.
    */
   async resolveRequest(
     requestId: string,
     status: FriendRequestStatus,
     now: number,
   ): Promise<boolean> {
-    const res = await this.db.query(
-      `UPDATE friend_requests SET status = $1, updated_at = $2
-       WHERE request_id = $3 AND status = 'PENDING'`,
-      [status, now, requestId],
-    );
-    return (res.rowCount ?? 0) > 0;
+    return await this.db.transaction(async (client): Promise<boolean> => {
+      const located = await this.findRequestById(requestId, client);
+      if (!located) {
+        return false;
+      }
+
+      await this.lockPair(client, located.requesterUid, located.recipientUid);
+
+      const res = await client.query(
+        `UPDATE friend_requests SET status = $1, updated_at = $2
+         WHERE request_id = $3 AND status = 'PENDING'`,
+        [status, now, requestId],
+      );
+      return (res.rowCount ?? 0) > 0;
+    });
   }
 
   // ------------------------------------------------------------------------------- amizade

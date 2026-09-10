@@ -155,15 +155,21 @@ docker compose -f docker-compose.prod.yml stop backend
 # 2. Verifique conectividade com a URL do banco
 docker compose -f docker-compose.prod.yml logs --tail 50 backend | grep -i -E "database|error|timeout"
 
-# 3. Em caso de restore de desastre
+# 3. O operador alcança o banco com as ferramentas do backup? (mesmo caminho do pg_dump)
+ops/check-health.sh                                   # "banco: ... alcançável pelas ferramentas do operador"
+
+# 4. Em caso de restore de desastre
 ops/restore.sh --to /tmp/recuperacao                  # verifica sem tocar em produção
-ops/restore.sh --to /tmp/recuperacao --install
+ops/restore.sh --to /tmp/recuperacao --install        # preserva pre-restore-*.dump, pg_restore em transação única
 docker compose -f docker-compose.prod.yml up -d
 curl -s https://api.<dominio>/health/ready
 ```
 
-**Nunca** `rm spark.db` (§130). O arquivo corrompido pode conter páginas legíveis que o backup não
-tem, e apagá-lo transforma um incidente recuperável em perda definitiva.
+**Nunca** apague o banco nem o dump `pre-restore-*.dump` para "resolver" (§130). Um banco que o
+provedor reporta como corrompido pode conter linhas que o último backup não tem; preservar é o que
+transforma um incidente recuperável em recuperado, e apagar é o que o transforma em perda
+definitiva. Se o provedor oferece PITR/branch, use-o **antes** de restaurar o dump — ele é mais
+recente. A política definitiva com PITR é a T18.3.
 
 Aparelhos com cursor à frente do change log restaurado recebem `CURSOR_EXPIRED` e pedem rebaseline
 explícito — é o desenho da T16.7 funcionando, não um efeito colateral.
@@ -227,7 +233,9 @@ cat /opt/spark/state/backup-status.json
 | Repositório inacessível | Rede, endpoint, bucket removido |
 | Disco cheio no staging | `df -h /opt/spark/backups` |
 | Outro backup em andamento | A mensagem do `flock` diz isso; não é erro se foi só uma corrida |
-| `integrity_check` falhou no snapshot | **Isto é corrupção do banco** — vá para "banco corrompido" |
+| `pg_dump` falhou ao conectar | `DATABASE_URL` inalcançável pelo operador — `ops/check-health.sh` acusa antes do backup |
+| `pg_restore --list` falhou no snapshot | O arquivo saiu truncado/corrompido: disco do staging, ou `pg_dump` interrompido |
+| `o dump não contém schema_migrations` | `DATABASE_URL` aponta para um banco que não é o do Spark |
 
 **Rodar manualmente** (a saída real do restic aparece em `stderr`):
 
@@ -247,7 +255,7 @@ direto à causa:
 | --- | --- |
 | `falha na etapa 'config'` | Credencial do storage ausente (`RESTIC_REPOSITORY`/senha) |
 | `falha na etapa 'workdir'` | Não conseguiu escrever em `/opt/spark/backups` — quase sempre disco |
-| `falha na etapa 'snapshot'` | `pg_dump`/snapshot — falha na extração ou integridade |
+| `falha na etapa 'snapshot'` | `pg_dump` não conectou/não terminou, ou o arquivo não passou em `pg_restore --list` |
 | `falha na etapa 'offsite-upload'` | O restic recusou o envio; o motivo dele está no journal |
 | `falha na etapa 'offsite-retention'` | O snapshot subiu, mas o `forget --prune` falhou: o repositório está crescendo sem limite |
 

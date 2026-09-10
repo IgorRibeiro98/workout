@@ -20,6 +20,24 @@ import {
   type Migration,
 } from './postgres-migration-runner';
 
+/**
+ * O banco não está disponível para esta chamada: pool inexistente, encerrado ou encerrando.
+ *
+ * Tipo próprio para que quem precise distinguir "sem banco" de "erro do SQL" consiga — o guard de
+ * autenticação e o readiness são os dois lugares que se importam.
+ */
+export class PostgresUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PostgresUnavailableError';
+  }
+}
+
+/** `pg` marca o pool como `ending` assim que `end()` começa; o campo não é público na tipagem. */
+function isEnding(pool: Pool): boolean {
+  return Boolean((pool as unknown as { ending?: boolean }).ending);
+}
+
 // Configura o parser do driver pg para retornar BIGINT (INT8) como número JavaScript.
 // No Spark Backend, timestamps em milissegundos e server_sequence estão bem dentro de Number.MAX_SAFE_INTEGER.
 types.setTypeParser(types.builtins.INT8, (val: string) => Number.parseInt(val, 10));
@@ -29,6 +47,8 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   private poolInstance?: Pool;
   private directPoolInstance?: Pool;
   private migrations: Migration[] = [];
+  /** `true` depois de `close()`: distingue "nunca abriu" de "já fechou" na mensagem de erro. */
+  private closed = false;
 
   constructor(
     @Inject(APP_CONFIG) private readonly config: AppConfig,
@@ -80,6 +100,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
     });
 
     this.poolInstance = pool;
+    this.closed = false;
 
     // Se DATABASE_URL_DIRECT foi configurada diferente da pooled, cria pool dedicado para migrations
     let migrationPool = pool;
@@ -117,33 +138,51 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   }
 
   get pool(): Pool {
+    return this.requireOpenPool();
+  }
+
+  get isOpen(): boolean {
+    return this.poolInstance !== undefined && !isEnding(this.poolInstance);
+  }
+
+  /**
+   * O pool, ou um erro explícito (T18.0.2).
+   *
+   * "Pool não inicializado", "pool encerrado" e "pool encerrando" são **indisponibilidade de
+   * infraestrutura**, e precisam falhar de forma visível. A versão anterior de `query()` devolvia
+   * `{ rows: [], rowCount: 0 }` nesses casos — o que misturava dois estados que nenhum repositório
+   * consegue distinguir depois: "a consulta rodou e não achou nada" e "não havia banco". Um
+   * `findById` que devolve `null` porque o pool fechou vira `NOT_FOUND` para o cliente; um guard
+   * que lê tombstones vira "conta não excluída". Nenhum dos dois é aceitável, e `transaction()`
+   * já lançava — a semântica agora é a mesma nos dois caminhos.
+   */
+  private requireOpenPool(): Pool {
     if (!this.poolInstance) {
-      throw new Error('PostgreSQL não foi inicializado.');
+      throw new PostgresUnavailableError(
+        this.closed ? 'o pool do PostgreSQL já foi encerrado.' : 'PostgreSQL não foi inicializado.',
+      );
+    }
+    if (isEnding(this.poolInstance)) {
+      throw new PostgresUnavailableError('o pool do PostgreSQL está encerrando.');
     }
     return this.poolInstance;
   }
 
-  get isOpen(): boolean {
-    return (
-      this.poolInstance !== undefined &&
-      !(this.poolInstance as unknown as { ending?: boolean }).ending
-    );
-  }
-
   /**
    * Executa uma query SQL com parâmetros no pool.
+   *
+   * Lança `PostgresUnavailableError` se o pool não existe ou está encerrando — nunca devolve um
+   * resultado vazio sintético.
    */
   async query<R extends QueryResultRow = QueryResultRow, I extends unknown[] = unknown[]>(
     sql: string,
     params?: I,
   ): Promise<QueryResult<R>> {
-    if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
-      return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as QueryResult<R>;
-    }
+    const pool = this.requireOpenPool();
     if (params !== undefined) {
-      return this.poolInstance.query<R>(sql, params);
+      return pool.query<R>(sql, params);
     }
-    return this.poolInstance.query<R>(sql);
+    return pool.query<R>(sql);
   }
 
   /**
@@ -151,10 +190,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
    * Faz ROLLBACK automático em caso de erro e libera o client de volta ao pool.
    */
   async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
-    if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
-      throw new Error('PostgreSQL pool is closed or ending.');
-    }
-    const client = await this.pool.connect();
+    const client = await this.requireOpenPool().connect();
     try {
       await client.query('BEGIN');
       const result = await work(client);
@@ -172,20 +208,23 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
     return this.migrations.map((migration) => migration.version);
   }
 
+  /** As versões registradas em `schema_migrations`. Lança com o pool indisponível, como `query()`. */
   async appliedVersions(): Promise<number[]> {
-    if (!this.poolInstance) return [];
-    return appliedVersions(this.poolInstance);
+    return appliedVersions(this.requireOpenPool());
   }
 
   /**
    * Verificação de saúde usada pelo readiness probe.
+   *
+   * É o **único** lugar em que indisponibilidade vira valor em vez de erro: `reachable: false` é
+   * exatamente a resposta que o readiness existe para dar.
    */
   async checkHealth(): Promise<{ reachable: boolean; migrationsUpToDate: boolean }> {
     try {
-      if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
+      if (!this.isOpen) {
         return { reachable: false, migrationsUpToDate: false };
       }
-      await this.poolInstance.query('SELECT 1');
+      await this.requireOpenPool().query('SELECT 1');
       const expected = this.expectedVersions();
       const applied = new Set(await this.appliedVersions());
       return {
@@ -198,17 +237,15 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   }
 
   async close(): Promise<void> {
-    if (
-      this.directPoolInstance &&
-      !(this.directPoolInstance as unknown as { ending?: boolean }).ending
-    ) {
+    if (this.directPoolInstance && !isEnding(this.directPoolInstance)) {
       await this.directPoolInstance.end().catch(() => undefined);
       this.directPoolInstance = undefined;
     }
-    if (this.poolInstance && !(this.poolInstance as unknown as { ending?: boolean }).ending) {
+    if (this.poolInstance && !isEnding(this.poolInstance)) {
       await this.poolInstance.end().catch(() => undefined);
       this.poolInstance = undefined;
     }
+    this.closed = true;
   }
 
   async onApplicationShutdown(): Promise<void> {

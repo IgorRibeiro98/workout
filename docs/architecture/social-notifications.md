@@ -31,7 +31,7 @@
 
 4. **Desacoplamento transacional:**
    - Falhas no envio de notificações para a infraestrutura do FCM ou limitações de quota nunca revertem, abortam ou bloqueiam transações de negócios (ex.: envio de pedido de amizade, aceite de amizade, criação de desafio ou encerramento).
-   - O enfileiramento de eventos utiliza o padrão **Transactional Outbox**, garantindo atomicidade com a mutação de banco de dados SQLite do backend.
+   - O enfileiramento de eventos utiliza o padrão **Transactional Outbox**, garantindo atomicidade com a mutação no banco de dados do backend (PostgreSQL).
 
 5. **Privacidade e Governança dos Tokens:**
    - Tokens FCM são credenciais de infraestrutura efêmeras; nunca são expostos em endpoints de leitura pública ou privada, e nunca são logados em texto claro.

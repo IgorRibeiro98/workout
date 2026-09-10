@@ -115,7 +115,7 @@ X sobre o mesmo check-in.
 A forma óbvia não funciona:
 
 ```sql
--- ERRADO: no SQLite cada NULL é distinto de qualquer outro numa UNIQUE, então duas reações
+-- ERRADO: em SQL cada NULL é distinto de qualquer outro numa UNIQUE, então duas reações
 -- FRIEND da mesma pessoa no mesmo post (group_id IS NULL nas duas) conviveriam sem conflito.
 UNIQUE (checkin_id, reactor_uid, group_id)
 ```
@@ -136,7 +136,7 @@ Dentro de `FRIEND`, `group_id` não entra na comparação. Dentro de `GROUP`, el
 ### Migration
 
 `0020_social_interaction_audience.sql`, aditiva e não destrutiva. As duas tabelas são reconstruídas
-no rebuild de 12 passos que o SQLite exige (a de reações precisava perder a `PRIMARY KEY` antiga, e
+no rebuild de 12 passos que o SQLite da época exigia (a de reações precisava perder a `PRIMARY KEY` antiga, e
 a de comentários precisava de um `CHECK` que compara duas colunas — nenhum dos dois é possível com
 `ALTER TABLE`). Todo o histórico é copiado com `audience_type = 'FRIEND'` e `group_id = NULL`: antes
 desta fase, toda interação nascia de relação direta, que é exatamente o que `FRIEND` significa

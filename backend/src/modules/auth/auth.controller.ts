@@ -23,7 +23,7 @@ export interface AuthenticatedIdentityResponse {
  * campo de corpo capaz de influenciar a resposta — nada aqui lê a requisição além do principal.
  *
  * Nada é persistido: a T16.1 não cria tabela de usuários. O Firebase tem a identidade, o backend
- * a verifica, o SQLite ainda não precisa guardar usuário nenhum.
+ * a verifica, o banco ainda não precisa guardar usuário nenhum.
  */
 @Controller('auth')
 export class AuthController {

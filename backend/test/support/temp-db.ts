@@ -88,7 +88,6 @@ export function configFor(
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     DATABASE_URL: databaseUrl,
-    DATABASE_PATH: raw,
     ...overrides,
   });
 }

@@ -170,6 +170,42 @@ describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
     await second.close();
   });
 
+  // --- fail-fast com o pool indisponível (T18.0.2) --------------------------------------------
+  //
+  // "Consulta executada e não achou nada" e "não havia banco" são estados diferentes, e o
+  // segundo precisa falhar de forma explícita. A versão anterior de `query()` devolvia
+  // `{ rows: [] }` com o pool ausente — um `findById` viraria `NOT_FOUND`, um guard de tombstone
+  // viraria "conta não excluída". Nenhum repositório pode receber um vazio sintético.
+
+  it('query antes de initialize lança erro explícito, e não um resultado vazio', async () => {
+    const postgres = postgresFor(configFor(temp.path));
+    await expect(postgres.query('SELECT 1')).rejects.toThrow(/não foi inicializado/);
+    await expect(postgres.appliedVersions()).rejects.toThrow(/não foi inicializado/);
+  });
+
+  it('query após close lança erro explícito, e não um resultado vazio', async () => {
+    const postgres = postgresFor(configFor(temp.path));
+    await postgres.initialize(MIGRATIONS_DIR);
+    await postgres.close();
+
+    expect(postgres.isOpen).toBe(false);
+    await expect(postgres.query('SELECT 1')).rejects.toThrow(/encerrado/);
+    await expect(
+      postgres.query('SELECT value FROM server_metadata WHERE key = $1', ['qualquer']),
+    ).rejects.toThrow(/encerrado/);
+    await expect(postgres.appliedVersions()).rejects.toThrow(/encerrado/);
+  });
+
+  it('transaction após close lança erro explícito, com a mesma semântica de query', async () => {
+    const postgres = postgresFor(configFor(temp.path));
+    await postgres.initialize(MIGRATIONS_DIR);
+    await postgres.close();
+
+    const work = jest.fn();
+    await expect(postgres.transaction(work)).rejects.toThrow(/encerrado/);
+    expect(work).not.toHaveBeenCalled();
+  });
+
   it('checkHealth reporta banco alcançável e schema na versão esperada', async () => {
     const postgres = postgresFor(configFor(temp.path));
     await postgres.initialize(MIGRATIONS_DIR);

@@ -17,7 +17,7 @@
  * "conta a purgar" a própria conta que está sendo excluída, num laço que se realimenta.
  *
  * Uma lista escrita à mão é o que permite dizer isso. O que impede que ela apodreça é o teste de
- * §24 (`social-v2-audit.spec.ts`), que lê o schema real do SQLite e exige que **toda** coluna com
+ * §24 (`social-v2-audit.spec.ts`), que lê o schema real do banco e exige que **toda** coluna com
  * cara de uid esteja ou aqui ou em [NON_ACCOUNT_UID_COLUMNS], com justificativa. Uma tabela nova
  * com uma coluna nova não passa em silêncio: ela reprova o teste até alguém decidir a política.
  *

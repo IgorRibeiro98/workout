@@ -11,23 +11,25 @@ set -euo pipefail
 
 # ---------------------------------------------------------------- configuração
 
-# Diretório de dados montado no container em `/data`. É onde `spark.db` vive de verdade.
+# Diretório operacional montado no container em `/data` (T18.0.2).
+#
+# Desde a T18.0 o banco **não** vive aqui: ele é o PostgreSQL apontado por `DATABASE_URL`. O que
+# resta neste diretório é o que continua sendo arquivo — hoje, o ledger anti-ressurreição de
+# exclusões de conta. O modelo de permissão (setgid + grupo compartilhado, T16.8.1 §3) continua
+# valendo para ele.
 SPARK_DATA_DIR="${SPARK_DATA_DIR:-/opt/spark/data}"
 # Diretório de mídia social montado no container em `/media` (T17.9 §26/§135).
 #
-# Separado do banco de propósito. O snapshot do SQLite é uma **cópia completa** a cada execução
-# (`VACUUM INTO`); a mídia é grande, imutável depois de escrita, e o restic a deduplica entre
-# snapshots. Se as fotos vivessem dentro de `/opt/spark/data`, cada `VACUUM INTO` continuaria
-# copiando só o banco — mas o `restic backup` do diretório inteiro passaria a arrastar mídia e
-# banco no mesmo caminho, e a restauração perderia a distinção entre "o banco está íntegro" e "os
-# arquivos vieram junto". Duas coisas com ciclos de vida diferentes, dois caminhos.
+# Separado do resto de propósito. O snapshot do banco é um `pg_dump` **completo** a cada execução;
+# a mídia é grande, imutável depois de escrita, e o restic a deduplica entre snapshots. Duas coisas
+# com ciclos de vida diferentes, dois caminhos no mesmo `restic backup`.
 SPARK_MEDIA_DIR="${SPARK_MEDIA_DIR:-/opt/spark/media}"
 # O ledger anti-ressurreição de exclusões de conta (T17.13.1 §8/§14).
 #
-# Ele vive **ao lado** do banco, em `$SPARK_DATA_DIR`, e não dentro dele — de propósito: numa
-# restauração o arquivo do banco é substituído por uma cópia anterior, e com ela voltariam as
-# contas já excluídas, inclusive a tabela `account_deletion_tombstones` da versão restaurada. O
-# único registro que sobrevive à troca é este arquivo.
+# Ele vive **fora** do banco, em `$SPARK_DATA_DIR`, de propósito: numa restauração o conteúdo do
+# banco é substituído por uma cópia anterior, e com ela voltariam as contas já excluídas,
+# inclusive a tabela `account_deletion_tombstones` da versão restaurada. O único registro que
+# sobrevive à troca é este arquivo.
 #
 # O caminho precisa ser o mesmo que o backend usa (`DELETION_TOMBSTONES_FILE_PATH`, que dentro do
 # container é `/data/deletion_tombstones.tsv`). Se um deploy mudar aquele, mude este junto.
@@ -46,14 +48,22 @@ SPARK_STATE_DIR="${SPARK_STATE_DIR:-/opt/spark/state}"
 SPARK_COMPOSE_DIR="${SPARK_COMPOSE_DIR:-/opt/spark/repo/backend}"
 SPARK_COMPOSE_FILE="${SPARK_COMPOSE_FILE:-docker-compose.prod.yml}"
 SPARK_SERVICE="${SPARK_SERVICE:-backend}"
-# Imagem usada para abrir o SQLite quando o container não está de pé.
+# Imagem do backend, usada pelo ensaio de restauração e pela reconciliação pós-restore.
 SPARK_IMAGE="${SPARK_IMAGE:-spark-backend:latest}"
+# Imagem que traz `pg_dump`, `pg_restore` e `psql` (T18.0.2).
+#
+# Os utilitários do PostgreSQL rodam por container, e não pelo pacote do host: a versão do
+# `pg_dump` precisa ser **igual ou mais nova** que a do servidor, e a que o `apt` da VPS instala não
+# tem essa garantia. Versão fixada pelo mesmo motivo do Caddy — uma ferramenta que se atualiza
+# sozinha muda de comportamento sem deploy. Suba a major aqui quando subir a do servidor.
+SPARK_PG_TOOLS_IMAGE="${SPARK_PG_TOOLS_IMAGE:-postgres:17-alpine}"
 # Arquivo de exclusão mútua do backup. Configuração, e não parâmetro de função: ele precisa ser o
 # mesmo para todas as execuções da máquina, e uma função que aceitasse outro por chamada tornaria
 # possível dois backups simultâneos com locks diferentes — que é exatamente o que ele impede.
 SPARK_LOCK_FILE="${SPARK_LOCK_FILE:-${SPARK_STATE_DIR}/backup.lock}"
 
-DB_FILENAME="${DB_FILENAME:-spark.db}"
+# Nome do dump dentro do snapshot. Fixo: é o que `ops/restore.sh` procura na árvore restaurada.
+DUMP_FILENAME="${DUMP_FILENAME:-spark.dump}"
 
 # ---------------------------------------------------------------- saída
 
@@ -76,9 +86,10 @@ require_cmd() {
 
 # Um job de backup por vez (§135).
 #
-# Dois `VACUUM INTO` simultâneos não corrompem o banco — o SQLite cuida disso —, mas desperdiçam
-# disco e I/O e podem deixar o repositório restic com snapshots redundantes. `flock` sem espera:
-# se já há um rodando, este simplesmente não roda, e diz por quê.
+# Dois `pg_dump` simultâneos não corrompem nada — cada um roda na sua própria transação de
+# leitura —, mas desperdiçam disco, I/O e conexões, e podem deixar o repositório restic com
+# snapshots redundantes. `flock` sem espera: se já há um rodando, este simplesmente não roda, e
+# diz por quê.
 acquire_lock() {
   mkdir -p "$(dirname "$SPARK_LOCK_FILE")"
   exec 9> "$SPARK_LOCK_FILE"
@@ -233,34 +244,72 @@ spark_data_gid() {
   stat -c %g "$SPARK_DATA_DIR"
 }
 
-# ---------------------------------------------------------------- SQLite
+# ---------------------------------------------------------------- PostgreSQL
 
-# Executa um script Node com o `better-sqlite3` da imagem do backend.
+# A connection string do banco de produção, para os scripts operacionais (T18.0.2).
 #
-# Por que não o CLI `sqlite3` do host: a versão instalada na VPS não é necessariamente a mesma que
-# escreveu o arquivo, e um backup consistente é exatamente o lugar onde essa diferença não pode
-# existir. Usar a **mesma biblioteca do processo que é dono do banco** elimina a pergunta.
+# Ordem: `SPARK_DATABASE_URL` no ambiente → `DATABASE_URL` no ambiente → `DATABASE_URL` do `.env`
+# do compose. A última é a fonte normal na VPS: é o mesmo arquivo de onde `docker-compose.prod.yml`
+# lê a variável para o serviço, então backup e servidor apontam para o mesmo banco por construção.
 #
-# Prefere `exec` no container em pé — mesma máquina, mesmo namespace de arquivo, mesmo build. Se
-# ele não estiver rodando, cai para um container efêmero da mesma imagem com o diretório montado.
-# O container efêmero entra no grupo compartilhado pelo mesmo motivo que o de produção: sem isso
-# ele não abriria o banco quando o uid do host não for 1000.
-sqlite_node() {
-  local script="$1"
-  if compose_running; then
-    compose_query exec -T "$SPARK_SERVICE" node -e "$script"
-  else
-    local group_args=()
-    local gid
-    if gid="$(spark_data_gid)"; then
-      group_args=(--group-add "$gid")
-    fi
-    docker run --rm \
-      "${group_args[@]}" \
-      -v "${SPARK_DATA_DIR}:/data" \
-      --entrypoint node \
-      "$SPARK_IMAGE" -e "$script"
+# O valor é **segredo** (carrega a senha). Ele nunca é impresso, nunca vai para `backup-status.json`
+# e entra nos containers de ferramenta por variável de ambiente, não por argumento — argumento
+# aparece em `ps` da máquina inteira.
+spark_database_url() {
+  if [ -n "${SPARK_DATABASE_URL:-}" ]; then
+    printf '%s' "$SPARK_DATABASE_URL"
+    return 0
   fi
+  if [ -n "${DATABASE_URL:-}" ]; then
+    printf '%s' "$DATABASE_URL"
+    return 0
+  fi
+  if [ -f "${SPARK_COMPOSE_DIR}/.env" ]; then
+    local value
+    value="$( sed -n 's/^DATABASE_URL=//p' "${SPARK_COMPOSE_DIR}/.env" | head -1 \
+      | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/" )"
+    if [ -n "$value" ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+require_database_url() {
+  spark_database_url > /dev/null \
+    || fail "DATABASE_URL não encontrada (nem SPARK_DATABASE_URL, nem DATABASE_URL, nem ${SPARK_COMPOSE_DIR}/.env)"
+}
+
+# Executa um script de shell com as ferramentas do PostgreSQL contra uma connection string.
+#
+#   pg_run <connection-url> <script> [argumentos extras do docker run…]
+#
+# O script enxerga a conexão em `$SPARK_PG_CONN`, e só nela. `--network host` de propósito: a
+# ferramenta precisa alcançar exatamente o endereço que está em `DATABASE_URL` — um banco remoto
+# (Neon), um PostgreSQL local na porta 5432 ou o serviço do CI —, e uma rede de bridge traduziria
+# `localhost` para o container errado. `--user` é quem chamou o script: um dump escrito num
+# diretório montado precisa nascer pertencendo ao operador, sem `chown` depois.
+pg_run() {
+  local url="$1" script="$2"
+  shift 2
+  docker run --rm --network host \
+    --user "$(id -u):$(id -g)" \
+    -e "SPARK_PG_CONN=${url}" \
+    "$@" \
+    --entrypoint sh "$SPARK_PG_TOOLS_IMAGE" -c "$script"
+}
+
+# A versão do schema aplicada num banco, para o manifesto e para os logs. Só o número.
+#
+# `\$SPARK_PG_CONN` é expandido **dentro** do container, nunca aqui: a connection string não passa
+# pela linha de comando do host.
+pg_schema_version() {
+  local url="$1"
+  pg_run "$url" "
+    psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 \\
+      -c 'SELECT COALESCE(MAX(version), 0) FROM schema_migrations'
+  " | tr -d '[:space:]'
 }
 
 # ---------------------------------------------------------------- restic

@@ -299,7 +299,7 @@ formato + dimensões
    ↓  resize inside 1600 px, sem ampliar
    ↓  re-encode WebP SEM withMetadata()  ← é esta ausência que remove GPS, aparelho e data
    ↓  cabe em 1,5 MB? senão, próxima qualidade
-arquivo sanitizado → SocialMediaStore (chave opaca, fora do SQLite)
+arquivo sanitizado → SocialMediaStore (chave opaca, fora do banco)
 ```
 
 O original **nunca** encosta no disco. A chave é `checkins/xx/yy/<uuid>.webp`, gerada pelo servidor,
@@ -393,7 +393,7 @@ sabe quais contas já haviam sido excluídas. Desde a T17.13.1 ele entra no snap
 `BEGIN`/`COMMIT`. Antes eram três operações independentes, e uma falha no meio do purge deixava a
 conta bloqueada para sempre sobre dados apagados pela metade — um estado que nada no sistema sabia
 interpretar. A mídia continua **fora** da transação: as chaves são lidas antes, os arquivos saem
-depois do commit, e I/O de disco nunca segura o SQLite.
+depois do commit, e I/O de disco nunca segura uma transação do banco.
 
 **O ledger deixou de ser best-effort.** A escrita era um `appendFileSync` dentro de um `catch {}`
 vazio, e a exclusão respondia `DELETED` mesmo quando o arquivo não recebia nada — disco cheio ou
@@ -410,7 +410,7 @@ account_deletion_jobs.phase
 └── FIREBASE_PENDING   ledger no disco; falta apagar o usuário no Firebase Auth
 ```
 
-O estado sobrevive a restart porque é uma linha do SQLite, e o `AccountDeletionReconciler` avança as
+O estado sobrevive a restart porque é uma linha do banco, e o `AccountDeletionReconciler` avança as
 fases com backoff. Não existe fase terminal: terminar é sair da tabela.
 
 **A reconciliação virou um comando.** `dist/cli/reconcile-account-deletions.js` é o único caminho —
@@ -601,7 +601,7 @@ comentário**, e é o servidor que a lê — aceitar um contexto ali deixaria a 
 
 ### A unicidade de reação, e a armadilha do `NULL`
 
-Uma `UNIQUE (checkin_id, reactor_uid, group_id)` **não** resolveria o problema: no SQLite cada
+Uma `UNIQUE (checkin_id, reactor_uid, group_id)` **não** resolveria o problema: em SQL cada
 `NULL` é distinto de qualquer outro numa `UNIQUE`, então duas reações `FRIEND` da mesma pessoa no
 mesmo post passariam sem conflito — a regra falharia justamente na audiência mais usada. A solução
 são dois índices únicos **parciais**, um por partição:
