@@ -25,122 +25,125 @@ const SOCIAL_SRC = join(__dirname, '..', 'src', 'modules', 'social');
  * log em uma lista de convites válidos.
  */
 describe('Observabilidade do social: metadata sim, identidade não', () => {
-  let temp: TempDb;
-  let app: INestApplication;
-  let written: string[];
-  let restore: () => void;
+  describe('emissão de logs em rotas HTTP', () => {
+    let temp: TempDb;
+    let app: INestApplication;
+    let written: string[];
+    let restore: () => void;
 
-  beforeEach(async () => {
-    temp = createTempDb();
-    written = [];
-    const original = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
-      written.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
-      return original(chunk as never, ...(rest as []));
-    }) as typeof process.stdout.write;
-    restore = () => {
-      process.stdout.write = original;
-    };
+    beforeEach(async () => {
+      temp = createTempDb();
+      written = [];
+      const original = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+        written.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return original(chunk as never, ...(rest as []));
+      }) as typeof process.stdout.write;
+      restore = () => {
+        process.stdout.write = original;
+      };
 
-    app = await createTestApp(
-      configFor(temp.path, { LOG_LEVEL: 'debug' }),
-      FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID, email: EMAIL }),
-    );
-  });
+      app = await createTestApp(
+        configFor(temp.path, { LOG_LEVEL: 'debug' }),
+        FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID, email: EMAIL }),
+      );
+    });
 
-  afterEach(async () => {
-    restore();
-    await app?.close();
-    temp.cleanup();
-  });
+    afterEach(async () => {
+      restore();
+      await app?.close();
+      app = undefined as unknown as INestApplication;
+      temp.cleanup();
+    });
 
-  const logs = () => written.join('\n');
+    const logs = () => written.join('\n');
 
-  const exerciseEveryRoute = async (): Promise<{ friendCode: string; socialId: string }> => {
-    const server = app.getHttpServer();
-    const auth = `Bearer ${TOKEN}`;
+    const exerciseEveryRoute = async (): Promise<{ friendCode: string; socialId: string }> => {
+      const server = app.getHttpServer();
+      const auth = `Bearer ${TOKEN}`;
 
-    await request(server).get('/v1/social/me').set('Authorization', auth);
-    const created = (
+      await request(server).get('/v1/social/me').set('Authorization', auth);
+      const created = (
+        await request(server)
+          .post('/v1/social/me/activate')
+          .set('Authorization', auth)
+          .send({ displayName: DISPLAY_NAME })
+      ).body.profile;
       await request(server)
         .post('/v1/social/me/activate')
         .set('Authorization', auth)
-        .send({ displayName: DISPLAY_NAME })
-    ).body.profile;
-    await request(server)
-      .post('/v1/social/me/activate')
-      .set('Authorization', auth)
-      .send({ displayName: DISPLAY_NAME });
-    await request(server)
-      .patch('/v1/social/me')
-      .set('Authorization', auth)
-      .send({ displayName: DISPLAY_NAME });
-    await request(server)
-      .patch('/v1/social/me/privacy')
-      .set('Authorization', auth)
-      .send({ activitySharingEnabled: true, activityTimeZoneId: 'America/Sao_Paulo' });
-    await request(server).post('/v1/social/me/disable').set('Authorization', auth);
-    await request(server).post('/v1/social/me/enable').set('Authorization', auth);
-    // Erros também passam pelo log — e também não podem carregar conteúdo.
-    await request(server)
-      .patch('/v1/social/me')
-      .set('Authorization', auth)
-      .send({ displayName: `${DISPLAY_NAME}\nAdmin` });
+        .send({ displayName: DISPLAY_NAME });
+      await request(server)
+        .patch('/v1/social/me')
+        .set('Authorization', auth)
+        .send({ displayName: DISPLAY_NAME });
+      await request(server)
+        .patch('/v1/social/me/privacy')
+        .set('Authorization', auth)
+        .send({ activitySharingEnabled: true, activityTimeZoneId: 'America/Sao_Paulo' });
+      await request(server).post('/v1/social/me/disable').set('Authorization', auth);
+      await request(server).post('/v1/social/me/enable').set('Authorization', auth);
+      // Erros também passam pelo log — e também não podem carregar conteúdo.
+      await request(server)
+        .patch('/v1/social/me')
+        .set('Authorization', auth)
+        .send({ displayName: `${DISPLAY_NAME}\nAdmin` });
 
-    return { friendCode: created.friendCode, socialId: created.socialId };
-  };
+      return { friendCode: created.friendCode, socialId: created.socialId };
+    };
 
-  it('o log não contém token, uid completo, e-mail, nome social, friendCode nem socialId', async () => {
-    const { friendCode, socialId } = await exerciseEveryRoute();
-    const output = logs();
+    it('o log não contém token, uid completo, e-mail, nome social, friendCode nem socialId', async () => {
+      const { friendCode, socialId } = await exerciseEveryRoute();
+      const output = logs();
 
-    expect(output).not.toContain(TOKEN);
-    expect(output).not.toContain(UID);
-    expect(output).not.toContain(EMAIL);
-    expect(output).not.toContain(DISPLAY_NAME);
-    expect(output).not.toContain(friendCode);
-    // Nem o código sem o prefixo: um log com o miolo do código serve para o mesmo abuso.
-    expect(output).not.toContain(friendCode.replace('SPK-', ''));
-    expect(output).not.toContain(socialId);
-    expect(output).not.toContain('Bearer ');
-  });
-
-  it('o log registra a metadata que serve para investigar', async () => {
-    await exerciseEveryRoute();
-    const output = logs();
-
-    // Prefixo do uid: correlaciona com suporte sem identificar a conta inteira.
-    expect(output).toContain(UID.slice(0, 6));
-    for (const event of [
-      'social.me',
-      'social.activated',
-      'social.profile.updated',
-      'social.privacy.updated',
-      'social.disabled',
-      'social.enabled',
-    ]) {
-      expect(output).toContain(event);
-    }
-  });
-
-  it('o log de privacidade diz quais campos mudaram, não os valores do perfil', async () => {
-    const server = app.getHttpServer();
-    const auth = `Bearer ${TOKEN}`;
-    await request(server)
-      .post('/v1/social/me/activate')
-      .set('Authorization', auth)
-      .send({ displayName: DISPLAY_NAME });
-    written.length = 0;
-
-    await request(server).patch('/v1/social/me/privacy').set('Authorization', auth).send({
-      friendRequestsEnabled: false,
-      activitySharingEnabled: true,
-      activityTimeZoneId: 'America/Sao_Paulo',
+      expect(output).not.toContain(TOKEN);
+      expect(output).not.toContain(UID);
+      expect(output).not.toContain(EMAIL);
+      expect(output).not.toContain(DISPLAY_NAME);
+      expect(output).not.toContain(friendCode);
+      // Nem o código sem o prefixo: um log com o miolo do código serve para o mesmo abuso.
+      expect(output).not.toContain(friendCode.replace('SPK-', ''));
+      expect(output).not.toContain(socialId);
+      expect(output).not.toContain('Bearer ');
     });
 
-    const output = logs();
-    expect(output).toContain('activitySharingEnabled,activityTimeZoneId,friendRequestsEnabled');
-    expect(output).not.toContain(DISPLAY_NAME);
+    it('o log registra a metadata que serve para investigar', async () => {
+      await exerciseEveryRoute();
+      const output = logs();
+
+      // Prefixo do uid: correlaciona com suporte sem identificar a conta inteira.
+      expect(output).toContain(UID.slice(0, 6));
+      for (const event of [
+        'social.me',
+        'social.activated',
+        'social.profile.updated',
+        'social.privacy.updated',
+        'social.disabled',
+        'social.enabled',
+      ]) {
+        expect(output).toContain(event);
+      }
+    });
+
+    it('o log de privacidade diz quais campos mudaram, não os valores do perfil', async () => {
+      const server = app.getHttpServer();
+      const auth = `Bearer ${TOKEN}`;
+      await request(server)
+        .post('/v1/social/me/activate')
+        .set('Authorization', auth)
+        .send({ displayName: DISPLAY_NAME });
+      written.length = 0;
+
+      await request(server).patch('/v1/social/me/privacy').set('Authorization', auth).send({
+        friendRequestsEnabled: false,
+        activitySharingEnabled: true,
+        activityTimeZoneId: 'America/Sao_Paulo',
+      });
+
+      const output = logs();
+      expect(output).toContain('activitySharingEnabled,activityTimeZoneId,friendRequestsEnabled');
+      expect(output).not.toContain(DISPLAY_NAME);
+    });
   });
 
   // ------------------------------------------------------------------ inspeção do código-fonte

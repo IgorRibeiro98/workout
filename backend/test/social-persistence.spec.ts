@@ -23,7 +23,7 @@ import { WorkoutCheckInRepository } from '../src/modules/social/workout-checkin.
 import { SystemClock } from '../src/common/clock';
 import * as identity from '../src/modules/social/social.identity';
 import { FRIEND_CODE_MAX_GENERATION_ATTEMPTS } from '../src/modules/social/social.limits';
-import { configFor, createTempDb, MIGRATIONS_DIR, postgresFor, type TempDb } from './support/temp-db';
+import { configFor, createTempDb, postgresFor, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 
@@ -118,7 +118,8 @@ describe('Persistência do domínio social', () => {
     });
 
     it('a migration é aditiva: só cria tabelas, não altera nem apaga as da T16', () => {
-      const sql = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 7)?.sql ?? '';
+      const sql =
+        loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 7)?.sql ?? '';
 
       expect(sql).toMatch(/CREATE TABLE social_profiles/);
       expect(sql).toMatch(/CREATE TABLE social_privacy_settings/);
@@ -198,7 +199,9 @@ describe('Persistência do domínio social', () => {
     it('o repositório distingue colisão de código de outros erros', async () => {
       await create('uid-1', 'social-1', 'SPK-AAAAAAAA');
 
-      await expect(create('uid-2', 'social-2', 'SPK-AAAAAAAA')).rejects.toThrow(FriendCodeCollisionError);
+      await expect(create('uid-2', 'social-2', 'SPK-AAAAAAAA')).rejects.toThrow(
+        FriendCodeCollisionError,
+      );
     });
 
     it('o serviço tenta de novo e conclui a ativação', async () => {
@@ -351,7 +354,10 @@ function socialServiceFor(
 }
 
 /** O `SocialGroupService` montado à mão, com as dependências reais sobre o PostgreSQL. */
-function groupServiceFor(postgres: PostgresService, repository: SocialRepository): SocialGroupService {
+function groupServiceFor(
+  postgres: PostgresService,
+  repository: SocialRepository,
+): SocialGroupService {
   const logger = new SparkLogger(configFor());
   return new SocialGroupService(
     new SocialGroupRepository(postgres),

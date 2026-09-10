@@ -9,7 +9,6 @@ import type {
   PushDeviceRegistrationDto,
   RegisterPushDeviceRequest,
   SupportedPlatform,
-  UpdateNotificationPreferencesRequest,
 } from './notification.contract';
 
 export interface CreateEventInput {
@@ -240,7 +239,9 @@ export class NotificationRepository {
     );
   }
 
-  async findActiveDevicesForRecipient(recipientUid: string): Promise<Array<{ id: string; fcmToken: string }>> {
+  async findActiveDevicesForRecipient(
+    recipientUid: string,
+  ): Promise<Array<{ id: string; fcmToken: string }>> {
     const res = await this.db.query<{ id: string; fcm_token: string }>(
       `SELECT id, fcm_token
        FROM social_push_devices
@@ -253,7 +254,11 @@ export class NotificationRepository {
 
   // --- Eventos de Notificação (Transactional Outbox) ----------------------------------
 
-  async createEvent(event: CreateEventInput, now: number, externalClient?: PoolClient): Promise<boolean> {
+  async createEvent(
+    event: CreateEventInput,
+    now: number,
+    externalClient?: PoolClient,
+  ): Promise<boolean> {
     const q = this.getRunner(externalClient);
     const result = await q.query(
       `INSERT INTO social_notification_events
@@ -310,7 +315,11 @@ export class NotificationRepository {
     }));
   }
 
-  async markEventStatus(id: string, status: NotificationEventStatus, completedAt?: number): Promise<void> {
+  async markEventStatus(
+    id: string,
+    status: NotificationEventStatus,
+    completedAt?: number,
+  ): Promise<void> {
     await this.db.query(
       `UPDATE social_notification_events
        SET status = $1, completed_at = $2
@@ -329,7 +338,10 @@ export class NotificationRepository {
     return result.rowCount ?? 0;
   }
 
-  async cancelEventsForEntity(entityId: string, types?: readonly NotificationType[]): Promise<number> {
+  async cancelEventsForEntity(
+    entityId: string,
+    types?: readonly NotificationType[],
+  ): Promise<number> {
     if (types && types.length > 0) {
       const result = await this.db.query(
         `UPDATE social_notification_events
@@ -375,7 +387,9 @@ export class NotificationRepository {
 
   // --- Entregas por Dispositivo -------------------------------------------------------
 
-  async createDeliveries(deliveries: Array<{ eventId: string; deviceRegistrationId: string }>): Promise<void> {
+  async createDeliveries(
+    deliveries: Array<{ eventId: string; deviceRegistrationId: string }>,
+  ): Promise<void> {
     if (deliveries.length === 0) return;
 
     await this.db.transaction(async (client) => {
@@ -430,19 +444,13 @@ export class NotificationRepository {
       `UPDATE social_notification_deliveries
        SET status = $1, attempt_count = $2, next_attempt_at = $3, last_error_code = $4, sent_at = $5
        WHERE event_id = $6 AND device_registration_id = $7`,
-      [
-        status,
-        attemptCount,
-        nextAttemptAt,
-        lastErrorCode,
-        sentAt,
-        eventId,
-        deviceRegistrationId,
-      ],
+      [status, attemptCount, nextAttemptAt, lastErrorCode, sentAt, eventId, deviceRegistrationId],
     );
   }
 
-  async cleanupOldEntries(beforeMs: number): Promise<{ cleanedEvents: number; cleanedDeliveries: number }> {
+  async cleanupOldEntries(
+    beforeMs: number,
+  ): Promise<{ cleanedEvents: number; cleanedDeliveries: number }> {
     const eventsResult = await this.db.query(
       `DELETE FROM social_notification_events
        WHERE status IN ('COMPLETED', 'SUPPRESSED', 'EXPIRED', 'CANCELLED')

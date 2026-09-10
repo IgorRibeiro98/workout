@@ -31,7 +31,10 @@ export class SocialActivityService {
     @Optional() private readonly blockService?: BlockService,
   ) {}
 
-  async getActivity(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialActivityResponse> {
+  async getActivity(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+  ): Promise<SocialActivityResponse> {
     const viewerAccount = await this.socialRepo.find(principal.uid);
     if (!viewerAccount || viewerAccount.profile.status !== 'ACTIVE') {
       throw SocialErrors.notEnabled();
@@ -70,7 +73,11 @@ export class SocialActivityService {
     // 16 dias de margem cobrem com folga os 14 dias civis em qualquer fuso horário mundial
     const cutoffMs = now - 16 * DAY_MS;
     const friendUids = eligibleFriends.map((f) => f.ownerUid);
-    const workouts = await this.trainingSource.getCompletedWorkoutSummaries(friendUids, cutoffMs, now);
+    const workouts = await this.trainingSource.getCompletedWorkoutSummaries(
+      friendUids,
+      cutoffMs,
+      now,
+    );
 
     const workoutsByUid = new Map<string, Array<{ startedAt: number }>>();
     for (const w of workouts) {

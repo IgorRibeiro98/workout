@@ -257,7 +257,12 @@ export class SocialGroupRepository {
   /**
    * Exclusão do Squad (§46/§48).
    */
-  async markGroupDeleted(groupId: string, ownerUid: string, now: number, client?: PoolClient): Promise<boolean> {
+  async markGroupDeleted(
+    groupId: string,
+    ownerUid: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<boolean> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE social_groups
@@ -286,7 +291,11 @@ export class SocialGroupRepository {
   /**
    * Os Squads de que o viewer participa (§131/§132).
    */
-  async listGroupsForMember(memberUid: string, limit: number, client?: PoolClient): Promise<GroupSummaryRow[]> {
+  async listGroupsForMember(
+    memberUid: string,
+    limit: number,
+    client?: PoolClient,
+  ): Promise<GroupSummaryRow[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{
       groupId: string;
@@ -309,7 +318,7 @@ export class SocialGroupRepository {
       [memberUid, limit],
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       groupId: row.groupId,
       name: row.name,
       role: row.role as SocialGroupRole,
@@ -338,7 +347,11 @@ export class SocialGroupRepository {
   /**
    * A participação do viewer neste Squad — a autorização de **toda** superfície do grupo (§59).
    */
-  async findActiveMembership(groupId: string, memberUid: string, client?: PoolClient): Promise<StoredGroupMembership | null> {
+  async findActiveMembership(
+    groupId: string,
+    memberUid: string,
+    client?: PoolClient,
+  ): Promise<StoredGroupMembership | null> {
     const runner = this.getRunner(client);
     const res = await runner.query<MembershipRow>(
       `SELECT m.id, m.group_id, m.member_uid, m.role, m.joined_at
@@ -352,7 +365,11 @@ export class SocialGroupRepository {
     return row ? toMembership(row) : null;
   }
 
-  async findMembershipById(groupId: string, membershipId: string, client?: PoolClient): Promise<StoredGroupMembership | null> {
+  async findMembershipById(
+    groupId: string,
+    membershipId: string,
+    client?: PoolClient,
+  ): Promise<StoredGroupMembership | null> {
     const runner = this.getRunner(client);
     const res = await runner.query<MembershipRow>(
       `SELECT ${MEMBERSHIP_COLUMNS} FROM social_group_memberships
@@ -375,7 +392,11 @@ export class SocialGroupRepository {
   /**
    * A lista de membros, com o bloqueio já resolvido pelo banco (§34/§121).
    */
-  async listMembers(groupId: string, viewerUid: string, client?: PoolClient): Promise<GroupMemberRow[]> {
+  async listMembers(
+    groupId: string,
+    viewerUid: string,
+    client?: PoolClient,
+  ): Promise<GroupMemberRow[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{
       membershipId: string;
@@ -404,7 +425,7 @@ export class SocialGroupRepository {
       [groupId, viewerUid],
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       membershipId: row.membershipId,
       memberUid: row.memberUid,
       role: row.role as SocialGroupRole,
@@ -416,7 +437,11 @@ export class SocialGroupRepository {
   }
 
   /** Sai do Squad (§38). Idempotente: o `changes` diz se havia o que remover. */
-  async deleteMembership(groupId: string, memberUid: string, client?: PoolClient): Promise<boolean> {
+  async deleteMembership(
+    groupId: string,
+    memberUid: string,
+    client?: PoolClient,
+  ): Promise<boolean> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `DELETE FROM social_group_memberships WHERE group_id = $1 AND member_uid = $2`,
@@ -428,7 +453,11 @@ export class SocialGroupRepository {
   /**
    * Os compartilhamentos de uma pessoa **naquele** Squad (§62/§63/§64).
    */
-  async deleteSharesByAuthorInGroup(groupId: string, authorUid: string, client?: PoolClient): Promise<number> {
+  async deleteSharesByAuthorInGroup(
+    groupId: string,
+    authorUid: string,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `DELETE FROM social_group_checkin_shares WHERE group_id = $1 AND author_uid = $2`,
@@ -440,7 +469,11 @@ export class SocialGroupRepository {
   /**
    * Quais check-ins desta pessoa estão neste Squad (T17.12 §71/§143).
    */
-  async listSharedCheckInIdsByAuthorInGroup(groupId: string, authorUid: string, client?: PoolClient): Promise<string[]> {
+  async listSharedCheckInIdsByAuthorInGroup(
+    groupId: string,
+    authorUid: string,
+    client?: PoolClient,
+  ): Promise<string[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{ checkInId: string }>(
       `SELECT checkin_id AS "checkInId"
@@ -448,18 +481,34 @@ export class SocialGroupRepository {
         WHERE group_id = $1 AND author_uid = $2`,
       [groupId, authorUid],
     );
-    return res.rows.map((row: any) => row.checkInId);
+    return res.rows.map((row) => row.checkInId);
   }
 
   /** A transferência de posse (§40/§150). Duas escritas, sempre dentro da mesma transação. */
-  async updateMembershipRole(membershipId: string, role: SocialGroupRole, client?: PoolClient): Promise<void> {
+  async updateMembershipRole(
+    membershipId: string,
+    role: SocialGroupRole,
+    client?: PoolClient,
+  ): Promise<void> {
     const runner = this.getRunner(client);
-    await runner.query(`UPDATE social_group_memberships SET role = $1 WHERE id = $2`, [role, membershipId]);
+    await runner.query(`UPDATE social_group_memberships SET role = $1 WHERE id = $2`, [
+      role,
+      membershipId,
+    ]);
   }
 
-  async updateGroupOwner(groupId: string, ownerUid: string, now: number, client?: PoolClient): Promise<void> {
+  async updateGroupOwner(
+    groupId: string,
+    ownerUid: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<void> {
     const runner = this.getRunner(client);
-    await runner.query(`UPDATE social_groups SET owner_uid = $1, updated_at = $2 WHERE id = $3`, [ownerUid, now, groupId]);
+    await runner.query(`UPDATE social_groups SET owner_uid = $1, updated_at = $2 WHERE id = $3`, [
+      ownerUid,
+      now,
+      groupId,
+    ]);
   }
 
   // ------------------------------------------------------------------ convites
@@ -485,7 +534,10 @@ export class SocialGroupRepository {
     );
   }
 
-  async findInvitation(invitationId: string, client?: PoolClient): Promise<StoredGroupInvitation | null> {
+  async findInvitation(
+    invitationId: string,
+    client?: PoolClient,
+  ): Promise<StoredGroupInvitation | null> {
     const runner = this.getRunner(client);
     const res = await runner.query<InvitationRow>(
       `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations WHERE id = $1 LIMIT 1`,
@@ -510,7 +562,11 @@ export class SocialGroupRepository {
     return row ? toInvitation(row) : null;
   }
 
-  async findPendingInvitation(groupId: string, recipientUid: string, client?: PoolClient): Promise<StoredGroupInvitation | null> {
+  async findPendingInvitation(
+    groupId: string,
+    recipientUid: string,
+    client?: PoolClient,
+  ): Promise<StoredGroupInvitation | null> {
     const runner = this.getRunner(client);
     const res = await runner.query<InvitationRow>(
       `SELECT ${INVITATION_COLUMNS} FROM social_group_invitations
@@ -566,7 +622,12 @@ export class SocialGroupRepository {
   /**
    * Cancela os convites pendentes entre um par, nas duas direções (§105).
    */
-  async cancelPendingInvitationsBetween(uidA: string, uidB: string, now: number, client?: PoolClient): Promise<number> {
+  async cancelPendingInvitationsBetween(
+    uidA: string,
+    uidB: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE social_group_invitations
@@ -580,7 +641,11 @@ export class SocialGroupRepository {
   }
 
   /** Cancela todo convite pendente **de** ou **para** esta conta (§96). */
-  async cancelAllPendingInvitationsFor(uid: string, now: number, client?: PoolClient): Promise<number> {
+  async cancelAllPendingInvitationsFor(
+    uid: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE social_group_invitations
@@ -594,7 +659,11 @@ export class SocialGroupRepository {
   /**
    * Os convites recebidos, com a prévia mínima de §138/§139.
    */
-  async listInvitationsForRecipient(recipientUid: string, limit: number, client?: PoolClient): Promise<GroupInvitationRow[]> {
+  async listInvitationsForRecipient(
+    recipientUid: string,
+    limit: number,
+    client?: PoolClient,
+  ): Promise<GroupInvitationRow[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{
       invitationId: string;
@@ -635,7 +704,7 @@ export class SocialGroupRepository {
       [recipientUid, limit],
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       invitationId: row.invitationId,
       groupId: row.groupId,
       groupName: row.groupName,
@@ -652,13 +721,16 @@ export class SocialGroupRepository {
 
   // ------------------------------------------------------------------ compartilhamento
 
-  async createShare(input: {
-    id: string;
-    groupId: string;
-    checkInId: string;
-    authorUid: string;
-    createdAt: number;
-  }, client?: PoolClient): Promise<void> {
+  async createShare(
+    input: {
+      id: string;
+      groupId: string;
+      checkInId: string;
+      authorUid: string;
+      createdAt: number;
+    },
+    client?: PoolClient,
+  ): Promise<void> {
     const runner = this.getRunner(client);
     await runner.query(
       `INSERT INTO social_group_checkin_shares (id, group_id, checkin_id, author_uid, created_at)
@@ -684,7 +756,12 @@ export class SocialGroupRepository {
   }
 
   /** §130 — só o autor remove o próprio compartilhamento. Idempotente. */
-  async deleteShare(groupId: string, checkInId: string, authorUid: string, client?: PoolClient): Promise<boolean> {
+  async deleteShare(
+    groupId: string,
+    checkInId: string,
+    authorUid: string,
+    client?: PoolClient,
+  ): Promise<boolean> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `DELETE FROM social_group_checkin_shares
@@ -714,7 +791,7 @@ export class SocialGroupRepository {
         WHERE s.checkin_id = $1`,
       [checkInId],
     );
-    return res.rows.map((row: any) => row.groupId);
+    return res.rows.map((row) => row.groupId);
   }
 
   /**
@@ -765,7 +842,7 @@ export class SocialGroupRepository {
       [viewerUid, groupId, sharedSinceMs, limit],
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       checkInId: row.checkInId,
       authorUid: row.authorUid,
       authorSocialId: row.authorSocialId,
@@ -790,7 +867,7 @@ export class SocialGroupRepository {
           AND (SELECT COUNT(*) FROM social_group_memberships m WHERE m.group_id = g.id) > 1`,
       [ownerUid],
     );
-    return res.rows.map((row: any) => row.groupId);
+    return res.rows.map((row) => row.groupId);
   }
 
   /** Os Squads ativos criados por esta conta — usado na exclusão de conta (§100/§101). */
@@ -800,7 +877,7 @@ export class SocialGroupRepository {
       `SELECT id AS "groupId" FROM social_groups WHERE owner_uid = $1 AND status = 'ACTIVE'`,
       [ownerUid],
     );
-    return res.rows.map((row: any) => row.groupId);
+    return res.rows.map((row) => row.groupId);
   }
 
   /** As participações **como MEMBER** desta conta em Squads ativos (§97). */
@@ -813,6 +890,6 @@ export class SocialGroupRepository {
         WHERE m.member_uid = $1 AND m.role = 'MEMBER' AND g.status = 'ACTIVE'`,
       [memberUid],
     );
-    return res.rows.map((row: any) => row.groupId);
+    return res.rows.map((row) => row.groupId);
   }
 }

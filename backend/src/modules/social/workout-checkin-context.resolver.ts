@@ -57,7 +57,11 @@ export class WorkoutCheckInContextResolver {
   ): Promise<ResolvedInteractionContext> {
     if (requested?.type === 'GROUP') {
       const groupId = requested.groupId as string;
-      const checkIn = await this.accessPolicy.findGroupAccessibleCheckIn(viewerUid, checkInId, groupId);
+      const checkIn = await this.accessPolicy.findGroupAccessibleCheckIn(
+        viewerUid,
+        checkInId,
+        groupId,
+      );
       if (!checkIn) {
         throw WorkoutCheckInErrors.checkInNotFound();
       }

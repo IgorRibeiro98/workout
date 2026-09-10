@@ -4,26 +4,27 @@ describe('AppConfig (bootstrap de configuração)', () => {
   const validEnv = {
     NODE_ENV: 'test',
     PORT: '8080',
-    DATABASE_PATH: '/tmp/spark-test.db',
+    DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
   };
 
   it('carrega configuração válida e aplica os defaults documentados', () => {
     const config = AppConfig.fromEnv(validEnv);
 
     expect(config.port).toBe(8080);
-    expect(config.databasePath).toBe('/tmp/spark-test.db');
+    expect(config.databaseUrl).toBe('postgresql://spark:spark@localhost:5432/spark_dev');
     expect(config.nodeEnv).toBe('test');
     expect(config.logLevel).toBe('info');
-    expect(config.sqliteBusyTimeoutMs).toBe(5000);
+    expect(config.databasePoolMin).toBe(2);
+    expect(config.databasePoolMax).toBe(10);
     expect(config.isProduction).toBe(false);
   });
 
-  it('falha quando DATABASE_PATH está ausente — não existe default silencioso', () => {
+  it('falha quando DATABASE_URL está ausente — não existe default silencioso', () => {
     expect(() => AppConfig.fromEnv({ NODE_ENV: 'test' })).toThrow(ConfigValidationError);
   });
 
-  it('falha quando DATABASE_PATH está vazio', () => {
-    expect(() => AppConfig.fromEnv({ ...validEnv, DATABASE_PATH: '' })).toThrow(
+  it('falha quando DATABASE_URL está vazio', () => {
+    expect(() => AppConfig.fromEnv({ ...validEnv, DATABASE_URL: '' })).toThrow(
       ConfigValidationError,
     );
   });
@@ -47,11 +48,11 @@ describe('AppConfig (bootstrap de configuração)', () => {
 
   it('reporta o campo inválido sem expor o valor recebido', () => {
     try {
-      AppConfig.fromEnv({ ...validEnv, DATABASE_PATH: '' });
+      AppConfig.fromEnv({ ...validEnv, DATABASE_URL: '' });
       fail('esperava ConfigValidationError');
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigValidationError);
-      expect((error as ConfigValidationError).issues.join()).toContain('DATABASE_PATH');
+      expect((error as ConfigValidationError).issues.join()).toContain('DATABASE_URL');
     }
   });
 

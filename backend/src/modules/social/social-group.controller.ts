@@ -71,7 +71,9 @@ export class SocialGroupController {
 
   @Get('groups/invitations')
   @HttpCode(HttpStatus.OK)
-  async listInvitations(@Principal() principal: AuthenticatedPrincipal): Promise<SocialGroupInvitationListDto> {
+  async listInvitations(
+    @Principal() principal: AuthenticatedPrincipal,
+  ): Promise<SocialGroupInvitationListDto> {
     return await this.service.listInvitations(principal.uid);
   }
 

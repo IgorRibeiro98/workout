@@ -69,9 +69,25 @@ jobs:
   verify:
     name: lint + test + build
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: spark
+          POSTGRES_DB: spark_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
+    env:
+      DATABASE_URL: postgresql://spark:spark@localhost:5432/spark_dev
     steps:
       - uses: actions/checkout@v4
 
@@ -117,6 +133,20 @@ jobs:
   docker:
     name: docker build
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: spark
+          POSTGRES_DB: spark_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         # Este job constrói a imagem a partir do contexto `backend/`, então o `.` abaixo é ele.
@@ -132,10 +162,10 @@ jobs:
       - name: Smoke test (health + persistência + schema de restore)
         run: |
           set -euo pipefail
-          docker volume create spark-ci-data
           docker volume create spark-ci-media
-          docker run -d --name spark-ci -p 127.0.0.1:8080:8080 \
-            -v spark-ci-data:/data -v spark-ci-media:/media \
+          docker run -d --name spark-ci --network host \
+            -v spark-ci-media:/media \
+            -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:ci
 
@@ -149,11 +179,11 @@ jobs:
           curl -fsS http://127.0.0.1:8080/health/ready | grep -q '"status":"ok"'
 
           docker exec spark-ci node -e "
-            const S=require('/app/node_modules/better-sqlite3');
-            const db=new S('/data/spark.db');
-            db.prepare('INSERT INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
-              .run('ci_persistencia','sobreviveu',1);
-            db.close();"
+            const { Pool } = require('pg');
+            const pool = new Pool({ connectionString: 'postgresql://spark:spark@127.0.0.1:5432/spark_dev' });
+            pool.query('INSERT INTO server_metadata (key,value,updated_at) VALUES (\$1,\$2,\$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', ['ci_persistencia','sobreviveu',1])
+              .then(() => pool.end())
+              .catch(e => { console.error(e); process.exit(1); });"
 
           # T17.9 §26 — a mídia social vive em volume, e não na camada efêmera do container. Sem
           # este par de passos, um `VOLUME` removido do Dockerfile por engano não quebraria teste
@@ -173,8 +203,8 @@ jobs:
           if [ "$uid" = "0" ]; then echo "o container não pode rodar como root"; exit 1; fi
           echo "container roda como uid $uid"
 
-          # Graceful shutdown (T16.8 §71/§72): uma requisição em voo precisa terminar, e o
-          # SQLite precisa ser fechado com checkpoint. `docker stop` manda SIGTERM e espera.
+          # Graceful shutdown (T16.8 §71/§72): uma requisição em voo precisa terminar.
+          # `docker stop` manda SIGTERM e espera.
           ( curl -sS -o /tmp/inflight.body -w '%{http_code}' --max-time 20 \
               http://127.0.0.1:8080/v1/auth/me > /tmp/inflight.code & )
           docker stop -t 15 spark-ci > /dev/null
@@ -190,8 +220,9 @@ jobs:
           echo "graceful shutdown ok"
 
           docker rm -f spark-ci
-          docker run -d --name spark-ci-2 -p 127.0.0.1:8080:8080 \
-            -v spark-ci-data:/data -v spark-ci-media:/media \
+          docker run -d --name spark-ci-2 --network host \
+            -v spark-ci-media:/media \
+            -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:ci
 
@@ -202,14 +233,17 @@ jobs:
           done
 
           docker exec spark-ci-2 node -e "
-            const S=require('/app/node_modules/better-sqlite3');
-            const db=new S('/data/spark.db');
-            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('ci_persistencia');
-            if (!row || row.value !== 'sobreviveu') {
-              console.error('dado não sobreviveu à recriação do container'); process.exit(1);
-            }
-            console.log('persistência ok');
-            db.close();"
+            const { Pool } = require('pg');
+            const pool = new Pool({ connectionString: 'postgresql://spark:spark@127.0.0.1:5432/spark_dev' });
+            pool.query('SELECT value FROM server_metadata WHERE key=\$1', ['ci_persistencia'])
+              .then(res => {
+                if (!res.rows[0] || res.rows[0].value !== 'sobreviveu') {
+                  console.error('dado não sobreviveu à recriação do container'); process.exit(1);
+                }
+                console.log('persistência ok');
+                return pool.end();
+              })
+              .catch(e => { console.error(e); process.exit(1); });"
 
           docker exec spark-ci-2 node -e "
             const fs=require('node:fs');
@@ -223,10 +257,8 @@ jobs:
 
           # A raiz de mídia é obrigatória em produção (T17.9 §28): um container sem ela precisa
           # **falhar no startup**, e não subir escrevendo em disco efêmero.
-          #
-          # A chave sintética entra aqui de propósito: sem ela o container morreria pela **outra**
-          # exigência de produção, e este passo passaria sem provar nada sobre a mídia.
-          if docker run --rm -e NODE_ENV=production -e DATABASE_PATH=/data/spark.db \
+          if docker run --rm --network host -e NODE_ENV=production \
+               -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
                -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
                -e SOCIAL_MEDIA_ROOT= spark-backend:ci > /tmp/nomedia.log 2>&1; then
             echo "o backend subiu sem SOCIAL_MEDIA_ROOT em produção"; cat /tmp/nomedia.log; exit 1
@@ -235,13 +267,9 @@ jobs:
             echo "a falha não citou SOCIAL_MEDIA_ROOT"; cat /tmp/nomedia.log; exit 1; }
           echo "produção recusa subir sem SOCIAL_MEDIA_ROOT"
 
-          # O portão simétrico (T17.13.1 §77): a chave HMAC do tombstone é **obrigatória** em
-          # produção, e o CI ter uma chave sintética não pode ser o mesmo que o portão não existir.
-          #
-          # Este é o passo que impede a correção proibida. Se alguém "resolver" o vermelho do
-          # workflow enfraquecendo `missingRequirements()`, rebaixando `NODE_ENV` ou dando um
-          # default de produção à chave, é aqui que aparece — o container sobe, e o job falha.
-          if docker run --rm -e NODE_ENV=production -e DATABASE_PATH=/data/spark.db \
+          # O portão simétrico (T17.13.1 §77): a chave HMAC do tombstone é **obrigatória** em produção.
+          if docker run --rm --network host -e NODE_ENV=production \
+               -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
                -e SOCIAL_MEDIA_ROOT=/media spark-backend:ci > /tmp/nohmac.log 2>&1; then
             echo "o backend subiu em produção com a chave HMAC de desenvolvimento"
             cat /tmp/nohmac.log; exit 1
@@ -250,37 +278,36 @@ jobs:
             echo "a falha não citou ACCOUNT_DELETION_HMAC_KEY"; cat /tmp/nohmac.log; exit 1; }
           echo "produção recusa subir com a chave HMAC de desenvolvimento"
 
-          # T16.5/T16.6/T16.7 — o schema do restore, o do sync incremental e o do tombstone.
-          #
-          # Sem service account não há como autenticar aqui, e é exatamente isso que o smoke
-          # verifica: as rotas existem e nascem **fechadas**. 401 (e não 404) é a prova.
+          # Schema do baseline e migrations aplicadas
           docker exec spark-ci-2 node -e "
-            const S=require('/app/node_modules/better-sqlite3');
-            const db=new S('/data/spark.db');
-            const columns=db.prepare('PRAGMA table_info(backup_snapshots)').all().map(c=>c.name);
-            if (!columns.includes('payload')) {
-              console.error('migration 0004 não aplicada: sem coluna payload'); process.exit(1);
-            }
-            for (const table of ['sync_entities','sync_changes','sync_mutations']) {
-              const found=db.prepare(
-                \"SELECT name FROM sqlite_master WHERE type='table' AND name=?\"
-              ).get(table);
-              if (!found) {
-                console.error('migration 0005 não aplicada: sem tabela ' + table); process.exit(1);
+            const { Pool } = require('pg');
+            const pool = new Pool({ connectionString: 'postgresql://spark:spark@127.0.0.1:5432/spark_dev' });
+            (async () => {
+              const columnsRes = await pool.query(\"SELECT column_name FROM information_schema.columns WHERE table_name = 'backup_snapshots'\");
+              const columns = columnsRes.rows.map(r => r.column_name);
+              if (!columns.includes('payload')) {
+                console.error('baseline não aplicada: sem coluna payload'); process.exit(1);
               }
-            }
-            const entity=db.prepare('PRAGMA table_info(sync_entities)').all().map(c=>c.name);
-            for (const column of ['deleted','deleted_at','deleted_by_device_id']) {
-              if (!entity.includes(column)) {
-                console.error('migration 0006 não aplicada: sem coluna ' + column); process.exit(1);
+              for (const table of ['sync_entities','sync_changes','sync_mutations']) {
+                const found = await pool.query(\"SELECT table_name FROM information_schema.tables WHERE table_name = \$1\", [table]);
+                if (found.rows.length === 0) {
+                  console.error('baseline não aplicada: sem tabela ' + table); process.exit(1);
+                }
               }
-            }
-            const applied=db.prepare('SELECT COUNT(*) AS total FROM schema_migrations').get();
-            if (applied.total < 6) {
-              console.error('migrations pendentes: ' + applied.total); process.exit(1);
-            }
-            console.log('schema de restore, de sync e de tombstone ok');
-            db.close();"
+              const entityRes = await pool.query(\"SELECT column_name FROM information_schema.columns WHERE table_name = 'sync_entities'\");
+              const entity = entityRes.rows.map(r => r.column_name);
+              for (const column of ['deleted','deleted_at','deleted_by_device_id']) {
+                if (!entity.includes(column)) {
+                  console.error('baseline não aplicada: sem coluna ' + column); process.exit(1);
+                }
+              }
+              const applied = await pool.query('SELECT COUNT(*) AS total FROM schema_migrations');
+              if (Number(applied.rows[0].total) < 1) {
+                console.error('migrations pendentes: ' + applied.rows[0].total); process.exit(1);
+              }
+              console.log('schema de restore, de sync e de tombstone ok');
+              await pool.end();
+            })().catch(err => { console.error(err); process.exit(1); });"
 
           for path in /v1/backups /v1/backups/abc /v1/backups/abc/content /v1/sync/pull \
                       /v1/sync/entities/WORKOUT_TEMPLATE/abc; do
@@ -298,16 +325,9 @@ jobs:
             echo "rota /v1/sync/push deveria exigir autenticação; respondeu $status"; exit 1
           fi
 
-          # O comando operacional de DR, exercitado no **artefato construído** (T17.13.1 §14/§65).
-          #
-          # O teste do Jest chama `runReconciliation()` — a mesma função — mas não prova que o
-          # arquivo existe em `dist/`, que o `require.main` guarda o auto-run, nem que os códigos de
-          # saída chegam ao shell. É isso que o operador e o `ops/restore.sh --install` dependem.
-          #
-          # Ledger ausente precisa **falhar fechado**: tratar a ausência como "nenhuma conta
-          # excluída" é o que devolveria ao ar contas já apagadas depois de um restore.
+          # O comando operacional de DR, exercitado no artefato construído
           if docker exec spark-ci-2 sh -c \
-               'DELETION_TOMBSTONES_FILE_PATH=/data/ausente.tsv node dist/cli/reconcile-account-deletions.js' \
+               'DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/ausente.tsv node dist/cli/reconcile-account-deletions.js' \
                > /tmp/dr-ausente.log 2>&1; then
             echo "a reconciliação passou sem ledger — ela precisa falhar fechada"
             cat /tmp/dr-ausente.log; exit 1
@@ -316,10 +336,9 @@ jobs:
             echo "falhou por outro motivo"; cat /tmp/dr-ausente.log; exit 1; }
           echo "reconciliação de DR falha fechada sem ledger"
 
-          # Uma linha malformada também é falha, e não uma linha ignorada em silêncio.
           if docker exec spark-ci-2 sh -c \
-               'printf "naoehumhash\t123\n" > /data/ruim.tsv &&
-                DELETION_TOMBSTONES_FILE_PATH=/data/ruim.tsv node dist/cli/reconcile-account-deletions.js' \
+               'printf "naoehumhash\t123\n" > /media/ruim.tsv &&
+                DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/ruim.tsv node dist/cli/reconcile-account-deletions.js' \
                > /tmp/dr-ruim.log 2>&1; then
             echo "a reconciliação aceitou um ledger malformado"; cat /tmp/dr-ruim.log; exit 1
           fi
@@ -327,15 +346,14 @@ jobs:
             echo "falhou por outro motivo"; cat /tmp/dr-ruim.log; exit 1; }
           echo "reconciliação de DR recusa ledger malformado"
 
-          # E o caminho feliz: ledger válido, reconciliação e os dois PRAGMAs de integridade.
           docker exec spark-ci-2 sh -c \
-            'printf "" > /data/deletion_tombstones.tsv && node dist/cli/reconcile-account-deletions.js' \
-            | grep -q 'foreign_key_check e integrity_check ok' || {
+            'printf "" > /media/deletion_tombstones.tsv && DATABASE_URL=\"postgresql://spark:spark@127.0.0.1:5432/spark_dev\" DELETION_TOMBSTONES_FILE_PATH=/media/deletion_tombstones.tsv node dist/cli/reconcile-account-deletions.js' \
+            | grep -q 'integridade referencial e verificação ok' || {
               echo "a reconciliação não validou a integridade"; exit 1; }
           echo "reconciliação de DR roda e valida integridade"
 
           docker rm -f spark-ci-2
-          docker volume rm spark-ci-data spark-ci-media
+          docker volume rm spark-ci-media
 
   ops-scripts:
     name: shellcheck dos scripts operacionais
@@ -454,6 +472,7 @@ jobs:
           # (`${VAR:?}`) desde a T16.8.1 — o valor não importa para conferir a topologia, mas sem
           # ele o Compose nem interpola o arquivo.
           resolved="$(SPARK_DOMAIN=api.exemplo.invalid SPARK_ACME_EMAIL=ops@exemplo.invalid \
+            DATABASE_URL=postgresql://spark:spark@localhost:5432/spark_dev \
             SPARK_DATA_GID=1 SPARK_IMAGE_TAG=ci docker compose -f docker-compose.prod.yml config)"
           # Só o Caddy publica portas. Se `8080` aparecer publicado, o teste falha.
           if printf '%s' "$resolved" | grep -A6 'container_name: spark-backend' | grep -q 'published:'; then
@@ -465,6 +484,20 @@ jobs:
   production-topology:
     name: topologia de produção (compose real)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: spark
+          POSTGRES_DB: spark_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: .
@@ -554,6 +587,7 @@ jobs:
           SPARK_SECRETS_DIR=$WORK/secrets
           SPARK_DATA_GID=$(id -g)
           SPARK_CI_HTTP_PORT=8081
+          DATABASE_URL=postgresql://spark:spark@172.17.0.1:5432/spark_dev
           EOF
 
       - name: A pilha de produção sobe, e o backend continua inalcançável do host
@@ -636,9 +670,11 @@ jobs:
           cd backend
           COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.ci-topology.yml"
           SPARK_IMAGE_TAG=topology $COMPOSE exec -T backend node -e "
-            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
-            db.prepare('INSERT OR REPLACE INTO server_metadata (key,value,updated_at) VALUES (?,?,?)')
-              .run('topologia','persistiu',Date.now()); db.close();"
+            const { Pool } = require('pg');
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+            pool.query('INSERT INTO server_metadata (key,value,updated_at) VALUES (\$1,\$2,\$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at', ['topologia','persistiu',Date.now()])
+              .then(() => pool.end())
+              .catch(e => { console.error(e); process.exit(1); });"
 
           SPARK_IMAGE_TAG=topology $COMPOSE down
           SPARK_IMAGE_TAG=topology $COMPOSE up -d
@@ -650,12 +686,17 @@ jobs:
           done
 
           SPARK_IMAGE_TAG=topology $COMPOSE exec -T backend node -e "
-            const D=require('better-sqlite3'); const db=new D('/data/spark.db');
-            const row=db.prepare('SELECT value FROM server_metadata WHERE key=?').get('topologia');
-            if (!row || row.value !== 'persistiu') {
-              console.error('o dado não sobreviveu ao bind mount'); process.exit(1);
-            }
-            console.log('persistência ok no bind mount'); db.close();"
+            const { Pool } = require('pg');
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+            pool.query('SELECT value FROM server_metadata WHERE key=\$1', ['topologia'])
+              .then(res => {
+                if (!res.rows[0] || res.rows[0].value !== 'persistiu') {
+                  console.error('o dado não sobreviveu ao bind mount'); process.exit(1);
+                }
+                console.log('persistência ok no bind mount');
+                return pool.end();
+              })
+              .catch(e => { console.error(e); process.exit(1); });"
 
           SPARK_IMAGE_TAG=topology $COMPOSE down -v
 

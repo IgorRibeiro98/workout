@@ -12,6 +12,7 @@ const MAX_BACKOFF_MS = 3_600_000;
 export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShutdown {
   private timer?: NodeJS.Timeout;
   private isProcessing = false;
+  private isShuttingDown = false;
 
   constructor(
     private readonly repo: AccountDeletionRepository,
@@ -27,13 +28,16 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
 
   onModuleInit(): void {
     // Roda uma verificação inicial e agenda o intervalo
-    void this.processDueJobs();
+    void this.processDueJobs().catch(() => undefined);
     this.timer = setInterval(() => {
-      void this.processDueJobs();
+      void this.processDueJobs().catch(() => undefined);
     }, RECONCILER_INTERVAL_MS);
+    this.timer.unref?.();
   }
 
   onApplicationShutdown(): void {
+    this.isShuttingDown = true;
+    this.isProcessing = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -41,7 +45,7 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
   }
 
   async processDueJobs(): Promise<number> {
-    if (this.isProcessing) return 0;
+    if (this.isProcessing || this.isShuttingDown) return 0;
     this.isProcessing = true;
 
     try {
@@ -78,6 +82,11 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
       }
 
       return processed;
+    } catch (error: unknown) {
+      this.logger.warn('account.deletion.reconciler_cycle_error', {
+        error: error instanceof Error ? error.name : 'Unknown',
+      });
+      return 0;
     } finally {
       this.isProcessing = false;
     }

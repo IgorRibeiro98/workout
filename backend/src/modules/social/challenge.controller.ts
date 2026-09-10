@@ -90,7 +90,11 @@ export class ChallengeController {
     @Req() request: Request,
     @Param('challengeId') challengeId: string,
   ): Promise<ChallengeDetailResponseDto> {
-    return await this.service.detail(principal, requestIdOf(request), parseChallengeId(challengeId));
+    return await this.service.detail(
+      principal,
+      requestIdOf(request),
+      parseChallengeId(challengeId),
+    );
   }
 
   @UseGuards(BearerAuthGuard)
@@ -101,7 +105,11 @@ export class ChallengeController {
     @Req() request: Request,
     @Param('challengeId') challengeId: string,
   ): Promise<CancelChallengeResponseDto> {
-    return await this.service.cancel(principal, requestIdOf(request), parseChallengeId(challengeId));
+    return await this.service.cancel(
+      principal,
+      requestIdOf(request),
+      parseChallengeId(challengeId),
+    );
   }
 
   @UseGuards(BearerAuthGuard)
@@ -141,7 +149,11 @@ export class ChallengeController {
     @Req() request: Request,
     @Param('invitationId') invitationId: string,
   ): Promise<AcceptChallengeResponseDto> {
-    return await this.service.accept(principal, requestIdOf(request), parseInvitationId(invitationId));
+    return await this.service.accept(
+      principal,
+      requestIdOf(request),
+      parseInvitationId(invitationId),
+    );
   }
 
   @UseGuards(BearerAuthGuard)
@@ -152,7 +164,11 @@ export class ChallengeController {
     @Req() request: Request,
     @Param('invitationId') invitationId: string,
   ): Promise<DeclineChallengeResponseDto> {
-    return await this.service.decline(principal, requestIdOf(request), parseInvitationId(invitationId));
+    return await this.service.decline(
+      principal,
+      requestIdOf(request),
+      parseInvitationId(invitationId),
+    );
   }
 }
 

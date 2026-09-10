@@ -58,9 +58,13 @@ export class AccountDeletionRepository {
           OR device_registration_id IN (SELECT id FROM social_push_devices WHERE owner_uid = $2)`,
       [ownerUid, ownerUid],
     );
-    await client.query(`DELETE FROM social_notification_events WHERE recipient_uid = $1`, [ownerUid]);
+    await client.query(`DELETE FROM social_notification_events WHERE recipient_uid = $1`, [
+      ownerUid,
+    ]);
     await client.query(`DELETE FROM social_push_devices WHERE owner_uid = $1`, [ownerUid]);
-    await client.query(`DELETE FROM social_notification_preferences WHERE owner_uid = $1`, [ownerUid]);
+    await client.query(`DELETE FROM social_notification_preferences WHERE owner_uid = $1`, [
+      ownerUid,
+    ]);
 
     // 5. Configurações sociais
     await client.query(`DELETE FROM social_progress_settings WHERE owner_uid = $1`, [ownerUid]);
@@ -96,10 +100,10 @@ export class AccountDeletionRepository {
     await client.query(`DELETE FROM challenges WHERE creator_uid = $1`, [ownerUid]);
 
     // 9. Workout Shares
-    await client.query(
-      `DELETE FROM workout_shares WHERE sender_uid = $1 OR recipient_uid = $2`,
-      [ownerUid, ownerUid],
-    );
+    await client.query(`DELETE FROM workout_shares WHERE sender_uid = $1 OR recipient_uid = $2`, [
+      ownerUid,
+      ownerUid,
+    ]);
 
     // 10. Workout Check-ins e Conteúdo UGC
     await client.query(`DELETE FROM social_checkin_comments WHERE author_uid = $1`, [ownerUid]);

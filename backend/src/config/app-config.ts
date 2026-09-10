@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
 export class ConfigValidationError extends Error {
@@ -20,15 +20,10 @@ export class AppConfig {
     const raw = { ...source };
     const issues: string[] = [];
 
-    if (!raw.DATABASE_URL && !raw.DATABASE_PATH) {
-      issues.push('DATABASE_PATH: DATABASE_PATH é obrigatório');
-    } else if (raw.DATABASE_PATH !== undefined && raw.DATABASE_PATH.trim() === '') {
-      issues.push('DATABASE_PATH: DATABASE_PATH não pode ser vazio');
-    } else if (!raw.DATABASE_URL && raw.DATABASE_PATH) {
-      raw.DATABASE_URL = raw.DATABASE_PATH.startsWith('postgres')
-        ? raw.DATABASE_PATH
-        : (process.env.DATABASE_URL || 'postgresql://spark:spark@localhost:5432/spark_dev');
+    if (!raw.DATABASE_URL || raw.DATABASE_URL.trim() === '') {
+      issues.push('DATABASE_URL: DATABASE_URL é obrigatório');
     }
+
     const result = envSchema.safeParse(raw);
     if (!result.success) {
       issues.push(
@@ -99,23 +94,6 @@ export class AppConfig {
 
   get shutdownTimeoutMs(): number {
     return this.env.SHUTDOWN_TIMEOUT_MS;
-  }
-
-  // Compatibilidade legada
-  get databasePath(): string {
-    return (this.env as any).DATABASE_PATH ?? ':memory:';
-  }
-
-  get sqliteBusyTimeoutMs(): number {
-    return (this.env as any).SQLITE_BUSY_TIMEOUT_MS ?? 5000;
-  }
-
-  get sqliteSynchronous(): string {
-    return (this.env as any).SQLITE_SYNCHRONOUS ?? 'NORMAL';
-  }
-
-  get sqliteWalAutocheckpointPages(): number {
-    return (this.env as any).SQLITE_WAL_AUTOCHECKPOINT_PAGES ?? 1000;
   }
 
   /** Caminho do arquivo de service account do Firebase Admin, quando configurado. */
@@ -243,10 +221,6 @@ export class AppConfig {
     const configured = this.env.SOCIAL_MEDIA_ROOT;
     if (configured) {
       return configured;
-    }
-    const dbPath = this.databasePath;
-    if (dbPath && dbPath !== ':memory:' && !dbPath.startsWith('postgres')) {
-      return join(dirname(dbPath), 'media');
     }
     return join(process.cwd(), '.spark-media');
   }

@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PostgresService } from '../../database/postgres.service';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
@@ -109,7 +108,11 @@ export interface ChallengeProgressSource {
    * Uma sessão canônica `COMPLETED` cujo `startedAt` cai na janela vale 1 ponto (§3).
    * `PLANNED`, `IN_PROGRESS`, `PAUSED` e `CANCELLED` não valem nada (§4).
    */
-  countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number>;
+  countCompletedWorkouts(
+    ownerUid: string,
+    startMs: number,
+    endMsExclusive: number,
+  ): Promise<number>;
 
   /**
    * Em quantos **dias de calendário** do desafio este dono concluiu pelo menos um treino (§7).
@@ -117,7 +120,12 @@ export interface ChallengeProgressSource {
    * Dois treinos no mesmo dia contam 1, e não 2. O dia é o dia local do fuso **do desafio** (§8/§9)
    * — o mesmo para todos os participantes.
    */
-  countActiveDays(ownerUid: string, startDate: string, endDate: string, timeZoneId: string): Promise<number>;
+  countActiveDays(
+    ownerUid: string,
+    startDate: string,
+    endDate: string,
+    timeZoneId: string,
+  ): Promise<number>;
 }
 
 /** O token de injeção. Interface no ponto de injeção, como `SOCIAL_PROGRESS_SOURCE` (T17.2). */
@@ -129,12 +137,11 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
 
   constructor(
     @Inject(CANONICAL_TRAINING_SOURCE)
-    trainingSourceOrDb: CanonicalTrainingSource | import('../../database/postgres.service').PostgresService,
+    trainingSourceOrDb:
+      | CanonicalTrainingSource
+      | import('../../database/postgres.service').PostgresService,
   ) {
-    if (
-      'countCompletedWorkouts' in trainingSourceOrDb &&
-      'countActiveDays' in trainingSourceOrDb
-    ) {
+    if ('countCompletedWorkouts' in trainingSourceOrDb && 'countActiveDays' in trainingSourceOrDb) {
       this.trainingSource = trainingSourceOrDb;
     } else {
       this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrDb);
@@ -146,7 +153,11 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
    *
    * Delega à fonte canônica de treino centralizada (T17.4.1).
    */
-  async countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number> {
+  async countCompletedWorkouts(
+    ownerUid: string,
+    startMs: number,
+    endMsExclusive: number,
+  ): Promise<number> {
     return await this.trainingSource.countCompletedWorkouts(ownerUid, startMs, endMsExclusive);
   }
 

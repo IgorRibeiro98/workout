@@ -9,7 +9,7 @@ import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { AccountDeletionService } from '../src/modules/account-deletion/account-deletion.service';
 import { AccountDeletionReconciler } from '../src/modules/account-deletion/account-deletion.reconciler';
 import { DeletionTombstoneLedger } from '../src/modules/account-deletion/deletion-tombstone.ledger';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 
 const ACCOUNTS = {
   A: { token: 'token-a', uid: 'uid-a', email: 'a@example.com', name: 'Alice' },
@@ -143,9 +143,16 @@ describe('T17.13.1 — durabilidade e atomicidade da exclusão de conta', () => 
     // preparados, e um gatilho criado de fora só é enxergado quando aquela conexão repara o
     // statement. O teste passava sozinho e falhava na suíte inteira por causa disso — a injeção
     // simplesmente não chegava a existir para quem executa o purge.
-    app.get(SqliteService).connection.exec(`
-      CREATE TRIGGER falha_no_purge BEFORE DELETE ON social_privacy_settings
-      BEGIN SELECT RAISE(ABORT, 'falha injetada no purge'); END;
+    await app.get(PostgresService).query(`
+      CREATE OR REPLACE FUNCTION fail_purge_fn() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'falha injetada no purge';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS falha_no_purge ON social_privacy_settings;
+      CREATE TRIGGER falha_no_purge
+      BEFORE DELETE ON social_privacy_settings
+      FOR EACH ROW EXECUTE FUNCTION fail_purge_fn();
     `);
 
     // `try/catch`, e nunca `.rejects.toThrow()` sem argumento: o erro vem do `better-sqlite3`, que
@@ -237,6 +244,7 @@ describe('T17.13.1 — durabilidade e atomicidade da exclusão de conta', () => 
 
     // Reinício de verdade: a aplicação inteira é derrubada e reconstruída sobre o mesmo arquivo.
     await app.close();
+    app = undefined as unknown as INestApplication;
     await boot();
 
     // A fase continua lá — porque é uma linha do SQLite, e não estado em memória.

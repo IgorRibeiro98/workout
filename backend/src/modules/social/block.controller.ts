@@ -51,7 +51,9 @@ export class BlockController {
   }
 
   @Get()
-  async listBlocked(@Principal() principal: AuthenticatedPrincipal): Promise<ListBlockedUsersResponseDto> {
+  async listBlocked(
+    @Principal() principal: AuthenticatedPrincipal,
+  ): Promise<ListBlockedUsersResponseDto> {
     return await this.blockService.listBlocked(principal.uid);
   }
 }

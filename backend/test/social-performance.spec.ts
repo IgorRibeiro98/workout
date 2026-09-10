@@ -2,7 +2,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MIGRATIONS_DIR, configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
+import { createTempDb, type TempDb } from './support/temp-db';
 import { loadMigrations, runMigrations } from '../src/database/migration-runner';
 import {
   viewerBlockedCte,

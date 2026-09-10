@@ -25,9 +25,11 @@
                  │  Spark Backend       │  NestJS, usuário `node` (uid 1000)
                  │  spark-backend:<sha> │  :8080 apenas na rede interna
                  └──────────┬───────────┘
-                            │ bind mount
-                            ▼
-                 /opt/spark/data/spark.db   SQLite (WAL, FULL, foreign_keys)
+                            │
+                            ├─▶ PostgreSQL / Neon (DATABASE_URL, persistência remota desde T18.0)
+                            │
+                            ▼ bind mounts
+                 /opt/spark/data/           ledgers operacionais (deletion_tombstones.tsv)
                  /opt/spark/media/          fotos dos check-ins (T17.9), fora do banco
                             │
                             │ ops/backup.sh (diário + pré-deploy)
@@ -35,9 +37,8 @@
                  restic → storage off-site (criptografado)
 ```
 
-Nada além disso. Sem Kubernetes, Redis, Kafka, PostgreSQL, service mesh ou monitoramento pago —
-a decisão está no [ADR-0001](../architecture/ADR-0001-spark-online-architecture.md), "política de
-custo", e a T16.8 não a reabre.
+Persistência relacional exclusivamente no PostgreSQL (migrado na T18.0/T18.0.1). O app Android
+continua usando Room/SQLite localmente para funcionamento offline integral.
 
 ## Usuários, grupos e permissões
 
@@ -79,7 +80,7 @@ operação normal e o backend continua rodando sem privilégio.
 | Caminho | Dono | Permissão | Quem precisa, e para quê |
 | --- | --- | --- | --- |
 | `/opt/spark/repo` | `spark:spark` | `755` | Repositório (compose, Caddyfile, `ops/`) |
-| `/opt/spark/data` | `spark:spark-data` | `2770` | **host** (backup lê e recolhe snapshot) + **container** (lê e escreve `spark.db`) |
+| `/opt/spark/data` | `spark:spark-data` | `2770` | **host** + **container** (ledgers operacionais e tombstones anti-ressurreição) |
 | `/opt/spark/media` | `spark:spark-data` | `2770` | **host** (backup lê as fotos) + **container** (escreve e serve a mídia dos check-ins, T17.9) |
 | `/opt/spark/secrets` | `spark:spark-data` | `2750` | host escreve; container lê a service account |
 | `/opt/spark/secrets/firebase-admin.json` | `spark:spark-data` | `640` | container lê (montado `:ro`) |

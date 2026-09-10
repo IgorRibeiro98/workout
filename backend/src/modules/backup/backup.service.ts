@@ -71,7 +71,10 @@ export class BackupService {
     const startedAt = Date.now();
     const snapshot = validateBackupRequest(rawBody);
 
-    const existing = await this.repository.findByClientBackupId(principal.uid, snapshot.clientBackupId);
+    const existing = await this.repository.findByClientBackupId(
+      principal.uid,
+      snapshot.clientBackupId,
+    );
     if (existing) {
       if (existing.payloadHash !== snapshot.payloadHash) {
         // Mesma tentativa, conteúdo outro. Aceitar apagaria em silêncio o que a primeira
@@ -92,7 +95,36 @@ export class BackupService {
       return { created: false, metadata: metadataOf(existing) };
     }
 
-    const stored = await this.repository.insert(principal.uid, snapshot, Date.now());
+    let stored: StoredSnapshot;
+    try {
+      stored = await this.repository.insert(principal.uid, snapshot, Date.now());
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === '23505') {
+        const concurrent = await this.repository.findByClientBackupId(
+          principal.uid,
+          snapshot.clientBackupId,
+        );
+        if (concurrent) {
+          if (concurrent.payloadHash !== snapshot.payloadHash) {
+            this.logger.warn('backup.idempotency.conflict', {
+              requestId,
+              uidPrefix: uidPrefix(principal.uid),
+              clientBackupId: snapshot.clientBackupId,
+            });
+            throw BackupErrors.idempotencyConflict();
+          }
+          this.logger.info('backup.replayed', {
+            requestId,
+            uidPrefix: uidPrefix(principal.uid),
+            clientBackupId: snapshot.clientBackupId,
+            backupId: concurrent.backupId,
+          });
+          return { created: false, metadata: metadataOf(concurrent) };
+        }
+      }
+      throw err;
+    }
 
     this.logger.info('backup.created', {
       requestId,
@@ -138,7 +170,10 @@ export class BackupService {
    * O `backupId` de outra conta responde exatamente como um inexistente: `404`. Distinguir os dois
    * transformaria este endpoint em um oráculo de "este backup existe em alguma conta".
    */
-  async metadata(principal: AuthenticatedPrincipal, backupId: string): Promise<BackupMetadataResponse> {
+  async metadata(
+    principal: AuthenticatedPrincipal,
+    backupId: string,
+  ): Promise<BackupMetadataResponse> {
     this.assertWithinReadLimit(principal.uid);
     const stored = await this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {
@@ -150,7 +185,11 @@ export class BackupService {
   /**
    * O documento canônico do snapshot, verbatim, para o restore.
    */
-  async content(principal: AuthenticatedPrincipal, requestId: string, backupId: string): Promise<string> {
+  async content(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+    backupId: string,
+  ): Promise<string> {
     this.assertWithinReadLimit(principal.uid);
     const stored = await this.repository.findByBackupId(principal.uid, backupId);
     if (!stored) {

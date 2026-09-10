@@ -1,6 +1,6 @@
 # Spark Backend — composição de PRODUÇÃO (T16.8).
 #
-#   Internet ──443/tcp──▶ Caddy (TLS automático) ──rede interna──▶ backend:8080 ──▶ SQLite
+#   Internet ──443/tcp──▶ Caddy (TLS automático) ──rede interna──▶ backend:8080 ──▶ PostgreSQL
 #
 # A diferença que importa em relação a `docker-compose.yml` (que é a composição **local**): aqui o
 # backend **não publica porta nenhuma**. Ele existe apenas na rede interna do Compose, e a única
@@ -109,15 +109,13 @@ services:
       - path: ${SPARK_SECRETS_DIR:-/opt/spark/secrets}/backend.env
         required: false
     volumes:
-      # Bind mount, e não volume nomeado, para produção: o backup precisa enxergar `spark.db` do
-      # host, e "onde está meu banco?" precisa ter resposta com um `ls`. Derrubar e recriar o
-      # container não toca neste diretório.
+      # Bind mount, e não volume nomeado, para produção: arquivos operacionais e ledgers
+      # (como deletion_tombstones.tsv) precisam ser inspecionáveis pelo host com um `ls`.
+      # Derrubar e recriar o container não toca neste diretório.
       - ${SPARK_DATA_DIR:-/opt/spark/data}:/data
-      # A mídia social (T17.9 §26). Bind mount separado do banco, pelo mesmo motivo do `/data`:
+      # A mídia social (T17.9 §26). Bind mount separado pelo mesmo motivo do `/data`:
       # `ops/backup.sh` precisa enxergá-la do host, e "onde estão as fotos?" precisa ter resposta
-      # com um `ls`. Separada do banco porque o snapshot do SQLite é copiado inteiro a cada backup
-      # e a mídia é deduplicada pelo restic — juntá-las faria cada backup diário arrastar todas as
-      # fotos de novo.
+      # com um `ls`. Separada de `/data` porque a mídia é deduplicada pelo restic.
       #
       # Derrubar e recriar o container não toca neste diretório, que é a única razão de ele
       # existir: a T17.9 recusa produção sem ele (§28).
@@ -135,7 +133,7 @@ services:
     deploy:
       resources:
         limits:
-          # Teto generoso, não apertado (§73): o processo é um Node com SQLite embarcado e um
+          # Teto generoso, não apertado (§73): o processo é um Node com PostgreSQL via pool e um
           # backup de até 4 MiB em memória durante a validação. Matar o container por OOM no meio
           # de um upload seria criar o incidente que o limite deveria evitar. O objetivo aqui é
           # conter um vazamento, não espremer o serviço.

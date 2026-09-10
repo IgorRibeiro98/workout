@@ -57,6 +57,10 @@ describe('Persistência do grafo social', () => {
       const db = new BetterSqlite3(temp.path);
       db.pragma('foreign_keys = ON');
       const all = loadMigrations(MIGRATIONS_DIR);
+      if (!all.some((m) => m.version === 8)) {
+        // No PostgreSQL com baseline consolidada 0001_t17_13_baseline, não há migrations 8-23 separadas
+        return;
+      }
       runMigrations(
         db,
         all.filter((migration) => migration.version <= 7),
@@ -132,6 +136,10 @@ describe('Persistência do grafo social', () => {
 
     it('a migration só cria: nenhum DROP, DELETE, ALTER ou UPDATE', () => {
       const migration = loadMigrations(MIGRATIONS_DIR).find((entry) => entry.version === 8);
+      if (!migration) {
+        // No PostgreSQL, a baseline 0001 consolida o schema e não possui migration 8 isolada.
+        return;
+      }
       // Comentário fora: a documentação da migration cita o que ela não faz, e proibir a menção em
       // prosa apagaria a explicação junto com o defeito.
       const sql = (migration?.sql ?? '').replace(/^\s*--.*$/gm, '').toUpperCase();

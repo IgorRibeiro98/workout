@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Database } from 'better-sqlite3';
 
 export interface Migration {
   readonly version: number;
@@ -13,6 +12,13 @@ export interface AppliedMigration {
   readonly version: number;
   readonly name: string;
   readonly appliedAt: number;
+}
+
+export interface MigrationSyncDb {
+  exec(sql: string): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  prepare(sql: string): any;
+  transaction<T>(fn: () => T): () => T;
 }
 
 const MIGRATION_FILE_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
@@ -55,36 +61,16 @@ export function loadMigrations(directory: string): Migration[] {
 
 /**
  * Aplica as migrations pendentes.
- *
- * Propriedades que os testes cobrem e que o runtime depende:
- *
- * - **idempotência**: rodar de novo não reaplica nada nem corrompe estado;
- * - **atomicidade**: cada migration e o respectivo registro em `schema_migrations` entram na mesma
- *   transação — uma migration que falha no meio não deixa o schema parcialmente migrado;
- * - **imutabilidade do histórico**: uma migration já aplicada que muda de **nome** ou de
- *   **conteúdo** é um erro, não uma reaplicação silenciosa.
- *
- * O checksum (T17.10 §111) fecha a metade que faltava. A verificação por nome pegava um arquivo
- * renomeado, mas não um arquivo **editado**: trocar o corpo de `0015_social_workout_checkins.sql`
- * depois de ele já ter rodado em produção passava despercebido, e o servidor seguia com um schema
- * que nenhuma migration descreve — enquanto uma instalação nova nasceria diferente da antiga. Esse
- * é o defeito mais caro possível num sistema com migrations, porque ele só aparece muito depois,
- * como uma diferença inexplicável entre dois ambientes.
- *
- * Bancos que já existiam antes desta coluna têm `checksum` nulo. O primeiro arranque **grava** o
- * valor atual em vez de recusar: não há como saber retroativamente qual era o conteúdo aplicado, e
- * derrubar o servidor de quem já estava em produção para provar um ponto seria pior do que
- * começar a proteger a partir de agora.
  */
-export function runMigrations(db: Database, migrations: Migration[]): AppliedMigration[] {
+export function runMigrations(db: MigrationSyncDb, migrations: Migration[]): AppliedMigration[] {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version    INTEGER NOT NULL PRIMARY KEY,
       name       TEXT    NOT NULL,
-      applied_at INTEGER NOT NULL
-    ) STRICT;
+      applied_at BIGINT  NOT NULL,
+      checksum   TEXT
+    );
   `);
-  ensureChecksumColumn(db);
 
   const alreadyApplied = new Map(
     (
@@ -110,8 +96,6 @@ export function runMigrations(db: Database, migrations: Migration[]): AppliedMig
 
       const checksum = checksumOf(migration.sql);
       if (previous.checksum === null) {
-        // Banco anterior ao checksum: confia no que já está aplicado e passa a proteger daqui
-        // em diante.
         db.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = ?').run(
           checksum,
           migration.version,
@@ -145,31 +129,13 @@ function checksumOf(sql: string): string {
   return createHash('sha256').update(sql, 'utf8').digest('hex');
 }
 
-/**
- * Acrescenta `checksum` a um `schema_migrations` que nasceu sem ela.
- *
- * Feito aqui, e não como uma migration numerada: `schema_migrations` é a tabela que o próprio
- * runner cria e mantém — uma migration que alterasse a tabela de controle das migrations
- * dependeria de si mesma para ser registrada.
- */
-function ensureChecksumColumn(db: Database): void {
-  const columns = db
-    .prepare(`SELECT name FROM pragma_table_info('schema_migrations')`)
-    .all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === 'checksum')) {
-    db.exec('ALTER TABLE schema_migrations ADD COLUMN checksum TEXT;');
-  }
-}
-
-export function appliedVersions(db: Database): number[] {
-  const table = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
-    .get();
-  if (!table) {
+export function appliedVersions(db: MigrationSyncDb): number[] {
+  try {
+    return db
+      .prepare('SELECT version FROM schema_migrations ORDER BY version')
+      .all()
+      .map((row: { version: number }) => row.version);
+  } catch {
     return [];
   }
-  return db
-    .prepare('SELECT version FROM schema_migrations ORDER BY version')
-    .all()
-    .map((row) => (row as { version: number }).version);
 }

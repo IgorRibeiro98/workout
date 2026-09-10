@@ -20,7 +20,7 @@ const UID = 'uid-da-conta';
  */
 describe('Sync multi-device', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -31,8 +31,9 @@ describe('Sync multi-device', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
   /** Um aparelho: cursor próprio, revisions próprias, nada compartilhado. */
@@ -44,7 +45,7 @@ describe('Sync multi-device', () => {
     constructor(readonly deviceId: string) {}
 
     async push(entitySyncId: string, payload: Record<string, unknown>) {
-      const response = await request(app.getHttpServer())
+      const response = await request(app!.getHttpServer())
         .post('/v1/sync/push')
         .set('Authorization', `Bearer ${TOKEN}`)
         .set('Content-Type', 'application/json')
@@ -70,7 +71,7 @@ describe('Sync multi-device', () => {
     }
 
     async pull() {
-      const response = await request(app.getHttpServer())
+      const response = await request(app!.getHttpServer())
         .get(`/v1/sync/pull?cursor=${this.cursor}&limit=100`)
         .set('Authorization', `Bearer ${TOKEN}`);
 
@@ -211,7 +212,7 @@ describe('Sync multi-device', () => {
     await a.push(conflitante, templatePayload(conflitante, 'versão do A'));
 
     // B envia um lote com a mutação stale **e** duas mutações independentes.
-    const response = await request(app.getHttpServer())
+    const response = await request(app!.getHttpServer())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${TOKEN}`)
       .set('Content-Type', 'application/json')

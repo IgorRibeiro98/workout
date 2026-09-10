@@ -26,7 +26,7 @@ const UID_B = 'uid-da-conta-b';
  */
 describe('Sync push (/v1/sync/push)', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -37,12 +37,15 @@ describe('Sync push (/v1/sync/push)', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
+  const server = () => app!.getHttpServer();
+
   const push = (body: string, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(server())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${token}`)
       .set('Content-Type', 'application/json')
@@ -51,7 +54,7 @@ describe('Sync push (/v1/sync/push)', () => {
   // ---------------------------------------------------------------------- autenticação
 
   it('sem token não sincroniza', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await request(server())
       .post('/v1/sync/push')
       .set('Content-Type', 'application/json')
       .send(pushBody([{ entityType: 'WORKOUT_PROGRAM', entitySyncId: uuid() }]));
@@ -154,7 +157,7 @@ describe('Sync push (/v1/sync/push)', () => {
     expect(stale.body.results[0].currentRevision).toBe(2);
 
     // Nada de last-write-wins: o conteúdo de A continua sendo o do servidor.
-    const pull = await request(app.getHttpServer())
+    const pull = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
     const last = pull.body.changes[pull.body.changes.length - 1];
@@ -247,7 +250,7 @@ describe('Sync push (/v1/sync/push)', () => {
     await push(body);
     await push(body);
 
-    const pull = await request(app.getHttpServer())
+    const pull = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
     expect(pull.body.changes).toHaveLength(1);
@@ -280,7 +283,7 @@ describe('Sync push (/v1/sync/push)', () => {
 
     expect(conflicting.body.results[0].status).toBe('IDEMPOTENCY_CONFLICT');
 
-    const pull = await request(app.getHttpServer())
+    const pull = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
     expect(pull.body.changes).toHaveLength(1);
@@ -343,7 +346,7 @@ describe('Sync push (/v1/sync/push)', () => {
     expect(rewritten.body.results[0].status).toBe('IMMUTABLE_HISTORY_CONFLICT');
     expect(rewritten.body.results[0].currentRevision).toBe(1);
 
-    const pull = await request(app.getHttpServer())
+    const pull = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
     expect(pull.body.changes).toHaveLength(1);
@@ -457,7 +460,7 @@ describe('Sync push (/v1/sync/push)', () => {
     expect(response.body.results[0].status).toBe('UNSUPPORTED');
     expect(response.body.results[0].reason).toBe('DELETE_NOT_ALLOWED');
 
-    const pull = await request(app.getHttpServer())
+    const pull = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
     expect(pull.body.changes).toHaveLength(0);
@@ -581,7 +584,7 @@ describe('Sync push (/v1/sync/push)', () => {
   });
 
   it('corpo que não é JSON é recusado', async () => {
-    const response = await request(app.getHttpServer())
+    const response = await request(server())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${TOKEN_A}`)
       .set('Content-Type', 'application/json')

@@ -12,7 +12,7 @@ import {
 import { AccountDeletionService } from '../src/modules/account-deletion/account-deletion.service';
 import { AccountDeletionRepository } from '../src/modules/account-deletion/account-deletion.repository';
 import { requestPath, isAccountRoutePath } from '../src/modules/auth/bearer-auth.guard';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 import {
   SOCIAL_MEDIA_STORE,
   type SocialMediaStore,
@@ -556,20 +556,14 @@ describe('T17.10 — auditoria final do Social', () => {
       };
 
       const countStatementsDuringFeed = async (): Promise<number> => {
-        const db = s.app.get(SqliteService).connection;
-        if (!db.prepare) return 0;
-        const original = db.prepare.bind(db);
-        let prepared = 0;
-        (db as unknown as { prepare: unknown }).prepare = ((sql: string) => {
-          prepared += 1;
-          return original(sql);
-        }) as unknown;
+        const postgres = s.app.get(PostgresService);
+        const spy = jest.spyOn(postgres, 'query');
         try {
           await get(ACCOUNT_A.token, '/v1/social/feed?limit=50').expect(200);
+          return spy.mock.calls.length;
         } finally {
-          (db as unknown as { prepare: unknown }).prepare = original;
+          spy.mockRestore();
         }
-        return prepared;
       };
 
       await publishMany(2);

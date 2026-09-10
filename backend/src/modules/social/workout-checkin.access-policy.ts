@@ -110,7 +110,10 @@ export function groupInteractionVisibleSql(actorUidColumn: string, groupIdColumn
  *
  * Exige `:groupId` e `:viewer` como parâmetros nomeados.
  */
-export function viewerInActiveGroupSql(groupIdParam: string = ':groupId', viewerParam: string = ':viewer'): string {
+export function viewerInActiveGroupSql(
+  groupIdParam: string = ':groupId',
+  viewerParam: string = ':viewer',
+): string {
   return `(
     EXISTS (SELECT 1 FROM social_groups g WHERE g.id = ${groupIdParam} AND g.status = 'ACTIVE')
     AND EXISTS (SELECT 1 FROM social_group_memberships vm
@@ -210,7 +213,10 @@ export class WorkoutCheckInAccessPolicy {
   /**
    * O check-in [checkInId] **e** o caminho pelo qual o viewer o alcança (T17.11 §76/§82).
    */
-  async findAccessibleCheckIn(viewerUid: string, checkInId: string): Promise<AccessibleCheckIn | null> {
+  async findAccessibleCheckIn(
+    viewerUid: string,
+    checkInId: string,
+  ): Promise<AccessibleCheckIn | null> {
     const res = await this.db.query<{
       checkInId: string;
       authorUid: string;

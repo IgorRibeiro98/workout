@@ -74,7 +74,10 @@ export class SocialProfileService {
   /**
    * `GET /v1/social/me/profile-preview` — exatamente o que um amigo veria agora (§40).
    */
-  async preview(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialFriendProfileResponse> {
+  async preview(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+  ): Promise<SocialFriendProfileResponse> {
     const owner = await this.requireActiveProfile(principal);
     const profile = await this.projectFor(owner);
 
@@ -116,7 +119,11 @@ export class SocialProfileService {
 
   private async projectFor(target: FriendProfileRow): Promise<SocialFriendProfileDto> {
     const settings = await this.settings.find(target.ownerUid);
-    const projection = await this.projector.project(target.ownerUid, settings.weekTimeZone, Date.now());
+    const projection = await this.projector.project(
+      target.ownerUid,
+      settings.weekTimeZone,
+      Date.now(),
+    );
 
     return {
       socialId: target.socialId,

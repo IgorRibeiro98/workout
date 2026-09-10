@@ -108,6 +108,11 @@ export class BackupRepository {
     const backupId = randomUUID();
 
     const sequence = await this.db.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        ownerUid,
+        `backup:${snapshot.clientBackupId}`,
+      ]);
+
       const res = await client.query<{ id: string | number }>(
         `INSERT INTO backup_snapshots
            (backup_id, owner_uid, client_backup_id, device_id, backup_schema_version,

@@ -3,26 +3,20 @@ import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
-import { sha256Hex } from '../backup/canonical-json';
-import { SyncEntityPolicyRegistry } from './sync.policy';
 import {
-  SYNC_MUTATION_REASONS,
   type SyncEntityStateResponse,
   type SyncMutationResult,
-  type SyncMutationStatus,
   type SyncPullResponse,
   type SyncPushResponse,
 } from './sync.contract';
 import { SyncErrors } from './sync.errors';
 import { SyncRateLimiter } from './sync.rate-limit';
-import { SyncRepository, type StoredSyncEntity } from './sync.repository';
+import { SyncRepository } from './sync.repository';
 import {
   parseCursor,
   parseEntityLookup,
   parseLimit,
   parsePushRequest,
-  validateMutation,
-  type AcceptedMutation,
   type ParsedMutation,
 } from './sync.validator';
 
@@ -73,7 +67,11 @@ export class SyncService {
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
-  async push(principal: AuthenticatedPrincipal, requestId: string, rawBody: string): Promise<SyncPushResponse> {
+  async push(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+    rawBody: string,
+  ): Promise<SyncPushResponse> {
     // Interruptor de escrita (T16.8 §121), antes de tudo: diante de um defeito grave no sync, o
     // que se quer é parar de gravar — não parar de responder. O pull continua, porque leitura não
     // corrompe nada, e a Outbox do aparelho permanece pendente porque 5xx nunca confirma.
@@ -125,11 +123,7 @@ export class SyncService {
     const startedAt = Date.now();
     const maxSeq = await this.repository.maxSequence();
     const oldestSeq = await this.repository.oldestSequence(principal.uid);
-    const cursor = parseCursor(
-      rawCursor,
-      maxSeq,
-      oldestSeq,
-    );
+    const cursor = parseCursor(rawCursor, maxSeq, oldestSeq);
     const limit = parseLimit(rawLimit);
 
     const { changes, hasMore } = await this.repository.changesAfter(principal.uid, cursor, limit);
@@ -230,289 +224,7 @@ export class SyncService {
     deviceId: string,
     mutation: ParsedMutation,
   ): Promise<SyncMutationResult> {
-    // 1. Idempotência primeiro, antes de qualquer validação de conteúdo.
-    //
-    // Um reenvio precisa devolver o resultado original mesmo que o servidor tenha ficado mais
-    // exigente entre as duas tentativas: a mutação já foi aplicada, e "revalidar e recusar agora"
-    // faria o aparelho reenviar para sempre algo que o servidor já tem.
-    const ledger = await this.repository.findMutation(ownerUid, mutation.clientMutationId);
-    if (ledger) {
-      // Uma exclusão não tem conteúdo, então o hash dela é vazio — e é a **intenção** (tipo,
-      // identidade, operação) que o ledger compara para distinguir reenvio de mutação nova.
-      const hash =
-        mutation.operation === 'DELETE'
-          ? ''
-          : mutation.canonicalPayload
-            ? sha256Hex(mutation.canonicalPayload)
-            : '';
-      const sameIntent =
-        ledger.entityType === mutation.entityType &&
-        ledger.entitySyncId === mutation.entitySyncId &&
-        ledger.operation === mutation.operation &&
-        ledger.payloadHash === hash;
-
-      if (!sameIntent) {
-        // Mesma tentativa, conteúdo (ou alvo) outro. Aceitar apagaria em silêncio o que a
-        // primeira significava; recusar deixa o cliente criar uma mutação nova, que é o correto.
-        return {
-          clientMutationId: mutation.clientMutationId,
-          status: 'IDEMPOTENCY_CONFLICT',
-        };
-      }
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'ALREADY_APPLIED',
-        serverRevision: ledger.resultRevision,
-        serverSequence: ledger.resultSequence,
-      };
-    }
-
-    // 2. Contrato: tipo, versão, payload, identidade, operação.
-    const verdict = validateMutation(mutation);
-    if (!verdict.ok) {
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: verdict.rejected.unsupported ? 'UNSUPPORTED' : 'INVALID',
-        reason: verdict.rejected.reason,
-      };
-    }
-    const accepted = verdict.accepted;
-
-    const entity = await this.repository.findEntity(ownerUid, accepted.entityType, mutation.entitySyncId);
-    const now = Date.now();
-
-    if (accepted.operation === 'DELETE') {
-      return this.applyDelete(ownerUid, deviceId, mutation, accepted, entity, now);
-    }
-
-    // 3. Tombstone antes de tudo: a entidade foi excluída, e este `UPSERT` a recriaria.
-    //
-    // É o caso do aparelho que ficou offline com a cópia antiga. Aceitar aqui — mesmo com
-    // `baseRevision` "correta" — desfaria em silêncio uma exclusão que o usuário fez em outro
-    // aparelho. Recriar é decisão dele, e ela nasce com `syncId` novo.
-    if (entity?.deleted) {
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'REMOTE_DELETED',
-        currentRevision: entity.serverRevision,
-        reason: SYNC_MUTATION_REASONS.ENTITY_DELETED,
-      };
-    }
-
-    // 4. Política do agregado. Histórico concluído e plano mutável não têm a mesma semântica.
-    if (SyncEntityPolicyRegistry.isImmutableHistory(accepted.entityType)) {
-      if (!entity) {
-        return this.apply(ownerUid, deviceId, mutation, accepted, 1, now, 'APPLIED');
-      }
-      if (entity.payloadHash === accepted.payloadHash) {
-        // A mesma sessão, byte a byte. Idempotente — e nunca `revision++`, que trataria histórico
-        // como documento editável.
-        return this.converged(ownerUid, deviceId, mutation, accepted, entity, now);
-      }
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'IMMUTABLE_HISTORY_CONFLICT',
-        currentRevision: entity.serverRevision,
-        reason: SYNC_MUTATION_REASONS.IMMUTABLE_HISTORY,
-      };
-    }
-
-    const base = mutation.baseRevision ?? 0;
-
-    if (!entity) {
-      if (base === 0) {
-        return this.apply(ownerUid, deviceId, mutation, accepted, 1, now, 'APPLIED');
-      }
-      // O cliente diz conhecer uma revision que este servidor nunca emitiu para esta entidade.
-      // Não é criação e não é atualização: é estado divergente, e quem decide é o usuário.
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'STALE',
-        currentRevision: 0,
-      };
-    }
-
-    if (base > entity.serverRevision) {
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'INVALID',
-        currentRevision: entity.serverRevision,
-        reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
-      };
-    }
-
-    if (accepted.payloadHash === entity.payloadHash) {
-      // Conteúdo idêntico ao que já está gravado. Criar uma revision nova aqui seria inventar uma
-      // mudança que não houve — e faria os outros aparelhos baixarem o que já têm.
-      return this.converged(ownerUid, deviceId, mutation, accepted, entity, now);
-    }
-
-    if (base === entity.serverRevision && base > 0) {
-      return this.apply(
-        ownerUid,
-        deviceId,
-        mutation,
-        accepted,
-        entity.serverRevision + 1,
-        now,
-        'APPLIED',
-      );
-    }
-
-    // `base < current` (outro aparelho já escreveu por cima), ou `base === 0` numa entidade que
-    // existe (o cliente acha que está criando). Os dois são escrita stale: o servidor devolve a
-    // revision atual e **não** aplica nada.
-    return {
-      clientMutationId: mutation.clientMutationId,
-      status: 'STALE',
-      currentRevision: entity.serverRevision,
-    };
-  }
-
-  /**
-   * Uma exclusão (T16.7).
-   */
-  private async applyDelete(
-    ownerUid: string,
-    deviceId: string,
-    mutation: ParsedMutation,
-    accepted: AcceptedMutation,
-    entity: StoredSyncEntity | null,
-    now: number,
-  ): Promise<SyncMutationResult> {
-    if (entity?.deleted) {
-      // Já é tombstone. Idempotente: nenhuma revision nova, nenhuma mudança nova no log — e a
-      // tentativa passa a ter resposta guardada, para que um reenvio não recomece o raciocínio.
-      return this.converged(ownerUid, deviceId, mutation, accepted, entity, now);
-    }
-
-    const base = mutation.baseRevision ?? 0;
-
-    if (!entity) {
-      return this.deleteEntity(ownerUid, deviceId, mutation, accepted, 1, now);
-    }
-
-    if (base > entity.serverRevision) {
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'INVALID',
-        currentRevision: entity.serverRevision,
-        reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
-      };
-    }
-
-    if (base !== entity.serverRevision) {
-      // O aparelho quis apagar uma versão que já não é a atual. Quem chegou primeiro definiu a
-      // revision seguinte, e o segundo recebe conflito — nunca uma exclusão silenciosa por cima
-      // de uma alteração mais nova.
-      return {
-        clientMutationId: mutation.clientMutationId,
-        status: 'STALE',
-        currentRevision: entity.serverRevision,
-      };
-    }
-
-    return this.deleteEntity(
-      ownerUid,
-      deviceId,
-      mutation,
-      accepted,
-      entity.serverRevision + 1,
-      now,
-    );
-  }
-
-  private async deleteEntity(
-    ownerUid: string,
-    deviceId: string,
-    mutation: ParsedMutation,
-    accepted: AcceptedMutation,
-    nextRevision: number,
-    now: number,
-  ): Promise<SyncMutationResult> {
-    const applied = await this.repository.applyDelete({
-      ownerUid,
-      deviceId,
-      clientMutationId: mutation.clientMutationId,
-      entityType: accepted.entityType,
-      entitySyncId: mutation.entitySyncId,
-      entitySchemaVersion: mutation.entitySchemaVersion,
-      baseRevision: mutation.baseRevision,
-      nextRevision,
-      now,
-    });
-    return {
-      clientMutationId: mutation.clientMutationId,
-      status: 'APPLIED',
-      serverRevision: applied.serverRevision,
-      serverSequence: applied.serverSequence,
-    };
-  }
-
-  private async apply(
-    ownerUid: string,
-    deviceId: string,
-    mutation: ParsedMutation,
-    accepted: AcceptedMutation,
-    nextRevision: number,
-    now: number,
-    status: SyncMutationStatus,
-  ): Promise<SyncMutationResult> {
-    const applied = await this.repository.applyMutation({
-      ownerUid,
-      deviceId,
-      clientMutationId: mutation.clientMutationId,
-      entityType: accepted.entityType,
-      entitySyncId: mutation.entitySyncId,
-      entitySchemaVersion: mutation.entitySchemaVersion,
-      operation: 'UPSERT',
-      baseRevision: mutation.baseRevision,
-      canonicalPayload: accepted.canonicalPayload,
-      payloadHash: accepted.payloadHash,
-      nextRevision,
-      now,
-    });
-    return {
-      clientMutationId: mutation.clientMutationId,
-      status,
-      serverRevision: applied.serverRevision,
-      serverSequence: applied.serverSequence,
-    };
-  }
-
-  /**
-   * O conteúdo já estava lá: nada é aplicado, e a tentativa passa a ter resposta guardada.
-   *
-   * Não é `APPLIED` — nenhuma revision foi gasta e nenhuma mudança foi anexada ao log. Para o
-   * aparelho o efeito é o mesmo: ele confirma a Outbox e passa a conhecer a revision remota.
-   */
-  private async converged(
-    ownerUid: string,
-    deviceId: string,
-    mutation: ParsedMutation,
-    accepted: AcceptedMutation,
-    entity: { serverRevision: number; lastServerSequence: number },
-    now: number,
-  ): Promise<SyncMutationResult> {
-    await this.repository.recordConverged({
-      ownerUid,
-      deviceId,
-      clientMutationId: mutation.clientMutationId,
-      entityType: mutation.entityType,
-      entitySyncId: mutation.entitySyncId,
-      operation: mutation.operation,
-      baseRevision: mutation.baseRevision,
-      payloadHash: accepted.payloadHash,
-      resultRevision: entity.serverRevision,
-      resultSequence: entity.lastServerSequence,
-      now,
-    });
-    return {
-      clientMutationId: mutation.clientMutationId,
-      status: 'ALREADY_APPLIED',
-      serverRevision: entity.serverRevision,
-      serverSequence: entity.lastServerSequence,
-    };
+    return this.repository.executeAtomicMutation(ownerUid, deviceId, mutation, Date.now());
   }
 }
 

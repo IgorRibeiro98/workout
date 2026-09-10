@@ -73,7 +73,10 @@ export class SocialGroupService {
   ): Promise<SocialGroupSummaryDto> {
     await this.requireActiveProfile(callerUid);
 
-    const existing = await this.repository.findGroupByClientRequest(callerUid, request.clientRequestId);
+    const existing = await this.repository.findGroupByClientRequest(
+      callerUid,
+      request.clientRequestId,
+    );
     if (existing && existing.status === 'ACTIVE') {
       if (existing.name !== request.name) {
         throw SocialGroupErrors.idempotencyConflict(
@@ -108,13 +111,16 @@ export class SocialGroupService {
 
     await this.repository.transaction(async (client) => {
       await this.repository.createGroup(group, client);
-      await this.repository.createMembership({
-        id: randomUUID(),
-        groupId: group.id,
-        memberUid: callerUid,
-        role: 'OWNER',
-        joinedAt: now,
-      }, client);
+      await this.repository.createMembership(
+        {
+          id: randomUUID(),
+          groupId: group.id,
+          memberUid: callerUid,
+          role: 'OWNER',
+          joinedAt: now,
+        },
+        client,
+      );
     });
 
     this.logger.info('social.group.created', {
@@ -128,7 +134,10 @@ export class SocialGroupService {
   /** `GET /v1/social/groups` (§131/§132). Só as participações **ativas** do próprio viewer. */
   async listGroups(callerUid: string): Promise<SocialGroupListDto> {
     await this.requireActiveProfile(callerUid);
-    const rows = await this.repository.listGroupsForMember(callerUid, SOCIAL_GROUP_LIST_PAGE.maxLimit);
+    const rows = await this.repository.listGroupsForMember(
+      callerUid,
+      SOCIAL_GROUP_LIST_PAGE.maxLimit,
+    );
     return {
       items: rows.map<SocialGroupSummaryDto>((row) => ({
         groupId: row.groupId,
@@ -241,7 +250,10 @@ export class SocialGroupService {
     if (pending) {
       return await this.invitationDtoOf(pending, group, callerUid);
     }
-    if ((await this.repository.countPendingInvitations(groupId)) >= SOCIAL_GROUP_MAX_PENDING_INVITATIONS) {
+    if (
+      (await this.repository.countPendingInvitations(groupId)) >=
+      SOCIAL_GROUP_MAX_PENDING_INVITATIONS
+    ) {
       throw SocialGroupErrors.inviteLimitReached(SOCIAL_GROUP_MAX_PENDING_INVITATIONS);
     }
 
@@ -367,13 +379,16 @@ export class SocialGroupService {
       if (!(await this.repository.resolveInvitation(invitationId, 'ACCEPTED', now, client))) {
         return false;
       }
-      await this.repository.createMembership({
-        id: randomUUID(),
-        groupId: group.id,
-        memberUid: callerUid,
-        role: 'MEMBER',
-        joinedAt: now,
-      }, client);
+      await this.repository.createMembership(
+        {
+          id: randomUUID(),
+          groupId: group.id,
+          memberUid: callerUid,
+          role: 'MEMBER',
+          joinedAt: now,
+        },
+        client,
+      );
       return true;
     });
 
@@ -390,14 +405,22 @@ export class SocialGroupService {
   }
 
   /** `POST /v1/social/group-invitations/{invitationId}/decline`. Só o destinatário. Idempotente. */
-  async declineInvitation(callerUid: string, requestId: string, invitationId: string): Promise<void> {
+  async declineInvitation(
+    callerUid: string,
+    requestId: string,
+    invitationId: string,
+  ): Promise<void> {
     await this.respondToInvitation(callerUid, requestId, invitationId, 'DECLINED');
   }
 
   /**
    * `POST /v1/social/group-invitations/{invitationId}/cancel`. Só quem enviou.
    */
-  async cancelInvitation(callerUid: string, requestId: string, invitationId: string): Promise<void> {
+  async cancelInvitation(
+    callerUid: string,
+    requestId: string,
+    invitationId: string,
+  ): Promise<void> {
     await this.respondToInvitation(callerUid, requestId, invitationId, 'CANCELLED');
   }
 
@@ -414,7 +437,9 @@ export class SocialGroupService {
 
     const group = await this.repository.findGroup(groupId);
     const membership =
-      group?.status === 'ACTIVE' ? await this.repository.findActiveMembership(groupId, callerUid) : null;
+      group?.status === 'ACTIVE'
+        ? await this.repository.findActiveMembership(groupId, callerUid)
+        : null;
 
     if (!group || group.status !== 'ACTIVE' || !membership) {
       return;
@@ -440,7 +465,12 @@ export class SocialGroupService {
   /**
    * `DELETE /v1/social/groups/{groupId}/members/{membershipId}` (§42/§43/§44/§63).
    */
-  async removeMember(callerUid: string, requestId: string, groupId: string, membershipId: string): Promise<void> {
+  async removeMember(
+    callerUid: string,
+    requestId: string,
+    groupId: string,
+    membershipId: string,
+  ): Promise<void> {
     if (!this.rateLimiter.tryAcquireMembership(callerUid)) {
       throw SocialGroupErrors.rateLimited();
     }
@@ -566,7 +596,10 @@ export class SocialGroupService {
 
     const existing = await this.repository.findShare(groupId, checkInId);
     if (!existing) {
-      if ((await this.repository.countSharesForCheckIn(checkInId)) >= SOCIAL_GROUP_MAX_SHARES_PER_CHECKIN) {
+      if (
+        (await this.repository.countSharesForCheckIn(checkInId)) >=
+        SOCIAL_GROUP_MAX_SHARES_PER_CHECKIN
+      ) {
         throw SocialGroupErrors.shareLimitReached(SOCIAL_GROUP_MAX_SHARES_PER_CHECKIN);
       }
       const now = this.clock.now();
@@ -580,7 +613,10 @@ export class SocialGroupService {
         });
       } catch (error) {
         const code = (error as { code?: unknown }).code;
-        if (code !== '23505' && (typeof code !== 'string' || !code.startsWith('SQLITE_CONSTRAINT'))) {
+        if (
+          code !== '23505' &&
+          (typeof code !== 'string' || !code.startsWith('SQLITE_CONSTRAINT'))
+        ) {
           throw error;
         }
         if (!(await this.repository.findShare(groupId, checkInId))) {
@@ -620,7 +656,12 @@ export class SocialGroupService {
   /**
    * `DELETE /v1/social/groups/{groupId}/checkins/{checkInId}` (§128/§129/§130).
    */
-  async unshareCheckIn(callerUid: string, requestId: string, groupId: string, checkInId: string): Promise<void> {
+  async unshareCheckIn(
+    callerUid: string,
+    requestId: string,
+    groupId: string,
+    checkInId: string,
+  ): Promise<void> {
     if (!this.rateLimiter.tryAcquireShare(callerUid)) {
       throw SocialGroupErrors.rateLimited();
     }
@@ -724,7 +765,11 @@ export class SocialGroupService {
       groupsLeft += 1;
     }
 
-    const invitationsCancelled = await this.repository.cancelAllPendingInvitationsFor(ownerUid, now, client);
+    const invitationsCancelled = await this.repository.cancelAllPendingInvitationsFor(
+      ownerUid,
+      now,
+      client,
+    );
 
     return { groupsDeleted, groupsLeft, invitationsCancelled };
   }
@@ -759,8 +804,17 @@ export class SocialGroupService {
     return { group, membership };
   }
 
-  private async purgeMemberFootprint(groupId: string, memberUid: string, now: number, client?: PoolClient): Promise<void> {
-    const sharedIds = await this.repository.listSharedCheckInIdsByAuthorInGroup(groupId, memberUid, client);
+  private async purgeMemberFootprint(
+    groupId: string,
+    memberUid: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<void> {
+    const sharedIds = await this.repository.listSharedCheckInIdsByAuthorInGroup(
+      groupId,
+      memberUid,
+      client,
+    );
     for (const checkInId of sharedIds) {
       await this.interactions.purgeGroupInteractionsForShare(groupId, checkInId, now, client);
     }
@@ -799,7 +853,10 @@ export class SocialGroupService {
     });
   }
 
-  private async summaryOf(group: StoredSocialGroup, role: 'OWNER' | 'MEMBER'): Promise<SocialGroupSummaryDto> {
+  private async summaryOf(
+    group: StoredSocialGroup,
+    role: 'OWNER' | 'MEMBER',
+  ): Promise<SocialGroupSummaryDto> {
     return {
       groupId: group.id,
       name: group.name,
@@ -854,7 +911,10 @@ export class SocialGroupService {
       canInteract: true,
     }));
 
-    const projected = await this.projector.project(viewerUid, projectable, { type: 'GROUP', groupId });
+    const projected = await this.projector.project(viewerUid, projectable, {
+      type: 'GROUP',
+      groupId,
+    });
     return projected.map((checkIn, index) => ({
       checkIn,
       sharedToGroupAt: rows[index].sharedToGroupAt,

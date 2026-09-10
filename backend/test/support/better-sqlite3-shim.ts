@@ -1,9 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { createPostgresSyncDb } from './postgres-sync-db';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const RealBetterSqlite3 = require(
-  require.resolve('better-sqlite3', { paths: [__dirname] }),
-);
+const RealBetterSqlite3 = require(require.resolve('better-sqlite3', { paths: [__dirname] }));
 
 function BetterSqlite3Shim(filename: string, options?: any) {
   if (

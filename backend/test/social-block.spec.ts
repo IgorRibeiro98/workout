@@ -25,6 +25,7 @@ describe('Social Hardening: Bloqueio de Usuários (T17.6)', () => {
 
   afterEach(async () => {
     await app?.close();
+    app = undefined as unknown as INestApplication;
     temp.cleanup();
   });
 

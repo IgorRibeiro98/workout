@@ -32,9 +32,18 @@ export interface CheckInSessionDetail {
 export interface CanonicalTrainingSource {
   hasAnyCompletedSession(ownerUid: string): Promise<boolean>;
 
-  countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number>;
+  countCompletedWorkouts(
+    ownerUid: string,
+    startMs: number,
+    endMsExclusive: number,
+  ): Promise<number>;
 
-  countActiveDays(ownerUid: string, startDate: string, endDate: string, timeZoneId: string): Promise<number>;
+  countActiveDays(
+    ownerUid: string,
+    startDate: string,
+    endDate: string,
+    timeZoneId: string,
+  ): Promise<number>;
 
   /**
    * Contagem de treinos concluídos em lote para múltiplos donos em uma janela [fromMs, untilMsExclusive).
@@ -57,7 +66,10 @@ export interface CanonicalTrainingSource {
   /**
    * A sessão canônica deste dono, para decidir um check-in (T17.8 §15/§16).
    */
-  findSessionForCheckIn(ownerUid: string, sessionSyncId: string): Promise<CheckInSessionDetail | null>;
+  findSessionForCheckIn(
+    ownerUid: string,
+    sessionSyncId: string,
+  ): Promise<CheckInSessionDetail | null>;
 }
 
 export const CANONICAL_TRAINING_SOURCE = Symbol('CANONICAL_TRAINING_SOURCE');
@@ -80,7 +92,11 @@ export class SyncedCanonicalTrainingSource implements CanonicalTrainingSource {
     return res.rows.length > 0;
   }
 
-  async countCompletedWorkouts(ownerUid: string, startMs: number, endMsExclusive: number): Promise<number> {
+  async countCompletedWorkouts(
+    ownerUid: string,
+    startMs: number,
+    endMsExclusive: number,
+  ): Promise<number> {
     const res = await this.db.query<{ total: string | number }>(
       `SELECT COUNT(*) AS total
          FROM sync_entities
@@ -199,7 +215,10 @@ export class SyncedCanonicalTrainingSource implements CanonicalTrainingSource {
     }));
   }
 
-  async findSessionForCheckIn(ownerUid: string, sessionSyncId: string): Promise<CheckInSessionDetail | null> {
+  async findSessionForCheckIn(
+    ownerUid: string,
+    sessionSyncId: string,
+  ): Promise<CheckInSessionDetail | null> {
     const res = await this.db.query<{
       owner_uid: string;
       entity_sync_id: string;

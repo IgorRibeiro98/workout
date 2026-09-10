@@ -4,7 +4,13 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppConfig, ConfigValidationError } from '../src/config/app-config';
 import { DEVELOPMENT_DELETION_HMAC_KEY } from '../src/config/env.schema';
-import { configFor, createTempDb, postgresFor, sqliteFor, MIGRATIONS_DIR, type TempDb } from './support/temp-db';
+import {
+  configFor,
+  createTempDb,
+  postgresFor,
+  MIGRATIONS_DIR,
+  type TempDb,
+} from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeAiProviderGateway } from './support/fake-ai-provider';
@@ -140,16 +146,16 @@ describe('Configuração de produção', () => {
     expect(withOwnKey.missingRequirements()).toEqual([]);
 
     // Fora de produção o default continua servindo: teste e `start:dev` sobem sem configuração.
-    const development = AppConfig.fromEnv({ ...base, DATABASE_PATH: '/tmp/spark/spark.db' });
+    const development = AppConfig.fromEnv(base);
     expect(development.missingRequirements()).toEqual([]);
   });
 
   it('fora de produção a raiz de mídia é derivada, e o processo sobe sem configuração', () => {
     // Teste e desenvolvimento precisam funcionar sem uma variável a mais; ali o armazenamento
     // efêmero é exatamente o que se quer.
-    const development = AppConfig.fromEnv({ ...base, DATABASE_PATH: '/tmp/spark/spark.db' });
+    const development = AppConfig.fromEnv(base);
     expect(development.missingRequirements()).toEqual([]);
-    expect(development.socialMediaRoot).toBe('/tmp/spark/media');
+    expect(development.socialMediaRoot).toBe(join(process.cwd(), '.spark-media'));
   });
 
   it('REQUIRE_GEMINI com AI_ENABLED=false é contradição declarada, e não passa despercebida', () => {
@@ -217,7 +223,7 @@ describe('Configurações efetivas e saúde do banco PostgreSQL', () => {
     expect(Number(res.rows[0].n)).toBe(1);
 
     await expect(
-      postgres.transaction(async (client: any) => {
+      postgres.transaction(async (client) => {
         await client.query('CREATE TEMPORARY TABLE test_txn (val int)');
         throw new Error('falha intencional');
       }),

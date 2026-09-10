@@ -326,7 +326,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'FRIEND_REQUEST_ACCEPTED': {
         // Confirma que o pedido foi de fato aceito
-        const rowRes = await this.db.query<{ status: string; requester_uid: string; recipient_uid: string }>(
+        const rowRes = await this.db.query<{
+          status: string;
+          requester_uid: string;
+          recipient_uid: string;
+        }>(
           `SELECT status, requester_uid, recipient_uid FROM friend_requests WHERE request_id = $1`,
           [event.entityId],
         );
@@ -351,7 +355,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_INVITATION_RECEIVED': {
         // Só entrega se convite PENDING e desafio UPCOMING e OPEN (T17.5 §66)
-        const rowRes = await this.db.query<{ inv_status: string; lifecycle: string; starts_at: string | number }>(
+        const rowRes = await this.db.query<{
+          inv_status: string;
+          lifecycle: string;
+          starts_at: string | number;
+        }>(
           `SELECT i.status as inv_status, c.lifecycle, c.starts_at
            FROM challenge_invitations i
            JOIN challenges c ON c.challenge_id = i.challenge_id
@@ -373,7 +381,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_STARTING_SOON': {
         // Só entrega se participante JOINED, desafio OPEN e now < startsAt (T17.5 §67)
-        const rowRes = await this.db.query<{ part_status: string; lifecycle: string; starts_at: string | number }>(
+        const rowRes = await this.db.query<{
+          part_status: string;
+          lifecycle: string;
+          starts_at: string | number;
+        }>(
           `SELECT p.status as part_status, c.lifecycle, c.starts_at
            FROM challenge_participants p
            JOIN challenges c ON c.challenge_id = p.challenge_id
@@ -395,7 +407,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
 
       case 'CHALLENGE_ENDED': {
         // Só entrega se participante JOINED e desafio OPEN e now >= endsAtExclusive (T17.5 §68)
-        const rowRes = await this.db.query<{ part_status: string; lifecycle: string; ends_at_exclusive: string | number }>(
+        const rowRes = await this.db.query<{
+          part_status: string;
+          lifecycle: string;
+          ends_at_exclusive: string | number;
+        }>(
           `SELECT p.status as part_status, c.lifecycle, c.ends_at_exclusive
            FROM challenge_participants p
            JOIN challenges c ON c.challenge_id = p.challenge_id
@@ -415,7 +431,11 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       }
 
       case 'WORKOUT_SHARE_RECEIVED': {
-        const rowRes = await this.db.query<{ status: string; expires_at: string | number; sender_uid: string }>(
+        const rowRes = await this.db.query<{
+          status: string;
+          expires_at: string | number;
+          sender_uid: string;
+        }>(
           `SELECT status, expires_at, sender_uid
            FROM workout_shares
            WHERE id = $1`,
@@ -443,7 +463,12 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       }
 
       case 'GROUP_INVITATION_RECEIVED': {
-        const rowRes = await this.db.query<{ inv_status: string; expires_at: string | number; sender_uid: string; group_status: string }>(
+        const rowRes = await this.db.query<{
+          inv_status: string;
+          expires_at: string | number;
+          sender_uid: string;
+          group_status: string;
+        }>(
           `SELECT i.status AS inv_status, i.expires_at, i.sender_uid, g.status AS group_status
              FROM social_group_invitations i
              JOIN social_groups g ON g.id = i.group_id

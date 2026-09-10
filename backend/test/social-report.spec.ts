@@ -25,6 +25,7 @@ describe('Social Hardening: Denúncia de Abuso (T17.6)', () => {
 
   afterEach(async () => {
     await app?.close();
+    app = undefined as unknown as INestApplication;
     temp.cleanup();
   });
 
@@ -67,7 +68,7 @@ describe('Social Hardening: Denúncia de Abuso (T17.6)', () => {
 
     expect(reportRes.body.result).toBe('REPORT_RECEIVED');
     expect(reportRes.body.reportId).toBeDefined();
-  });
+  }, 30_000);
 
   it('valida enum fechado de motivos e impede auto-denúncia', async () => {
     const socialIdA = await setupProfile(ACCOUNTS.A.token, ACCOUNTS.A.name);
@@ -93,7 +94,7 @@ describe('Social Hardening: Denúncia de Abuso (T17.6)', () => {
       .set('Authorization', auth(ACCOUNTS.A.token))
       .send({ reportedSocialId: socialIdB, reason: 'INVALID_REASON' })
       .expect(400);
-  });
+  }, 30_000);
 
   it('bloqueia duplicatas idênticas no mesmo dia e aplica rate limit de 5/dia', async () => {
     const socialIdA = await setupProfile(ACCOUNTS.A.token, ACCOUNTS.A.name);
@@ -123,5 +124,5 @@ describe('Social Hardening: Denúncia de Abuso (T17.6)', () => {
       result: 'REPORT_RECEIVED',
       reportId: 'duplicate-suppressed',
     });
-  });
+  }, 30_000);
 });

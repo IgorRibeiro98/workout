@@ -182,7 +182,7 @@ E o portão anti-ressurreição, no servidor (T17.13.1):
 ```bash
 # A reconciliação já rodou dentro do --install. Confira que ela encontrou o ledger:
 sort -u /opt/spark/data/deletion_tombstones.tsv | wc -l
-sqlite3 /opt/spark/data/spark.db "SELECT COUNT(*) FROM account_deletion_tombstones;"
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM account_deletion_tombstones;"
 ```
 
 A tabela precisa cobrir todas as contas do ledger. Se o número de tombstones for **zero** com um

@@ -67,7 +67,10 @@ export class SocialController {
   @UseGuards(BearerAuthGuard)
   @Get('me')
   @HttpCode(HttpStatus.OK)
-  async me(@Principal() principal: AuthenticatedPrincipal, @Req() request: Request): Promise<SocialMeResponse> {
+  async me(
+    @Principal() principal: AuthenticatedPrincipal,
+    @Req() request: Request,
+  ): Promise<SocialMeResponse> {
     return await this.service.me(principal, requestIdOf(request));
   }
 

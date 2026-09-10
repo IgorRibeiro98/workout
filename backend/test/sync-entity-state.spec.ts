@@ -23,7 +23,7 @@ const UID_B = 'uid-da-conta-b';
  */
 describe('Sync entity state (/v1/sync/entities)', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -34,19 +34,22 @@ describe('Sync entity state (/v1/sync/entities)', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
+  const server = () => app!.getHttpServer();
+
   const push = (body: string, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(server())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${token}`)
       .set('Content-Type', 'application/json')
       .send(body);
 
   const state = (entityType: string, entitySyncId: string, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(server())
       .get(`/v1/sync/entities/${entityType}/${entitySyncId}`)
       .set('Authorization', `Bearer ${token}`);
 
@@ -91,9 +94,7 @@ describe('Sync entity state (/v1/sync/entities)', () => {
   it('sem token não responde nada', async () => {
     const syncId = await createTemplate();
 
-    const response = await request(app.getHttpServer()).get(
-      `/v1/sync/entities/WORKOUT_TEMPLATE/${syncId}`,
-    );
+    const response = await request(server()).get(`/v1/sync/entities/WORKOUT_TEMPLATE/${syncId}`);
 
     expect(response.status).toBe(401);
   });
@@ -219,7 +220,7 @@ describe('Sync entity state (/v1/sync/entities)', () => {
   it('nenhum uid do cliente influencia a resposta', async () => {
     const syncId = await createTemplate('Segredo do A');
 
-    const response = await request(app.getHttpServer())
+    const response = await request(server())
       .get(`/v1/sync/entities/WORKOUT_TEMPLATE/${syncId}?ownerUid=${UID_A}&uid=${UID_A}`)
       .set('Authorization', `Bearer ${TOKEN_B}`);
 
@@ -280,13 +281,13 @@ describe('Sync entity state (/v1/sync/entities)', () => {
 
   it('consultar não move o cursor de ninguém', async () => {
     const syncId = await createTemplate();
-    const antes = await request(app.getHttpServer())
+    const antes = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
 
     await state('WORKOUT_TEMPLATE', syncId);
 
-    const depois = await request(app.getHttpServer())
+    const depois = await request(server())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN_A}`);
 

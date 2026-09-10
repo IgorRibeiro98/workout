@@ -150,7 +150,10 @@ export class SocialRepository {
       if (isPgUniqueViolation(error, 'friend_code')) {
         throw new FriendCodeCollisionError();
       }
-      if (isPgUniqueViolation(error, 'owner_uid') || isPgUniqueViolation(error, 'social_profiles_pkey')) {
+      if (
+        isPgUniqueViolation(error, 'owner_uid') ||
+        isPgUniqueViolation(error, 'social_profiles_pkey')
+      ) {
         const created = await this.find(input.ownerUid);
         if (created) {
           return created;

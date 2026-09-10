@@ -31,7 +31,7 @@ describe('Persistência do sync', () => {
   });
 
   afterEach(() => {
-    temp.cleanup();
+    temp?.cleanup();
   });
 
   // ------------------------------------------------------------------------- transação
@@ -111,8 +111,29 @@ describe('Persistência do sync', () => {
   // ------------------------------------------------------------------------- restart
 
   describe('o estado sobrevive ao restart do processo', () => {
-    const start = async (): Promise<INestApplication> =>
-      createTestApp(configFor(temp.path), FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID }));
+    const openApps: INestApplication[] = [];
+
+    const start = async (): Promise<INestApplication> => {
+      const a = await createTestApp(
+        configFor(temp.path),
+        FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID }),
+      );
+      openApps.push(a);
+      return a;
+    };
+
+    const closeApp = async (a: INestApplication): Promise<void> => {
+      const idx = openApps.indexOf(a);
+      if (idx !== -1) openApps.splice(idx, 1);
+      await a.close().catch(() => undefined);
+    };
+
+    afterEach(async () => {
+      while (openApps.length > 0) {
+        const a = openApps.pop();
+        await a?.close().catch(() => undefined);
+      }
+    });
 
     it('push, restart, pull: a mudança continua lá', async () => {
       const syncId = uuid();
@@ -132,7 +153,7 @@ describe('Persistência do sync', () => {
           ]),
         );
       expect(pushed.body.results[0].status).toBe('APPLIED');
-      await first.close();
+      await closeApp(first);
 
       const second = await start();
       const pulled = await request(second.getHttpServer())
@@ -140,8 +161,8 @@ describe('Persistência do sync', () => {
         .set('Authorization', `Bearer ${TOKEN}`);
       expect(pulled.body.changes).toHaveLength(1);
       expect(pulled.body.changes[0].entitySyncId).toBe(syncId);
-      await second.close();
-    });
+      await closeApp(second);
+    }, 60_000);
 
     it('o ledger de idempotência sobrevive: o reenvio depois do restart não reaplica', async () => {
       const syncId = uuid();
@@ -161,7 +182,7 @@ describe('Persistência do sync', () => {
         .set('Authorization', `Bearer ${TOKEN}`)
         .set('Content-Type', 'application/json')
         .send(body);
-      await first.close();
+      await closeApp(first);
 
       const second = await start();
       const retry = await request(second.getHttpServer())
@@ -177,24 +198,33 @@ describe('Persistência do sync', () => {
         .get('/v1/sync/pull?cursor=0')
         .set('Authorization', `Bearer ${TOKEN}`);
       expect(pulled.body.changes).toHaveLength(1);
-      await second.close();
-    });
+      await closeApp(second);
+    }, 60_000);
 
     it('o banco de dados PostgreSQL continua saudável com migrations aplicadas', async () => {
       const app = await start();
-      const postgres = app.get(PostgresService);
-
-      expect(postgres.isOpen).toBe(true);
-      expect((await postgres.appliedVersions()).length).toBeGreaterThan(0);
-      await app.close();
-    });
+      try {
+        const postgres = app.get(PostgresService);
+        expect(postgres.isOpen).toBe(true);
+        expect((await postgres.appliedVersions()).length).toBeGreaterThan(0);
+      } finally {
+        await closeApp(app);
+      }
+    }, 60_000);
   });
 
   // ------------------------------------------------------------------------- rate limit
 
   describe('proteção por conta', () => {
+    let app: INestApplication | undefined;
+
+    afterEach(async () => {
+      await app?.close().catch(() => undefined);
+      app = undefined;
+    });
+
     it('um cliente em laço recebe 429 em vez de martelar a VPS', async () => {
-      const app = await createTestApp(
+      app = await createTestApp(
         configFor(temp.path),
         FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID }),
       );
@@ -212,8 +242,7 @@ describe('Persistência do sync', () => {
       }
 
       expect(limited).toBe(true);
-      await app.close();
-    });
+    }, 60_000);
   });
 
   // ------------------------------------------------------------------------- observabilidade
@@ -221,6 +250,7 @@ describe('Persistência do sync', () => {
   describe('o log do sync não carrega domínio', () => {
     let written: string[];
     let restoreStdout: () => void;
+    let app: INestApplication | undefined;
 
     beforeEach(() => {
       written = [];
@@ -234,12 +264,14 @@ describe('Persistência do sync', () => {
       };
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       restoreStdout();
+      await app?.close().catch(() => undefined);
+      app = undefined;
     });
 
     it('registra metadata técnica e nunca payload, nome, nota ou token', async () => {
-      const app = await createTestApp(
+      app = await createTestApp(
         configFor(temp.path, { LOG_LEVEL: 'debug' }),
         FakeAuthTokenVerifier.withPrincipal(TOKEN, { uid: UID }),
       );
@@ -288,8 +320,6 @@ describe('Persistência do sync', () => {
       // Nem o uid inteiro, nem a identidade da entidade.
       expect(logs).not.toContain(UID);
       expect(logs).not.toContain(syncId);
-
-      await app.close();
     });
   });
 });

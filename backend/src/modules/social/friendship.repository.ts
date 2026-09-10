@@ -168,7 +168,10 @@ export class FriendshipRepository {
     return row ? toRequest(row) : null;
   }
 
-  async findRequestById(requestId: string, client?: PoolClient): Promise<StoredFriendRequest | null> {
+  async findRequestById(
+    requestId: string,
+    client?: PoolClient,
+  ): Promise<StoredFriendRequest | null> {
     const q = this.getRunner(client);
     const res = await q.query<RequestRow>(
       `SELECT request_id, requester_uid, recipient_uid, status, created_at, updated_at
@@ -191,11 +194,21 @@ export class FriendshipRepository {
     readonly now: number;
   }): Promise<SendRequestOutcome> {
     return await this.db.transaction(async (client): Promise<SendRequestOutcome> => {
+      const [uidMin, uidMax] = canonicalPair(input.requesterUid, input.recipientUid);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        uidMin,
+        uidMax,
+      ]);
+
       if (await this.areFriends(input.requesterUid, input.recipientUid, client)) {
         return { kind: 'ALREADY_FRIENDS' };
       }
 
-      const existing = await this.findPendingRequest(input.requesterUid, input.recipientUid, client);
+      const existing = await this.findPendingRequest(
+        input.requesterUid,
+        input.recipientUid,
+        client,
+      );
       if (existing) {
         return { kind: 'ALREADY_PENDING', request: existing };
       }
@@ -266,6 +279,12 @@ export class FriendshipRepository {
         return { kind: 'NOT_PENDING' };
       }
 
+      const [uidMin, uidMax] = canonicalPair(request.requesterUid, request.recipientUid);
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        uidMin,
+        uidMax,
+      ]);
+
       const res = await client.query(
         `UPDATE friend_requests SET status = 'ACCEPTED', updated_at = $1
          WHERE request_id = $2 AND status = 'PENDING'`,
@@ -273,7 +292,11 @@ export class FriendshipRepository {
       );
 
       if ((res.rowCount ?? 0) === 0) {
-        const since = await this.friendshipCreatedAt(request.requesterUid, request.recipientUid, client);
+        const since = await this.friendshipCreatedAt(
+          request.requesterUid,
+          request.recipientUid,
+          client,
+        );
         if (request.status === 'ACCEPTED' && since !== null) {
           return { kind: 'ALREADY_FRIENDS', friendsSince: since };
         }
@@ -290,7 +313,8 @@ export class FriendshipRepository {
         });
       }
 
-      const since = (await this.friendshipCreatedAt(request.requesterUid, request.recipientUid, client)) ?? now;
+      const since =
+        (await this.friendshipCreatedAt(request.requesterUid, request.recipientUid, client)) ?? now;
       return { kind: 'ACCEPTED', friendsSince: since };
     });
   }
@@ -298,7 +322,11 @@ export class FriendshipRepository {
   /**
    * Muda o status de um pedido pendente. `true` quando **esta** chamada foi a que mudou.
    */
-  async resolveRequest(requestId: string, status: FriendRequestStatus, now: number): Promise<boolean> {
+  async resolveRequest(
+    requestId: string,
+    status: FriendRequestStatus,
+    now: number,
+  ): Promise<boolean> {
     const res = await this.db.query(
       `UPDATE friend_requests SET status = $1, updated_at = $2
        WHERE request_id = $3 AND status = 'PENDING'`,
@@ -312,7 +340,12 @@ export class FriendshipRepository {
   /**
    * Cria a amizade na forma canônica.
    */
-  private async insertFriendship(uidA: string, uidB: string, now: number, client?: PoolClient): Promise<void> {
+  private async insertFriendship(
+    uidA: string,
+    uidB: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<void> {
     const [a, b] = canonicalPair(uidA, uidB);
     const q = this.getRunner(client);
     await q.query(
@@ -322,7 +355,11 @@ export class FriendshipRepository {
     );
   }
 
-  async friendshipCreatedAt(uidA: string, uidB: string, client?: PoolClient): Promise<number | null> {
+  async friendshipCreatedAt(
+    uidA: string,
+    uidB: string,
+    client?: PoolClient,
+  ): Promise<number | null> {
     const [a, b] = canonicalPair(uidA, uidB);
     const q = this.getRunner(client);
     const res = await q.query<{ created_at: string | number }>(
@@ -357,15 +394,15 @@ export class FriendshipRepository {
     if (page.cursor) {
       query = `
         ${FRIENDS_SELECT}
-        AND (p.display_name > $2 OR (p.display_name = $2 AND p.social_id > $3))
-        ORDER BY p.display_name ASC, p.social_id ASC
+        AND (p.display_name COLLATE "C" > $2 COLLATE "C" OR (p.display_name COLLATE "C" = $2 COLLATE "C" AND p.social_id > $3))
+        ORDER BY p.display_name COLLATE "C" ASC, p.social_id ASC
         LIMIT $4
       `;
       params = [ownerUid, String(page.cursor.primary), page.cursor.secondary, page.limit + 1];
     } else {
       query = `
         ${FRIENDS_SELECT}
-        ORDER BY p.display_name ASC, p.social_id ASC
+        ORDER BY p.display_name COLLATE "C" ASC, p.social_id ASC
         LIMIT $2
       `;
       params = [ownerUid, page.limit + 1];
@@ -467,7 +504,7 @@ export class FriendshipRepository {
          ON s.owner_uid = p.owner_uid
        WHERE (f.user_a_uid = $1 OR f.user_b_uid = $1)
          AND p.status = 'ACTIVE'
-       ORDER BY p.display_name ASC, p.social_id ASC`,
+       ORDER BY p.display_name COLLATE "C" ASC, p.social_id ASC`,
       [ownerUid],
     );
 

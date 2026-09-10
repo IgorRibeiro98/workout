@@ -557,8 +557,8 @@ Firebase e sem Gemini.
 
 | Autoridade | Responsabilidade |
 | --- | --- |
-| Android / Room + DataStore | autoridade **operacional local** — treino, execução, histórico, templates, catálogo, gamificação, preferências |
-| Spark Backend | estado remoto da conta e convergência entre dispositivos |
+| Android / Room + DataStore | autoridade **operacional local** (SQLite via Room) — treino, execução, histórico, templates, catálogo, gamificação, preferências |
+| Spark Backend (PostgreSQL / Neon) | autoridade de **persistência remota** (PostgreSQL desde T18.0/T18.0.1) — estado remoto da conta e convergência entre dispositivos |
 | Firebase | identidade/autenticação (`Firebase Auth`) |
 | Gemini | serviço probabilístico — nunca autoridade do domínio |
 
@@ -646,7 +646,7 @@ persistência do domínio        validação da resposta
    em DataStore, no Git ou em teste — há teste estrutural nos dois lados.
 2. **O contexto vem do Android.** O backend não lê dado sincronizado para montar contexto: não
    existe sync, e analisar sobre estado velho seria pior que não analisar.
-3. **O contexto não é persistido.** Ele entra, é usado e vai embora. O SQLite do servidor guarda
+3. **O contexto não é persistido.** Ele entra, é usado e vai embora. O PostgreSQL do servidor guarda
    só `ai_usage_daily` — uid, dia (UTC), tipo, contagem e tokens. Nada de prompt, histórico,
    resposta ou texto do usuário.
 4. **Uma ação explícita = no máximo uma invocação do modelo.** Sem crítica, reescrita, segunda
@@ -834,7 +834,7 @@ Conta A no mesmo aparelho.
 #### Backup não é sincronização
 
 ```text
-T16.4     Spark Android  ──snapshot completo──▶  Spark Backend  ──▶  SQLite (imutável)
+T16.4     Spark Android  ──snapshot completo──▶  Spark Backend  ──▶  PostgreSQL (imutável)
 
 AINDA NÃO EXISTE
           Spark Android  ◀──X──────────────────  Spark Backend
@@ -1762,7 +1762,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > **T17.13.1** — **fechamento pós-auditoria**. Nenhuma funcionalidade social nova; sete correções de
 > integridade encontradas por auditoria independente depois da T17.13.
 > **Exclusão de conta atômica:** tombstone, job e purge das tabelas account-scoped passam a ser uma
-> transação SQLite única — uma falha no meio faz `ROLLBACK` de tudo, em vez de deixar a conta
+> transação PostgreSQL única — uma falha no meio faz `ROLLBACK` de tudo, em vez de deixar a conta
 > bloqueada sobre dados apagados pela metade. A mídia continua fora da transação (chaves lidas
 > antes, arquivos apagados depois do commit).
 > **Ledger de DR durável:** `deletion_tombstones.tsv` deixa de ser `appendFileSync` dentro de um
@@ -2054,7 +2054,7 @@ Invariantes bloqueantes que se somam aos de cima:
     animação, valida pixels e arestas antes de alocar, aplica a orientação EXIF aos **pixels** e
     re-encoda em WebP **sem** copiar metadata. É a ausência de `withMetadata()` que remove GPS,
     modelo do aparelho e data original. O original nunca encosta no disco.
-45. **A imagem não entra no SQLite.** Metadata em `social_checkin_media`, bytes em
+45. **A imagem não entra no banco de dados.** Metadata em `social_checkin_media`, bytes em
     `SocialMediaStore` sob `SOCIAL_MEDIA_ROOT` — obrigatória em produção, sob pena de falha de
     startup. Chave opaca gerada pelo servidor; path traversal com duas barreiras.
 46. **`mediaId` não concede acesso.** `GET /v1/social/media/{id}` exige token e passa pela mesma
@@ -2083,7 +2083,7 @@ Invariantes bloqueantes que se somam aos de cima:
 `social_workout_checkins` (T17.8) e, desde a T17.9, legendas, mídia, comentários (também os feitos
 em posts alheios) e reações — e grava um tombstone HMAC contra ressurreição. As **chaves de
 armazenamento** da mídia são lidas antes do purge e os arquivos apagados depois do commit: o
-`ON DELETE CASCADE` do SQLite não alcança o sistema de arquivos, e uma exclusão que apagasse só a
+`ON DELETE CASCADE` do PostgreSQL não alcança o sistema de arquivos, e uma exclusão que apagasse só a
 metadata deixaria a foto da pessoa no disco de um servidor que jura tê-la apagado.
 
 O dado **local** de treino continua no aparelho: excluir a conta é desfazer a identidade online,

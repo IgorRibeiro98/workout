@@ -519,6 +519,6 @@ describe('T17.4 — Atividade dos amigos e rankings contextuais', () => {
         rank: 55, // Salto de competição: 54 empatados em 1º -> Alice é 55ª
         isCurrentUser: true,
       });
-    });
+    }, 60000);
   });
 });

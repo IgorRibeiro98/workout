@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { AppConfig } from '../../src/config/app-config';
 import { SparkLogger } from '../../src/common/logger';
 import { PostgresService } from '../../src/database/postgres.service';
-import { createPostgresSyncDb, PostgresSyncDb } from './postgres-sync-db';
+export { createPostgresSyncDb, type PostgresSyncDb } from './postgres-sync-db';
 
 export const MIGRATIONS_DIR = join(__dirname, '..', '..', 'migrations', 'postgres');
 export const DEFAULT_TEST_DATABASE_URL =
@@ -26,25 +26,6 @@ export function createTempDb(): TempDb {
   const schema =
     'test_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
   const baseDatabaseUrl = process.env.DATABASE_URL || DEFAULT_TEST_DATABASE_URL;
-  try {
-    execFileSync(
-      'docker',
-      [
-        'exec',
-        '-i',
-        'spark-postgres-dev',
-        'psql',
-        '-U',
-        'spark',
-        '-d',
-        'spark_dev',
-        '-q',
-        '-c',
-        `CREATE SCHEMA IF NOT EXISTS "${schema}";`,
-      ],
-      { stdio: 'ignore' },
-    );
-  } catch {}
 
   const databaseUrl = baseDatabaseUrl.includes('?')
     ? `${baseDatabaseUrl}&options=-csearch_path%3D${schema}`
@@ -59,26 +40,39 @@ export function createTempDb(): TempDb {
     cleanup: () => {
       try {
         rmSync(directory, { recursive: true, force: true });
-      } catch {}
+      } catch {
+        // ignore
+      }
       try {
-        execFileSync(
-          'docker',
-          [
-            'exec',
-            '-i',
-            'spark-postgres-dev',
-            'psql',
-            '-U',
-            'spark',
-            '-d',
-            'spark_dev',
-            '-q',
-            '-c',
-            `DROP SCHEMA IF EXISTS "${schema}" CASCADE;`,
-          ],
-          { stdio: 'ignore' },
-        );
-      } catch {}
+        const dropSql = `DROP SCHEMA IF EXISTS "${schema}" CASCADE; DROP SCHEMA IF EXISTS "${schema}_snap" CASCADE;`;
+        const cleanUrl = baseDatabaseUrl.replace(/[?&]options=[^&]+/g, '');
+        try {
+          const code = `const { Client } = require('pg'); const c = new Client({ connectionString: ${JSON.stringify(cleanUrl)} }); c.connect().then(() => c.query(${JSON.stringify(dropSql)})).then(() => c.end()).catch(() => process.exit(0));`;
+          execFileSync(process.execPath, ['-e', code], { timeout: 5000, stdio: 'ignore' });
+        } catch {
+          try {
+            execFileSync(
+              'docker',
+              [
+                'exec',
+                'spark-postgres-dev',
+                'psql',
+                '-U',
+                'spark',
+                '-d',
+                'spark_dev',
+                '-c',
+                dropSql,
+              ],
+              { timeout: 5000, stdio: 'ignore' },
+            );
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
     },
   };
 }
@@ -89,7 +83,7 @@ export function configFor(
 ): AppConfig {
   const raw = databasePathOrUrl ?? (process.env.DATABASE_URL || DEFAULT_TEST_DATABASE_URL);
   const isUrl = raw.startsWith('postgres://') || raw.startsWith('postgresql://');
-  const databaseUrl = isUrl ? raw : (process.env.DATABASE_URL || DEFAULT_TEST_DATABASE_URL);
+  const databaseUrl = isUrl ? raw : process.env.DATABASE_URL || DEFAULT_TEST_DATABASE_URL;
   return AppConfig.fromEnv({
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
@@ -105,4 +99,3 @@ export function postgresFor(config: AppConfig): PostgresService {
 
 // Alias de compatibilidade para suítes existentes:
 export const sqliteFor = postgresFor as (config: AppConfig) => PostgresService;
-export { createPostgresSyncDb, type PostgresSyncDb };

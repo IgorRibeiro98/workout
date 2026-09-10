@@ -7,7 +7,12 @@ export class BlockRepository {
   constructor(private readonly db: PostgresService) {}
 
   /** Cria ou ignora bloqueio (idempotente). */
-  async createBlock(id: string, blockerUid: string, blockedUid: string, now: number): Promise<void> {
+  async createBlock(
+    id: string,
+    blockerUid: string,
+    blockedUid: string,
+    now: number,
+  ): Promise<void> {
     await this.db.query(
       `INSERT INTO social_blocks (id, blocker_uid, blocked_uid, created_at)
        VALUES ($1, $2, $3, $4)
@@ -79,7 +84,11 @@ export class BlockRepository {
    *    - Blocker member: retira blocker (WITHDRAWN);
    * 5. Cancela eventos de notificação pendentes.
    */
-  async cleanupSharedRelationsOnBlock(blockerUid: string, blockedUid: string, now: number): Promise<void> {
+  async cleanupSharedRelationsOnBlock(
+    blockerUid: string,
+    blockedUid: string,
+    now: number,
+  ): Promise<void> {
     await this.db.transaction(async (client) => {
       // 1. Remove amizades bilaterais
       await client.query(

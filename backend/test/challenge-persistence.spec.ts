@@ -3,7 +3,6 @@ import { INestApplication } from '@nestjs/common';
 import BetterSqlite3 from 'better-sqlite3';
 import request from 'supertest';
 import { loadMigrations, runMigrations } from '../src/database/migration-runner';
-import { PostgresService } from '../src/database/postgres.service';
 import {
   account,
   acceptChallenge,
@@ -15,7 +14,13 @@ import {
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeClock } from './support/fake-clock';
-import { configFor, createPostgresSyncDb, createTempDb, MIGRATIONS_DIR, postgresFor, type TempDb } from './support/temp-db';
+import {
+  configFor,
+  createPostgresSyncDb,
+  createTempDb,
+  postgresFor,
+  type TempDb,
+} from './support/temp-db';
 
 /**
  * A persistência dos desafios (T17.3 §131–§143/§225).
@@ -153,7 +158,8 @@ describe('Persistência dos desafios', () => {
     });
 
     it('a migration só cria: nenhum DROP, ALTER, DELETE ou UPDATE (§132)', () => {
-      const sql = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 10)?.sql ?? '';
+      const sql =
+        loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find((m) => m.version === 10)?.sql ?? '';
       const code = sql.replace(/--.*$/gm, '');
 
       expect(code).toMatch(/CREATE TABLE challenges/);
@@ -315,9 +321,9 @@ describe('Persistência dos desafios', () => {
         'challenge_creation_requests',
       ];
       for (const table of tables) {
-        const columns = (
-          db.pragma(`table_info(${table})`) as Array<{ name: string }>
-        ).map((column) => column.name);
+        const columns = (db.pragma(`table_info(${table})`) as Array<{ name: string }>).map(
+          (column) => column.name,
+        );
 
         for (const forbidden of ['score', 'progress', 'points', 'rank', 'winner', 'count']) {
           expect({ table, forbidden, present: columns.includes(forbidden) }).toEqual({
@@ -468,9 +474,9 @@ describe('Persistência dos desafios', () => {
         expect({ table, n: Number(count.n) }).toEqual({ table, n: 0 });
       }
       // Nem no backup.
-      const backups = db
-        .prepare('SELECT COUNT(*) AS n FROM backup_snapshots')
-        .get() as { n: number | string };
+      const backups = db.prepare('SELECT COUNT(*) AS n FROM backup_snapshots').get() as {
+        n: number | string;
+      };
       expect(Number(backups.n)).toBe(0);
 
       // E o servidor recusa um push que tente declarar um desafio como entidade de sync.

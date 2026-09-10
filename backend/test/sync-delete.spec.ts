@@ -30,7 +30,7 @@ const UID_B = 'uid-da-conta-b';
  */
 describe('Sync delete e tombstones (T16.7)', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -41,19 +41,20 @@ describe('Sync delete e tombstones (T16.7)', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
   const push = (body: string, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${token}`)
       .set('Content-Type', 'application/json')
       .send(body);
 
   const pull = (cursor = 0, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .get(`/v1/sync/pull?cursor=${cursor}`)
       .set('Authorization', `Bearer ${token}`);
 

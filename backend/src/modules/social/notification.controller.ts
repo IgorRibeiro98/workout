@@ -53,7 +53,9 @@ export class NotificationController {
   }
 
   @Get('preferences')
-  async getPreferences(@Principal() principal: AuthenticatedPrincipal): Promise<NotificationPreferencesDto> {
+  async getPreferences(
+    @Principal() principal: AuthenticatedPrincipal,
+  ): Promise<NotificationPreferencesDto> {
     return await this.service.getPreferences(principal);
   }
 

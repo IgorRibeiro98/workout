@@ -1,28 +1,10 @@
 # Spark Backend
 
-Fronteira online do Spark. Monólito modular em NestJS sobre SQLite, pensado para rodar em **uma**
-VPS com Docker Compose.
+Fronteira online do Spark. Monólito modular em NestJS sobre PostgreSQL / Neon (migrado do SQLite na T18.0/T18.0.1), pensado para rodar em
+VPS com Docker Compose ou na nuvem com Neon Database.
 
-> **Estado (T16.8): fundação + identidade + Coach IA + backup + restore + sync + tombstones +
-> prontidão de produção.**
-> Existe verificação de Firebase ID Token (`GET /v1/auth/me`), a fronteira com o Gemini
-> (`POST /v1/ai/coach`), o **backup estruturado** (`POST /v1/backups`, `GET /v1/backups/latest`), o
-> **download do conteúdo** para restore (`GET /v1/backups`, `/{id}`, `/{id}/content`), a
-> **sincronização incremental** (`POST /v1/sync/push`, `GET /v1/sync/pull`) com `serverRevision`,
-> ledger de idempotência, change log e — desde a T16.7 — **tombstone** (`sync_entities.deleted`) com
-> prevenção de ressurreição, e — desde a T16.7.1 — a leitura **somente leitura** do estado atual de
-> um agregado (`GET /v1/sync/entities/{entityType}/{entitySyncId}`), que o aparelho consulta antes
-> de aplicar a versão da nuvem numa resolução de conflito.
->
-> O servidor **detecta e recusa**; ele nunca resolve conflito. Não existe `force`/`overwrite`, merge
-> por campo, realtime, WebSocket, push do servidor nem limpeza de tombstone. Sob `/v1` há `auth`,
-> `ai`, `backups` e `sync`. Ver
-> [ADR-0001](../docs/architecture/ADR-0001-spark-online-architecture.md).
-
-O Spark Android **não depende deste backend**. Sem ele — e sem internet — treino, execução,
-histórico, templates e gamificação continuam funcionando normalmente sobre Room. O que passa a
-depender dele, desde a T16.2, é o **Coach IA**: ele é uma capacidade online autenticada, e o
-núcleo não é. Desde a T16.4, o **backup** também: ele exige conta, e não é requisito para treinar.
+> **Estado (T18.0.1): fundação + identidade + Coach IA + backup + restore + sync + tombstones +
+> prontidão de produção com PostgreSQL hardened.**
 
 ## Stack
 
@@ -30,18 +12,15 @@ núcleo não é. Desde a T16.4, o **backup** também: ele exige conta, e não é
 | --- | --- | --- |
 | Runtime | Node.js 22 LTS | LTS atual; `fetch` global dispensa cliente HTTP no healthcheck |
 | Framework | NestJS 11 | Módulos, DI e ciclo de vida (shutdown hooks) prontos |
-| Banco | SQLite via `better-sqlite3` | Maduro, síncrono, prepared statements, transações e `PRAGMA` diretos, sem ORM |
-| Migrations | runner próprio (`src/database/migration-runner.ts`) | ~100 linhas versionadas e testadas, contra um ORM inteiro por uma tabela |
+| Banco | PostgreSQL / Neon via `pg` | Pool de alta performance, advisory locks de sessão, transações ACID estritas e CAS atômico |
+| Migrations | runner próprio (`src/database/postgres-migration-runner.ts`) | DDL transacional, locking por schema via `pg_advisory_lock`, checksum SHA-256 |
 | Validação | `zod` | Valida o ambiente no startup, com fail-fast |
 | Logging | `pino` | JSON estruturado, com `redact` para campos sensíveis |
 | Testes | Jest + Supertest | Padrão do NestJS; offline e determinístico |
 | Identidade | `firebase-admin` | Verificação oficial de Firebase ID Token; exige Node >= 22, que já é o runtime |
 | Modelo | `@google/genai` | SDK server-side oficial da Google para a Gemini API. O SDK do Firebase AI Logic é de cliente e não entra aqui |
 
-**Por que não um ORM:** o backend tem hoje uma tabela e terá poucas. Prisma, TypeORM ou Drizzle
-trariam geração de código, engine própria e um modelo de migrations opinativo — em troca de nada que
-`better-sqlite3` não resolva com SQL direto. Se o schema crescer a ponto de justificar, é uma
-decisão nova.
+**Persistência:** O backend opera exclusivamente com PostgreSQL como autoridade de runtime. O Android continua utilizando Room / SQLite localmente, mantendo o funcionamento offline integral do aplicativo.
 
 ## Rodar
 
@@ -97,9 +76,12 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | --- | --- | --- | --- |
 | `NODE_ENV` | não | `development` | `development` \| `test` \| `production` |
 | `PORT` | não | `8080` | TLS é do Caddy, não deste processo |
-| `DATABASE_PATH` | **sim** | — | Sem default de propósito: em container precisa apontar para o volume |
+| `DATABASE_URL` | **sim** | — | Connection string do PostgreSQL (pooled / Neon). Obrigatório, sem default. |
+| `DATABASE_URL_DIRECT` | não | — | Connection string direta para migrations e operações administrativas (Neon direct connection) |
+| `DATABASE_POOL_MIN` | não | `2` | Mínimo de conexões no pool pg |
+| `DATABASE_POOL_MAX` | não | `10` | Máximo de conexões no pool pg |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | não | `30000` | Timeout por instrução SQL |
 | `LOG_LEVEL` | não | `info` | |
-| `SQLITE_BUSY_TIMEOUT_MS` | não | `5000` | Único lugar que decide o `busy_timeout` |
 | `SHUTDOWN_TIMEOUT_MS` | não | `10000` | Drenagem em SIGTERM/SIGINT |
 | `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Sem ele, rota autenticada responde `503` |
 | `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial |
@@ -113,8 +95,6 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `AI_MAX_REQUESTS_GLOBAL_DAY` | não | `500` | Quota diária do servidor inteiro |
 | `AI_MAX_CONCURRENT_REQUESTS_PER_USER` | não | `1` | Chamadas simultâneas ao provider por conta |
 | `BACKUP_RETENTION_COUNT` | não | `5` | Quantos snapshots guardar por conta. Cinco porque cada backup já basta sozinho para restaurar — guardar vários é janela de arrependimento, não redundância |
-| `SQLITE_SYNCHRONOUS` | não | `FULL` | `FULL` \| `NORMAL`. `FULL` porque o aparelho só libera a Outbox com confirmação: uma transação confirmada e perdida é dado que ele considera salvo (T16.8) |
-| `SQLITE_WAL_AUTOCHECKPOINT_PAGES` | não | `1000` | Teto de crescimento do WAL, declarado em vez de herdado |
 | `HTTP_REQUEST_TIMEOUT_MS` | não | `120000` | Teto de uma requisição. Não são 30 s: um backup de 4 MiB em rede móvel ruim não cabe |
 | `HTTP_KEEP_ALIVE_TIMEOUT_MS` | não | `65000` | Precisa ser maior que o keep-alive do proxy, senão o Caddy reaproveita conexão fechada e o cliente vê 502 |
 | `REQUIRE_FIREBASE_ADMIN` | não | `false` | `true` derruba o processo no startup sem credencial — falha visível em vez de 503 em toda requisição |
@@ -136,7 +116,7 @@ A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive for
 | Rota | Auth | O que faz |
 | --- | --- | --- |
 | `GET /health/live` | pública | O processo está vivo. Não consulta nada externo. |
-| `GET /health/ready` | pública | Configuração carregada + SQLite acessível + migrations aplicadas. `503` quando algo falta. |
+| `GET /health/ready` | pública | Configuração carregada + PostgreSQL acessível + migrations aplicadas. `503` quando algo falta. |
 | `GET /v1/auth/me` | **Bearer** | Devolve `{ "uid": ... }` derivado do token verificado. |
 | `POST /v1/ai/coach` | **Bearer** | Coach IA: recebe contexto + intenção, decide prompt e modelo, chama o Gemini e devolve a resposta validada. |
 | `POST /v1/backups` | **Bearer** | Recebe um snapshot completo do estado pessoal, valida por inteiro, guarda em uma transação e devolve **metadata**. |
@@ -315,7 +295,7 @@ backend/
 │   ├── main.ts                  entrada: config → banco → HTTP, e graceful shutdown
 │   ├── bootstrap/create-app.ts  montagem (usada igual em produção e nos testes)
 │   ├── config/                  schema do ambiente + AppConfig
-│   ├── database/                conexão SQLite, PRAGMAs, runner de migrations
+│   ├── database/                conexão PostgreSQL (Pool), health check, runner de migrations
 │   ├── common/                  logger, request ID, log de acesso, envelope de erro
 │   ├── modules/health/          liveness e readiness
 │   ├── modules/auth/            verificação de Firebase ID Token, guard e principal
@@ -324,7 +304,7 @@ backend/
 │   ├── modules/sync/            Sync incremental: contrato, política, validação, change log
 │   └── modules/social/          Social: identidade pública, privacidade, política de acesso
 │                                 e o grafo (friendship.*): pedidos e amizade bilateral
-├── migrations/                  NNNN_nome.sql, versionadas
+├── migrations/                  NNNN_nome.sql, versionadas (PostgreSQL)
 └── test/
 ```
 
@@ -342,15 +322,13 @@ testes juntos, que é o objetivo.
 
 ## Banco
 
-- Arquivo persistente — nunca `:memory:` em runtime, nunca só na camada do container.
-- `PRAGMA journal_mode = WAL`
-- `PRAGMA foreign_keys = ON`
-- `PRAGMA busy_timeout` centralizado na configuração
+- PostgreSQL 17 / Neon como autoridade server-side exclusiva de persistência remota.
+- Conexões gerenciadas via pool de conexões (`pg.Pool`) com dimensionamento configurável (`DATABASE_POOL_MIN`, `DATABASE_POOL_MAX`).
+- Timeouts explícitos centralizados (`DATABASE_STATEMENT_TIMEOUT_MS`, `statement_timeout`, `lock_timeout`).
+- Concorrência crítica protegida por advisory locks transacionais (`pg_advisory_xact_lock`) e CAS atômico.
+- Migrations versionadas em `migrations/postgres/` executadas com lock de sessão (`pg_advisory_lock`) e transação DDL atômica.
 
-Os três são verificados por teste, e o de `foreign_keys` prova o comportamento (uma FK órfã é
-recusada), não só o valor reportado.
-
-Migrations são `migrations/NNNN_nome.sql`, aplicadas em ordem, cada uma na mesma transação do seu
+Migrations são `migrations/postgres/NNNN_nome.sql`, aplicadas em ordem, cada uma na mesma transação do seu
 registro em `schema_migrations`. Rodar de novo não reaplica nada; alterar o conteúdo de uma
 migration já aplicada é erro, não reaplicação silenciosa.
 
@@ -372,17 +350,17 @@ As duas de social são a exceção deliberada, e ela é delimitada: o perfil soc
 treino entra ali — nem XP, nem streak, nem contagem, nem peso, nem PR. Ver
 [`social-domain.md`](../docs/architecture/social-domain.md).
 
-## Produção (T16.8)
+## Produção (T16.8 / T18.0)
 
 ```text
-Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ Spark Backend ──▶ SQLite
-                                                                              │
-                                                          ops/backup.sh ──▶ restic ──▶ off-site
-                                                                             (criptografado)
+Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ Spark Backend ──▶ PostgreSQL
+                                                                               │
+                                                           ops/backup.sh ──▶ pg_dump/WAL ──▶ off-site
+                                                                              (criptografado)
 ```
 
 - [`docker-compose.prod.yml`](./docker-compose.prod.yml) — o backend **não publica porta nenhuma**;
-  quem escuta na internet é o Caddy. Bind mount para `/opt/spark/data`, rotação de log, limites de
+  quem escuta na internet é o Caddy. Conexão com PostgreSQL via `DATABASE_URL`, rotação de log, limites de
   recurso e credencial montada somente-leitura.
 - [`Caddyfile.prod`](./Caddyfile.prod) — o domínio vem de `{$SPARK_DOMAIN}`, porque domínio real é
   configuração operacional e não código.
@@ -394,8 +372,8 @@ Internet ──443──▶ Caddy (TLS automático) ──rede interna──▶ 
 > [`docs/operations/PRODUCTION_DEPLOYMENT.md`](../docs/operations/PRODUCTION_DEPLOYMENT.md).
 
 > **Backup do usuário ≠ backup do servidor.** A T16.4 protege contra a perda do **aparelho**: o
-> dado do usuário passa a existir também aqui. A **T16.8** protege contra a perda desta VPS: o
-> SQLite do servidor passa a existir fora dela, criptografado. Restaurar o servidor **não**
+> dado do usuário passa a existir também aqui. A **T16.8/T18.0** protege contra a perda desta VPS: os
+> dados do PostgreSQL passam a existir fora dela, criptografados. Restaurar o servidor **não**
 > restaura o Room de nenhum aparelho. Ver
 > [`docs/operations/BACKUP_AND_RESTORE.md`](../docs/operations/BACKUP_AND_RESTORE.md).
 

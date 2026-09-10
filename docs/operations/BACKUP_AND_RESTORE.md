@@ -28,8 +28,14 @@ Confundir os dois dá falsa sensação de segurança nos dois sentidos (§48):
 
 ## Como o snapshot é feito
 
+> **Nota de migração (T18.0/T18.0.1):** O Spark Backend foi migrado para PostgreSQL / Neon.
+> No PostgreSQL, backups lógicos utilizam `pg_dump` com transação consistente snapshot e backups
+> contínuos utilizam streaming/WAL archiving (ou PITR nativo no Neon). O fluxo abaixo registra a
+> fundamentação de consistência e o princípio de que o backup do servidor captura os dados relacionais,
+> os arquivos operacionais/ledgers (`deletion_tombstones.tsv`) e a mídia (`/opt/spark/media`).
+
 ```text
-spark.db (ativo, WAL) ──VACUUM INTO──▶ cópia ──integrity_check──▶ foreign_key_check ──▶ manifesto
+spark (ativo, transacional) ──pg_dump / snapshot──▶ cópia consistente ──▶ manifesto
 ```
 
 **`cp spark.db backup.db` com o banco ativo é proibido** (§26). Em WAL, o arquivo principal não

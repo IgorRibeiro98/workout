@@ -207,19 +207,14 @@ describe('Pontuação de desafio', () => {
 
       const postgres = app.get(PostgresService);
       const snapshot = async () => ({
-        entities: (
-          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_entities')
-        ).rows[0],
-        changes: (
-          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_changes')
-        ).rows[0],
-        mutations: (
-          await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_mutations')
-        ).rows[0],
+        entities: (await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_entities'))
+          .rows[0],
+        changes: (await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_changes'))
+          .rows[0],
+        mutations: (await postgres.query<{ n: number }>('SELECT COUNT(*) AS n FROM sync_mutations'))
+          .rows[0],
         participants: (
-          await postgres.query(
-            'SELECT * FROM challenge_participants ORDER BY participant_uid',
-          )
+          await postgres.query('SELECT * FROM challenge_participants ORDER BY participant_uid')
         ).rows,
         challenges: (await postgres.query('SELECT * FROM challenges')).rows,
       });
@@ -597,8 +592,8 @@ describe('Pontuação de desafio', () => {
   describe('o ranking, sobre uma fonte de mentira', () => {
     /** Uma fonte controlada: prova o ranking sem montar banco, sync nem HTTP. */
     const sourceOf = (scores: Record<string, number>): ChallengeProgressSource => ({
-      countCompletedWorkouts: async (ownerUid) => scores[ownerUid] ?? 0,
-      countActiveDays: async (ownerUid) => scores[ownerUid] ?? 0,
+      countCompletedWorkouts: (ownerUid) => Promise.resolve(scores[ownerUid] ?? 0),
+      countActiveDays: (ownerUid) => Promise.resolve(scores[ownerUid] ?? 0),
     });
 
     const challenge = {
@@ -646,10 +641,7 @@ describe('Pontuação de desafio', () => {
       const scoring = new ChallengeScoringService(sourceOf({ a: 4, b: 4 }));
       const order = async () =>
         (
-          await scoring.leaderboard(challenge, [
-            participant('b', 'Bruno'),
-            participant('a', 'Ana'),
-          ])
+          await scoring.leaderboard(challenge, [participant('b', 'Bruno'), participant('a', 'Ana')])
         ).map((p) => p.displayName);
 
       // A entrada vem em ordem diferente da saída, e a saída é sempre a mesma: sem isto, duas
@@ -661,16 +653,13 @@ describe('Pontuação de desafio', () => {
     it('ninguém pontua fora do próprio uid', async () => {
       const seen: string[] = [];
       const scoring = new ChallengeScoringService({
-        countCompletedWorkouts: async (ownerUid) => {
+        countCompletedWorkouts: (ownerUid) => {
           seen.push(ownerUid);
-          return 1;
+          return Promise.resolve(1);
         },
-        countActiveDays: async () => 0,
+        countActiveDays: () => Promise.resolve(0),
       });
-      await scoring.leaderboard(challenge, [
-        participant('a', 'Ana'),
-        participant('b', 'Bruno'),
-      ]);
+      await scoring.leaderboard(challenge, [participant('a', 'Ana'), participant('b', 'Bruno')]);
       expect(seen.sort()).toEqual(['a', 'b']);
     });
   });

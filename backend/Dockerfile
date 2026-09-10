@@ -2,14 +2,11 @@
 #
 # Duas decisões que valem explicação:
 #
-# 1. `bookworm-slim` em vez de Alpine: `better-sqlite3` é um módulo nativo e publica binários
-#    pré-compilados para glibc. Em Alpine (musl) ele precisaria ser compilado a cada build, o que
-#    é mais lento e menos reproduzível para nenhum ganho relevante de tamanho aqui.
-#
-#    Desde a T17.9 há um segundo módulo nativo: `sharp` (libvips), o pipeline de imagem dos
-#    check-ins. Ele publica `@img/sharp-linux-x64` para glibc, e a mesma escolha de base vale pelo
-#    mesmo motivo — em musl ele exigiria `@img/sharp-linuxmusl-x64` ou compilação da libvips
-#    inteira. `docker build` é gate de CI (T17.9 §143): se o binário não vier, a imagem não sai.
+# 1. `bookworm-slim` em vez de Alpine: módulos nativos como `sharp` (libvips, pipeline de
+#    imagem dos check-ins) publicam binários pré-compilados para glibc (`@img/sharp-linux-x64`).
+#    Em Alpine (musl), eles precisariam ser compilados do zero, o que é mais lento e menos
+#    reproduzível para nenhum ganho relevante de tamanho aqui.
+#    `docker build` é gate de CI (T17.9 §143): se o binário não vier, a imagem não sai.
 # 2. Multi-stage: o estágio de runtime recebe apenas dependências de produção e o `dist` já
 #    compilado. Nem TypeScript, nem ESLint, nem Jest, nem código-fonte entram na imagem final.
 
@@ -35,22 +32,19 @@ FROM node:22.22.1-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
     PORT=8080 \
-    DATABASE_PATH=/data/spark.db \
     SOCIAL_MEDIA_ROOT=/media
 
 WORKDIR /app
 
 # `node` é um usuário sem privilégios já presente na imagem base (uid 1000). O processo nunca roda
-# como root, e `/data` pertence a ele para que o volume seja gravável sem elevar privilégio.
+# como root, e `/media` pertence a ele para que o volume seja gravável sem elevar privilégio.
 #
-# `/media` é o volume de mídia social da T17.9 (§26). Ele é **separado** de `/data` de propósito:
-# o banco é copiado por `VACUUM INTO` a cada backup, e a mídia é grande, imutável e copiada por
-# deduplicação — misturar os dois faria cada snapshot do banco arrastar todas as fotos junto.
+# `/media` é o volume de mídia social da T17.9 (§26).
 #
 # `0750`: o processo lê e escreve; o grupo compartilhado (T16.8.1 §3) lê, que é o que o backup
 # precisa. Ninguém mais alcança.
-RUN mkdir -p /data /media \
- && chown -R node:node /data /media \
+RUN mkdir -p /media \
+ && chown -R node:node /media \
  && chmod 0750 /media
 
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
@@ -62,13 +56,13 @@ USER node
 
 EXPOSE 8080
 
-# O banco e a mídia vivem em volumes, nunca na camada efêmera do container (T17.9 §26).
+# A mídia vive em volume, nunca na camada efêmera do container (T17.9 §26).
 #
 # Sem isto, `docker compose up` recriando o container apagaria a foto de todo mundo — em silêncio,
 # porque escrever num diretório efêmero funciona perfeitamente até alguém reiniciar. Em produção
 # `SOCIAL_MEDIA_ROOT` precisa apontar para um volume real, e o processo **recusa subir** sem a
 # variável definida (§28, `AppConfig.missingRequirements`).
-VOLUME ["/data", "/media"]
+VOLUME ["/media"]
 
 # Healthcheck sem curl: a imagem slim não traz um, e o `fetch` global do Node 22 resolve.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

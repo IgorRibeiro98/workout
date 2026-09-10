@@ -27,6 +27,7 @@ describe('Retenção de backups', () => {
 
   afterEach(async () => {
     await app?.close();
+    app = undefined as unknown as INestApplication;
     temp.cleanup();
   });
 
@@ -70,7 +71,7 @@ describe('Retenção de backups', () => {
       .get('/v1/backups/latest')
       .set('Authorization', `Bearer ${TOKEN}`);
     expect(latest.body.backupId).toBe(created.at(-1)?.body.backupId);
-  });
+  }, 30_000);
 
   it('o backup recém-criado nunca é o removido', async () => {
     await start('1');

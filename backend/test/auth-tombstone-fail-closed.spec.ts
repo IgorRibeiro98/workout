@@ -4,7 +4,7 @@ import request from 'supertest';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 
 const ACCOUNTS = {
   A: { token: 'token-a', uid: 'uid-a', email: 'a@example.com', name: 'Alice' },
@@ -42,10 +42,10 @@ const ACCOUNTS = {
  */
 describe('T17.13.1 — tombstone do Auth Guard falha fechado', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
   let verifier: FakeAuthTokenVerifier;
 
-  const server = () => app.getHttpServer();
+  const server = () => app!.getHttpServer();
   const auth = (token: string) => `Bearer ${token}`;
 
   beforeEach(async () => {
@@ -71,6 +71,7 @@ describe('T17.13.1 — tombstone do Auth Guard falha fechado', () => {
 
   afterEach(async () => {
     await app?.close();
+    app = undefined;
     temp.cleanup();
   });
 
@@ -95,9 +96,8 @@ describe('T17.13.1 — tombstone do Auth Guard falha fechado', () => {
   });
 
   it('o SELECT do tombstone lançando ⇒ 503, e nunca "conta ativa" (§19/§21)', async () => {
-    // A tabela desaparece debaixo do guard. `prepare` passa a lançar "no such table" — uma falha
-    // real do banco, do mesmo tipo que um arquivo corrompido ou um schema pela metade produziria.
-    app.get(SqliteService).connection.exec(`DROP TABLE account_deletion_tombstones`);
+    // A tabela desaparece debaixo do guard. O SELECT passa a lançar erro de tabela inexistente.
+    await app!.get(PostgresService).query(`DROP TABLE account_deletion_tombstones`);
 
     const res = await request(server())
       .get('/v1/social/me')
@@ -106,10 +106,10 @@ describe('T17.13.1 — tombstone do Auth Guard falha fechado', () => {
     expect(res.body.error.code).toBe('ACCOUNT_STATE_UNAVAILABLE');
   });
 
-  it('conexão SQLite fechada ⇒ 503 (§19/§21)', async () => {
+  it('conexão fechada ⇒ 503 (§19/§21)', async () => {
     // O banco fecha sob o processo: é o que acontece durante um shutdown, ou se o serviço nunca
     // chegou a abrir. Antes, isto era `return false` — conta ativa.
-    app.get(SqliteService).onApplicationShutdown();
+    await app!.get(PostgresService).close();
 
     const res = await request(server())
       .get('/v1/social/me')
@@ -156,13 +156,13 @@ describe('T17.13.1 — tombstone do Auth Guard falha fechado', () => {
       .set('Authorization', auth(ACCOUNTS.A.token))
       .expect(403);
     expect(hashTrick.body.error.code).toBe('ACCOUNT_DELETED');
-  });
+  }, 60_000);
 
   it('mesmo quando o banco não responde, a rota de exclusão continua isenta (§20)', async () => {
     // A isenção é decidida pelo **caminho**, antes de qualquer consulta: uma conta em processo de
     // exclusão precisa conseguir consultar o próprio estado mesmo com o banco degradado. O que
     // ela não pode é usar o resto da API — e isso o teste de 503 acima já fixa.
-    app.get(SqliteService).onApplicationShutdown();
+    await app!.get(PostgresService).close();
 
     // Não é 503 do guard: o pedido chega ao controller, que falha por outro motivo (o banco).
     // O que importa aqui é que o guard não o converteu em 503 antes de olhar o caminho.

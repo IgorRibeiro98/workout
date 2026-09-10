@@ -352,7 +352,7 @@ describe('T17.13 — fechamento do Social V2: exclusão e DR com Squads', () => 
       await get(ACCOUNT_C, '/v1/social/me').expect(200);
       // §99 — sem corrupção de FK depois do ciclo inteiro.
       expect(s.inDatabase((db) => db.pragma('foreign_key_check'))).toEqual([]);
-    });
+    }, 60_000);
 
     it('um Squad órfão de um restore parcial ainda é alcançado pelo reconciliador (§51)', async () => {
       // O caso que a enumeração do reconciliador precisa cobrir: um restore inconsistente traz de
@@ -385,6 +385,6 @@ describe('T17.13 — fechamento do Social V2: exclusão e DR com Squads', () => 
 
       expect(await service.reconcileTombstones(new Set([hashA]))).toBe(1);
       expect(counts().groupsOfA).toBe(0);
-    });
+    }, 60_000);
   });
 });

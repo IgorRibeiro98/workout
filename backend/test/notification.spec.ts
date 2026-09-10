@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 import { NotificationDispatcher } from '../src/modules/social/notification.dispatcher';
 import { NotificationRepository } from '../src/modules/social/notification.repository';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
@@ -449,7 +449,7 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       expect(cancelRes.status).toBe(200);
 
       // Eventos programados do desafio foram cancelados
-      const startsAt = created.body.challenge.startsAt;
+      const startsAt = saoPauloInstant('2026-09-10T00:00:00');
       const due = await repository.findDueEvents(startsAt + 1000, 50);
       const startingSoon = due.filter(
         (e) => e.entityId === challengeId && e.type === 'CHALLENGE_STARTING_SOON',
@@ -709,12 +709,14 @@ describe('T17.5 — Notificações Sociais com Firebase Cloud Messaging', () => 
       await dispatcher.runDispatchCycle();
 
       // O evento deve ser transicionado para EXPIRED
-      const row = app
-        .get(SqliteService)
-        .connection.prepare(
-          'SELECT status, completed_at FROM social_notification_events WHERE id = ?',
-        )
-        .get('event-to-expire') as { status: string; completed_at: number };
+      const res = await app.get(PostgresService).query<{
+        status: string;
+        completed_at: string | number;
+      }>('SELECT status, completed_at FROM social_notification_events WHERE id = $1', ['event-to-expire']);
+      const row = {
+        status: res.rows[0].status,
+        completed_at: Number(res.rows[0].completed_at),
+      };
 
       expect(row.status).toBe('EXPIRED');
       expect(row.completed_at).toBe(clock.now());

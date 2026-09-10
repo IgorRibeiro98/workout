@@ -34,7 +34,9 @@ export class WorkoutShareController {
   }
 
   @Get('received')
-  async listReceived(@Principal() principal: AuthenticatedPrincipal): Promise<WorkoutShareItemDto[]> {
+  async listReceived(
+    @Principal() principal: AuthenticatedPrincipal,
+  ): Promise<WorkoutShareItemDto[]> {
     return this.service.listReceived(principal.uid);
   }
 

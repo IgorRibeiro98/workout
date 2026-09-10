@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { INestApplication } from '@nestjs/common';
@@ -50,7 +50,6 @@ describe('T17.13.1 — reconciliação de DR pelo comando operacional', () => {
   let verifier: FakeAuthTokenVerifier;
   let ledgerPath: string;
   let mediaRoot: string;
-  let snapshotPath: string;
 
   const server = () => app!.getHttpServer();
   const auth = (token: string) => `Bearer ${token}`;
@@ -70,6 +69,7 @@ describe('T17.13.1 — reconciliação de DR pelo comando operacional', () => {
     Object.assign(process.env, {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
+      DATABASE_URL: temp.databaseUrl,
       DATABASE_PATH: temp.path,
       SOCIAL_MEDIA_ROOT: mediaRoot,
       DELETION_TOMBSTONES_FILE_PATH: ledgerPath,
@@ -102,7 +102,6 @@ describe('T17.13.1 — reconciliação de DR pelo comando operacional', () => {
     temp = createTempDb();
     ledgerPath = join(temp.directory, 'deletion_tombstones.tsv');
     mediaRoot = join(temp.directory, 'media');
-    snapshotPath = join(temp.directory, 'snapshot.db');
     await boot();
   });
 
@@ -119,20 +118,43 @@ describe('T17.13.1 — reconciliação de DR pelo comando operacional', () => {
       .send({ displayName: account.name })
       .expect(200);
 
-  /** Um "backup" do arquivo do banco, no estado atual. */
+  /** Um "backup" do banco, no estado atual. */
   function snapshot(): void {
-    inDatabase((db) => db.pragma('wal_checkpoint(TRUNCATE)'));
-    copyFileSync(temp.path, snapshotPath);
+    inDatabase((db) => {
+      db.exec(`
+        DO $$
+        DECLARE tbl text;
+        BEGIN
+          CREATE SCHEMA IF NOT EXISTS "${temp.schema}_snap";
+          FOR tbl IN (SELECT tablename FROM pg_tables WHERE schemaname = '${temp.schema}') LOOP
+            EXECUTE format('DROP TABLE IF EXISTS "${temp.schema}_snap".%I CASCADE', tbl);
+            EXECUTE format('CREATE TABLE "${temp.schema}_snap".%I (LIKE "${temp.schema}".%I INCLUDING ALL)', tbl, tbl);
+            EXECUTE format('INSERT INTO "${temp.schema}_snap".%I SELECT * FROM "${temp.schema}".%I', tbl, tbl);
+          END LOOP;
+        END $$;
+      `);
+    });
   }
 
   /** Substitui o banco pelo snapshot — o que um restore faz de verdade. */
   async function restoreSnapshot(): Promise<void> {
     await app?.close();
     app = undefined;
-    for (const suffix of ['-wal', '-shm']) {
-      rmSync(`${temp.path}${suffix}`, { force: true });
-    }
-    copyFileSync(snapshotPath, temp.path);
+    inDatabase((db) => {
+      db.exec(`
+        DO $$
+        DECLARE tbl text;
+        BEGIN
+          FOR tbl IN (SELECT tablename FROM pg_tables WHERE schemaname = '${temp.schema}') LOOP
+            EXECUTE format('DROP TABLE IF EXISTS "${temp.schema}".%I CASCADE', tbl);
+          END LOOP;
+          FOR tbl IN (SELECT tablename FROM pg_tables WHERE schemaname = '${temp.schema}_snap') LOOP
+            EXECUTE format('CREATE TABLE "${temp.schema}".%I (LIKE "${temp.schema}_snap".%I INCLUDING ALL)', tbl, tbl);
+            EXECUTE format('INSERT INTO "${temp.schema}".%I SELECT * FROM "${temp.schema}_snap".%I', tbl, tbl);
+          END LOOP;
+        END $$;
+      `);
+    });
   }
 
   // ================================================================ §65 o cenário principal

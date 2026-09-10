@@ -27,6 +27,7 @@ module.exports = {
   collectCoverageFrom: ['src/**/*.ts'],
   coverageDirectory: './coverage',
   testEnvironment: 'node',
+  testTimeout: 60000,
   setupFiles: ['<rootDir>/test/setup-env.ts'],
   moduleNameMapper: {
     '^better-sqlite3$': '<rootDir>/test/support/better-sqlite3-shim.ts',

@@ -40,7 +40,9 @@ export interface SocialProgressSource {
   getLevel(ownerUid: string): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /** A sequência **semanal** de consistência (§20). */
-  getConsistencyStreak(ownerUid: string): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
+  getConsistencyStreak(
+    ownerUid: string,
+  ): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /**
    * Quantos treinos **concluídos** o dono tem na semana canônica que contém [nowMs].
@@ -56,7 +58,9 @@ export interface SocialProgressSource {
   ): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
 
   /** Os identificadores canônicos das conquistas que o dono realmente obteve. */
-  getEarnedAchievementIds(ownerUid: string): SocialProgressValue<readonly string[]> | Promise<SocialProgressValue<readonly string[]>>;
+  getEarnedAchievementIds(
+    ownerUid: string,
+  ): SocialProgressValue<readonly string[]> | Promise<SocialProgressValue<readonly string[]>>;
 }
 
 /**

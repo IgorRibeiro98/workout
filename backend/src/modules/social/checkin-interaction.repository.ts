@@ -147,7 +147,7 @@ export class CheckInInteractionRepository {
       params,
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       checkInId: row.checkInId,
       type: row.type as ReactionType,
       total: Number(row.total),
@@ -267,7 +267,7 @@ export class CheckInInteractionRepository {
       createdAt: string | number;
     }>(sql, params);
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       commentId: row.commentId,
       authorUid: row.authorUid,
       authorSocialId: row.authorSocialId,

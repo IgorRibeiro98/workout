@@ -150,10 +150,10 @@ export async function createSocialScenario(options: ScenarioOptions = {}): Promi
     server,
     auth,
 
-    inDatabase<T>(read: (db: any) => T): T {
+    inDatabase<T>(read: (db: BetterSqlite3.Database) => T): T {
       const db = createPostgresSyncDb(temp.schema);
       try {
-        return read(db);
+        return read(db as unknown as BetterSqlite3.Database);
       } finally {
         db.close();
       }

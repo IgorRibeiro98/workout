@@ -148,7 +148,7 @@ describe('Verificação da credencial do Firebase Admin no startup', () => {
     // sem credencial, `/health/*` responde e rota autenticada devolve 503 — nunca 200 sem verificar.
     const config = AppConfig.fromEnv({
       NODE_ENV: 'test',
-      DATABASE_PATH: '/tmp/spark-preflight.db',
+      DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
     });
 
     expect(config.requireFirebaseAdmin).toBe(false);
@@ -161,7 +161,7 @@ describe('Verificação da credencial do Firebase Admin no startup', () => {
     // para o caminho crítico — o Coach fora nunca pode derrubar backup e sync.
     const config = AppConfig.fromEnv({
       NODE_ENV: 'test',
-      DATABASE_PATH: '/tmp/spark-preflight.db',
+      DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
       REQUIRE_FIREBASE_ADMIN: 'true',
       GOOGLE_APPLICATION_CREDENTIALS: join(directory, 'qualquer.json'),
     });

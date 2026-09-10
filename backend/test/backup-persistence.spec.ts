@@ -211,6 +211,8 @@ function snapshotWith(
 }
 
 async function itemCount(postgres: PostgresService): Promise<number> {
-  const result = await postgres.query<{ total: number }>('SELECT COUNT(*) AS total FROM backup_items');
+  const result = await postgres.query<{ total: number }>(
+    'SELECT COUNT(*) AS total FROM backup_items',
+  );
   return result.rows[0].total;
 }

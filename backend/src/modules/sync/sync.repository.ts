@@ -1,6 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { PostgresService } from '../../database/postgres.service';
-import type { SyncChangeResponse, SyncEntityType, SyncOperation } from './sync.contract';
+import { PostgresService, type PoolClient } from '../../database/postgres.service';
+import { sha256Hex } from '../backup/canonical-json';
+import {
+  SYNC_MUTATION_REASONS,
+  type SyncChangeResponse,
+  type SyncEntityType,
+  type SyncMutationResult,
+  type SyncOperation,
+} from './sync.contract';
+import { SyncEntityPolicyRegistry } from './sync.policy';
+import { validateMutation, type ParsedMutation } from './sync.validator';
 
 /** O estado atual de um agregado no servidor. */
 export interface StoredSyncEntity {
@@ -166,82 +175,528 @@ export class SyncRepository {
   }
 
   /**
+   * Executa a decisão de revisão e mutação de forma estritamente atômica e serializada.
+   */
+  async executeAtomicMutation(
+    ownerUid: string,
+    deviceId: string,
+    mutation: ParsedMutation,
+    now: number,
+  ): Promise<SyncMutationResult> {
+    return this.db.transaction(async (client) => {
+      // 1. Serializa chamadas concorrentes com o mesmo clientMutationId
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        ownerUid,
+        `mut:${mutation.clientMutationId}`,
+      ]);
+
+      // Verifica idempotência dentro do lock de mutação
+      const ledgerRes = await client.query<MutationRow>(
+        `SELECT client_mutation_id, entity_type, entity_sync_id, operation, payload_hash,
+                result_revision, result_sequence
+         FROM sync_mutations
+         WHERE owner_uid = $1 AND client_mutation_id = $2`,
+        [ownerUid, mutation.clientMutationId],
+      );
+      const ledger = ledgerRes.rows[0];
+      if (ledger) {
+        const hash =
+          mutation.operation === 'DELETE'
+            ? ''
+            : mutation.canonicalPayload
+              ? sha256Hex(mutation.canonicalPayload)
+              : '';
+        const sameIntent =
+          ledger.entity_type === mutation.entityType &&
+          ledger.entity_sync_id === mutation.entitySyncId &&
+          ledger.operation === mutation.operation &&
+          ledger.payload_hash === hash;
+
+        if (!sameIntent) {
+          return {
+            clientMutationId: mutation.clientMutationId,
+            status: 'IDEMPOTENCY_CONFLICT',
+          };
+        }
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'ALREADY_APPLIED',
+          serverRevision: ledger.result_revision,
+          serverSequence: Number(ledger.result_sequence),
+        };
+      }
+
+      // 2. Validação estrutural e de contrato
+      const verdict = validateMutation(mutation);
+      if (!verdict.ok) {
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: verdict.rejected.unsupported ? 'UNSUPPORTED' : 'INVALID',
+          reason: verdict.rejected.reason,
+        };
+      }
+      const accepted = verdict.accepted;
+
+      // 3. Serializa operações concorrentes no mesmo agregado da mesma conta
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        ownerUid,
+        `ent:${accepted.entityType}:${mutation.entitySyncId}`,
+      ]);
+
+      // 4. Lê o estado atual da entidade dentro da transação e do lock
+      const entityRes = await client.query<EntityRow>(
+        `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
+                last_server_sequence, payload_hash, deleted
+         FROM sync_entities
+         WHERE owner_uid = $1 AND entity_type = $2 AND entity_sync_id = $3`,
+        [ownerUid, accepted.entityType, mutation.entitySyncId],
+      );
+      const entityRow = entityRes.rows[0];
+      const entity = entityRow
+        ? {
+            entityType: entityRow.entity_type as SyncEntityType,
+            entitySyncId: entityRow.entity_sync_id,
+            entitySchemaVersion: entityRow.entity_schema_version,
+            serverRevision: entityRow.server_revision,
+            lastServerSequence: Number(entityRow.last_server_sequence),
+            payloadHash: entityRow.payload_hash,
+            deleted: Boolean(entityRow.deleted),
+          }
+        : null;
+
+      // 5. Decisão de exclusão (DELETE)
+      if (accepted.operation === 'DELETE') {
+        if (entity?.deleted) {
+          await this.recordConvergedWithClient(client, {
+            ownerUid,
+            deviceId,
+            clientMutationId: mutation.clientMutationId,
+            entityType: mutation.entityType,
+            entitySyncId: mutation.entitySyncId,
+            operation: mutation.operation,
+            baseRevision: mutation.baseRevision,
+            payloadHash: '',
+            resultRevision: entity.serverRevision,
+            resultSequence: entity.lastServerSequence,
+            now,
+          });
+          return {
+            clientMutationId: mutation.clientMutationId,
+            status: 'ALREADY_APPLIED',
+            serverRevision: entity.serverRevision,
+            serverSequence: entity.lastServerSequence,
+          };
+        }
+
+        const base = mutation.baseRevision ?? 0;
+        if (!entity) {
+          return this.applyDeleteWithClient(client, {
+            ownerUid,
+            deviceId,
+            clientMutationId: mutation.clientMutationId,
+            entityType: accepted.entityType,
+            entitySyncId: mutation.entitySyncId,
+            entitySchemaVersion: mutation.entitySchemaVersion,
+            baseRevision: mutation.baseRevision,
+            nextRevision: 1,
+            now,
+          });
+        }
+
+        if (base > entity.serverRevision) {
+          return {
+            clientMutationId: mutation.clientMutationId,
+            status: 'INVALID',
+            currentRevision: entity.serverRevision,
+            reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
+          };
+        }
+
+        if (base !== entity.serverRevision) {
+          return {
+            clientMutationId: mutation.clientMutationId,
+            status: 'STALE',
+            currentRevision: entity.serverRevision,
+          };
+        }
+
+        return this.applyDeleteWithClient(client, {
+          ownerUid,
+          deviceId,
+          clientMutationId: mutation.clientMutationId,
+          entityType: accepted.entityType,
+          entitySyncId: mutation.entitySyncId,
+          entitySchemaVersion: mutation.entitySchemaVersion,
+          baseRevision: mutation.baseRevision,
+          nextRevision: entity.serverRevision + 1,
+          now,
+        });
+      }
+
+      // 6. Decisão de escrita (UPSERT)
+      if (entity?.deleted) {
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'REMOTE_DELETED',
+          currentRevision: entity.serverRevision,
+          reason: SYNC_MUTATION_REASONS.ENTITY_DELETED,
+        };
+      }
+
+      if (SyncEntityPolicyRegistry.isImmutableHistory(accepted.entityType)) {
+        if (!entity) {
+          return this.applyMutationWithClient(client, {
+            ownerUid,
+            deviceId,
+            clientMutationId: mutation.clientMutationId,
+            entityType: accepted.entityType,
+            entitySyncId: mutation.entitySyncId,
+            entitySchemaVersion: mutation.entitySchemaVersion,
+            operation: 'UPSERT',
+            baseRevision: mutation.baseRevision,
+            canonicalPayload: accepted.canonicalPayload,
+            payloadHash: accepted.payloadHash,
+            nextRevision: 1,
+            now,
+          });
+        }
+        if (entity.payloadHash === accepted.payloadHash) {
+          await this.recordConvergedWithClient(client, {
+            ownerUid,
+            deviceId,
+            clientMutationId: mutation.clientMutationId,
+            entityType: mutation.entityType,
+            entitySyncId: mutation.entitySyncId,
+            operation: mutation.operation,
+            baseRevision: mutation.baseRevision,
+            payloadHash: accepted.payloadHash,
+            resultRevision: entity.serverRevision,
+            resultSequence: entity.lastServerSequence,
+            now,
+          });
+          return {
+            clientMutationId: mutation.clientMutationId,
+            status: 'ALREADY_APPLIED',
+            serverRevision: entity.serverRevision,
+            serverSequence: entity.lastServerSequence,
+          };
+        }
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'IMMUTABLE_HISTORY_CONFLICT',
+          currentRevision: entity.serverRevision,
+          reason: SYNC_MUTATION_REASONS.IMMUTABLE_HISTORY,
+        };
+      }
+
+      const base = mutation.baseRevision ?? 0;
+      if (!entity) {
+        if (base === 0) {
+          return this.applyMutationWithClient(client, {
+            ownerUid,
+            deviceId,
+            clientMutationId: mutation.clientMutationId,
+            entityType: accepted.entityType,
+            entitySyncId: mutation.entitySyncId,
+            entitySchemaVersion: mutation.entitySchemaVersion,
+            operation: 'UPSERT',
+            baseRevision: mutation.baseRevision,
+            canonicalPayload: accepted.canonicalPayload,
+            payloadHash: accepted.payloadHash,
+            nextRevision: 1,
+            now,
+          });
+        }
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'STALE',
+          currentRevision: 0,
+        };
+      }
+
+      if (base > entity.serverRevision) {
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'INVALID',
+          currentRevision: entity.serverRevision,
+          reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
+        };
+      }
+
+      if (accepted.payloadHash === entity.payloadHash) {
+        await this.recordConvergedWithClient(client, {
+          ownerUid,
+          deviceId,
+          clientMutationId: mutation.clientMutationId,
+          entityType: mutation.entityType,
+          entitySyncId: mutation.entitySyncId,
+          operation: mutation.operation,
+          baseRevision: mutation.baseRevision,
+          payloadHash: accepted.payloadHash,
+          resultRevision: entity.serverRevision,
+          resultSequence: entity.lastServerSequence,
+          now,
+        });
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'ALREADY_APPLIED',
+          serverRevision: entity.serverRevision,
+          serverSequence: entity.lastServerSequence,
+        };
+      }
+
+      if (base === entity.serverRevision && base > 0) {
+        return this.applyMutationWithClient(client, {
+          ownerUid,
+          deviceId,
+          clientMutationId: mutation.clientMutationId,
+          entityType: accepted.entityType,
+          entitySyncId: mutation.entitySyncId,
+          entitySchemaVersion: mutation.entitySchemaVersion,
+          operation: 'UPSERT',
+          baseRevision: mutation.baseRevision,
+          canonicalPayload: accepted.canonicalPayload,
+          payloadHash: accepted.payloadHash,
+          nextRevision: entity.serverRevision + 1,
+          now,
+        });
+      }
+
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'STALE',
+        currentRevision: entity.serverRevision,
+      };
+    });
+  }
+
+  private async applyMutationWithClient(
+    client: PoolClient,
+    input: ApplyMutationInput,
+  ): Promise<SyncMutationResult> {
+    const changeRes = await client.query<{ server_sequence: string | number }>(
+      `INSERT INTO sync_changes
+         (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+          operation, payload, payload_hash, origin_device_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING server_sequence`,
+      [
+        input.ownerUid,
+        input.entityType,
+        input.entitySyncId,
+        input.entitySchemaVersion,
+        input.nextRevision,
+        input.operation,
+        input.canonicalPayload,
+        input.payloadHash,
+        input.deviceId,
+        input.now,
+      ],
+    );
+    const serverSequence = Number(changeRes.rows[0].server_sequence);
+
+    const entityRes = await client.query(
+      `INSERT INTO sync_entities
+         (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+          last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
+         entity_schema_version = EXCLUDED.entity_schema_version,
+         server_revision       = EXCLUDED.server_revision,
+         last_server_sequence  = EXCLUDED.last_server_sequence,
+         payload               = EXCLUDED.payload,
+         payload_hash          = EXCLUDED.payload_hash,
+         origin_device_id      = EXCLUDED.origin_device_id,
+         updated_at            = EXCLUDED.updated_at
+       WHERE sync_entities.server_revision < EXCLUDED.server_revision
+         AND sync_entities.deleted = FALSE`,
+      [
+        input.ownerUid,
+        input.entityType,
+        input.entitySyncId,
+        input.entitySchemaVersion,
+        input.nextRevision,
+        serverSequence,
+        input.canonicalPayload,
+        input.payloadHash,
+        input.deviceId,
+        input.now,
+        input.now,
+      ],
+    );
+
+    if (entityRes.rowCount !== 1) {
+      throw new Error(
+        `Sync CAS conflict: entity ${input.entityType}:${input.entitySyncId} revision ${input.nextRevision} failed CAS`,
+      );
+    }
+
+    await client.query(
+      `INSERT INTO sync_mutations
+         (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
+          base_revision, result_revision, result_sequence, payload_hash, applied_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        input.ownerUid,
+        input.clientMutationId,
+        input.deviceId,
+        input.entityType,
+        input.entitySyncId,
+        input.operation,
+        input.baseRevision,
+        input.nextRevision,
+        serverSequence,
+        input.payloadHash,
+        input.now,
+      ],
+    );
+
+    return {
+      clientMutationId: input.clientMutationId,
+      status: 'APPLIED',
+      serverRevision: input.nextRevision,
+      serverSequence,
+    };
+  }
+
+  private async applyDeleteWithClient(
+    client: PoolClient,
+    input: ApplyDeleteInput,
+  ): Promise<SyncMutationResult> {
+    const changeRes = await client.query<{ server_sequence: string | number }>(
+      `INSERT INTO sync_changes
+         (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+          operation, payload, payload_hash, origin_device_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, 'DELETE', 'null', '', $6, $7)
+       RETURNING server_sequence`,
+      [
+        input.ownerUid,
+        input.entityType,
+        input.entitySyncId,
+        input.entitySchemaVersion,
+        input.nextRevision,
+        input.deviceId,
+        input.now,
+      ],
+    );
+    const serverSequence = Number(changeRes.rows[0].server_sequence);
+
+    const entityRes = await client.query(
+      `INSERT INTO sync_entities
+         (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
+          last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at,
+          deleted, deleted_at, deleted_by_device_id)
+       VALUES ($1, $2, $3, $4, $5, $6, '', '', $7, $8, $9, TRUE, $10, $11)
+       ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
+         server_revision      = EXCLUDED.server_revision,
+         last_server_sequence = EXCLUDED.last_server_sequence,
+         payload              = '',
+         payload_hash         = '',
+         origin_device_id     = EXCLUDED.origin_device_id,
+         updated_at           = EXCLUDED.updated_at,
+         deleted              = TRUE,
+         deleted_at           = EXCLUDED.deleted_at,
+         deleted_by_device_id = EXCLUDED.deleted_by_device_id
+       WHERE sync_entities.server_revision < EXCLUDED.server_revision`,
+      [
+        input.ownerUid,
+        input.entityType,
+        input.entitySyncId,
+        input.entitySchemaVersion,
+        input.nextRevision,
+        serverSequence,
+        input.deviceId,
+        input.now,
+        input.now,
+        input.now,
+        input.deviceId,
+      ],
+    );
+
+    if (entityRes.rowCount !== 1) {
+      throw new Error(
+        `Sync CAS conflict: entity ${input.entityType}:${input.entitySyncId} revision ${input.nextRevision} failed CAS delete`,
+      );
+    }
+
+    await client.query(
+      `INSERT INTO sync_mutations
+         (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
+          base_revision, result_revision, result_sequence, payload_hash, applied_at)
+       VALUES ($1, $2, $3, $4, $5, 'DELETE', $6, $7, $8, '', $9)`,
+      [
+        input.ownerUid,
+        input.clientMutationId,
+        input.deviceId,
+        input.entityType,
+        input.entitySyncId,
+        input.baseRevision,
+        input.nextRevision,
+        serverSequence,
+        input.now,
+      ],
+    );
+
+    return {
+      clientMutationId: input.clientMutationId,
+      status: 'APPLIED',
+      serverRevision: input.nextRevision,
+      serverSequence,
+    };
+  }
+
+  private async recordConvergedWithClient(
+    client: PoolClient,
+    input: {
+      readonly ownerUid: string;
+      readonly deviceId: string;
+      readonly clientMutationId: string;
+      readonly entityType: string;
+      readonly entitySyncId: string;
+      readonly operation: string;
+      readonly baseRevision: number | null;
+      readonly payloadHash: string;
+      readonly resultRevision: number;
+      readonly resultSequence: number;
+      readonly now: number;
+    },
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO sync_mutations
+         (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
+          base_revision, result_revision, result_sequence, payload_hash, applied_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (owner_uid, client_mutation_id) DO NOTHING`,
+      [
+        input.ownerUid,
+        input.clientMutationId,
+        input.deviceId,
+        input.entityType,
+        input.entitySyncId,
+        input.operation,
+        input.baseRevision,
+        input.resultRevision,
+        input.resultSequence,
+        input.payloadHash,
+        input.now,
+      ],
+    );
+  }
+
+  /**
    * Aplica a mutação: estado atual, log de mudança e ledger — **em uma transação**.
    */
   async applyMutation(input: ApplyMutationInput): Promise<AppliedMutation> {
     return this.db.transaction(async (client) => {
-      const changeRes = await client.query<{ server_sequence: string | number }>(
-        `INSERT INTO sync_changes
-           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-            operation, payload, payload_hash, origin_device_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING server_sequence`,
-        [
-          input.ownerUid,
-          input.entityType,
-          input.entitySyncId,
-          input.entitySchemaVersion,
-          input.nextRevision,
-          input.operation,
-          input.canonicalPayload,
-          input.payloadHash,
-          input.deviceId,
-          input.now,
-        ],
-      );
-      const serverSequence = Number(changeRes.rows[0].server_sequence);
-
-      await client.query(
-        `INSERT INTO sync_entities
-           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-            last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
-           entity_schema_version = EXCLUDED.entity_schema_version,
-           server_revision       = EXCLUDED.server_revision,
-           last_server_sequence  = EXCLUDED.last_server_sequence,
-           payload               = EXCLUDED.payload,
-           payload_hash          = EXCLUDED.payload_hash,
-           origin_device_id      = EXCLUDED.origin_device_id,
-           updated_at            = EXCLUDED.updated_at
-         WHERE sync_entities.server_revision < EXCLUDED.server_revision
-           AND sync_entities.deleted = FALSE`,
-        [
-          input.ownerUid,
-          input.entityType,
-          input.entitySyncId,
-          input.entitySchemaVersion,
-          input.nextRevision,
-          serverSequence,
-          input.canonicalPayload,
-          input.payloadHash,
-          input.deviceId,
-          input.now,
-          input.now,
-        ],
-      );
-
-      await client.query(
-        `INSERT INTO sync_mutations
-           (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
-            base_revision, result_revision, result_sequence, payload_hash, applied_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-          input.ownerUid,
-          input.clientMutationId,
-          input.deviceId,
-          input.entityType,
-          input.entitySyncId,
-          input.operation,
-          input.baseRevision,
-          input.nextRevision,
-          serverSequence,
-          input.payloadHash,
-          input.now,
-        ],
-      );
-
-      return { serverRevision: input.nextRevision, serverSequence };
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        input.ownerUid,
+        `ent:${input.entityType}:${input.entitySyncId}`,
+      ]);
+      const res = await this.applyMutationWithClient(client, input);
+      return {
+        serverRevision: res.serverRevision!,
+        serverSequence: res.serverSequence!,
+      };
     });
   }
 
@@ -288,75 +743,15 @@ export class SyncRepository {
    */
   async applyDelete(input: ApplyDeleteInput): Promise<AppliedMutation> {
     return this.db.transaction(async (client) => {
-      const changeRes = await client.query<{ server_sequence: string | number }>(
-        `INSERT INTO sync_changes
-           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-            operation, payload, payload_hash, origin_device_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, 'DELETE', 'null', '', $6, $7)
-         RETURNING server_sequence`,
-        [
-          input.ownerUid,
-          input.entityType,
-          input.entitySyncId,
-          input.entitySchemaVersion,
-          input.nextRevision,
-          input.deviceId,
-          input.now,
-        ],
-      );
-      const serverSequence = Number(changeRes.rows[0].server_sequence);
-
-      await client.query(
-        `INSERT INTO sync_entities
-           (owner_uid, entity_type, entity_sync_id, entity_schema_version, server_revision,
-            last_server_sequence, payload, payload_hash, origin_device_id, created_at, updated_at,
-            deleted, deleted_at, deleted_by_device_id)
-         VALUES ($1, $2, $3, $4, $5, $6, '', '', $7, $8, $9, TRUE, $10, $11)
-         ON CONFLICT (owner_uid, entity_type, entity_sync_id) DO UPDATE SET
-           server_revision      = EXCLUDED.server_revision,
-           last_server_sequence = EXCLUDED.last_server_sequence,
-           payload              = '',
-           payload_hash         = '',
-           origin_device_id     = EXCLUDED.origin_device_id,
-           updated_at           = EXCLUDED.updated_at,
-           deleted              = TRUE,
-           deleted_at           = EXCLUDED.deleted_at,
-           deleted_by_device_id = EXCLUDED.deleted_by_device_id
-         WHERE sync_entities.server_revision < EXCLUDED.server_revision`,
-        [
-          input.ownerUid,
-          input.entityType,
-          input.entitySyncId,
-          input.entitySchemaVersion,
-          input.nextRevision,
-          serverSequence,
-          input.deviceId,
-          input.now,
-          input.now,
-          input.now,
-          input.deviceId,
-        ],
-      );
-
-      await client.query(
-        `INSERT INTO sync_mutations
-           (owner_uid, client_mutation_id, device_id, entity_type, entity_sync_id, operation,
-            base_revision, result_revision, result_sequence, payload_hash, applied_at)
-         VALUES ($1, $2, $3, $4, $5, 'DELETE', $6, $7, $8, '', $9)`,
-        [
-          input.ownerUid,
-          input.clientMutationId,
-          input.deviceId,
-          input.entityType,
-          input.entitySyncId,
-          input.baseRevision,
-          input.nextRevision,
-          serverSequence,
-          input.now,
-        ],
-      );
-
-      return { serverRevision: input.nextRevision, serverSequence };
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        input.ownerUid,
+        `ent:${input.entityType}:${input.entitySyncId}`,
+      ]);
+      const res = await this.applyDeleteWithClient(client, input);
+      return {
+        serverRevision: res.serverRevision!,
+        serverSequence: res.serverSequence!,
+      };
     });
   }
 

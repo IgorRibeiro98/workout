@@ -63,80 +63,125 @@ export function loadMigrations(directory: string): Migration[] {
  * - **concorrência segura**: protegido por advisory lock (`pg_advisory_lock`);
  * - **imutabilidade do histórico**: checksum SHA-256 e nome imutáveis.
  */
+function isPool(target: PoolClient | Pool): target is Pool {
+  return typeof (target as Pool).connect === 'function';
+}
+
+function schemaHash(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
 export async function runMigrations(
-  client: PoolClient | Pool,
+  target: PoolClient | Pool,
   migrations: Migration[],
 ): Promise<AppliedMigration[]> {
-  // Advisory lock para serializar instâncias concorrentes
-  await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_ADVISORY_LOCK_KEY]);
+  const ownsClient = isPool(target);
+  const client: PoolClient = isPool(target) ? await target.connect() : target;
 
+  let schemaLockKey = 0;
   try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version    INTEGER NOT NULL PRIMARY KEY,
-        name       TEXT    NOT NULL,
-        applied_at BIGINT  NOT NULL,
-        checksum   TEXT
-      );
-    `);
+    const searchPathRes = await client.query<{ search_path: string }>('SHOW search_path');
+    const firstConfiguredSchema = (searchPathRes.rows[0]?.search_path ?? '')
+      .split(',')[0]
+      .trim()
+      .replace(/^"|"$/g, '');
+    const currentSchema =
+      firstConfiguredSchema && firstConfiguredSchema !== '$user' ? firstConfiguredSchema : 'public';
 
-    const result = await client.query<{
-      version: number;
-      name: string;
-      checksum: string | null;
-    }>('SELECT version, name, checksum FROM schema_migrations ORDER BY version');
-
-    const alreadyApplied = new Map(result.rows.map((row) => [row.version, row]));
-    const applied: AppliedMigration[] = [];
-
-    for (const migration of migrations) {
-      const previous = alreadyApplied.get(migration.version);
-      if (previous !== undefined) {
-        if (previous.name !== migration.name) {
-          throw new Error(
-            `Migration ${migration.version} já aplicada como "${previous.name}", mas o repositório ` +
-              `agora traz "${migration.name}". Histórico de migrations não pode ser reescrito.`,
-          );
-        }
-
-        const checksum = checksumOf(migration.sql);
-        if (previous.checksum === null) {
-          await client.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
-            checksum,
-            migration.version,
-          ]);
-        } else if (previous.checksum !== checksum) {
-          throw new Error(
-            `Migration ${migration.version} ("${migration.name}") foi editada depois de aplicada. ` +
-              `Histórico de migrations não pode ser reescrito: crie uma migration nova.`,
-          );
-        }
-        continue;
-      }
-
-      const appliedAt = Date.now();
-      const checksum = checksumOf(migration.sql);
-
-      // Cada migration é aplicada dentro de uma transação explícita
-      await client.query('BEGIN');
-      try {
-        await client.query(migration.sql);
-        await client.query(
-          'INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES ($1, $2, $3, $4)',
-          [migration.version, migration.name, appliedAt, checksum],
-        );
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
-
-      applied.push({ version: migration.version, name: migration.name, appliedAt });
+    if (currentSchema !== 'public') {
+      await client.query(`CREATE SCHEMA IF NOT EXISTS "${currentSchema}"`);
+      await client.query(`SET search_path TO "${currentSchema}"`);
     }
 
-    return applied;
+    schemaLockKey = schemaHash(currentSchema);
+
+    // Advisory lock com timeout de statement e lock para serializar migrations concorrentes no mesmo schema
+    await client.query('SET statement_timeout = 15000').catch(() => undefined);
+    await client.query('SET lock_timeout = 15000').catch(() => undefined);
+    await client.query('SELECT pg_advisory_lock($1, $2)', [
+      MIGRATION_ADVISORY_LOCK_KEY,
+      schemaLockKey,
+    ]);
+    await client.query('SET statement_timeout = 0').catch(() => undefined);
+
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          version    INTEGER NOT NULL PRIMARY KEY,
+          name       TEXT    NOT NULL,
+          applied_at BIGINT  NOT NULL,
+          checksum   TEXT
+        );
+      `);
+
+      const result = await client.query<{
+        version: number;
+        name: string;
+        checksum: string | null;
+      }>('SELECT version, name, checksum FROM schema_migrations ORDER BY version');
+
+      const alreadyApplied = new Map(result.rows.map((row) => [row.version, row]));
+      const applied: AppliedMigration[] = [];
+
+      for (const migration of migrations) {
+        const previous = alreadyApplied.get(migration.version);
+        if (previous !== undefined) {
+          if (previous.name !== migration.name) {
+            throw new Error(
+              `Migration ${migration.version} já aplicada como "${previous.name}", mas o repositório ` +
+                `agora traz "${migration.name}". Histórico de migrations não pode ser reescrito.`,
+            );
+          }
+
+          const checksum = checksumOf(migration.sql);
+          if (previous.checksum === null) {
+            await client.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
+              checksum,
+              migration.version,
+            ]);
+          } else if (previous.checksum !== checksum) {
+            throw new Error(
+              `Migration ${migration.version} ("${migration.name}") foi editada depois de aplicada. ` +
+                `Histórico de migrations não pode ser reescrito: crie uma migration nova.`,
+            );
+          }
+          continue;
+        }
+
+        const appliedAt = Date.now();
+        const checksum = checksumOf(migration.sql);
+
+        // Cada migration é aplicada dentro de uma transação explícita na mesma conexão
+        await client.query('BEGIN');
+        try {
+          await client.query(migration.sql);
+          await client.query(
+            'INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES ($1, $2, $3, $4)',
+            [migration.version, migration.name, appliedAt, checksum],
+          );
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          throw error;
+        }
+
+        applied.push({ version: migration.version, name: migration.name, appliedAt });
+      }
+
+      return applied;
+    } finally {
+      await client
+        .query('SELECT pg_advisory_unlock($1, $2)', [MIGRATION_ADVISORY_LOCK_KEY, schemaLockKey])
+        .catch(() => undefined);
+    }
   } finally {
-    await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_KEY]).catch(() => undefined);
+    if (ownsClient) {
+      client.release();
+    }
   }
 }
 

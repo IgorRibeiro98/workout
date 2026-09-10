@@ -2,7 +2,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { MIGRATIONS_DIR, configFor, createTempDb, sqliteFor, type TempDb } from './support/temp-db';
+import { createTempDb, type TempDb } from './support/temp-db';
 import { loadMigrations, runMigrations } from '../src/database/migration-runner';
 
 /**
@@ -385,9 +385,7 @@ describe('T17.10 — migrations sociais', () => {
       const target = join(mirror, '0015_social_workout_checkins.sql');
       writeFileSync(target, `${readFileSync(target, 'utf8')}\n-- alteração retroativa\n`, 'utf8');
 
-      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(
-        /editada depois de aplicada/,
-      );
+      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(/editada depois de aplicada/);
     });
 
     it('um banco anterior ao checksum é adotado sem quebrar, e passa a ser protegido', () => {
@@ -413,9 +411,7 @@ describe('T17.10 — migrations sociais', () => {
       // E a partir daqui uma edição é recusada.
       const target = join(mirror, '0017_social_checkin_reactions_comments.sql');
       writeFileSync(target, `${readFileSync(target, 'utf8')}\n-- editada\n`, 'utf8');
-      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(
-        /editada depois de aplicada/,
-      );
+      expect(() => sqliteMigrateAll(temp.sqlitePath, mirror)).toThrow(/editada depois de aplicada/);
     });
   });
 });

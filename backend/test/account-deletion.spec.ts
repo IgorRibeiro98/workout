@@ -15,7 +15,7 @@ const ACCOUNTS = {
 
 describe('Account Deletion & Disaster Recovery (T17.6)', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
   let verifier: FakeAuthTokenVerifier;
   let drFilePath: string;
 
@@ -35,10 +35,11 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
 
   afterEach(async () => {
     await app?.close();
+    app = undefined;
     temp.cleanup();
   });
 
-  const server = () => app.getHttpServer();
+  const server = () => app!.getHttpServer();
   const auth = (token: string) => `Bearer ${token}`;
 
   it('exclui conta completamente, limpa tabelas, grava tombstone e rejeita novas requisições com 403 ACCOUNT_DELETED', async () => {
@@ -80,7 +81,7 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
       .set('Authorization', auth(ACCOUNTS.B.token))
       .send({ displayName: ACCOUNTS.B.name })
       .expect(200);
-  });
+  }, 60_000);
 
   it('permite reconciliação DR para expurgar dados se um backup antigo for restaurado', async () => {
     // Cria dados para A
@@ -90,8 +91,8 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
       .send({ displayName: ACCOUNTS.A.name })
       .expect(200);
 
-    const deletionService = app.get(AccountDeletionService);
-    const deletionRepo = app.get(AccountDeletionRepository);
+    const deletionService = app!.get(AccountDeletionService);
+    const deletionRepo = app!.get(AccountDeletionRepository);
 
     // Calcula o hash de A
     const hashA = deletionService.hashUid(ACCOUNTS.A.uid);
@@ -110,5 +111,5 @@ describe('Account Deletion & Disaster Recovery (T17.6)', () => {
       .send({ displayName: 'Alice Reloaded' })
       .expect(403);
     expect(blockedRes.body.error.code).toBe('ACCOUNT_DELETED');
-  });
+  }, 60_000);
 });

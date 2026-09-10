@@ -141,7 +141,12 @@ export class WorkoutCheckInRepository {
   /**
    * Exclusão pelo autor (§64/§66).
    */
-  async softDelete(checkInId: string, authorUid: string, now: number, client?: PoolClient): Promise<boolean> {
+  async softDelete(
+    checkInId: string,
+    authorUid: string,
+    now: number,
+    client?: PoolClient,
+  ): Promise<boolean> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE social_workout_checkins
@@ -170,7 +175,12 @@ export class WorkoutCheckInRepository {
   /**
    * O feed do `viewerUid` (§54–§60, §70–§79).
    */
-  async findFeed(viewerUid: string, publishedSinceMs: number, limit: number, client?: PoolClient): Promise<FeedRow[]> {
+  async findFeed(
+    viewerUid: string,
+    publishedSinceMs: number,
+    limit: number,
+    client?: PoolClient,
+  ): Promise<FeedRow[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{
       checkInId: string;
@@ -198,7 +208,7 @@ export class WorkoutCheckInRepository {
       [viewerUid, publishedSinceMs, limit],
     );
 
-    return res.rows.map((row: any) => ({
+    return res.rows.map((row) => ({
       checkInId: row.checkInId,
       authorUid: row.authorUid,
       authorSocialId: row.authorSocialId,

@@ -249,7 +249,10 @@ export class SocialService {
    * A linha permanece, com `status = DISABLED`: é ela que preserva `socialId` e `friendCode` para
    * uma reativação futura.
    */
-  async disable(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialProfileResponse> {
+  async disable(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+  ): Promise<SocialProfileResponse> {
     const account = await this.require(principal);
     if (account.profile.status === 'DISABLED') {
       throw SocialErrors.alreadyDisabled();
@@ -288,7 +291,10 @@ export class SocialService {
    * continua sendo o dele, e as relações que a T17.1 vier a criar não precisam ser reconstruídas
    * a cada toque no interruptor.
    */
-  async enable(principal: AuthenticatedPrincipal, requestId: string): Promise<SocialProfileResponse> {
+  async enable(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+  ): Promise<SocialProfileResponse> {
     const account = await this.require(principal);
     if (account.profile.status === 'ACTIVE') {
       throw SocialErrors.alreadyEnabled();

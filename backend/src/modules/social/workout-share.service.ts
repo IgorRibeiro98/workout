@@ -46,7 +46,10 @@ export class WorkoutShareService {
     private readonly logger: SparkLogger,
   ) {}
 
-  async createShare(senderUid: string, request: CreateWorkoutShareRequest): Promise<WorkoutShareDetailDto> {
+  async createShare(
+    senderUid: string,
+    request: CreateWorkoutShareRequest,
+  ): Promise<WorkoutShareDetailDto> {
     const now = this.clock.now();
 
     // 1. Validação de clientRequestId
@@ -148,7 +151,10 @@ export class WorkoutShareService {
       );
     }
 
-    const dailyCount = await this.repository.countCreatedToday(senderUid, now - 24 * 60 * 60 * 1000);
+    const dailyCount = await this.repository.countCreatedToday(
+      senderUid,
+      now - 24 * 60 * 60 * 1000,
+    );
     if (dailyCount >= MAX_DAILY_SHARES) {
       throw new HttpException(
         {
@@ -255,7 +261,9 @@ export class WorkoutShareService {
     // Auto-expira se necessário
     let currentStatus = share.status;
     if (currentStatus === 'PENDING' && now >= share.expires_at) {
-      if (await this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now)) {
+      if (
+        await this.repository.transitionStatus(shareId, 'PENDING', 'EXPIRED', 'cancelled_at', now)
+      ) {
         currentStatus = 'EXPIRED';
       } else {
         currentStatus = (await this.repository.findById(shareId))?.status ?? currentStatus;
@@ -271,7 +279,10 @@ export class WorkoutShareService {
     );
   }
 
-  async acceptShare(recipientUid: string, shareId: string): Promise<WorkoutTemplateShareSnapshotV1> {
+  async acceptShare(
+    recipientUid: string,
+    shareId: string,
+  ): Promise<WorkoutTemplateShareSnapshotV1> {
     const now = this.clock.now();
     const share = await this.repository.findById(shareId);
 
@@ -318,7 +329,9 @@ export class WorkoutShareService {
       });
     }
 
-    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'ACCEPTED', 'accepted_at', now))) {
+    if (
+      !(await this.repository.transitionStatus(shareId, 'PENDING', 'ACCEPTED', 'accepted_at', now))
+    ) {
       const current = await this.repository.findById(shareId);
       if (current && (current.status === 'ACCEPTED' || current.status === 'IMPORTED')) {
         return JSON.parse(current.snapshot_json) as WorkoutTemplateShareSnapshotV1;
@@ -355,7 +368,9 @@ export class WorkoutShareService {
       });
     }
 
-    if (!(await this.repository.transitionStatus(shareId, 'ACCEPTED', 'IMPORTED', 'imported_at', now))) {
+    if (
+      !(await this.repository.transitionStatus(shareId, 'ACCEPTED', 'IMPORTED', 'imported_at', now))
+    ) {
       if ((await this.repository.findById(shareId))?.status === 'IMPORTED') {
         return { success: true };
       }
@@ -391,7 +406,9 @@ export class WorkoutShareService {
       });
     }
 
-    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'DECLINED', 'declined_at', now))) {
+    if (
+      !(await this.repository.transitionStatus(shareId, 'PENDING', 'DECLINED', 'declined_at', now))
+    ) {
       if ((await this.repository.findById(shareId))?.status === 'DECLINED') {
         return { success: true };
       }
@@ -427,7 +444,15 @@ export class WorkoutShareService {
       });
     }
 
-    if (!(await this.repository.transitionStatus(shareId, 'PENDING', 'CANCELLED', 'cancelled_at', now))) {
+    if (
+      !(await this.repository.transitionStatus(
+        shareId,
+        'PENDING',
+        'CANCELLED',
+        'cancelled_at',
+        now,
+      ))
+    ) {
       if ((await this.repository.findById(shareId))?.status === 'CANCELLED') {
         return { success: true };
       }

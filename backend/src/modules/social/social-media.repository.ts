@@ -121,7 +121,10 @@ export class SocialMediaRepository {
   }
 
   /** A idempotência de §36: mesmo dono, mesmo `clientUploadId` → a mesma mídia. */
-  async findByOwnerAndUpload(ownerUid: string, clientUploadId: string): Promise<StoredCheckInMedia | null> {
+  async findByOwnerAndUpload(
+    ownerUid: string,
+    clientUploadId: string,
+  ): Promise<StoredCheckInMedia | null> {
     const res = await this.db.query<MediaRow>(
       `SELECT ${SELECT_COLUMNS} FROM social_checkin_media
         WHERE owner_uid = $1 AND client_upload_id = $2 LIMIT 1`,
@@ -223,7 +226,11 @@ export class SocialMediaRepository {
     viewerUid: string,
     mediaId: string,
   ): Promise<{ storageKey: string; mimeType: string; byteSize: number } | null> {
-    const res = await this.db.query<{ storageKey: string; mimeType: string; byteSize: string | number }>(
+    const res = await this.db.query<{
+      storageKey: string;
+      mimeType: string;
+      byteSize: string | number;
+    }>(
       `WITH ${viewerScopeCte('$1')}
        SELECT m.storage_key AS "storageKey",
               m.mime_type   AS "mimeType",
@@ -256,7 +263,10 @@ export class SocialMediaRepository {
   // ------------------------------------------------------------------ limpeza (§39/§140)
 
   /** Mídia `PENDING` cujo prazo passou, e mídia já marcada `DELETED`. Bounded, sempre. */
-  async findCollectable(now: number, limit: number): Promise<Array<{ id: string; storageKey: string }>> {
+  async findCollectable(
+    now: number,
+    limit: number,
+  ): Promise<Array<{ id: string; storageKey: string }>> {
     const res = await this.db.query<{ id: string; storageKey: string }>(
       `SELECT id, storage_key AS "storageKey"
          FROM social_checkin_media

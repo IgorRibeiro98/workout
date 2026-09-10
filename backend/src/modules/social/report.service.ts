@@ -90,7 +90,10 @@ export class ReportService {
    * Não pune, não bloqueia, não oculta conteúdo e não notifica ninguém — nem o denunciado, nem o
    * denunciante. Ela registra uma linha para revisão operacional.
    */
-  async createReport(reporterUid: string, request: CreateReportRequestDto): Promise<CreateReportResponseDto> {
+  async createReport(
+    reporterUid: string,
+    request: CreateReportRequestDto,
+  ): Promise<CreateReportResponseDto> {
     const reason = request.reason;
     if (!REPORT_REASONS.includes(reason)) {
       throw new BadRequestException('Motivo de denúncia inválido.');

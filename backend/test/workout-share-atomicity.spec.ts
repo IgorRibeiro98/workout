@@ -5,7 +5,7 @@ import { configFor, createTempDb, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import type { WorkoutTemplateShareSnapshotV1 } from '../src/modules/social/workout-share.contract';
-import { SqliteService } from '../src/database/sqlite.service';
+import { PostgresService } from '../src/database/postgres.service';
 
 const ACCOUNTS = {
   A: { token: 'token-a', uid: 'uid-a', email: 'a@example.com', name: 'Alice' },
@@ -147,9 +147,16 @@ describe('T17.13.1 — WorkoutShare: outbox transacional e transições CAS', ()
     //
     // §49 é explícito em que testar uma falha do FCM falso não cobre isto: aquilo é outra camada,
     // e a entrega acontece muito depois, fora de qualquer transação.
-    app.get(SqliteService).connection.exec(`
-      CREATE TRIGGER falha_no_evento BEFORE INSERT ON social_notification_events
-      BEGIN SELECT RAISE(ABORT, 'falha injetada no outbox'); END;
+    await app.get(PostgresService).query(`
+      CREATE OR REPLACE FUNCTION fail_event_fn() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'falha injetada no outbox';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS falha_no_evento ON social_notification_events;
+      CREATE TRIGGER falha_no_evento
+      BEFORE INSERT ON social_notification_events
+      FOR EACH ROW EXECUTE FUNCTION fail_event_fn();
     `);
 
     await share(socialB, 'req-falha').expect(500);
@@ -160,7 +167,10 @@ describe('T17.13.1 — WorkoutShare: outbox transacional e transições CAS', ()
 
     // E o `clientRequestId` não ficou queimado: a tentativa seguinte, depois de o problema
     // passar, cria a oferta normalmente.
-    app.get(SqliteService).connection.exec(`DROP TRIGGER falha_no_evento`);
+    await app.get(PostgresService).query(`
+      DROP TRIGGER IF EXISTS falha_no_evento ON social_notification_events;
+      DROP FUNCTION IF EXISTS fail_event_fn();
+    `);
     await share(socialB, 'req-falha').expect(201);
     expect(shareCount()).toBe(1);
     expect(eventCount()).toBe(1);
@@ -168,9 +178,16 @@ describe('T17.13.1 — WorkoutShare: outbox transacional e transições CAS', ()
 
   it('falha ao gravar o share não deixa evento órfão (§47)', async () => {
     const { socialB } = await setup();
-    app.get(SqliteService).connection.exec(`
-      CREATE TRIGGER falha_no_share BEFORE INSERT ON workout_shares
-      BEGIN SELECT RAISE(ABORT, 'falha injetada no share'); END;
+    await app.get(PostgresService).query(`
+      CREATE OR REPLACE FUNCTION fail_share_fn() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'falha injetada no share';
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS falha_no_share ON workout_shares;
+      CREATE TRIGGER falha_no_share
+      BEFORE INSERT ON workout_shares
+      FOR EACH ROW EXECUTE FUNCTION fail_share_fn();
     `);
 
     await share(socialB, 'req-falha-share').expect(500);

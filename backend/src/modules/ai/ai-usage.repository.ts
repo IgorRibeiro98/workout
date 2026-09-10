@@ -30,6 +30,11 @@ export class AiUsageRepository {
     const now = Date.now();
 
     return this.db.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        'ai_usage_global',
+        utcDate,
+      ]);
+
       await client.query(
         `INSERT INTO ai_usage_daily (uid, utc_date, request_type, request_count, updated_at)
          VALUES ($1, $2, $3, 1, $4)
@@ -62,12 +67,18 @@ export class AiUsageRepository {
     utcDate: string,
     requestType: AiCoachRequestType,
   ): Promise<void> {
-    await this.db.query(
-      `UPDATE ai_usage_daily
-       SET request_count = GREATEST(request_count - 1, 0), updated_at = $1
-       WHERE uid = $2 AND utc_date = $3 AND request_type = $4`,
-      [Date.now(), uid, utcDate, requestType],
-    );
+    await this.db.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+        'ai_usage_global',
+        utcDate,
+      ]);
+      await client.query(
+        `UPDATE ai_usage_daily
+         SET request_count = GREATEST(request_count - 1, 0), updated_at = $1
+         WHERE uid = $2 AND utc_date = $3 AND request_type = $4`,
+        [Date.now(), uid, utcDate, requestType],
+      );
+    });
   }
 
   /** Soma os tokens que o provider informou. Metadata de custo, nunca conteúdo. */

@@ -24,7 +24,7 @@ const UID = 'uid-da-conta';
  */
 describe('Sync não substitui backup', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -35,19 +35,20 @@ describe('Sync não substitui backup', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
   const push = (body: string) =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${TOKEN}`)
       .set('Content-Type', 'application/json')
       .send(body);
 
   const backup = () =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .post('/v1/backups')
       .set('Authorization', `Bearer ${TOKEN}`)
       .set('Content-Type', 'application/json')
@@ -69,7 +70,7 @@ describe('Sync não substitui backup', () => {
       ]),
     );
 
-    const latest = await request(app.getHttpServer())
+    const latest = await request(app!.getHttpServer())
       .get('/v1/backups/latest')
       .set('Authorization', `Bearer ${TOKEN}`);
 
@@ -80,7 +81,7 @@ describe('Sync não substitui backup', () => {
   it('um backup não cria mudanças no change log', async () => {
     await backup();
 
-    const pulled = await request(app.getHttpServer())
+    const pulled = await request(app!.getHttpServer())
       .get('/v1/sync/pull?cursor=0')
       .set('Authorization', `Bearer ${TOKEN}`);
 
@@ -97,7 +98,7 @@ describe('Sync não substitui backup', () => {
       ]),
     );
 
-    const content = await request(app.getHttpServer())
+    const content = await request(app!.getHttpServer())
       .get(`/v1/backups/${created.body.backupId}/content`)
       .set('Authorization', `Bearer ${TOKEN}`);
 

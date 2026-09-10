@@ -126,7 +126,11 @@ export class ChallengeRepository {
    */
   async create(input: CreateChallengeInput): Promise<CreateChallengeOutcome> {
     return this.db.transaction(async (client): Promise<CreateChallengeOutcome> => {
-      const previous = await this.findCreationRequest(input.creatorUid, input.clientRequestId, client);
+      const previous = await this.findCreationRequest(
+        input.creatorUid,
+        input.clientRequestId,
+        client,
+      );
       if (previous) {
         // Mesma tentativa. Conteúdo igual devolve o mesmo desafio; conteúdo diferente é conflito —
         // e nunca uma segunda criação silenciosa (§190).
@@ -216,13 +220,7 @@ export class ChallengeRepository {
         `INSERT INTO challenge_creation_requests
            (owner_uid, client_request_id, request_hash, challenge_id, created_at)
          VALUES ($1, $2, $3, $4, $5)`,
-        [
-          input.creatorUid,
-          input.clientRequestId,
-          input.requestHash,
-          input.challengeId,
-          input.now,
-        ],
+        [input.creatorUid, input.clientRequestId, input.requestHash, input.challengeId, input.now],
       );
 
       const challenge = await this.findById(input.challengeId, client);
@@ -256,7 +254,11 @@ export class ChallengeRepository {
   /**
    * Quantos desafios **abertos** esta conta criou (§111).
    */
-  async countOpenChallengesBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+  async countOpenChallengesBy(
+    creatorUid: string,
+    nowMs: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query<{ total: string | number }>(
       `SELECT COUNT(*) AS total FROM challenges
@@ -293,13 +295,18 @@ export class ChallengeRepository {
       [challengeId, participantUid],
     );
     const row = res.rows[0];
-    return row ? { role: row.role as ChallengeRole, status: row.status as ChallengeParticipantStatus } : null;
+    return row
+      ? { role: row.role as ChallengeRole, status: row.status as ChallengeParticipantStatus }
+      : null;
   }
 
   /**
    * Os participantes de um desafio, com o perfil social resolvido.
    */
-  async listParticipants(challengeId: string, client?: PoolClient): Promise<readonly StoredChallengeParticipant[]> {
+  async listParticipants(
+    challengeId: string,
+    client?: PoolClient,
+  ): Promise<readonly StoredChallengeParticipant[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<ParticipantRow>(
       `SELECT cp.participant_uid, cp.role, cp.status, cp.joined_at,
@@ -346,7 +353,10 @@ export class ChallengeRepository {
   /**
    * Os desafios de que esta conta participa, paginados.
    */
-  async listForParticipant(participantUid: string, page: PageRequest): Promise<Page<StoredChallenge>> {
+  async listForParticipant(
+    participantUid: string,
+    page: PageRequest,
+  ): Promise<Page<StoredChallenge>> {
     let query: string;
     let params: unknown[];
 
@@ -383,7 +393,10 @@ export class ChallengeRepository {
 
   // ------------------------------------------------------------------------------- convites
 
-  async findInvitationById(invitationId: string, client?: PoolClient): Promise<StoredChallengeInvitation | null> {
+  async findInvitationById(
+    invitationId: string,
+    client?: PoolClient,
+  ): Promise<StoredChallengeInvitation | null> {
     const runner = this.getRunner(client);
     const res = await runner.query<InvitationRow>(
       `SELECT invitation_id, challenge_id, inviter_uid, recipient_uid, status, created_at
@@ -481,10 +494,12 @@ export class ChallengeRepository {
         [challengeId, recipientUid, now],
       );
 
-      const chRes = await client.query<{ starts_at: string | number; ends_at_exclusive: string | number }>(
-        `SELECT starts_at, ends_at_exclusive FROM challenges WHERE challenge_id = $1`,
-        [challengeId],
-      );
+      const chRes = await client.query<{
+        starts_at: string | number;
+        ends_at_exclusive: string | number;
+      }>(`SELECT starts_at, ends_at_exclusive FROM challenges WHERE challenge_id = $1`, [
+        challengeId,
+      ]);
       const ch = chRes.rows[0];
 
       if (ch) {
@@ -563,21 +578,29 @@ export class ChallengeRepository {
   /**
    * Os desafios **ainda não encerrados** que esta conta criou (§118).
    */
-  async openChallengesCreatedBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<readonly string[]> {
+  async openChallengesCreatedBy(
+    creatorUid: string,
+    nowMs: number,
+    client?: PoolClient,
+  ): Promise<readonly string[]> {
     const runner = this.getRunner(client);
     const res = await runner.query<{ challenge_id: string }>(
       `SELECT challenge_id FROM challenges
         WHERE creator_uid = $1 AND lifecycle = 'OPEN' AND ends_at_exclusive > $2`,
       [creatorUid, nowMs],
     );
-    return res.rows.map((row: any) => row.challenge_id);
+    return res.rows.map((row) => row.challenge_id);
   }
 
   /**
    * Tira esta conta de todos os desafios ainda não encerrados em que ela participa como membro
    * (§117), e recusa os convites pendentes dela (§116).
    */
-  async withdrawFromOpenChallenges(participantUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+  async withdrawFromOpenChallenges(
+    participantUid: string,
+    nowMs: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE challenge_participants SET status = 'WITHDRAWN', left_at = $1
@@ -592,7 +615,11 @@ export class ChallengeRepository {
   }
 
   /** Recusa todos os convites pendentes desta conta (§116). Parte da mesma transação. */
-  async declinePendingInvitationsOf(recipientUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+  async declinePendingInvitationsOf(
+    recipientUid: string,
+    nowMs: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE challenge_invitations SET status = 'DECLINED', updated_at = $1
@@ -603,7 +630,11 @@ export class ChallengeRepository {
   }
 
   /** Cancela os desafios abertos criados por esta conta (§118). Parte da mesma transação. */
-  async cancelOpenChallengesCreatedBy(creatorUid: string, nowMs: number, client?: PoolClient): Promise<number> {
+  async cancelOpenChallengesCreatedBy(
+    creatorUid: string,
+    nowMs: number,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
     const res = await runner.query(
       `UPDATE challenges SET lifecycle = 'CANCELLED', cancelled_at = $1, updated_at = $2

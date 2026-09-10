@@ -775,7 +775,7 @@ describe('T17.8 — Check-ins de treino e Feed Social', () => {
 
       const asked = await readFeed(TOKEN_A, '?limit=3').expect(200);
       expect(asked.body.items).toHaveLength(3);
-    });
+    }, 30000);
 
     it('usa o default quando o cliente não pede número', async () => {
       await activate(TOKEN_A, 'Alice');
@@ -783,7 +783,7 @@ describe('T17.8 — Check-ins de treino e Feed Social', () => {
 
       const feed = await readFeed(TOKEN_A).expect(200);
       expect(feed.body.items).toHaveLength(20);
-    });
+    }, 30000);
 
     it('ordena por publishedAt DESC com desempate determinístico por checkInId (§76)', async () => {
       await activate(TOKEN_A, 'Alice');

@@ -113,7 +113,13 @@ export class WorkoutCheckInController {
   ): Promise<WorkoutCheckInDto> {
     assertCheckInBodyWithinLimit((request as RequestWithRawBody).rawBody);
     const { type, context } = parseReactionRequest(body);
-    return await this.service.putReaction(principal.uid, requestIdOf(request), checkInId, type, context);
+    return await this.service.putReaction(
+      principal.uid,
+      requestIdOf(request),
+      checkInId,
+      type,
+      context,
+    );
   }
 
   /**

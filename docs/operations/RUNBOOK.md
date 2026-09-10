@@ -82,7 +82,7 @@ curl -s https://api.<dominio>/health/ready
 ```
 
 O SIGTERM faz o processo parar de aceitar requisições, drenar as em andamento até
-`SHUTDOWN_TIMEOUT_MS` e fechar o SQLite com `wal_checkpoint(TRUNCATE)`. Requisição interrompida no
+`SHUTDOWN_TIMEOUT_MS` e fechar o pool de conexões do PostgreSQL. Requisição interrompida no
 meio não é perda: backup e sync são idempotentes por contrato, e o cliente reenvia.
 
 ---
@@ -97,13 +97,11 @@ O processo está vivo e o **banco** não está utilizável. O corpo diz qual ver
 
 | Falha | Causa provável |
 | --- | --- |
-| `database: false` | Arquivo sumiu, permissão errada, disco cheio, corrupção |
+| `database: false` | PostgreSQL inacessível, timeout de conexão, credenciais inválidas em `DATABASE_URL` |
 | `migrations: false` | Migration nova no código que não foi aplicada — quase sempre um deploy pela metade |
 
 ```bash
-stat -c '%n %U:%G %a' /opt/spark/data /opt/spark/data/spark.db
-df -h /opt/spark/data                            # disco cheio?
-docker compose -f docker-compose.prod.yml logs --tail 50 backend | grep -i database
+docker compose -f docker-compose.prod.yml logs --tail 50 backend | grep -i -E "database|postgres|pool"
 ```
 
 O esperado é `/opt/spark/data` em `spark:spark-data 2770`. **Não confira se o dono é o uid 1000**:
@@ -124,52 +122,40 @@ derrubar sync e backup (§61). Se `ready` está falhando, o problema é banco ou
 
 ---
 
-## Disco cheio
-
-**O modo de falha mais provável de um SQLite em VPS pequena**, e ele é silencioso até deixar de ser.
+## Disco cheio ou PostgreSQL sob pressão
 
 ```bash
 df -h
-du -sh /opt/spark/data /opt/spark/backups /var/lib/docker/containers
+du -sh /opt/spark/data /opt/spark/media /opt/spark/backups /var/lib/docker/containers
 docker system df
 ```
 
-**Nunca apague banco nem backup para liberar espaço** (§131). Nesta ordem, do mais seguro:
+**Nunca apague backups nem ledgers para liberar espaço** (§131). Nesta ordem, do mais seguro:
 
 ```bash
 docker image prune -a                     # imagens antigas: a fonte mais provável de espaço
 docker system prune                       # containers/redes parados
 rm -rf /opt/spark/backups/work-*          # resíduo de backup interrompido
-docker compose -f docker-compose.prod.yml restart   # checkpoint do WAL no shutdown
+docker compose -f docker-compose.prod.yml restart   # drena pool e reinicia limpo
 ```
 
 Se ainda faltar espaço, **aumente o disco**. Log já é rotacionado (10 MB × 5 por container), então
 ele dificilmente é a causa — mas confirme com `docker system df`.
 
-Um `spark.db-wal` persistentemente grande indica checkpoint que não fecha, normalmente por um
-leitor de longa duração. Reiniciar o backend resolve (o shutdown faz `wal_checkpoint(TRUNCATE)`).
-
 ---
 
-## Banco corrompido
+## Banco de Dados Inacessível ou Falha de Conexão
 
-**Sintoma:** o log traz `SQLITE_CORRUPT`, `database disk image is malformed`, ou o `integrity_check`
-do backup falha.
+**Sintoma:** o log traz `ECONNREFUSED`, `connection timeout`, `out of shared memory`, ou `503` em `/health/ready`.
 
 ```bash
-# 1. PARE AS ESCRITAS — antes de qualquer outra coisa
-docker compose -f docker-compose.prod.yml down
+# 1. PARE AS ESCRITAS se necessário
+docker compose -f docker-compose.prod.yml stop backend
 
-# 2. PRESERVE o arquivo corrompido. Ele é evidência, e pode conter dado que o backup não tem.
-cp -a /opt/spark/data/spark.db /opt/spark/data/spark.db.corrompido-$(date -u +%Y%m%dT%H%M%SZ)
+# 2. Verifique conectividade com a URL do banco
+docker compose -f docker-compose.prod.yml logs --tail 50 backend | grep -i -E "database|error|timeout"
 
-# 3. Confirme o diagnóstico
-docker run --rm -v /opt/spark/data:/data --entrypoint node spark-backend:latest -e "
-  const D=require('better-sqlite3');
-  const db=new D('/data/spark.db',{readonly:true});
-  console.log(db.pragma('integrity_check',{simple:true}));"
-
-# 4. Restaure do backup
+# 3. Em caso de restore de desastre
 ops/restore.sh --to /tmp/recuperacao                  # verifica sem tocar em produção
 ops/restore.sh --to /tmp/recuperacao --install
 docker compose -f docker-compose.prod.yml up -d
@@ -261,7 +247,7 @@ direto à causa:
 | --- | --- |
 | `falha na etapa 'config'` | Credencial do storage ausente (`RESTIC_REPOSITORY`/senha) |
 | `falha na etapa 'workdir'` | Não conseguiu escrever em `/opt/spark/backups` — quase sempre disco |
-| `falha na etapa 'snapshot'` | `VACUUM INTO`/`integrity_check` — pode ser **corrupção do banco** |
+| `falha na etapa 'snapshot'` | `pg_dump`/snapshot — falha na extração ou integridade |
 | `falha na etapa 'offsite-upload'` | O restic recusou o envio; o motivo dele está no journal |
 | `falha na etapa 'offsite-retention'` | O snapshot subiu, mas o `forget --prune` falhou: o repositório está crescendo sem limite |
 

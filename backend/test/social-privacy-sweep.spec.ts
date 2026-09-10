@@ -99,7 +99,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
     challengeId: string;
   };
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     s = await createSocialScenario();
 
     const socialIdA = await s.activate(ACCOUNT_A);
@@ -196,9 +196,9 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       shareId: share.body.shareId as string,
       challengeId: challenge.body.challenge.challengeId as string,
     };
-  });
+  }, 60_000);
 
-  afterEach(async () => {
+  afterAll(async () => {
     await s?.close();
   });
 

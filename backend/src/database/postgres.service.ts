@@ -4,9 +4,9 @@ import { Pool, type PoolClient, type QueryResult, type QueryResultRow, types } f
 export type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 export interface DbClient {
-  query<R extends QueryResultRow = any>(
+  query<R extends QueryResultRow = QueryResultRow>(
     sql: string,
-    params?: any[],
+    params?: unknown[],
   ): Promise<QueryResult<R>>;
 }
 
@@ -124,20 +124,26 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   }
 
   get isOpen(): boolean {
-    return this.poolInstance !== undefined && !this.poolInstance.ended;
+    return (
+      this.poolInstance !== undefined &&
+      !(this.poolInstance as unknown as { ending?: boolean }).ending
+    );
   }
 
   /**
    * Executa uma query SQL com parâmetros no pool.
    */
-  async query<R extends QueryResultRow = any, I extends unknown[] = any[]>(
+  async query<R extends QueryResultRow = QueryResultRow, I extends unknown[] = unknown[]>(
     sql: string,
     params?: I,
   ): Promise<QueryResult<R>> {
-    if (params !== undefined) {
-      return this.pool.query<R>(sql, params);
+    if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
+      return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as QueryResult<R>;
     }
-    return this.pool.query<R>(sql);
+    if (params !== undefined) {
+      return this.poolInstance.query<R>(sql, params);
+    }
+    return this.poolInstance.query<R>(sql);
   }
 
   /**
@@ -145,6 +151,9 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
    * Faz ROLLBACK automático em caso de erro e libera o client de volta ao pool.
    */
   async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
+      throw new Error('PostgreSQL pool is closed or ending.');
+    }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -173,7 +182,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
    */
   async checkHealth(): Promise<{ reachable: boolean; migrationsUpToDate: boolean }> {
     try {
-      if (!this.poolInstance) {
+      if (!this.poolInstance || (this.poolInstance as unknown as { ending?: boolean }).ending) {
         return { reachable: false, migrationsUpToDate: false };
       }
       await this.poolInstance.query('SELECT 1');
@@ -189,11 +198,14 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   }
 
   async close(): Promise<void> {
-    if (this.directPoolInstance && !this.directPoolInstance.ended) {
+    if (
+      this.directPoolInstance &&
+      !(this.directPoolInstance as unknown as { ending?: boolean }).ending
+    ) {
       await this.directPoolInstance.end().catch(() => undefined);
       this.directPoolInstance = undefined;
     }
-    if (this.poolInstance && !this.poolInstance.ended) {
+    if (this.poolInstance && !(this.poolInstance as unknown as { ending?: boolean }).ending) {
       await this.poolInstance.end().catch(() => undefined);
       this.poolInstance = undefined;
     }

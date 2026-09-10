@@ -38,7 +38,10 @@ export class FriendRankingService {
     @Optional() private readonly blockService?: BlockService,
   ) {}
 
-  async getRanking(principal: AuthenticatedPrincipal, requestId: string): Promise<FriendRankingResponse> {
+  async getRanking(
+    principal: AuthenticatedPrincipal,
+    requestId: string,
+  ): Promise<FriendRankingResponse> {
     const viewerAccount = await this.socialRepo.find(principal.uid);
     if (!viewerAccount || viewerAccount.profile.status !== 'ACTIVE') {
       throw SocialErrors.notEnabled();

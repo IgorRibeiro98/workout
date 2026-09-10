@@ -11,7 +11,7 @@ function configWith(overrides: Record<string, string> = {}): AppConfig {
   return AppConfig.fromEnv({
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
-    DATABASE_PATH: '/tmp/spark-auth-config.db',
+    DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
     ...overrides,
   });
 }

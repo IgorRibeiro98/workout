@@ -86,7 +86,7 @@ docker run --rm \
   -v /opt/spark/data:/data \
   -v /opt/spark/media:/media \
   -e NODE_ENV=production \
-  -e DATABASE_PATH=/data/spark.db \
+  -e DATABASE_URL="${DATABASE_URL}" \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e DELETION_TOMBSTONES_FILE_PATH=/data/deletion_tombstones.tsv \
   --env-file /opt/spark/secrets/backend.env \
@@ -140,12 +140,8 @@ Os caminhos abaixo são os de produção (`docker-compose.prod.yml`).
 ```bash
 # Tombstones no banco × registros no ledger.
 # O ledger pode ter MAIS linhas que a tabela: repetições de retry são permitidas (§13).
-sqlite3 /opt/spark/data/spark.db "SELECT COUNT(*) FROM account_deletion_tombstones;"
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM account_deletion_tombstones;"
 sort -u /opt/spark/data/deletion_tombstones.tsv | wc -l
-
-# Integridade referencial depois da reconciliação.
-sqlite3 /opt/spark/data/spark.db "PRAGMA foreign_key_check;"   # esperado: nenhuma linha
-sqlite3 /opt/spark/data/spark.db "PRAGMA integrity_check;"     # esperado: ok
 ```
 
 ### 3.1 Exclusões ainda pendentes
@@ -154,7 +150,7 @@ sqlite3 /opt/spark/data/spark.db "PRAGMA integrity_check;"     # esperado: ok
 linha já significa "não terminou". Terminar é sair da tabela.
 
 ```bash
-sqlite3 -header -column /opt/spark/data/spark.db "
+psql "$DATABASE_URL" -c "
   SELECT id, phase, attempts, last_error, next_attempt_at, created_at
     FROM account_deletion_jobs
    ORDER BY created_at;"
@@ -184,7 +180,7 @@ commit. Depois do purge as linhas não existem mais, e não haveria como saber q
 
 ```bash
 # Nenhuma linha de mídia da conta excluída
-sqlite3 /opt/spark/data/spark.db "SELECT COUNT(*) FROM social_checkin_media;"
+psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM social_checkin_media;"
 
 # E nenhum arquivo órfão crescendo
 find /opt/spark/media -type f | wc -l
@@ -214,7 +210,7 @@ comenta dentro do Squad, e só dentro dele. Ver
 
 ```bash
 # Nenhum Squad órfão de um dono já excluído
-sqlite3 /opt/spark/data/spark.db "
+psql "$DATABASE_URL" -c "
   SELECT COUNT(*) FROM social_groups g
    WHERE NOT EXISTS (SELECT 1 FROM social_profiles p WHERE p.owner_uid = g.owner_uid);"
 # esperado: 0

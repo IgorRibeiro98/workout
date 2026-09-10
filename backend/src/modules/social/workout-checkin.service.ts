@@ -13,10 +13,7 @@ import { CheckInProjector } from './checkin.projector';
 import { SocialGroupRepository } from './social-group.repository';
 import { SocialMediaService } from './social-media.service';
 import { SocialRepository } from './social.repository';
-import {
-  WorkoutCheckInAccessPolicy,
-  type VisibleCheckIn,
-} from './workout-checkin.access-policy';
+import { WorkoutCheckInAccessPolicy, type VisibleCheckIn } from './workout-checkin.access-policy';
 import {
   WorkoutCheckInContextResolver,
   type InteractionAudience,
@@ -85,7 +82,10 @@ export class WorkoutCheckInService {
     const profile = await this.requireActiveProfile(callerUid);
     const { sessionSyncId, clientRequestId, caption, mediaId } = request;
 
-    const byRequest = await this.repository.findByAuthorAndClientRequest(callerUid, clientRequestId);
+    const byRequest = await this.repository.findByAuthorAndClientRequest(
+      callerUid,
+      clientRequestId,
+    );
     if (byRequest && byRequest.sourceSessionSyncId !== sessionSyncId) {
       throw WorkoutCheckInErrors.requestConflict();
     }
@@ -93,7 +93,12 @@ export class WorkoutCheckInService {
     const bySession = await this.repository.findByAuthorAndSession(callerUid, sessionSyncId);
     if (bySession) {
       if (bySession.status === 'PUBLISHED') {
-        return await this.projectSingle(callerUid, bySession.id, profile.socialId, profile.displayName);
+        return await this.projectSingle(
+          callerUid,
+          bySession.id,
+          profile.socialId,
+          profile.displayName,
+        );
       }
       throw WorkoutCheckInErrors.alreadyExists();
     }
@@ -115,7 +120,12 @@ export class WorkoutCheckInService {
     const published = await this.insertOrResolveRace(created);
 
     if (mediaId) {
-      const attached = await this.media.attachToCheckIn(mediaId, callerUid, sessionSyncId, published.id);
+      const attached = await this.media.attachToCheckIn(
+        mediaId,
+        callerUid,
+        sessionSyncId,
+        published.id,
+      );
       if (!attached) {
         if (published.id === created.id) {
           await this.repository.hardDelete(published.id);
@@ -190,7 +200,11 @@ export class WorkoutCheckInService {
     await this.requireActiveProfile(callerUid);
 
     if (context) {
-      const { audience, checkIn } = await this.contextResolver.resolve(callerUid, checkInId, context);
+      const { audience, checkIn } = await this.contextResolver.resolve(
+        callerUid,
+        checkInId,
+        context,
+      );
       return await this.projectInAudience(callerUid, checkIn, audience);
     }
 
@@ -358,7 +372,12 @@ export class WorkoutCheckInService {
   /**
    * `DELETE /v1/social/workout-checkins/{checkInId}/comments/{commentId}` (§93–§98).
    */
-  async deleteComment(callerUid: string, requestId: string, checkInId: string, commentId: string): Promise<void> {
+  async deleteComment(
+    callerUid: string,
+    requestId: string,
+    checkInId: string,
+    commentId: string,
+  ): Promise<void> {
     await this.requireActiveProfile(callerUid);
 
     const comment = await this.interactions.findComment(commentId);
@@ -404,7 +423,11 @@ export class WorkoutCheckInService {
     return account.profile;
   }
 
-  private async assertSessionEligible(callerUid: string, sessionSyncId: string, now: number): Promise<void> {
+  private async assertSessionEligible(
+    callerUid: string,
+    sessionSyncId: string,
+    now: number,
+  ): Promise<void> {
     const session = await this.canonicalTraining.findSessionForCheckIn(callerUid, sessionSyncId);
 
     if (!session || session.deleted) {
@@ -487,7 +510,10 @@ export class WorkoutCheckInService {
     return projected[0];
   }
 
-  private async moderatesGroupAudience(viewerUid: string, audience: InteractionAudience): Promise<boolean> {
+  private async moderatesGroupAudience(
+    viewerUid: string,
+    audience: InteractionAudience,
+  ): Promise<boolean> {
     if (audience.type !== 'GROUP') {
       return false;
     }

@@ -24,11 +24,28 @@ export interface StoredWorkoutShare {
   readonly expires_at: number;
 }
 
+interface WorkoutShareRow {
+  id: string;
+  sender_uid: string;
+  recipient_uid: string;
+  snapshot_version: number | string;
+  snapshot_json: string;
+  snapshot_hash: string;
+  status: string;
+  client_request_id: string;
+  created_at: number | string;
+  accepted_at: number | string | null;
+  imported_at: number | string | null;
+  declined_at: number | string | null;
+  cancelled_at: number | string | null;
+  expires_at: number | string;
+}
+
 @Injectable()
 export class WorkoutShareRepository {
   constructor(private readonly db: PostgresService) {}
 
-  private toDomain(row: any): StoredWorkoutShare {
+  private toDomain(row: WorkoutShareRow): StoredWorkoutShare {
     return {
       id: row.id,
       sender_uid: row.sender_uid,
@@ -78,7 +95,7 @@ export class WorkoutShareRepository {
     senderUid: string,
     clientRequestId: string,
   ): Promise<StoredWorkoutShare | undefined> {
-    const res = await this.db.query(
+    const res = await this.db.query<WorkoutShareRow>(
       `SELECT * FROM workout_shares
        WHERE sender_uid = $1 AND client_request_id = $2`,
       [senderUid, clientRequestId],
@@ -88,7 +105,9 @@ export class WorkoutShareRepository {
   }
 
   async findById(shareId: string): Promise<StoredWorkoutShare | undefined> {
-    const res = await this.db.query(`SELECT * FROM workout_shares WHERE id = $1`, [shareId]);
+    const res = await this.db.query<WorkoutShareRow>(`SELECT * FROM workout_shares WHERE id = $1`, [
+      shareId,
+    ]);
     if (res.rows.length === 0) return undefined;
     return this.toDomain(res.rows[0]);
   }
@@ -125,33 +144,47 @@ export class WorkoutShareRepository {
   async findProfileBySocialId(
     socialId: string,
   ): Promise<{ ownerUid: string; displayName: string; socialId: string } | undefined> {
-    const res = await this.db.query(
+    const res = await this.db.query<{
+      ownerUid?: string;
+      owneruid?: string;
+      displayName?: string;
+      displayname?: string;
+      socialId?: string;
+      socialid?: string;
+    }>(
       `SELECT owner_uid AS "ownerUid", display_name AS "displayName", social_id AS "socialId"
        FROM social_profiles
        WHERE social_id = $1 AND status = 'ACTIVE'`,
       [socialId],
     );
     if (res.rows.length === 0) return undefined;
-    const row = res.rows[0] as any;
+    const row = res.rows[0];
     return {
-      ownerUid: row.ownerUid ?? row.owneruid,
-      displayName: row.displayName ?? row.displayname,
-      socialId: row.socialId ?? row.socialid,
+      ownerUid: (row.ownerUid ?? row.owneruid)!,
+      displayName: (row.displayName ?? row.displayname)!,
+      socialId: (row.socialId ?? row.socialid)!,
     };
   }
 
-  async findProfileByUid(ownerUid: string): Promise<{ socialId: string; displayName: string } | undefined> {
-    const res = await this.db.query(
+  async findProfileByUid(
+    ownerUid: string,
+  ): Promise<{ socialId: string; displayName: string } | undefined> {
+    const res = await this.db.query<{
+      displayName?: string;
+      displayname?: string;
+      socialId?: string;
+      socialid?: string;
+    }>(
       `SELECT social_id AS "socialId", display_name AS "displayName"
        FROM social_profiles
        WHERE owner_uid = $1 AND status = 'ACTIVE'`,
       [ownerUid],
     );
     if (res.rows.length === 0) return undefined;
-    const row = res.rows[0] as any;
+    const row = res.rows[0];
     return {
-      socialId: row.socialId ?? row.socialid,
-      displayName: row.displayName ?? row.displayname,
+      socialId: (row.socialId ?? row.socialid)!,
+      displayName: (row.displayName ?? row.displayname)!,
     };
   }
 
@@ -224,18 +257,18 @@ export class WorkoutShareRepository {
       [recipientUid],
     );
 
-    return res.rows.map((r: any) => {
-      const snap = JSON.parse(r.snapshotJson ?? r.snapshotjson) as WorkoutTemplateShareSnapshotV1;
+    return res.rows.map((r) => {
+      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
       return {
-        shareId: r.shareId ?? r.shareid,
+        shareId: r.shareId,
         status: r.status,
-        createdAt: Number(r.createdAt ?? r.createdat),
-        expiresAt: Number(r.expiresAt ?? r.expiresat),
+        createdAt: Number(r.createdAt),
+        expiresAt: Number(r.expiresAt),
         templateName: snap.name,
         exerciseCount: snap.exercises?.length ?? 0,
         otherUser: {
-          socialId: r.otherSocialId ?? r.othersocialid,
-          displayName: r.otherDisplayName ?? r.otherdisplayname,
+          socialId: r.otherSocialId,
+          displayName: r.otherDisplayName,
         },
       };
     });
@@ -276,18 +309,18 @@ export class WorkoutShareRepository {
       [senderUid],
     );
 
-    return res.rows.map((r: any) => {
-      const snap = JSON.parse(r.snapshotJson ?? r.snapshotjson) as WorkoutTemplateShareSnapshotV1;
+    return res.rows.map((r) => {
+      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
       return {
-        shareId: r.shareId ?? r.shareid,
+        shareId: r.shareId,
         status: r.status,
-        createdAt: Number(r.createdAt ?? r.createdat),
-        expiresAt: Number(r.expiresAt ?? r.expiresat),
+        createdAt: Number(r.createdAt),
+        expiresAt: Number(r.expiresAt),
         templateName: snap.name,
         exerciseCount: snap.exercises?.length ?? 0,
         otherUser: {
-          socialId: r.otherSocialId ?? r.othersocialid,
-          displayName: r.otherDisplayName ?? r.otherdisplayname,
+          socialId: r.otherSocialId,
+          displayName: r.otherDisplayName,
         },
       };
     });

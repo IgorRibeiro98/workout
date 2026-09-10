@@ -18,7 +18,7 @@ const UID_B = 'uid-da-conta-b';
  */
 describe('Sync pull (/v1/sync/pull)', () => {
   let temp: TempDb;
-  let app: INestApplication;
+  let app: INestApplication | undefined;
 
   beforeEach(async () => {
     temp = createTempDb();
@@ -29,19 +29,20 @@ describe('Sync pull (/v1/sync/pull)', () => {
   });
 
   afterEach(async () => {
-    await app.close();
-    temp.cleanup();
+    await app?.close().catch(() => undefined);
+    app = undefined;
+    temp?.cleanup();
   });
 
   const push = (body: string, token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .post('/v1/sync/push')
       .set('Authorization', `Bearer ${token}`)
       .set('Content-Type', 'application/json')
       .send(body);
 
   const pull = (query = 'cursor=0', token = TOKEN_A) =>
-    request(app.getHttpServer())
+    request(app!.getHttpServer())
       .get(`/v1/sync/pull?${query}`)
       .set('Authorization', `Bearer ${token}`);
 
@@ -62,7 +63,7 @@ describe('Sync pull (/v1/sync/pull)', () => {
   };
 
   it('sem token não lê o change log', async () => {
-    expect((await request(app.getHttpServer()).get('/v1/sync/pull?cursor=0')).status).toBe(401);
+    expect((await request(app!.getHttpServer()).get('/v1/sync/pull?cursor=0')).status).toBe(401);
   });
 
   it('conta sem nada recebe uma página vazia, não um erro', async () => {

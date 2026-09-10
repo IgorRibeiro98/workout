@@ -1,8 +1,14 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PostgresService } from '../src/database/postgres.service';
+
 import { loadMigrations, runMigrations } from '../src/database/postgres-migration-runner';
-import { configFor, createTempDb, MIGRATIONS_DIR, postgresFor, type TempDb } from './support/temp-db';
+import {
+  configFor,
+  createTempDb,
+  MIGRATIONS_DIR,
+  postgresFor,
+  type TempDb,
+} from './support/temp-db';
 
 describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
   let temp: TempDb;
@@ -72,10 +78,9 @@ describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
 
     expect(applied).toEqual([]);
     expect(await postgres.appliedVersions()).toEqual(firstRun);
-    const res = await postgres.query(
-      'SELECT value FROM server_metadata WHERE key = $1',
-      ['teste_idempotencia'],
-    );
+    const res = await postgres.query('SELECT value FROM server_metadata WHERE key = $1', [
+      'teste_idempotencia',
+    ]);
     expect(res.rows[0]?.value).toBe('preservado');
 
     await postgres.close();
@@ -144,10 +149,11 @@ describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
   it('persiste o dado através de um ciclo completo de fechamento e reabertura', async () => {
     const first = postgresFor(configFor(temp.path));
     await first.initialize(MIGRATIONS_DIR);
-    await first.query(
-      'INSERT INTO server_metadata (key, value, updated_at) VALUES ($1, $2, $3)',
-      ['teste_persistencia', 'sobreviveu', 42],
-    );
+    await first.query('INSERT INTO server_metadata (key, value, updated_at) VALUES ($1, $2, $3)', [
+      'teste_persistencia',
+      'sobreviveu',
+      42,
+    ]);
     await first.close();
 
     expect(first.isOpen).toBe(false);
@@ -156,10 +162,9 @@ describe('PostgreSQL (pool, migrations, transações, persistência)', () => {
     const second = postgresFor(configFor(temp.path));
     await second.initialize(MIGRATIONS_DIR);
 
-    const res = await second.query(
-      'SELECT value, updated_at FROM server_metadata WHERE key = $1',
-      ['teste_persistencia'],
-    );
+    const res = await second.query('SELECT value, updated_at FROM server_metadata WHERE key = $1', [
+      'teste_persistencia',
+    ]);
     expect(res.rows[0]).toEqual({ value: 'sobreviveu', updated_at: 42 });
 
     await second.close();

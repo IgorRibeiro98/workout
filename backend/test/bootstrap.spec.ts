@@ -1,5 +1,3 @@
-import { existsSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { type CreatedApp, createApp } from '../src/bootstrap/create-app';
 import { AppConfig, ConfigValidationError } from '../src/config/app-config';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';

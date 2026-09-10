@@ -76,7 +76,8 @@ export class ChallengeService {
 
     const now = this.clock.now();
     if (
-      (await this.repository.countOpenChallengesBy(creator.ownerUid, now)) >= CHALLENGE_MAX_OPEN_PER_CREATOR
+      (await this.repository.countOpenChallengesBy(creator.ownerUid, now)) >=
+      CHALLENGE_MAX_OPEN_PER_CREATOR
     ) {
       throw ChallengeErrors.tooManyOpenChallenges();
     }
@@ -130,7 +131,10 @@ export class ChallengeService {
   /**
    * `socialId` → `ownerUid`, exigindo amizade ativa agora (§32/§34).
    */
-  private async resolveInvitableFriend(creator: FriendProfileRow, socialId: string): Promise<string> {
+  private async resolveInvitableFriend(
+    creator: FriendProfileRow,
+    socialId: string,
+  ): Promise<string> {
     const target = await this.friendships.findProfileBySocialId(socialId);
     if (!target || target.status !== 'ACTIVE') {
       throw ChallengeErrors.participantNotAvailable();
@@ -139,7 +143,9 @@ export class ChallengeService {
       throw ChallengeErrors.participantNotAvailable();
     }
     const areFriends = await this.friendships.areFriends(creator.ownerUid, target.ownerUid);
-    const isBlocked = this.blockService ? await this.blockService.isBlocked(creator.ownerUid, target.ownerUid) : false;
+    const isBlocked = this.blockService
+      ? await this.blockService.isBlocked(creator.ownerUid, target.ownerUid)
+      : false;
     if (!areFriends || isBlocked) {
       throw ChallengeErrors.participantNotAvailable();
     }
@@ -162,7 +168,10 @@ export class ChallengeService {
       throw ChallengeErrors.notFound();
     }
 
-    const participation = await this.repository.findParticipation(challengeId, viewerProfile.ownerUid);
+    const participation = await this.repository.findParticipation(
+      challengeId,
+      viewerProfile.ownerUid,
+    );
     if (!participation) {
       throw ChallengeErrors.notFound();
     }
@@ -182,7 +191,9 @@ export class ChallengeService {
 
     const creator = participants.find((participant) => participant.role === 'CREATOR');
     const isCreatorBlocked =
-      creator && this.blockService ? await this.blockService.isBlocked(viewerProfile.ownerUid, creator.ownerUid) : false;
+      creator && this.blockService
+        ? await this.blockService.isBlocked(viewerProfile.ownerUid, creator.ownerUid)
+        : false;
 
     this.log(requestId, principal.uid, 'social.challenge.read', {
       challengeType: challenge.type,
@@ -318,7 +329,7 @@ export class ChallengeService {
     const page = await this.repository.listPendingInvitations(owner.ownerUid, query);
     const now = this.clock.now();
 
-    const visibleItems: typeof page.items[number][] = [];
+    const visibleItems: (typeof page.items)[number][] = [];
     for (const invitation of page.items) {
       const blocked = this.blockService
         ? await this.blockService.isBlocked(owner.ownerUid, invitation.inviterUid)
@@ -508,7 +519,10 @@ export class ChallengeService {
     const owner = await this.requireActiveProfile(principal);
     this.requireRespondQuota(principal, requestId);
 
-    const { challenge, participation } = await this.requireParticipation(owner.ownerUid, challengeId);
+    const { challenge, participation } = await this.requireParticipation(
+      owner.ownerUid,
+      challengeId,
+    );
     if (participation.role === 'CREATOR') {
       throw ChallengeErrors.cannotLeaveAsCreator();
     }
@@ -536,7 +550,10 @@ export class ChallengeService {
     const owner = await this.requireActiveProfile(principal);
     this.requireRespondQuota(principal, requestId);
 
-    const { challenge, participation } = await this.requireParticipation(owner.ownerUid, challengeId);
+    const { challenge, participation } = await this.requireParticipation(
+      owner.ownerUid,
+      challengeId,
+    );
     if (participation.role !== 'CREATOR') {
       throw ChallengeErrors.notCreator();
     }
