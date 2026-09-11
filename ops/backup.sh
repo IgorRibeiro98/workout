@@ -128,7 +128,11 @@ fi
 finalize() {
   local code=$?
 
-  rm -rf "${WORK_DIR:-}" 2> /dev/null || true
+  # Nunca `rm -rf` de uma variável que pode estar vazia (T18.3 §26): o diretório de trabalho só
+  # existe depois do `mktemp`, e antes disso não há o que limpar.
+  if [ -n "${WORK_DIR:-}" ] && [ -d "${WORK_DIR}" ]; then
+    rm -rf "${WORK_DIR}" 2> /dev/null || true
+  fi
   rm -f "${RESTIC_OUTPUT_FILE:-}" 2> /dev/null || true
 
   if [ "$SUCCEEDED" -eq 1 ] && [ "$code" -eq 0 ]; then

@@ -448,6 +448,85 @@ export const envSchema = z.object({
    * dispara em CPU que a plataforma já suspendeu) não é proteção — é a ilusão dela.
    */
   BACKGROUND_JOBS_MODE: z.enum(['interval', 'disabled']).default('interval'),
+
+  // --- Operação: heartbeat, tamanho do banco, frescor do DR (T18.3) ----------------------
+  //
+  // Nenhum destes valores altera o que o Spark **faz** — só o que ele **observa** e reporta. Os
+  // limiares e as janelas moram aqui, num lugar só, porque um número repetido em dois lugares
+  // diverge na primeira alteração (T16.8 §12).
+
+  /**
+   * Depois de quanto tempo sem um ciclo de manutenção bem-sucedido o serviço é considerado parado.
+   *
+   * O Cloud Scheduler chama `spark-maintenance` a cada minuto; cinco minutos sem sucesso cobre um
+   * retry atrasado e um deploy no meio, sem esconder um Scheduler desabilitado por muito tempo.
+   * É o que `maintenance_stale` e `GET /internal/maintenance/status` usam.
+   */
+  MAINTENANCE_STALE_AFTER_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(24 * 60 * 60 * 1000)
+    .default(5 * 60 * 1000),
+
+  /**
+   * Cadência mínima entre duas medições de `pg_database_size` pelo ciclo de manutenção.
+   *
+   * Nunca a cada requisição, nunca a cada minuto: o tamanho do banco muda devagar, e a medição
+   * é uma consulta de catálogo que não precisa competir com tráfego real. O mínimo baixo existe
+   * para o teste.
+   */
+  DATABASE_SIZE_CHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(24 * 60 * 60 * 1000)
+    .default(60 * 60 * 1000),
+
+  /**
+   * Os quatro limiares de tamanho do banco, em MB, do menos ao mais grave:
+   * ATTENTION, INVESTIGATE, PLAN, ACTION_REQUIRED. Abaixo do primeiro é NORMAL.
+   *
+   * Os defaults são os limites operacionais internos do Spark para o Neon (T18.3). Um único ponto
+   * de configuração; `database-size.policy.ts` é quem classifica.
+   */
+  DATABASE_SIZE_THRESHOLDS_MB: z
+    .string()
+    .regex(
+      /^\d+(,\d+){3}$/,
+      'DATABASE_SIZE_THRESHOLDS_MB exige quatro inteiros separados por vírgula',
+    )
+    .default('300,350,400,450')
+    .transform((value) => value.split(',').map((part) => Number.parseInt(part, 10)))
+    .refine(
+      (values) => values.every((value, index) => index === 0 || value > values[index - 1]),
+      'DATABASE_SIZE_THRESHOLDS_MB precisa ser estritamente crescente',
+    ),
+
+  /**
+   * Idade máxima do backup de DR mais recente antes de `db_backup_stale` ser emitido.
+   *
+   * O backup é diário; 26 h absorve um atraso de agendamento sem deixar dois dias passarem em
+   * silêncio. Quem mede é o ciclo de manutenção, na cadência de `DR_BACKUP_CHECK_INTERVAL_MS`.
+   */
+  DR_BACKUP_MAX_AGE_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(30 * 24 * 60 * 60 * 1000)
+    .default(26 * 60 * 60 * 1000),
+
+  /**
+   * Cadência mínima entre duas verificações do frescor do backup de DR pelo ciclo de manutenção.
+   * Cada verificação é uma listagem paga no bucket — trinta minutos é frequente o bastante para um
+   * alerta chegar no mesmo dia e raro o bastante para custar nada.
+   */
+  DR_BACKUP_CHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(24 * 60 * 60 * 1000)
+    .default(30 * 60 * 1000),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

@@ -27,24 +27,30 @@ Spark Android
               └──────► Gemini                    (API key via Secret Manager)
 
 Artifact Registry
-       │  imagem imutável, identificada por git SHA/digest
+       │  imagem imutável, identificada por git SHA/digest (política de retenção nativa, T18.3)
        ├────► Cloud Run API (spark-backend)
        ├────► Cloud Run Maintenance (spark-maintenance, privado)
-       └────► Cloud Run Migration Job (spark-db-migrate)
+       ├────► Cloud Run Job spark-db-migrate   (migration, SA migrator)
+       ├────► Cloud Run Job spark-db-backup    (DR do PostgreSQL, SA backup — T18.3)
+       └────► Cloud Run Job spark-storage-audit (PostgreSQL ↔ GCS, somente leitura — T18.3)
 
-Cloud Scheduler ──OIDC──► spark-maintenance (privado, run.invoker apenas)
+Cloud Scheduler ──OIDC──► spark-maintenance (privado, run.invoker apenas)       a cada minuto
+Cloud Scheduler ──OAuth──► Job spark-db-backup (run.invoker sobre o Job)         03:15 UTC, diário
 ```
 
-Três superfícies de execução, uma imagem só:
+Cinco superfícies de execução, uma imagem só:
 
 | Serviço/Job | Tipo | Tráfego | Comando | Identidade |
 | --- | --- | --- | --- | --- |
 | `spark-backend` | Cloud Run Service | público (Firebase Bearer nas rotas de produto) | `node dist/main.js` (default do Dockerfile) | `spark-backend-runtime` |
 | `spark-maintenance` | Cloud Run Service | privado (só `run.invoker` do Scheduler) | `node dist/maintenance-main.js` | `spark-backend-runtime` |
 | `spark-db-migrate` | Cloud Run Job | nenhum (não é HTTP) | `node dist/cli/migrate-database.js` | `spark-backend-migrator` |
+| `spark-db-backup` (T18.3) | Cloud Run Job | nenhum | `node dist/cli/db-backup.js` | `spark-backend-backup` |
+| `spark-storage-audit` (T18.3) | Cloud Run Job | nenhum | `node dist/cli/storage-audit.js` | `spark-backend-runtime` |
 
-Nenhum dos três monta a API pública e a manutenção no mesmo processo, e os três compartilham o
-**mesmo digest de imagem** em cada deploy — a diferença é comando e identidade, nunca o artefato.
+Nenhum deles monta a API pública e a manutenção no mesmo processo, e todos compartilham o **mesmo
+digest de imagem** em cada deploy — a diferença é comando e identidade, nunca o artefato. A imagem
+traz `pg_dump`/`pg_restore`/`psql` 17 (PGDG) para os dois comandos de DR.
 
 ## 2. Pré-requisito
 
@@ -65,17 +71,26 @@ Idempotente (§4): recurso existente é reutilizado, recurso ausente é criado. 
    ou qualquer IAM ser aplicado — ver §3.1 quando o projeto Firebase é diferente do projeto GCP.
 2. APIs habilitadas (`run`, `artifactregistry`, `secretmanager`, `cloudscheduler`, `cloudbuild`, `iam`).
 3. Repositório Artifact Registry `spark` (Docker, regional, `southamerica-east1`).
-4. Três Service Accounts: `spark-backend-runtime`, `spark-backend-migrator`,
-   `spark-maintenance-scheduler`.
+4. Quatro Service Accounts: `spark-backend-runtime`, `spark-backend-migrator`,
+   `spark-maintenance-scheduler` e, desde a T18.3, `spark-backend-backup`.
 5. Os quatro secrets do Secret Manager (`spark-database-url`, `spark-database-url-direct`,
    `spark-gemini-api-key`, `spark-account-deletion-hmac-key`) — a chave HMAC é **gerada** com
    `openssl rand -hex 32` na primeira execução, e nunca rotacionada automaticamente depois (§20 —
    trocá-la sem migração destruiria o reconhecimento de tombstones históricos).
-6. IAM por secret: `spark-backend-runtime` só acessa os três da API; `spark-backend-migrator` só o
-   secret direto (§9/§21).
+6. IAM por secret: `spark-backend-runtime` só acessa os três da API; `spark-backend-migrator` e
+   `spark-backend-backup` só o secret direto (§9/§21; T18.3 §2).
 7. IAM mínimo de Firebase Admin (`roles/firebaseauth.admin`, `roles/firebasecloudmessaging.admin`,
    aplicado no projeto **Firebase** — §3.1) e de bucket (`roles/storage.objectAdmin` sobre
-   `spark-private-assets-prod`, no projeto GCP) para a runtime SA.
+   `spark-private-assets-prod`, no projeto GCP) para a runtime SA. A backup SA recebe
+   `roles/storage.objectAdmin` **condicionado** ao prefixo `system/dr/postgres/` (IAM Condition
+   sobre `resource.name`) e `roles/storage.legacyBucketReader` (listar nomes; nunca ler conteúdo de
+   `social/` ou `backups/`).
+8. A política de retenção do Artifact Registry (`ops/gcp/artifact-registry-retention.sh --apply`,
+   T18.3 §17).
+
+Depois do bootstrap, `ops/gcp/iam-audit.sh` confirma que o IAM real é exatamente este — e reporta
+`DRIFT` para qualquer papel a mais (por exemplo, a runtime SA com acesso ao secret direto, que foi o
+drift real encontrado na T18.3).
 
 ### 3.1 Cross-project: infraestrutura GCP ≠ projeto Firebase (T18.2.1)
 
@@ -160,16 +175,24 @@ gcloud secrets versions add spark-gemini-api-key --data-file=- <<< "<chave real>
 ops/gcp/deploy-cloud-run.sh
 ```
 
-Ordem obrigatória (§10), cada etapa falha cedo:
+Ordem obrigatória (§10; endurecida na T18.3), cada etapa falha cedo:
 
 ```text
 árvore Git limpa
       ↓
-build (tag = git SHA)
+build (tag = git SHA; --provenance=false --sbom=false: um digest por release)
       ↓
 push no Artifact Registry
       ↓
 resolve o digest exato
+      ↓
+resolve a versão HABILITADA de cada secret → revision X usa secret:versão Y, nunca :latest (T18.3 §19)
+      ↓
+atualiza os Jobs spark-db-backup e spark-storage-audit com o MESMO digest
+      ↓
+GATE de DR (T18.3 §10): existe backup válido com ≤ SPARK_DR_MAX_BACKUP_AGE_HOURS (24 h)?
+   não → SPARK_DR_PREDEPLOY_POLICY=run-backup (default): executa spark-db-backup e espera SUCCESS
+         SPARK_DR_PREDEPLOY_POLICY=fail: aborta
       ↓
 atualiza spark-db-migrate com o MESMO digest
       ↓
@@ -179,19 +202,22 @@ spark-backend já existe?
       ↓                                              ↓
      SIM (deploy seguinte)                          NÃO (primeiro deploy — §4.1)
 deploy do candidate — --no-traffic --tag candidate    deploy da MESMA imagem/config num serviço
-      ↓                                               TEMPORÁRIO (spark-backend-validate)
+      ↓                                               TEMPORÁRIO e PRIVADO (spark-backend-validate)
 smoke contra o candidate                                    ↓
-      ↓                                              smoke contra o serviço temporário
+      ↓                                              smoke com o identity token do operador
 falha do smoke → tráfego antigo permanece                  ↓
       ↓                                              remove o temporário, cria spark-backend
 100% do tráfego para o candidate                      de verdade (já validado)
       ↓                                                     ↓
               deploy de spark-maintenance com o MESMO digest (privado, sem troca de tráfego)
       ↓
-garante o job do Cloud Scheduler
+garante os dois jobs do Cloud Scheduler (manutenção a cada minuto; backup de DR diário)
 ```
 
-`--skip-maintenance` pula as duas últimas etapas quando só a API muda.
+`--skip-maintenance` pula a manutenção e os schedulers quando só a API muda.
+
+O deploy termina imprimindo `secrets pinados nesta release: spark-database-url=vN …` — a
+correlação revision → versão de secret, que `ops/gcp/config-drift-audit.sh` confere depois.
 
 ### 4.1 Primeiro deploy: por que `--no-traffic` não basta (T18.2.1)
 
@@ -205,10 +231,15 @@ existir.
 ou não) e segue um caminho diferente só no primeiro deploy:
 
 1. A mesma imagem/configuração (`deploy_api_revision`, uma função só — candidate, validação e
-   primeiro deploy real nunca divergem entre si) é publicada num serviço **temporário**,
-   `spark-backend-validate` (`SPARK_RUN_API_VALIDATE_SERVICE`), sem `--no-traffic`/`--tag`.
-2. `smoke-cloud-run.sh` roda contra ele. Ninguém além deste script conhece sua URL — não é tráfego
-   de produção.
+   primeiro deploy real nunca divergem entre si) é publicada num serviço **temporário e privado**
+   (`--no-allow-unauthenticated`), `spark-backend-validate` (`SPARK_RUN_API_VALIDATE_SERVICE`), sem
+   `--no-traffic`/`--tag`. Só o acesso muda entre o temporário e o real: a configuração do processo
+   é idêntica.
+2. `smoke-cloud-run.sh` roda contra ele com o identity token do operador
+   (`gcloud auth print-identity-token`) em `X-Serverless-Authorization` — o Cloud Run valida e
+   remove esse header antes de entregar a requisição, então `Authorization` continua livre para o
+   Firebase Bearer e as expectativas do smoke não mudam (T18.3 §21). O token entra por variável de
+   ambiente e nunca é impresso. Ninguém sem `run.invoker` alcança o temporário.
 3. Smoke FALHA → `spark-backend-validate` é removido, `spark-backend` **nunca** é criado, o script
    aborta.
 4. Smoke PASSA → `spark-backend-validate` é removido, e só então `spark-backend` é criado com a
@@ -318,8 +349,8 @@ GCP de infraestrutura onde a própria Service Account vive — ver §3.1 (T18.2.
 
 | Secret | Consumido por | IAM |
 | --- | --- | --- |
-| `spark-database-url` | API, Maintenance | `spark-backend-runtime` |
-| `spark-database-url-direct` | Migration Job | `spark-backend-migrator` **apenas** |
+| `spark-database-url` | API, Maintenance, Job storage-audit | `spark-backend-runtime` |
+| `spark-database-url-direct` | Jobs migrate e backup | `spark-backend-migrator`, `spark-backend-backup` **apenas** |
 | `spark-gemini-api-key` | API, Maintenance | `spark-backend-runtime` |
 | `spark-account-deletion-hmac-key` | API, Maintenance | `spark-backend-runtime` |
 
@@ -327,6 +358,20 @@ GCP de infraestrutura onde a própria Service Account vive — ver §3.1 (T18.2.
 `roles/secretmanager.admin` sobre o projeto. Nenhum valor de secret aparece em Git, na imagem, em
 `docker build --build-arg` ou em log — a chave HMAC é gerada uma única vez com
 `openssl rand -hex 32` e nunca impressa pelos scripts de `ops/gcp/`.
+
+### Versões pinadas (T18.3 §19)
+
+Nenhuma revision ou job referencia `secret:latest`. `deploy-cloud-run.sh` resolve, por metadata
+(`gcloud secrets versions list --filter=state:enabled`, sem ler valor), a versão habilitada mais
+recente de cada secret e a grava na revision (`--set-secrets DATABASE_URL=spark-database-url:3,…`).
+Consequências deliberadas:
+
+- uma revision declara exatamente com que versão de cada secret ela sobe — `gcloud run revisions
+  describe <rev>` mostra `secretKeyRef.key = 3`, e `config-drift-audit.sh` confere;
+- **rotacionar um secret não muda produção** até um deploy deliberado criar revisions novas
+  (ver "Rotação" em [`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md));
+- rollback para uma revision anterior volta também às versões de secret que ela pinou;
+- um secret sem versão habilitada aborta o deploy antes de qualquer revision existir.
 
 ## 8. Object Storage
 
@@ -507,10 +552,10 @@ scale-to-zero.
 
 Domínio customizado, Load Balancer, CDN, Cloud Armor, Redis, Cloud SQL, migração Neon → Cloud SQL,
 Vertex AI, múltiplas regiões, alta disponibilidade multi-region, `min instances ≥ 1`, autoscaling
-agressivo, Kubernetes/GKE, Terraform, observabilidade avançada, políticas finais de DR, otimização
-final de custos, VPC Connector/Cloud NAT/IP estático de saída (Neon, Firebase, Gemini e GCS são
-endpoints públicos autenticados — não há requisito concreto para eles ainda). Ficam para a T18.3 ou
-depois, quando uma necessidade real exigir.
+agressivo, Kubernetes/GKE, Terraform, VPC Connector/Cloud NAT/IP estático de saída (Neon, Firebase,
+Gemini e GCS são endpoints públicos autenticados — não há requisito concreto para eles). DR,
+observabilidade, auditorias e retenção chegaram na T18.3 (§19 abaixo); o resto fica para quando uma
+necessidade real exigir.
 
 ## 14. Probes, graceful shutdown e filesystem
 
@@ -563,10 +608,51 @@ Cloud Run consome logs pela saída padrão — nenhum log durável em arquivo. P
 `errorName`, `uidPrefix` e a redação existente continuam sem mudança. Nunca aparecem em log:
 secret, connection string, token, URL assinada, chave HMAC.
 
-## 18. NOT VERIFIED neste ambiente
+## 18. Estado de verificação
 
-Este documento foi escrito e revisado num ambiente de desenvolvimento sem `gcloud` instalado e sem
-acesso à rede do Google Cloud. Todo item que exige execução real contra um projeto GCP —
-Artifact Registry, bootstrap, deploy, migration job, candidate/tráfego, smoke real, IAM efetivo,
-Cloud Scheduler — é **NOT VERIFIED** por inspeção de código apenas. Ver o relatório final da T18.2
-para o checklist completo.
+A T18.2 e a T18.2.1 foram implantadas e validadas em Cloud Run real (primeiro deploy, migration job,
+`spark-backend-validate`, health, 401 nas rotas `/v1`, `spark-maintenance` privado, Scheduler OIDC —
+revision `spark-backend-00001-gs2`, digest `sha256:bfe4d582…`). Os itens da T18.3 que exigem
+execução real (backup no bucket, ensaio contra o bucket real, alertas, rollback drill, auditorias
+contra o projeto real) têm o estado registrado no relatório final da T18.3 — `VERIFIED` ou
+`NOT VERIFIED`, nunca inferido de inspeção.
+
+## 19. Hardening operacional, DR e observabilidade (T18.3)
+
+O que a T18.3 acrescentou a esta topologia — cada item com o documento que o detalha:
+
+| Capacidade | Onde | Documento |
+| --- | --- | --- |
+| Backup de DR do PostgreSQL independente do Neon (`spark-db-backup`, diário, `pg_dump --format=custom`, SHA-256, manifesto, retenção 7) | `backend/src/dr/`, `ops/gcp/lib.dr.sh` | [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md) |
+| Restore só em destino limpo, nunca produção (`db-restore-drill.js`, `ops/gcp/dr-restore-drill.sh`) | idem | idem |
+| Ensaio de DR de ponta a ponta no CI, com anti-ressurreição (`ops/gcp/dr-backup-drill.sh`) | CI job `dr-drill` | idem |
+| Gate de backup pré-migration no deploy | `deploy-cloud-run.sh` | §4 |
+| Versões de secret pinadas por revision | `deploy-cloud-run.sh`, `lib.gcp.sh#resolve_secret_version` | §7 |
+| Validação privada no primeiro deploy | `deploy-cloud-run.sh`, `smoke-cloud-run.sh` | §4.1 |
+| Heartbeat do maintenance, stale detection, tamanho do banco, frescor do DR (`GET /internal/maintenance/status`) | `MaintenanceCoordinator` | [`OBSERVABILITY.md`](./OBSERVABILITY.md) |
+| Logs estruturados e 12 alertas (`ops/gcp/monitoring-alerts.sh`) | Cloud Logging/Monitoring | idem |
+| Auditor PostgreSQL ↔ GCS, somente leitura (`spark-storage-audit`) | `backend/src/dr/storage-auditor.ts` | idem |
+| Auditorias de drift, IAM e custo; retenção do Artifact Registry | `ops/gcp/*-audit.sh`, `artifact-registry-retention.sh` | [`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md) |
+| Política de TLS explícita para o PostgreSQL (`verify-full`) | `backend/src/database/postgres-url.ts` | [`SECURITY.md`](./SECURITY.md) |
+| Rollback drill (`ops/gcp/rollback-drill.sh`) | `ops/gcp/` | [`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md) |
+
+Parâmetros novos, todos em `ops/gcp/lib.gcp.sh` (um lugar só):
+
+| Variável | Default | Papel |
+| --- | --- | --- |
+| `SPARK_SA_BACKUP` | `spark-backend-backup` | identidade do Job de backup |
+| `SPARK_RUN_BACKUP_JOB` / `SPARK_RUN_STORAGE_AUDIT_JOB` | `spark-db-backup` / `spark-storage-audit` | os dois Jobs novos |
+| `SPARK_BACKUP_SCHEDULER_JOB` / `SPARK_BACKUP_SCHEDULER_CRON` | `spark-db-backup-daily` / `15 3 * * *` | agendamento diário |
+| `SPARK_DR_PREFIX` | `system/dr/postgres/` | namespace no bucket (= `DR_POSTGRES_PREFIX` no backend) |
+| `SPARK_DR_RETENTION_COUNT` | `7` | backups válidos mantidos |
+| `SPARK_DR_MAX_BACKUP_AGE_HOURS` | `24` | janela do gate de deploy |
+| `SPARK_DR_PREDEPLOY_POLICY` | `run-backup` | `run-backup` ou `fail` |
+| `SPARK_RUN_BACKUP_MEMORY` / `SPARK_RUN_BACKUP_TIMEOUT` | `1Gi` / `1800` | recursos do Job de backup (o dump nasce em tmpfs) |
+| `SPARK_GCS_SOFT_DELETE_MIN_SECONDS` | `604800` | mínimo aceito pela auditoria |
+
+E no backend (`env.schema.ts`): `MAINTENANCE_STALE_AFTER_MS` (5 min), `DATABASE_SIZE_CHECK_INTERVAL_MS`
+(1 h), `DATABASE_SIZE_THRESHOLDS_MB` (`300,350,400,450`), `DR_BACKUP_MAX_AGE_MS` (26 h),
+`DR_BACKUP_CHECK_INTERVAL_MS` (30 min); e para os Jobs de DR, `SPARK_DR_RETENTION_COUNT`,
+`SPARK_DR_WORK_DIR`, `SPARK_DR_MAX_DUMP_BYTES`, `SPARK_GIT_COMMIT`, `SPARK_IMAGE_DIGEST`,
+`SPARK_DRILL_ADMIN_URL`, `SPARK_DRILL_DATABASE`, `SPARK_DRILL_KEEP_DATABASE`,
+`SPARK_DRILL_REPLACE_EXISTING`, `SPARK_DR_BACKUP_ID`.

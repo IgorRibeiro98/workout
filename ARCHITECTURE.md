@@ -526,7 +526,7 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3, T18.1, T18.1.1 e T18.2 implementadas.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-11): T16.0 a T16.8.1, T18.0 a T18.0.3, T18.1, T18.1.1, T18.2, T18.2.1 e T18.3 implementadas.** A T16.0 criou o backend em `backend/` com
 > configuração, banco (SQLite até a T17.13; **PostgreSQL desde a T18.0**), migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -1835,6 +1835,96 @@ Testes: `ops/tests/gcp-cross-project.test.sh` — com um `gcloud` fake (sem rede
 prova o fallback de compatibilidade, a validação dos dois projetos, que o binding de Firebase Admin
 alveja o projeto Firebase (nunca o de infraestrutura) mesmo quando são projetos diferentes, e que
 `FIREBASE_PROJECT_ID` no deploy vem de `SPARK_FIREBASE_PROJECT`.
+
+### Hardening operacional, DR e observabilidade da produção Cloud Run (T18.3)
+
+> **Status (verificado em 2026-09-11): implementado no código, provado offline (Jest + shell com
+> fakes) e no CI com `pg_dump`/`pg_restore` reais e a imagem real.** O estado de cada item que exige
+> execução contra o GCP real (backup no bucket, ensaio contra o bucket, alertas, rollback drill,
+> auditorias contra o projeto) está no relatório final da T18.3 — `VERIFIED` ou `NOT VERIFIED` por
+> evidência. Ver [`docs/operations/DISASTER_RECOVERY.md`](docs/operations/DISASTER_RECOVERY.md),
+> [`OBSERVABILITY.md`](docs/operations/OBSERVABILITY.md) e
+> [`OPERATIONS_CHECKLIST.md`](docs/operations/OPERATIONS_CHECKLIST.md).
+
+A T18.2 colocou o Spark Backend em Cloud Run; a T18.3 responde à pergunta seguinte: **e quando algo
+falhar de verdade?** Nada de domínio muda — nenhum contrato de sync, backup pessoal, restore ou
+social. O que nasce é uma camada operacional com provas executáveis.
+
+```text
+                     Cloud Scheduler (diário) ──OAuth──▶ Job spark-db-backup ──▶ gs://…/system/dr/postgres/<id>/
+                                                          (SA backup: secret DIRETO +                ├── database.dump
+                                                           prefixo de DR do bucket)                  └── manifest.json (por último)
+                                                                                                          │
+   deploy ── gate: backup válido ≤ 24 h? ─────────────────────────────────────────────────────────────────┘
+      │       (senão: executa o Job e espera)                                                              │
+      ▼                                                                                          ensaio: db-restore-drill
+   migration → candidate → smoke → tráfego                                                          → CREATE DATABASE spark_drill_*
+                                                                                                    → pg_restore (sem --clean)
+   Cloud Scheduler (1 min) ──OIDC──▶ spark-maintenance                                              → tabelas == manifesto
+      ├── heartbeat em server_metadata → GET /internal/maintenance/status (stale?)                  → migrations → readiness
+      ├── pg_database_size → NORMAL/ATTENTION/INVESTIGATE/PLAN/ACTION_REQUIRED                       → RESTORE_DRILL_PASS
+      └── idade do backup de DR → db_backup_stale
+```
+
+1. **O DR do PostgreSQL vive fora do provedor e é verificado por releitura.** `src/dr/` —
+   `dr-manifest.ts` (o contrato do backup; `formatVersion`, identidade sem credencial, proveniência,
+   `sha256`, migrations, tabelas), `dr-backup.store.ts` (o namespace `system/dr/postgres/` sobre a
+   mesma fronteira neutra de Object Storage da T18.1; **um** critério de validade para retenção,
+   frescor, gate e auditor), `dr-retention.ts` (função pura: mantém os N válidos mais recentes,
+   nunca o último, nunca toca incompletos), `pg-tools.ts` (`pg_dump`/`pg_restore` por processo, com a
+   conexão pelas variáveis da libpq — nunca argv), `db-backup.runner.ts` (dump → `--list` → SHA-256 →
+   upload → **releitura** → manifesto → retenção; qualquer passo que falhe é `db_backup_failed` e
+   código ≠ 0). `DrJobConfig` (`src/config/dr-job-config.ts`) substitui `AppConfig` nos Jobs de DR
+   pelo mesmo motivo de `migrate-database` na T18.2: a Service Account do backup não precisa — e não
+   deve poder — conhecer a URL pooled, o Gemini ou o HMAC.
+2. **Restore é sempre em destino novo, nunca em produção.** `db-restore-drill.runner.ts`: nome de
+   destino obrigatório na forma `spark_drill_*`, recusas explícitas (banco do manifesto, conexão
+   administrativa que é produção, destino existente sem `--replace`, checksum divergente),
+   `CREATE DATABASE` limpo, `pg_restore --single-transaction` sem `--clean`, e a verificação
+   "tabelas restauradas == tabelas do manifesto" — a prova, a cada ensaio, de que um snapshot antigo
+   não convive com objeto novo. Depois, o mesmo caminho de uma recuperação real: as migrations que o
+   código tiver a mais são aplicadas e a readiness de `/health/ready` é conferida sem HTTP. O CLI não
+   conhece `DATABASE_URL`: há teste estático.
+3. **A URL do banco é identidade e política.** `src/database/postgres-url.ts` — parse com
+   `database` obrigatório (fail closed em `postgres://host`), `normalizeSslMode` (`require|prefer|
+   verify-ca` → `verify-full` explícito; produção recusa `disable|no-verify|uselibpqcompat`),
+   `libpqEnvironment` (`PGSSLMODE=verify-full` + `PGSSLROOTCERT=system`). `PostgresService` usa a
+   string normalizada nos dois pools e loga `sslMode`/`sslNormalized`.
+4. **O maintenance mede a si mesmo.** `MaintenanceCoordinator` grava `maintenance_last_*` em
+   `server_metadata` a cada ciclo (início, fim, sucesso, falha com `errorName`, duração), expõe
+   `status()` (`stale` = sem sucesso há mais de `MAINTENANCE_STALE_AFTER_MS`) em
+   `GET /internal/maintenance/status`, e leva duas observações de baixa cadência pelo mesmo CAS dos
+   cleaners: `pg_database_size` classificado por `database-size.policy.ts` (limiares em
+   `DATABASE_SIZE_THRESHOLDS_MB`, um lugar só) e a idade do backup válido mais recente
+   (`DrBackupStore.latestValid`). Uma falha nelas é registrada sem derrubar o ciclo.
+5. **O auditor PostgreSQL ↔ GCS é somente leitura.** `src/dr/storage-auditor.ts` lista cada
+   prefixo uma vez (bounded), cruza com o banco por lotes de chaves, amostra hashes, e classifica —
+   `MISSING_OBJECT`, `ORPHAN_OBJECT`, `RECENT_UNREFERENCED`, `INVALID_METADATA`, `HASH_MISMATCH`,
+   `INCOMPLETE_BACKUP`, `TOMBSTONE_INCONSISTENT`, `UNKNOWN`. Nunca chama `remove`. Contagens no log;
+   chaves no relatório (stdout do Job `spark-storage-audit`).
+6. **Uma imagem, cinco superfícies.** O Dockerfile ganhou `pg_dump`/`pg_restore`/`psql` 17 (PGDG,
+   extraídos sem arrastar o Perl dos wrappers) — API, manutenção e os três Jobs (migrate, backup,
+   storage-audit) continuam no mesmo digest. O build é sem provenance/SBOM: um release, um digest,
+   para a retenção nativa do Artifact Registry (Keep 10 / untagged > 7 d / tagged > 90 d) nunca
+   apagar um manifesto filho de baixo de uma tag.
+7. **O deploy sabe o que está fazendo.** `ops/gcp/deploy-cloud-run.sh`: versões de secret
+   resolvidas por metadata e **pinadas** por revision (nunca `:latest`); Jobs de DR e auditoria com
+   o digest da release; **gate de DR** antes da migration (`SPARK_DR_PREDEPLOY_POLICY`:
+   `run-backup` | `fail`); serviço de validação do primeiro deploy **privado**, chamado com o identity
+   token do operador em `X-Serverless-Authorization`; Scheduler diário do backup por OAuth com
+   `run.invoker` sobre o Job. `bootstrap-cloud-run.sh` cria `spark-backend-backup` com IAM condicional
+   ao prefixo de DR e aplica a retenção do registry.
+8. **Operação com respostas, não com intenções.** `dr-status.sh` (existe backup? consigo? o
+   maintenance está vivo?), `dr-backup-now.sh`, `dr-restore-drill.sh` (bucket real → PostgreSQL local
+   descartável → backend real ready → `RESTORE_DRILL_PASS`, com `--record` no Cloud Logging),
+   `rollback-drill.sh` (A → B → A com smoke), `config-drift-audit.sh` / `iam-audit.sh` /
+   `cost-audit.sh` (`PASS`/`DRIFT`/`NOT_VERIFIED`, sem remediação), `artifact-registry-retention.sh`,
+   `monitoring-alerts.sh` (canal + 10 métricas log-based + 12 políticas, idempotente).
+
+Testes: `postgres-url.spec.ts`, `dr-backup.spec.ts`, `dr-restore-drill.spec.ts`,
+`storage-auditor.spec.ts`, `maintenance-heartbeat.spec.ts`, `dr-anti-resurrection.spec.ts`;
+`ops/tests/{deploy-hardening,rollback-drill,gcp-audits,monitoring-alerts,artifact-registry-retention,ops-scripts-safety,database-identity,restore-old-snapshot-risk}.test.sh`;
+CI job `dr-drill` (`ops/gcp/dr-backup-drill.sh`).
 
 ### Conta opcional e identidade (T16.1)
 

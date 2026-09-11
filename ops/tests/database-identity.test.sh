@@ -82,6 +82,40 @@ check "spark x spark_drill é permitido" "não" \
 check "bancos e hosts distintos é permitido" "não" \
   "$(perigoso 'postgresql://a:b@prod.example.com/spark' 'postgresql://c:d@drill.example.com/spark_drill')"
 
+# 6. (T18.3 §4) uma URL sem nome de banco é tratada como PERIGOSA, de qualquer lado: "não sei
+#    qual banco é" nunca pode virar "são bancos diferentes".
+check "URL sem path do lado do ensaio é perigosa (falha fechada)" "sim" \
+  "$(perigoso 'postgresql://a:b@prod.example.com/spark' 'postgresql://c:d@drill.example.com')"
+check "URL sem path do lado da produção é perigosa (falha fechada)" "sim" \
+  "$(perigoso 'postgresql://a:b@prod.example.com' 'postgresql://c:d@drill.example.com/spark_drill')"
+check "URL com path vazio (barra final) é perigosa (falha fechada)" "sim" \
+  "$(perigoso 'postgresql://a:b@prod.example.com/' 'postgresql://c:d@drill.example.com/spark_drill')"
+
+echo
+echo "=== require_pg_url_database (T18.3 §4) ==="
+
+check "aceita URL com database" "0" \
+  "$( ( require_pg_url_database 'postgresql://a:b@h/spark' 'X' > /dev/null 2>&1 ) && echo 0 || echo 1 )"
+check "recusa URL sem database" "1" \
+  "$( ( require_pg_url_database 'postgresql://a:b@h' 'X' > /dev/null 2>&1 ) && echo 0 || echo 1 )"
+check "recusa URL com barra final" "1" \
+  "$( ( require_pg_url_database 'postgresql://a:b@h/' 'X' > /dev/null 2>&1 ) && echo 0 || echo 1 )"
+MENSAGEM_RECUSA="$( ( require_pg_url_database 'postgresql://a:segredo@h' 'MINHA_VAR' 2>&1 ) || true )"
+check "a mensagem nomeia a variável" "sim" \
+  "$( printf '%s' "$MENSAGEM_RECUSA" | grep -q 'MINHA_VAR' && echo sim || echo não )"
+check "a mensagem nunca carrega a senha" "não" \
+  "$( printf '%s' "$MENSAGEM_RECUSA" | grep -q 'segredo' && echo sim || echo não )"
+
+echo
+echo "=== spark_database_url prefere a URL direta (T18.3) ==="
+
+check "com DATABASE_URL_DIRECT e DATABASE_URL, devolve a direta" "postgresql://d:d@direct/spark" \
+  "$( DATABASE_URL_DIRECT='postgresql://d:d@direct/spark' DATABASE_URL='postgresql://p:p@pooled/spark' SPARK_COMPOSE_DIR=/nao-existe spark_database_url )"
+check "DATABASE_URL_DIRECT vazia conta como ausente: devolve a pooled" "postgresql://p:p@pooled/spark" \
+  "$( DATABASE_URL_DIRECT='' DATABASE_URL='postgresql://p:p@pooled/spark' SPARK_COMPOSE_DIR=/nao-existe spark_database_url )"
+check "SPARK_DATABASE_URL_DIRECT vence tudo" "postgresql://s:s@sdirect/spark" \
+  "$( SPARK_DATABASE_URL_DIRECT='postgresql://s:s@sdirect/spark' DATABASE_URL_DIRECT='postgresql://d:d@direct/spark' DATABASE_URL='postgresql://p:p@pooled/spark' SPARK_COMPOSE_DIR=/nao-existe spark_database_url )"
+
 echo
 echo "=== ops/verify-backup.sh recusa antes de qualquer pg_restore ==="
 
@@ -102,6 +136,22 @@ check "nunca chegou a restaurar (nenhum log de restauração)" "não" \
   "$( printf '%s' "$SAIDA" | grep -q 'restaurando o dump' && echo sim || echo não )"
 check "a senha da URL de produção não vaza na saída" "não" \
   "$( printf '%s' "$SAIDA" | grep -q 'segredo' && echo sim || echo não )"
+
+# (T18.3 §4) Um ensaio com a URL do banco descartável SEM nome de banco é recusado antes de
+# qualquer restauração — e a recusa nomeia a variável, não a senha.
+SAIDA_SEM_DB="$(
+  DATABASE_URL='postgresql://spark:segredo@127.0.0.1:5432/spark' \
+  SPARK_DRILL_DATABASE_URL='postgresql://spark:outrasenha@127.0.0.1:5432' \
+  SPARK_BACKUP_ENV_FILE=/dev/null \
+  "${OPS_DIR}/verify-backup.sh" 2>&1
+)" && CODIGO_SEM_DB=0 || CODIGO_SEM_DB=$?
+check "ensaio com URL sem database sai com código diferente de zero" "sim" "$( [ "$CODIGO_SEM_DB" != "0" ] && echo sim || echo não )"
+check "a recusa nomeia SPARK_DRILL_DATABASE_URL" "sim" \
+  "$( printf '%s' "$SAIDA_SEM_DB" | grep -q 'SPARK_DRILL_DATABASE_URL não declara o database' && echo sim || echo não )"
+check "nunca chegou a restaurar" "não" \
+  "$( printf '%s' "$SAIDA_SEM_DB" | grep -q 'restaurando o dump' && echo sim || echo não )"
+check "nenhuma senha vaza" "não" \
+  "$( printf '%s' "$SAIDA_SEM_DB" | grep -qE 'segredo|outrasenha' && echo sim || echo não )"
 
 # O par permitido do enunciado, chamado de ponta a ponta: a checagem de identidade não pode ser o
 # que bloqueia — o script segue adiante e falha por outro motivo (sem `SPARK_IMAGE`/backup real),

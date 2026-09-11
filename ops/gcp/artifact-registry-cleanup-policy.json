@@ -1,0 +1,17 @@
+[
+  {
+    "name": "spark-keep-recent-releases",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 10 }
+  },
+  {
+    "name": "spark-delete-untagged-after-7d",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "UNTAGGED", "olderThan": "604800s" }
+  },
+  {
+    "name": "spark-delete-tagged-after-90d",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "TAGGED", "olderThan": "7776000s" }
+  }
+]

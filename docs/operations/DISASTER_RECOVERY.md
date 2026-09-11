@@ -1,22 +1,186 @@
 # Spark — Recuperação de desastre
 
-> **Estado:** `IMPLEMENTED` (procedimento e scripts; PostgreSQL desde a T18.0.2) · `NOT VERIFIED`
-> em VPS real — não há VPS nem PostgreSQL gerenciado provisionados. O ensaio equivalente
-> (`ops/verify-backup.sh`) roda no CI contra um PostgreSQL real: restauração → `pg_restore` num
-> banco descartável → backend real subindo sobre a cópia → `/health/ready`.
+> **Estado:** `IMPLEMENTED` (procedimento, scripts, CLIs e ensaios; PostgreSQL desde a T18.0.2;
+> DR independente do provedor desde a T18.3) · ensaio de ponta a ponta `VERIFIED` no CI
+> (`ops/gcp/dr-backup-drill.sh`: `pg_dump` real → destino limpo → dado de volta → conta excluída não
+> ressuscita) · backup real no bucket e ensaio contra o bucket real: ver o relatório da T18.3 para o
+> estado (`VERIFIED` ou `NOT VERIFIED`) no momento da leitura.
 >
-> Desde a T18.0 o banco **não vive na VPS**: ele é o PostgreSQL de `DATABASE_URL` (Neon ou outro
-> gerenciado). Perder a VPS não perde o banco — perde a mídia, o ledger de exclusões e os segredos.
-> Perder o **provedor do banco** (conta suspensa, credencial vazada, erro do provedor) é o cenário
-> que o `pg_dump` off-site cobre, e é por isso que ele continua existindo mesmo com PITR do
-> provedor. A política definitiva (PITR/branches) é a T18.3.
->
-> Desde a T18.1, com `OBJECT_STORAGE_PROVIDER=gcs`, **a mídia e os documentos de backup do usuário
-> também não vivem na VPS**: eles estão no bucket privado do GCS, referenciados pelo banco. Perder a
-> VPS passa a perder só o ledger e os segredos; o que este documento diz sobre "restaurar a mídia"
-> descreve o provider `local`. A reconciliação de tombstones (`reconcile-account-deletions`) usa o
-> mesmo provider do runtime, então com `gcs` ela purga o bucket. A proteção do próprio bucket
-> (versionamento, retenção, soft delete) é a T18.3, junto com o PITR.
+> Desde a T18.0 o banco **não vive na VPS**: ele é o PostgreSQL de `DATABASE_URL` (Neon). Desde a
+> T18.1, com `OBJECT_STORAGE_PROVIDER=gcs`, mídia, backups pessoais e o ledger de exclusões vivem no
+> bucket. Desde a T18.2 não há VPS: Cloud Run. **A seção "Cloud Run" abaixo é a topologia real**;
+> o procedimento VPS continua documentado para quem usa `docker-compose.prod.yml`.
+
+## Cloud Run — o desenho de DR (T18.3)
+
+```text
+Cloud Scheduler (spark-db-backup-daily, 03:15 UTC)
+      │  OAuth · roles/run.invoker sobre o Job
+      ▼
+Cloud Run Job spark-db-backup  (SA spark-backend-backup: só o secret DIRETO + o prefixo de DR do bucket)
+      │  pg_dump --format=custom  (conexão direta/admin; senha só por variável da libpq, nunca argv)
+      │  pg_restore --list · SHA-256 · upload · RELEITURA (tamanho + hash) · manifesto por ÚLTIMO
+      ▼
+gs://spark-private-assets-prod/system/dr/postgres/<backupId>/
+      ├── database.dump
+      └── manifest.json   ← sem ele o backup NÃO existe (retenção ignora, auditor aponta)
+      │
+      │  retenção: os 7 válidos mais recentes; nunca o último; incompletos/inválidos nunca tocados
+      ▼
+maintenance (a cada 30 min): idade do backup válido mais recente → db_backup_stale se > 26 h
+deploy: gate — nenhuma migration sem backup válido ≤ 24 h (senão executa um e espera)
+```
+
+Por que independente do Neon: o backup é um `pg_dump` lógico guardado **fora** da conta do
+provedor do banco. Perder o projeto Neon (conta, credencial, erro do provedor) não perde o backup;
+e o ensaio abaixo prova que ele restaura num PostgreSQL qualquer.
+
+O que **não** está no dump — e sobrevive por outro caminho:
+
+| O quê | Onde vive | Sobrevive a um restore do PostgreSQL? |
+| --- | --- | --- |
+| fotos dos check-ins, documentos de backup pessoal | bucket (`social/`, `backups/`) | sim — o dump só tem a metadata; `spark-storage-audit` aponta referências quebradas |
+| ledger anti-ressurreição | bucket (`system/deletion-tombstones/`) | sim — é **por isso** que ele está fora do banco |
+| os próprios dumps de DR | bucket (`system/dr/postgres/`) | sim |
+| secrets (URLs, Gemini, HMAC) | Secret Manager | sim |
+
+### RPO e RTO (Cloud Run)
+
+```text
+backup diário (03:15 UTC) + backup pré-deploy quando o último tem > 24 h
+RPO                                     até 24 h de estado REMOTO (o Room de cada aparelho não é afetado)
+
+RTO — o PostgreSQL foi perdido:
+  criar um banco novo (Neon ou outro PG 17)           5 min
+  restaurar (db-restore-drill.js, ~1 GB de dump)     5–15 min
+  reconcile-account-deletions                        1 min
+  versões novas dos dois secrets + deploy            10 min
+  ────────────────────────────────────────────────────────────
+                                                     ~30–45 min, sem DNS a propagar
+```
+
+Aparelhos com cursor à frente do change log restaurado recebem `CURSOR_EXPIRED` e pedem rebaseline
+explícito — o desenho da T16.7, não um efeito colateral.
+
+### Antes de tudo: você tem estes?
+
+```text
+[ ] acesso ao projeto GCP (gcloud auth login) — o bucket, os secrets, o Cloud Run
+[ ] a chave HMAC continua no Secret Manager (spark-account-deletion-hmac-key) — insubstituível
+[ ] acesso ao provedor do banco (Neon), ou a capacidade de subir um PostgreSQL 17 em outro lugar
+[ ] docker na máquina (para o ensaio local) — opcional para a recuperação real
+```
+
+Nada aqui exige a senha antiga do banco: o dump não a contém, e o banco novo terá a sua.
+
+### Ensaio (faça isto ANTES de precisar)
+
+```bash
+export SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943
+gcloud auth application-default login          # ADC para o SDK do GCS dentro do container
+ops/gcp/dr-restore-drill.sh --record            # o backup válido mais recente
+ops/gcp/dr-restore-drill.sh --backup-id 2026-09-11T031500Z
+```
+
+O que ele faz: sobe um `postgres:17-alpine` descartável local → roda `dist/cli/db-restore-drill.js`
+**na imagem que está em produção** (ela lê o bucket com a sua ADC) → `CREATE DATABASE spark_drill_<ts>`
+→ verifica SHA-256 e tamanho contra o manifesto → `pg_restore --single-transaction` (sem `--clean`:
+não há o que limpar) → confere `schema_migrations` e a lista de tabelas **exatamente** iguais ao
+manifesto (é a prova do destino limpo) → aplica as migrations que o código atual tiver a mais →
+readiness (a mesma de `/health/ready`) → consultas essenciais → sobe o backend real sobre o banco
+restaurado e confere `/health/ready` 200 e `/v1/*` 401 → **`RESTORE_DRILL_PASS`** → derruba tudo.
+Nada aponta para produção: o script não recebe `DATABASE_URL`, e a CLI tampouco. `--record` grava o
+veredito no Cloud Logging (`spark-dr-drill`), onde o alerta `spark-restore-drill-failed` o vigia.
+
+O mesmo ensaio, com `pg_dump`/`pg_restore` reais, roda em todo CI (`ops/gcp/dr-backup-drill.sh`),
+incluindo o cenário "snapshot antigo + tabela criada depois → a tabela NÃO existe no restaurado" e
+o cenário "conta excluída depois do backup → não ressuscita".
+
+### Procedimento — o PostgreSQL foi perdido (ou precisa voltar a um ponto anterior)
+
+**Nunca restaure por cima do banco atual.** O destino é sempre um banco NOVO e limpo; o banco
+antigo, se ainda existir, fica intacto até você decidir apagá-lo.
+
+1. **Pare as escritas** (opcional, mas evita divergência durante a troca):
+   `gcloud run services update spark-backend --region southamerica-east1 --update-env-vars SYNC_WRITE_ENABLED=false`
+   — a Outbox dos aparelhos fica pendente (503), nada é perdido.
+
+2. **Escolha o backup**: `ops/gcp/dr-status.sh --backups-only` lista os válidos (id, idade, schema,
+   commit). Prefira o mais recente válido, salvo se o incidente for "dado corrompido às X horas".
+
+3. **Restaure num banco novo.** A CLI é a mesma do ensaio, apontada para o servidor de destino
+   (um projeto/branch novo no Neon, ou qualquer PostgreSQL 17). A conexão administrativa é um banco
+   de **manutenção** desse servidor (`neondb`/`postgres`, com `CREATEDB`); o banco de destino nasce
+   dentro da CLI, com nome no padrão `spark_drill_*`, e fica (`SPARK_DRILL_KEEP_DATABASE=true`):
+
+   ```bash
+   SPARK_DRILL_ADMIN_URL='postgresql://<user>:<senha>@<host-novo>/neondb?sslmode=require' \
+   SPARK_DRILL_DATABASE=spark_drill_restored_20260911 \
+   SPARK_DRILL_KEEP_DATABASE=true \
+   SPARK_DR_BACKUP_ID=2026-09-11T031500Z \
+   OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod \
+   GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/gcloud/application_default_credentials.json \
+     node dist/cli/db-restore-drill.js
+   ```
+
+   (ou o equivalente com `docker run` da imagem de produção, como `ops/gcp/dr-restore-drill.sh`
+   faz). A CLI recusa: nome fora de `spark_drill_*`, nome igual ao banco do manifesto, conexão
+   administrativa igual ao banco de produção do manifesto, banco de destino já existente (sem
+   `SPARK_DRILL_REPLACE_EXISTING=true`), checksum divergente. Termina em `RESTORE_DRILL_PASS` com
+   o banco `spark_drill_restored_20260911` pronto e migrado até o schema do código atual.
+
+4. **Reconcilie as exclusões** — obrigatório, antes de apontar qualquer coisa para o banco:
+
+   ```bash
+   DATABASE_URL='postgresql://<user>:<senha>@<host-novo>/spark_drill_restored_20260911?sslmode=require' \
+   OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod \
+   ACCOUNT_DELETION_HMAC_KEY="$(gcloud secrets versions access latest --secret spark-account-deletion-hmac-key --project "$SPARK_GCP_PROJECT")" \
+   NODE_ENV=production DATABASE_MIGRATION_MODE=verify BACKGROUND_JOBS_MODE=disabled \
+     node dist/cli/reconcile-account-deletions.js
+   ```
+
+   O ledger no bucket conhece toda exclusão feita depois do backup; a reconciliação purga essas
+   contas de novo e regrava o tombstone. **Com a chave HMAC errada ela encontra zero e reporta
+   sucesso** — é por isso que a chave vem do Secret Manager direto para a variável do processo,
+   nunca digitada, nunca gravada em arquivo nem no histórico do shell. `contas reconciliadas
+   (purgadas de novo): N` é o número a registrar no incidente.
+
+5. **Aponte produção para o banco novo**: versões novas dos dois secrets de URL
+   (`gcloud secrets versions add spark-database-url --data-file=-` com a URL pooled do banco novo;
+   idem `spark-database-url-direct` com a direta) e `ops/gcp/deploy-cloud-run.sh`. O deploy pina as
+   versões novas, roda o gate de DR (que vai executar um backup do banco novo), a migration (no-op)
+   e o smoke. Reative `SYNC_WRITE_ENABLED=true` se tiver desligado.
+
+6. **Valide**: `ops/gcp/smoke-cloud-run.sh <url>`, `ops/gcp/config-drift-audit.sh`,
+   `gcloud run jobs execute spark-storage-audit … --wait` (referências a fotos/backups pessoais que o
+   restore trouxe de volta e que o bucket não tem mais aparecem como `MISSING_OBJECT` — são as
+   exclusões/coletas ocorridas depois do backup; nada a fazer além de registrar).
+
+7. **Retome o ritmo**: `ops/gcp/dr-status.sh` → um backup válido novo existe (o gate do deploy o
+   produziu). O banco antigo, se existir, pode ser apagado depois de dias — nunca no mesmo dia.
+
+### Procedimento — o bucket foi perdido
+
+Não há cópia do bucket fora do bucket (decisão registrada: soft delete de 7 dias +
+`public_access_prevention` + UBLA são a proteção contra exclusão acidental; um segundo bucket em
+outra região é custo sem incidente que o justifique hoje). Perder o bucket perde fotos, backups
+pessoais, o ledger e os dumps de DR. O que resta é o PostgreSQL (com a metadata apontando para
+objetos inexistentes → `spark-storage-audit` classifica tudo como `MISSING_OBJECT`) e o histórico
+de exclusões em `account_deletion_tombstones` no banco. Este é o único cenário sem recuperação
+completa, e está registrado como risco aceito.
+
+### Procedimento — o projeto GCP foi perdido
+
+Bootstrap num projeto novo (`ops/gcp/bootstrap-cloud-run.sh`), valores novos dos secrets, e o
+banco continua no Neon (não é afetado). O bucket não sobrevive ao projeto — ver acima. A chave HMAC
+precisa ser **a mesma** (recupere-a do gerenciador de senhas onde uma cópia deve existir) ou toda
+exclusão histórica deixa de ser reconhecida.
+
+---
+
+# VPS / Docker Compose — o procedimento original (T16.8 → T18.0.2)
+
+> Aplica-se só à topologia `docker-compose.prod.yml`. No Cloud Run, use a seção acima.
 
 ## O princípio
 
@@ -153,37 +317,11 @@ próprio snapshot; se ele não estiver nem lá nem no disco, o `--install` **par
 como saber quais contas já foram excluídas, e prosseguir as devolveria ao ar. Ver
 [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
-### 4b. Cloud Run — o cenário muda de forma (T18.2)
+### 4b. Cloud Run
 
-Este procedimento (§0–§8) é o da topologia VPS: container efêmero, banco/mídia/ledger externos ao
-container mas ainda geridos por scripts que rodam **nele**. No Cloud Run não existe "a VPS morreu"
-— não há VPS, container recriado é o comportamento normal (não um desastre), e mídia, backup e
-ledger já vivem fora do container por desenho (bucket privado, ADC). O cenário de desastre que
-resta é mais estreito: **o PostgreSQL gerenciado foi perdido ou restaurado de um backup antigo**.
-
-```text
-PostgreSQL restaurado de um ponto anterior
-         +
-ledger de exclusão (GCS, independente do PostgreSQL)
-         =
-contas excluídas depois do ponto do backup continuam excluídas
-```
-
-```bash
-# reconciliação, contra o PostgreSQL já restaurado — a mesma fábrica de ledger da API:
-OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod \
-DATABASE_URL=<postgres restaurado> \
-  node dist/cli/reconcile-account-deletions.js
-```
-
-Sem "instalar" nada: o ledger no bucket não faz parte do dump do PostgreSQL nem do container —
-ele já está lá, independente do que aconteceu com o banco. A reconciliação lê o bucket, varre o
-banco restaurado e purga qualquer conta cujo HMAC já estivesse no ledger.
-
-DR completo de Cloud Run — provisionamento do próprio projeto GCP do zero, runbook de restauração
-do bucket, RPO/RTO formais desta topologia — é **T18.3, pendente**. O que existe hoje (T18.2) é o
-suficiente para a garantia central de Account Deletion sobreviver a um restore de PostgreSQL; não
-é, ainda, um runbook de recuperação de desastre completo para Cloud Run.
+Ver a seção "Cloud Run — o desenho de DR (T18.3)" no topo deste documento: o PostgreSQL é restaurado
+num banco **novo** a partir do dump de DR no bucket, a reconciliação de exclusões roda antes de
+apontar produção, e nada é restaurado por cima.
 
 ### 5. Subir
 

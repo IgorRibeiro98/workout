@@ -169,7 +169,8 @@ curl -s https://api.<dominio>/health/ready
 provedor reporta como corrompido pode conter linhas que o último backup não tem; preservar é o que
 transforma um incidente recuperável em recuperado, e apagar é o que o transforma em perda
 definitiva. Se o provedor oferece PITR/branch, use-o **antes** de restaurar o dump — ele é mais
-recente. A política definitiva com PITR é a T18.3.
+recente. No Cloud Run, o caminho é o de [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md): banco
+novo restaurado do dump de DR, nunca por cima (T18.3).
 
 Aparelhos com cursor à frente do change log restaurado recebem `CURSOR_EXPIRED` e pedem rebaseline
 explícito — é o desenho da T16.7 funcionando, não um efeito colateral.
@@ -402,17 +403,60 @@ Nunca rebuilda imagem — só move tráfego de volta para uma revision que já e
 migration já aplicada **não** é desfeita pelo rollback (§56) — é por isso que migrations de
 produção são sempre additive.
 
-### `spark-maintenance` parece não estar rodando
+### `spark-maintenance` parece não estar rodando (alerta `spark-maintenance-stale`)
 
 ```bash
-gcloud scheduler jobs describe spark-maintenance-cycle --location southamerica-east1
+ops/gcp/dr-status.sh                                # lê GET /internal/maintenance/status: stale, ageMs, lastErrorName
+gcloud scheduler jobs describe spark-maintenance-cycle --location southamerica-east1 --format='value(state,status.code,lastAttemptTime)'
 gcloud scheduler jobs run spark-maintenance-cycle --location southamerica-east1   # dispara um ciclo agora
 gcloud run services logs read spark-maintenance --region southamerica-east1 --limit 50
 ```
 
-Procure por `maintenance.cycle.skipped_locked` no log — se aparecer em toda chamada, outra
-execução pode estar presa segurando o `pg_try_advisory_lock`; confirme se há uma execução anterior
-ainda em andamento antes de investigar mais.
+`stale: true` com `lastErrorName` preenchido é um ciclo que **falha** (veja `maintenance_failed` no
+log); `stale: true` com `lastStartedAt` parado é o Scheduler que **não chama** (estado, IAM
+`run.invoker`, `status.code` do último attempt). Procure por `maintenance.cycle.skipped_locked` —
+se aparecer em toda chamada, outra execução pode estar presa segurando o `pg_try_advisory_lock`.
+Quando o ciclo volta, ele registra `maintenance_stale` com `ageMs` (quanto tempo ficou parado).
+
+### O backup de DR falhou ou está velho (alertas `spark-job-backup-failed`, `spark-db-backup-stale`)
+
+```bash
+ops/gcp/dr-status.sh --backups-only
+gcloud run jobs executions list --job spark-db-backup --region southamerica-east1 --limit 5
+gcloud logging read 'resource.type="cloud_run_job" AND jsonPayload.event="db_backup_failed"' --limit 3 \
+  --format='value(timestamp,jsonPayload.step,jsonPayload.errorName,jsonPayload.errorMessage)'
+gcloud scheduler jobs describe spark-db-backup-daily --location southamerica-east1 --format='value(state,status.code,lastAttemptTime)'
+ops/gcp/dr-backup-now.sh                            # um backup agora, verificado no bucket
+```
+
+`step` diz onde parou: `pg_dump` (banco inalcançável, credencial, major do `pg_dump` < a do servidor),
+`arquivo` (dump vazio/acima de `SPARK_DR_MAX_DUMP_BYTES` — suba `SPARK_RUN_BACKUP_MEMORY` junto),
+`upload do dump` (IAM do bucket para `spark-backend-backup`: a condição de prefixo), `releitura`
+(integridade — não ignore), `retenção` (o backup novo está íntegro; só a limpeza falhou).
+
+### O auditor de storage encontrou achados (`storage_audit_completed` com `status=ISSUES`)
+
+```bash
+gcloud run jobs executions list --job spark-storage-audit --region southamerica-east1 --limit 1
+gcloud run jobs executions logs read <execution> --region southamerica-east1 | grep -A200 '"findings"'
+```
+
+| Classe | Significa | Ação |
+| --- | --- | --- |
+| `MISSING_OBJECT` | linha aponta para objeto que não existe | se veio de um restore: exclusão/coleta posterior ao backup — registre; senão, investigue a ordem "objeto antes, metadata depois" |
+| `ORPHAN_OBJECT` | objeto sem linha, velho | o coletor do maintenance recolhe; se persistir, o coletor não está rodando |
+| `RECENT_UNREFERENCED` | objeto sem linha, novo | nada — upload em voo |
+| `INVALID_METADATA` / `HASH_MISMATCH` | metadata e bytes não batem | nunca aconteceu por desenho (create-only + CRC32C); trate como incidente |
+| `INCOMPLETE_BACKUP` | dump de DR sem manifesto | um Job de backup morreu no meio; o próximo backup segue; remova a pasta à mão se quiser |
+| `TOMBSTONE_INCONSISTENT` | ledger e tabela discordam | rode `reconcile-account-deletions` (ver DISASTER_RECOVERY.md) |
+
+O auditor **nunca apaga nada** — a ação é sempre humana.
+
+### Uma revision aponta para uma versão antiga de secret (`config-drift-audit` → DRIFT)
+
+Alguém adicionou uma versão de secret sem deploy. É o comportamento esperado até o deploy:
+`ops/gcp/deploy-cloud-run.sh` cria revisions novas pinadas na versão habilitada mais recente. Só
+depois desabilite a versão antiga.
 
 ### Notificação social não está sendo entregue em Cloud Run
 
@@ -447,8 +491,16 @@ API — é a manutenção que despacha); `spark-maintenance` está recebendo cha
 | Deploy | `ops/gcp/deploy-cloud-run.sh` |
 | Smoke manual | `ops/gcp/smoke-cloud-run.sh <url>` |
 | Rollback | `ops/gcp/rollback-cloud-run.sh <revision>` |
+| Ensaio de rollback (A→B→A com smoke) | `ops/gcp/rollback-drill.sh --to <revision>` |
 | Migration manual (fora do deploy) | `gcloud run jobs execute spark-db-migrate --region southamerica-east1 --wait` |
 | Disparar um ciclo de manutenção agora | `gcloud scheduler jobs run spark-maintenance-cycle --location southamerica-east1` |
+| Existe backup recente? maintenance vivo? | `ops/gcp/dr-status.sh` |
+| Backup de DR agora | `ops/gcp/dr-backup-now.sh` |
+| Ensaio de restauração (bucket real → PostgreSQL local descartável) | `ops/gcp/dr-restore-drill.sh --record` |
+| Auditar drift / IAM / custo | `ops/gcp/config-drift-audit.sh` · `ops/gcp/iam-audit.sh` · `ops/gcp/cost-audit.sh` |
+| Auditar PostgreSQL ↔ GCS | `gcloud run jobs execute spark-storage-audit --region southamerica-east1 --wait` |
+| Alertas (criar/atualizar; listar) | `SPARK_ALERT_EMAIL=… ops/gcp/monitoring-alerts.sh` · `--list` |
+| Retenção do Artifact Registry | `ops/gcp/artifact-registry-retention.sh [--apply]` |
 | Logs da API | `gcloud run services logs read spark-backend --region southamerica-east1` |
 | Logs da manutenção | `gcloud run services logs read spark-maintenance --region southamerica-east1` |
 | Log do backend | `docker compose -f docker-compose.prod.yml logs -f backend` |

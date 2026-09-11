@@ -9,10 +9,11 @@
 > descartável → backend real subindo sobre a cópia → `/health/ready` → mídia legível pelo processo.
 > O envio off-site (restic) continua sem credencial no CI e é validado manualmente.
 >
-> **O que este documento não é:** o desenho definitivo de backup do PostgreSQL gerenciado (PITR,
-> branches do Neon, retenção do provedor). Isso é a T18.3. O que existe aqui é o backup lógico
-> completo que substitui o snapshot do SQLite com as mesmas garantias — e que continua necessário
-> mesmo com PITR do provedor, porque vive **fora** da conta do provedor.
+> **O que este documento não é:** o DR do PostgreSQL gerenciado na topologia Cloud Run. Esse é
+> `spark-db-backup` + `system/dr/postgres/` no bucket + o ensaio em destino limpo — desenhado na
+> T18.3 e documentado em [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md). O que existe aqui é o
+> backup lógico da topologia VPS (restic off-site) — que continua válido e continua necessário mesmo
+> com PITR do provedor, porque vive **fora** da conta do provedor.
 
 ## Duas coisas diferentes com o mesmo nome
 
@@ -142,9 +143,9 @@ saíram do lugar. Um objeto que o banco restaurado referencie e o bucket não te
 tocado por fora) responde `410 BACKUP_CONTENT_UNAVAILABLE` no restore do usuário e `404` na foto —
 nunca conteúdo corrompido, porque o hash é conferido antes de qualquer byte sair.
 
-O que este documento **não** redesenha: proteção do bucket contra exclusão acidental (versionamento
-de objetos, retenção, soft delete do GCS) e a estratégia de DR do PostgreSQL gerenciado. Os dois
-pertencem à T18.3.
+O que este documento **não** redesenha: a proteção do bucket (soft delete de 7 dias, `public
+access prevention`, UBLA — auditadas por `ops/gcp/config-drift-audit.sh`) e o DR do PostgreSQL
+gerenciado (`spark-db-backup`, T18.3). Os dois estão em [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md).
 
 ### O ledger de exclusões entra desde a T17.13.1
 
@@ -301,12 +302,13 @@ O desfecho perigoso é uma migration futura escrita de forma idempotente (`CREAT
 EXISTS`, `ADD COLUMN IF NOT EXISTS`): ela reaplicaria **sem erro** sobre o objeto que já estava lá
 desde antes da restauração — sem recriar dados, sem revalidar constraints que só o `CREATE`
 original teria checado — e o boot pareceria limpo. Esse é o cenário de "corrupção silenciosa" que
-esta tarefa não resolve: a mitigação correta (recriar o schema do zero antes de um `--install` que
-"anda para trás" no tempo, ou detectar e recusar um dump mais antigo que `schema_migrations` atual)
-fica para a T18.3, junto com o desenho definitivo de PITR/branches do Neon. Até lá, um operador que
-precisar restaurar um snapshot conhecidamente anterior à migration mais recente deve tratar o banco
-pós-restore como **suspeito** e conferir manualmente `schema_migrations` contra o histórico de
-`backend/migrations/postgres/` antes de declarar a restauração concluída.
+a T18.0.3 não resolvia. **Desde a T18.3 ele é recusado**: `ops/restore.sh --install` compara as
+tabelas do destino com o índice do dump (`pg_dump_extra_tables`, em `ops/lib.sh`) **antes** do
+`pg_restore --clean`, e para com uma mensagem clara quando o destino tem tabelas que o snapshot não
+contém — `ops/tests/restore-old-snapshot-risk.test.sh` prova as duas coisas com `pg_dump`/`pg_restore`
+reais. O caminho para restaurar um snapshot mais antigo que o schema atual é o destino **limpo**:
+um banco novo, restaurado do zero e depois apontado por `DATABASE_URL` — o mesmo desenho do DR do
+Cloud Run ([`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md)).
 
 **O Feed só está recuperado quando os dois voltaram.** `--install` instala o banco **e** a mídia:
 restaurar só o banco deixa `/health/ready` respondendo e cada card com foto sem imagem. A mídia
@@ -361,7 +363,8 @@ Um snapshot da VPS pelo painel do provedor — ou o PITR/branch do provedor do P
 uma camada adicional útil e barata, e **não** é uma estratégia de recuperação sozinho (§38): vive
 na conta do mesmo provedor, e uma conta suspensa, uma credencial vazada ou um erro do provedor leva
 o banco e a "cópia" juntos. O `pg_dump` off-site é o que existe **fora** dessa conta. Use os dois;
-não troque um pelo outro. A política definitiva com PITR é a T18.3.
+não troque um pelo outro. No Cloud Run, o `pg_dump` fora da conta do provedor é o Job
+`spark-db-backup` (T18.3, [`DISASTER_RECOVERY.md`](./DISASTER_RECOVERY.md)).
 
 ## RPO e RTO
 

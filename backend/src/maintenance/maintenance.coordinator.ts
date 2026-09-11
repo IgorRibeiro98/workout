@@ -2,11 +2,21 @@ import { Inject, Injectable } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { CLOCK, type Clock } from '../common/clock';
 import { SparkLogger } from '../common/logger';
+import {
+  classifyDatabaseSize,
+  isDatabaseSizeAlerting,
+  type DatabaseSizeLevel,
+} from '../database/database-size.policy';
 import { PostgresService } from '../database/postgres.service';
+import { DrBackupStore } from '../dr/dr-backup.store';
 import { NotificationDispatcher } from '../modules/social/notification.dispatcher';
 import { SocialMediaCleaner } from '../modules/social/social-media.cleaner';
 import { BackupPayloadCleaner } from '../modules/backup/backup-payload.cleaner';
 import { AccountDeletionReconciler } from '../modules/account-deletion/account-deletion.reconciler';
+import {
+  OBJECT_STORAGE_CLIENT,
+  type ObjectStorageClient,
+} from '../object-storage/object-storage.client';
 
 export interface MaintenanceCycleResult {
   readonly skipped: boolean;
@@ -16,6 +26,9 @@ export interface MaintenanceCycleResult {
   readonly socialMediaObjectsRemoved: number;
   readonly backupPayloadSweepRan: boolean;
   readonly backupPayloadObjectsRemoved: number;
+  readonly databaseSizeChecked: boolean;
+  readonly drBackupChecked: boolean;
+  readonly durationMs: number;
 }
 
 const SKIPPED_RESULT: MaintenanceCycleResult = {
@@ -26,10 +39,63 @@ const SKIPPED_RESULT: MaintenanceCycleResult = {
   socialMediaObjectsRemoved: 0,
   backupPayloadSweepRan: false,
   backupPayloadObjectsRemoved: 0,
+  databaseSizeChecked: false,
+  drBackupChecked: false,
+  durationMs: 0,
 };
 
 /**
- * O ciclo de manutenção bounded do Cloud Run (T18.2 §37–§39).
+ * O heartbeat persistido do maintenance e as duas observações que ele carrega (T18.3 §12/§13).
+ *
+ * Tudo aqui vem de `server_metadata` — sobrevive a restart, revision nova e scale-to-zero, e é o
+ * que `GET /internal/maintenance/status` devolve. Nenhum valor é sensível.
+ */
+export interface MaintenanceStatus {
+  readonly now: number;
+  readonly lastStartedAt: number | null;
+  readonly lastCompletedAt: number | null;
+  readonly lastSuccessAt: number | null;
+  readonly lastFailureAt: number | null;
+  readonly lastDurationMs: number | null;
+  readonly lastErrorName: string | null;
+  readonly staleAfterMs: number;
+  /** Idade do último sucesso, ou `null` se nunca houve um. */
+  readonly ageMs: number | null;
+  /** `true` sem sucesso registrado, ou com o último sucesso mais antigo que `staleAfterMs`. */
+  readonly stale: boolean;
+  readonly databaseSize: {
+    readonly checkedAt: number;
+    readonly sizeBytes: number;
+    readonly level: DatabaseSizeLevel;
+  } | null;
+  readonly drBackup: {
+    readonly checkedAt: number;
+    readonly latestBackupId: string | null;
+    readonly latestCreatedAt: number | null;
+    readonly ageMs: number | null;
+    readonly maxAgeMs: number;
+    readonly stale: boolean;
+  } | null;
+}
+
+/** As chaves de `server_metadata` do heartbeat. Um lugar só; o status lê exatamente estas. */
+const KEYS = {
+  startedAt: 'maintenance_last_started_at',
+  completedAt: 'maintenance_last_completed_at',
+  successAt: 'maintenance_last_success_at',
+  failureAt: 'maintenance_last_failure_at',
+  durationMs: 'maintenance_last_duration_ms',
+  errorName: 'maintenance_last_error',
+  dbSizeCheckedAt: 'database_size_checked_at',
+  dbSizeBytes: 'database_size_bytes',
+  dbSizeLevel: 'database_size_level',
+  drCheckedAt: 'dr_backup_checked_at',
+  drLatestId: 'dr_backup_latest_id',
+  drLatestCreatedAt: 'dr_backup_latest_created_at',
+} as const;
+
+/**
+ * O ciclo de manutenção bounded do Cloud Run (T18.2 §37–§39; heartbeat e observações na T18.3).
  *
  * ## O que ele substitui
  *
@@ -62,6 +128,15 @@ const SKIPPED_RESULT: MaintenanceCycleResult = {
  * `server_metadata` — o mesmo tipo de linha que já guarda `migrations_applied_at` — que só deixa
  * o cleaner rodar quando já passou `*_CLEANUP_INTERVAL_MS` desde a última vez, reaproveitando os
  * mesmos dois valores de configuração que, em modo `interval`, seriam o período do `setInterval`.
+ *
+ * ## Heartbeat, tamanho do banco e frescor do DR (T18.3)
+ *
+ * Cada ciclo que conquista o lock grava início, fim, sucesso/falha e duração em `server_metadata`
+ * — é o que `status()` lê e o que `maintenance_stale` usa para dizer "o Scheduler parou". Duas
+ * observações de baixa cadência viajam no mesmo ciclo, pelo mesmo CAS dos cleaners:
+ * `pg_database_size` classificado pelos limiares (`database-size.policy.ts`) e a idade do backup
+ * de DR mais recente (`DrBackupStore.latestValid`). Nenhuma das duas roda a cada minuto, e uma
+ * falha nelas é registrada sem derrubar o ciclo — notificação e exclusão de conta importam mais.
  */
 @Injectable()
 export class MaintenanceCoordinator {
@@ -71,6 +146,7 @@ export class MaintenanceCoordinator {
     private readonly accountDeletionReconciler: AccountDeletionReconciler,
     private readonly socialMediaCleaner: SocialMediaCleaner,
     private readonly backupPayloadCleaner: BackupPayloadCleaner,
+    @Inject(OBJECT_STORAGE_CLIENT) private readonly objectStorage: ObjectStorageClient,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
@@ -79,6 +155,7 @@ export class MaintenanceCoordinator {
   async runCycle(): Promise<MaintenanceCycleResult> {
     const client = await this.postgres.pool.connect();
     let locked = false;
+    const startedAt = this.clock.now();
     try {
       const { rows } = await client.query<{ locked: boolean }>(
         `SELECT pg_try_advisory_lock(hashtext('spark_maintenance_cycle')) AS locked`,
@@ -89,46 +166,91 @@ export class MaintenanceCoordinator {
         return SKIPPED_RESULT;
       }
 
-      let notificationsDispatched = false;
-      if (this.config.socialPushEnabled) {
-        await this.notificationDispatcher.runDispatchCycle();
-        notificationsDispatched = true;
+      await this.recordStarted(startedAt);
+      this.logger.info('maintenance_started', { operation: 'maintenance_cycle' });
+
+      try {
+        let notificationsDispatched = false;
+        if (this.config.socialPushEnabled) {
+          await this.notificationDispatcher.runDispatchCycle();
+          notificationsDispatched = true;
+        }
+
+        const accountDeletionJobsProcessed = await this.accountDeletionReconciler.processDueJobs();
+
+        let socialMediaSweepRan = false;
+        let socialMediaObjectsRemoved = 0;
+        if (await this.claimDue('social_media_cleanup', this.config.socialMediaCleanupIntervalMs)) {
+          socialMediaObjectsRemoved = await this.socialMediaCleaner.sweep();
+          socialMediaSweepRan = true;
+        }
+
+        let backupPayloadSweepRan = false;
+        let backupPayloadObjectsRemoved = 0;
+        if (
+          await this.claimDue('backup_payload_cleanup', this.config.backupPayloadCleanupIntervalMs)
+        ) {
+          backupPayloadObjectsRemoved = await this.backupPayloadCleaner.sweep();
+          backupPayloadSweepRan = true;
+        }
+
+        let databaseSizeChecked = false;
+        if (await this.claimDue('database_size_check', this.config.databaseSizeCheckIntervalMs)) {
+          await this.checkDatabaseSize();
+          databaseSizeChecked = true;
+        }
+
+        let drBackupChecked = false;
+        if (await this.claimDue('dr_backup_check', this.config.drBackupCheckIntervalMs)) {
+          await this.checkDrBackupFreshness();
+          drBackupChecked = true;
+        }
+
+        const durationMs = this.clock.now() - startedAt;
+        await this.recordCompleted(startedAt, durationMs);
+        this.logger.info('maintenance_completed', {
+          operation: 'maintenance_cycle',
+          status: 'SUCCESS',
+          durationMs,
+          notificationsDispatched,
+          accountDeletionJobsProcessed,
+          socialMediaSweepRan,
+          backupPayloadSweepRan,
+          databaseSizeChecked,
+          drBackupChecked,
+        });
+        // O evento histórico (T18.2) continua, para quem já filtra por ele.
+        this.logger.info('maintenance.cycle.completed', {
+          notificationsDispatched,
+          accountDeletionJobsProcessed,
+          socialMediaSweepRan,
+          backupPayloadSweepRan,
+        });
+
+        return {
+          skipped: false,
+          notificationsDispatched,
+          accountDeletionJobsProcessed,
+          socialMediaSweepRan,
+          socialMediaObjectsRemoved,
+          backupPayloadSweepRan,
+          backupPayloadObjectsRemoved,
+          databaseSizeChecked,
+          drBackupChecked,
+          durationMs,
+        };
+      } catch (error) {
+        const durationMs = this.clock.now() - startedAt;
+        const errorName = error instanceof Error ? error.name : 'UNKNOWN';
+        await this.recordFailed(durationMs, errorName).catch(() => undefined);
+        this.logger.error('maintenance_failed', {
+          operation: 'maintenance_cycle',
+          status: 'FAILED',
+          durationMs,
+          errorName,
+        });
+        throw error;
       }
-
-      const accountDeletionJobsProcessed = await this.accountDeletionReconciler.processDueJobs();
-
-      let socialMediaSweepRan = false;
-      let socialMediaObjectsRemoved = 0;
-      if (await this.claimDue('social_media_cleanup', this.config.socialMediaCleanupIntervalMs)) {
-        socialMediaObjectsRemoved = await this.socialMediaCleaner.sweep();
-        socialMediaSweepRan = true;
-      }
-
-      let backupPayloadSweepRan = false;
-      let backupPayloadObjectsRemoved = 0;
-      if (
-        await this.claimDue('backup_payload_cleanup', this.config.backupPayloadCleanupIntervalMs)
-      ) {
-        backupPayloadObjectsRemoved = await this.backupPayloadCleaner.sweep();
-        backupPayloadSweepRan = true;
-      }
-
-      this.logger.info('maintenance.cycle.completed', {
-        notificationsDispatched,
-        accountDeletionJobsProcessed,
-        socialMediaSweepRan,
-        backupPayloadSweepRan,
-      });
-
-      return {
-        skipped: false,
-        notificationsDispatched,
-        accountDeletionJobsProcessed,
-        socialMediaSweepRan,
-        socialMediaObjectsRemoved,
-        backupPayloadSweepRan,
-        backupPayloadObjectsRemoved,
-      };
     } finally {
       if (locked) {
         await client
@@ -137,6 +259,195 @@ export class MaintenanceCoordinator {
       }
       client.release();
     }
+  }
+
+  /** O heartbeat, lido de `server_metadata`. Nunca lança por ausência: "nunca rodou" é `stale`. */
+  async status(): Promise<MaintenanceStatus> {
+    const now = this.clock.now();
+    const values = await this.readKeys(Object.values(KEYS));
+    const num = (key: string): number | null => {
+      const raw = values.get(key);
+      if (raw === undefined) {
+        return null;
+      }
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    const lastSuccessAt = num(KEYS.successAt);
+    const ageMs = lastSuccessAt === null ? null : Math.max(0, now - lastSuccessAt);
+    const stale = ageMs === null || ageMs > this.config.maintenanceStaleAfterMs;
+
+    const dbCheckedAt = num(KEYS.dbSizeCheckedAt);
+    const dbSizeBytes = num(KEYS.dbSizeBytes);
+    const dbLevel = values.get(KEYS.dbSizeLevel);
+
+    const drCheckedAt = num(KEYS.drCheckedAt);
+    const drLatestCreatedAt = num(KEYS.drLatestCreatedAt);
+    const drLatestId = values.get(KEYS.drLatestId) ?? null;
+    const drAgeMs = drLatestCreatedAt === null ? null : Math.max(0, now - drLatestCreatedAt);
+
+    return {
+      now,
+      lastStartedAt: num(KEYS.startedAt),
+      lastCompletedAt: num(KEYS.completedAt),
+      lastSuccessAt,
+      lastFailureAt: num(KEYS.failureAt),
+      lastDurationMs: num(KEYS.durationMs),
+      lastErrorName: values.get(KEYS.errorName) ?? null,
+      staleAfterMs: this.config.maintenanceStaleAfterMs,
+      ageMs,
+      stale,
+      databaseSize:
+        dbCheckedAt !== null && dbSizeBytes !== null && dbLevel !== undefined
+          ? { checkedAt: dbCheckedAt, sizeBytes: dbSizeBytes, level: dbLevel as DatabaseSizeLevel }
+          : null,
+      drBackup:
+        drCheckedAt !== null
+          ? {
+              checkedAt: drCheckedAt,
+              latestBackupId: drLatestId === '' ? null : drLatestId,
+              latestCreatedAt: drLatestCreatedAt,
+              ageMs: drAgeMs,
+              maxAgeMs: this.config.drBackupMaxAgeMs,
+              stale: drAgeMs === null || drAgeMs > this.config.drBackupMaxAgeMs,
+            }
+          : null,
+    };
+  }
+
+  // ------------------------------------------------------------------ observações
+
+  private async checkDatabaseSize(): Promise<void> {
+    const now = this.clock.now();
+    try {
+      const { rows } = await this.postgres.query<{ bytes: string }>(
+        'SELECT pg_database_size(current_database())::text AS bytes',
+      );
+      const sizeBytes = Number(rows[0]?.bytes ?? 0);
+      const assessment = classifyDatabaseSize(sizeBytes, this.config.databaseSizeThresholdsMb);
+      await this.writeKeys([
+        [KEYS.dbSizeCheckedAt, String(now)],
+        [KEYS.dbSizeBytes, String(assessment.sizeBytes)],
+        [KEYS.dbSizeLevel, assessment.level],
+      ]);
+      const fields = {
+        operation: 'database_size_check',
+        databaseSizeBytes: assessment.sizeBytes,
+        databaseSizeMb: assessment.sizeMb,
+        level: assessment.level,
+        threshold: assessment.thresholdMb,
+        thresholdsMb: this.config.databaseSizeThresholdsMb,
+      };
+      this.logger.info('database_size_checked', fields);
+      if (assessment.level !== 'NORMAL') {
+        if (isDatabaseSizeAlerting(assessment.level)) {
+          this.logger.error('database_size_threshold_exceeded', fields);
+        } else {
+          this.logger.warn('database_size_threshold_exceeded', fields);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('database_size_check_failed', {
+        operation: 'database_size_check',
+        errorName: error instanceof Error ? error.name : 'UNKNOWN',
+      });
+    }
+  }
+
+  private async checkDrBackupFreshness(): Promise<void> {
+    const now = this.clock.now();
+    try {
+      const latest = await new DrBackupStore(this.objectStorage).latestValid();
+      const createdAt = latest?.manifest.createdAtEpochMs ?? null;
+      const ageMs = createdAt === null ? null : Math.max(0, now - createdAt);
+      const stale = ageMs === null || ageMs > this.config.drBackupMaxAgeMs;
+      await this.writeKeys([
+        [KEYS.drCheckedAt, String(now)],
+        [KEYS.drLatestId, latest?.backupId ?? ''],
+        [KEYS.drLatestCreatedAt, createdAt === null ? '' : String(createdAt)],
+      ]);
+      const fields = {
+        operation: 'dr_backup_freshness_check',
+        backupId: latest?.backupId ?? null,
+        ageMs,
+        maxAgeMs: this.config.drBackupMaxAgeMs,
+        stale,
+      };
+      this.logger.info('db_backup_freshness_checked', fields);
+      if (stale) {
+        this.logger.error('db_backup_stale', fields);
+      }
+    } catch (error) {
+      this.logger.warn('db_backup_freshness_check_failed', {
+        operation: 'dr_backup_freshness_check',
+        errorName: error instanceof Error ? error.name : 'UNKNOWN',
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------ heartbeat
+
+  private async recordStarted(startedAt: number): Promise<void> {
+    const previous = await this.readKeys([KEYS.successAt]);
+    const lastSuccess = Number(previous.get(KEYS.successAt));
+    if (Number.isFinite(lastSuccess) && lastSuccess > 0) {
+      const ageMs = startedAt - lastSuccess;
+      if (ageMs > this.config.maintenanceStaleAfterMs) {
+        // O ciclo voltou depois de um buraco: quem lê o log sabe quanto tempo ficou parado.
+        this.logger.warn('maintenance_stale', {
+          operation: 'maintenance_cycle',
+          ageMs,
+          staleAfterMs: this.config.maintenanceStaleAfterMs,
+        });
+      }
+    }
+    await this.writeKeys([[KEYS.startedAt, String(startedAt)]]);
+  }
+
+  private async recordCompleted(startedAt: number, durationMs: number): Promise<void> {
+    const completedAt = startedAt + durationMs;
+    await this.writeKeys([
+      [KEYS.completedAt, String(completedAt)],
+      [KEYS.successAt, String(completedAt)],
+      [KEYS.durationMs, String(durationMs)],
+      [KEYS.errorName, ''],
+    ]);
+  }
+
+  private async recordFailed(durationMs: number, errorName: string): Promise<void> {
+    const failedAt = this.clock.now();
+    await this.writeKeys([
+      [KEYS.completedAt, String(failedAt)],
+      [KEYS.failureAt, String(failedAt)],
+      [KEYS.durationMs, String(durationMs)],
+      [KEYS.errorName, errorName],
+    ]);
+  }
+
+  private async writeKeys(entries: readonly (readonly [string, string])[]): Promise<void> {
+    const now = this.clock.now();
+    for (const [key, value] of entries) {
+      await this.postgres.query(
+        `INSERT INTO server_metadata (key, value, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`,
+        [key, value, now],
+      );
+    }
+  }
+
+  private async readKeys(keys: readonly string[]): Promise<Map<string, string>> {
+    const { rows } = await this.postgres.query<{ key: string; value: string }>(
+      'SELECT key, value FROM server_metadata WHERE key = ANY($1::text[])',
+      [keys as string[]],
+    );
+    const values = new Map<string, string>();
+    for (const row of rows) {
+      if (row.value !== '') {
+        values.set(row.key, row.value);
+      }
+    }
+    return values;
   }
 
   /**

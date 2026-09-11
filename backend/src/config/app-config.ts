@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { productionSslViolation } from '../database/postgres-url';
 import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
 /** Onde os bytes de mídia e de backup vivem (T18.1). A escolha mora em `object-storage.factory.ts`. */
@@ -295,6 +296,29 @@ export class AppConfig {
     return this.env.BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS;
   }
 
+  // --- Operação: heartbeat, tamanho do banco, frescor do DR (T18.3) ----------------------
+
+  get maintenanceStaleAfterMs(): number {
+    return this.env.MAINTENANCE_STALE_AFTER_MS;
+  }
+
+  get databaseSizeCheckIntervalMs(): number {
+    return this.env.DATABASE_SIZE_CHECK_INTERVAL_MS;
+  }
+
+  /** Os quatro limiares em MB, crescentes: ATTENTION, INVESTIGATE, PLAN, ACTION_REQUIRED. */
+  get databaseSizeThresholdsMb(): readonly number[] {
+    return this.env.DATABASE_SIZE_THRESHOLDS_MB;
+  }
+
+  get drBackupMaxAgeMs(): number {
+    return this.env.DR_BACKUP_MAX_AGE_MS;
+  }
+
+  get drBackupCheckIntervalMs(): number {
+    return this.env.DR_BACKUP_CHECK_INTERVAL_MS;
+  }
+
   /**
    * As exigências que o operador declarou e o ambiente não cumpre.
    *
@@ -360,6 +384,23 @@ export class AppConfig {
       missing.push(
         'NODE_ENV=production exige ACCOUNT_DELETION_HMAC_KEY própria (o default é de desenvolvimento)',
       );
+    }
+    // T18.3 §20 — a política de TLS do PostgreSQL é explícita: produção não sobe com uma URL que
+    // declare, por escrito, não verificar a identidade do servidor (`sslmode=disable|no-verify`,
+    // ou `uselibpqcompat=true` sem `verify-full`). `sslmode=require` é aceito e normalizado para
+    // `verify-full` em `PostgresService` — ver `postgres-url.ts`.
+    if (this.isProduction) {
+      const pooled = productionSslViolation(this.env.DATABASE_URL);
+      if (pooled !== undefined) {
+        missing.push(`DATABASE_URL: ${pooled}`);
+      }
+      const direct =
+        this.env.DATABASE_URL_DIRECT !== undefined
+          ? productionSslViolation(this.env.DATABASE_URL_DIRECT)
+          : undefined;
+      if (direct !== undefined) {
+        missing.push(`DATABASE_URL_DIRECT: ${direct}`);
+      }
     }
     return missing;
   }

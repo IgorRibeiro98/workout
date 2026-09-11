@@ -4,9 +4,13 @@ Scripts que rodam **na VPS**, contra o banco e o backup de produção — a topo
 Eles são versionados de propósito: infraestrutura escrita em um terminal e não guardada em lugar
 nenhum é infraestrutura que ninguém consegue repetir depois de um desastre.
 
-> Para a topologia **Cloud Run** (T18.2), os scripts equivalentes vivem em
-> [`ops/gcp/`](./gcp/) — bootstrap, deploy, smoke e rollback. Ver
-> [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md).
+> Para a topologia **Cloud Run** (T18.2 — a topologia real), os scripts vivem em
+> [`ops/gcp/`](./gcp/): bootstrap, deploy, smoke, rollback e, desde a T18.3, DR (`dr-status.sh`,
+> `dr-backup-now.sh`, `dr-restore-drill.sh`, `dr-backup-drill.sh`), rollback drill, auditorias
+> (`config-drift-audit.sh`, `iam-audit.sh`, `cost-audit.sh`), retenção do Artifact Registry e
+> alertas (`monitoring-alerts.sh`). Ver
+> [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md) e
+> [`docs/operations/OPERATIONS_CHECKLIST.md`](../docs/operations/OPERATIONS_CHECKLIST.md).
 
 O banco é o PostgreSQL de `DATABASE_URL` (T18.0). Os scripts o alcançam com `pg_dump`,
 `pg_restore` e `psql` rodando **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:17-alpine`),
@@ -30,6 +34,11 @@ com permissão `600`.
 | `deploy.sh` | Backup pré-deploy → build com tag do commit → `up` → health **interno** → rollback se falhar. |
 | `tests/permissions.test.sh` | Prova o modelo de grupo compartilhado com uid diferente entre host e container (ledger e service account). Precisa de `SPARK_TEST_DATABASE_URL`. Roda no CI. |
 | `tests/backup-status.test.sh` | Prova que todo desfecho do backup — sucesso e as seis falhas — chega a `backup-status.json`. Precisa de `SPARK_TEST_DATABASE_URL`. Roda no CI. |
+| `tests/database-identity.test.sh` | O ensaio nunca aponta para produção: identidade pelo nome do banco, falha fechada sem nome (T18.3), preferência pela URL direta. |
+| `tests/restore-old-snapshot-risk.test.sh` | Com `pg_dump`/`pg_restore` reais: `--clean` não apaga objeto fora do dump; a guarda `pg_dump_extra_tables` o detecta; um destino limpo não o tem (T18.3). |
+| `tests/lib.fakes.sh` | Dublês de `gcloud`/`docker`/`git`/`curl` para os testes offline de `ops/gcp/`. |
+| `tests/deploy-first-run.test.sh`, `deploy-hardening.test.sh`, `rollback-drill.test.sh`, `gcp-audits.test.sh`, `monitoring-alerts.test.sh`, `artifact-registry-retention.test.sh`, `gcp-cross-project.test.sh` | Os scripts de `ops/gcp/` provados sem GCP (T18.2.1/T18.3). |
+| `tests/ops-scripts-safety.test.sh` | Regras estáticas: `set -euo pipefail`, `rm -rf` só com guard, segredo nunca no argv, sem `:latest`, ensaio cego para produção (T18.3 §26). |
 | `systemd/` | Unidades e timers para o backup diário e a verificação horária. |
 
 ## Convenções
@@ -65,8 +74,11 @@ ops/snapshot.sh                                   # pg_dump + verificação do a
 ops/verify-backup.sh --from-file <snapshot>       # ensaio completo, sem credencial de storage
 ```
 
-O que este diretório **não** faz ainda: PITR/arquivamento de WAL e a política definitiva de backup
-do PostgreSQL gerenciado — isso é a T18.3. O `pg_dump` diário é o backup lógico completo que
-substitui o snapshot do SQLite com as mesmas garantias verificadas no CI.
+O DR do PostgreSQL gerenciado na topologia Cloud Run (backup independente do Neon no bucket, restore
+em destino limpo, ensaio com anti-ressurreição) é a T18.3 e vive em [`ops/gcp/`](./gcp/) + os CLIs
+`db-backup`/`db-restore-drill`/`storage-audit` do backend — ver
+[`docs/operations/DISASTER_RECOVERY.md`](../docs/operations/DISASTER_RECOVERY.md). PITR/WAL continua
+fora: o `pg_dump` diário é o backup lógico completo, e a proteção contínua do provedor é uma camada a
+mais, nunca substituta.
 
 Documentação: [`../docs/operations/`](../docs/operations/).

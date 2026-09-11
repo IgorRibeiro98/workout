@@ -24,56 +24,16 @@
 set -euo pipefail
 
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-failures=0
-check() {
-  local descricao="$1" esperado="$2" obtido="$3"
-  if [ "$esperado" = "$obtido" ]; then
-    printf '  ok    %s\n' "$descricao"
-  else
-    printf '  FALHA %s (esperado "%s", obtido "%s")\n' "$descricao" "$esperado" "$obtido" >&2
-    failures=$((failures + 1))
-  fi
-}
+# shellcheck source=ops/tests/lib.fakes.sh
+. "${OPS_DIR}/tests/lib.fakes.sh"
 
 FAKE_BIN_DIR="$(mktemp -d)"
 trap 'rm -rf "${FAKE_BIN_DIR}"' EXIT
-
-# Fake `gcloud`: registra cada chamada em GCLOUD_CALL_LOG. `projects describe X` falha só quando X
-# é igual a GCLOUD_FAIL_PROJECT (simula projeto inexistente/inacessível); qualquer outro comando
-# com "describe" no meio (resource_exists de artifact registry, service account, secret) falha
-# também — força o script a seguir pelo caminho de "recurso não existe, criar". Todo o resto
-# (create, add-iam-policy-binding, enable, versions add) é sucesso.
-cat > "${FAKE_BIN_DIR}/gcloud" <<'FAKE_GCLOUD'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${GCLOUD_CALL_LOG}"
-
-# `--data-file=-` (usado por `secrets versions add`, inclusive na geração da chave HMAC via
-# `openssl rand -hex 32 | gcloud ... --data-file=-`) precisa ser drenado antes de sair: um `gcloud`
-# fake que retorna sem ler stdin fecha o pipe cedo, e o `openssl` do outro lado pode receber SIGPIPE
-# — sob `pipefail` (como em bootstrap-cloud-run.sh) isso derruba o script com uma falha que não tem
-# nada a ver com a lógica de produção sendo testada.
-for arg in "$@"; do
-  if [ "${arg}" = "--data-file=-" ]; then
-    cat > /dev/null
-    break
-  fi
-done
-
-if [ "${1:-}" = "projects" ] && [ "${2:-}" = "describe" ]; then
-  target="${3:-}"
-  [ "${target}" = "${GCLOUD_FAIL_PROJECT:-}" ] && exit 1
-  exit 0
-fi
-
-for arg in "$@"; do
-  [ "${arg}" = "describe" ] && exit 1
-done
-
-exit 0
-FAKE_GCLOUD
-chmod +x "${FAKE_BIN_DIR}/gcloud"
+# O `gcloud` fake de `lib.fakes.sh`: `projects describe X` falha só quando X é igual a
+# GCLOUD_FAIL_PROJECT (simula projeto inexistente/inacessível); com GCLOUD_DESCRIBE_FAILS_ALL=1
+# qualquer outro `describe` de existência (artifact registry, service account, secret) falha —
+# força o bootstrap a seguir pelo caminho de "recurso não existe, criar".
+install_fakes "${FAKE_BIN_DIR}"
 
 echo "=== SPARK_FIREBASE_PROJECT: fallback de compatibilidade (lib.gcp.sh) ==="
 
@@ -96,13 +56,15 @@ GCLOUD_CALL_LOG="$(mktemp)"
 export GCLOUD_CALL_LOG
 SAIDA="$(
   PATH="${FAKE_BIN_DIR}:${PATH}" \
+    GCLOUD_DESCRIBE_FAILS_ALL=1 \
     SPARK_GCP_PROJECT=infra-project \
     SPARK_FIREBASE_PROJECT=firebase-project \
     SPARK_GCP_REGION=southamerica-east1 \
     "${OPS_DIR}/gcp/bootstrap-cloud-run.sh" 2>&1
 )" && CODIGO=0 || CODIGO=$?
 LOG="$(cat "${GCLOUD_CALL_LOG}")"
-rm -f "${GCLOUD_CALL_LOG}"
+LOG_SEPARADOS="${LOG}"
+rm -rf "${GCLOUD_CALL_LOG}" "${GCLOUD_CALL_LOG}.state"
 
 check "bootstrap termina com sucesso" "0" "${CODIGO}"
 check "valida o projeto GCP" "sim" \
@@ -127,18 +89,40 @@ check "nenhum comando referenciou --project firebase-project" "não" \
   "$(printf '%s\n' "$LOG" | grep -q -- '--project firebase-project' && echo sim || echo não)"
 
 echo
+echo "=== bootstrap-cloud-run.sh: T18.3 — backup SA, IAM mínimo e retenção do Artifact Registry ==="
+
+# O LOG da execução com projetos separados (acima) ainda está em $LOG_SEPARADOS.
+check "cria a Service Account de backup no projeto GCP" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep -q 'iam service-accounts create spark-backend-backup --project infra-project' && echo sim || echo não)"
+check "backup SA recebe secretAccessor SÓ no secret direto" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding' | grep 'spark-backend-backup@' | grep -c . | grep -qx 1 && printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-database-url-direct' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
+check "backup SA nunca recebe Gemini/HMAC/pooled" "não" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding' | grep -E 'spark-gemini-api-key|spark-account-deletion-hmac-key|spark-database-url ' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
+check "runtime SA NÃO recebe o secret direto" "não" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-database-url-direct' | grep -q 'spark-backend-runtime@' && echo sim || echo não)"
+check "backup SA: objectAdmin condicionado ao prefixo de DR no bucket" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'storage buckets add-iam-policy-binding gs://spark-private-assets-prod' | grep 'spark-backend-backup@' | grep 'roles/storage.objectAdmin' | grep -q 'resource.name.startsWith("projects/_/buckets/spark-private-assets-prod/objects/system/dr/postgres/")' && echo sim || echo não)"
+check "backup SA: legacyBucketReader (listar nomes, nunca conteúdo)" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'storage buckets add-iam-policy-binding' | grep 'spark-backend-backup@' | grep -q 'roles/storage.legacyBucketReader' && echo sim || echo não)"
+check "backup SA não recebe papel de Firebase" "não" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'roles/firebase' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
+check "a política de retenção do Artifact Registry é aplicada (nativa, --no-dry-run)" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'artifacts repositories set-cleanup-policies spark --project infra-project' | grep -q -- '--no-dry-run' && echo sim || echo não)"
+
+echo
 echo "=== bootstrap-cloud-run.sh: compatibilidade com projeto único ==="
 
 GCLOUD_CALL_LOG="$(mktemp)"
 export GCLOUD_CALL_LOG
 SAIDA="$(
   PATH="${FAKE_BIN_DIR}:${PATH}" \
+    GCLOUD_DESCRIBE_FAILS_ALL=1 \
     SPARK_GCP_PROJECT=solo-project \
     SPARK_GCP_REGION=southamerica-east1 \
     "${OPS_DIR}/gcp/bootstrap-cloud-run.sh" 2>&1
 )" && CODIGO=0 || CODIGO=$?
 LOG="$(cat "${GCLOUD_CALL_LOG}")"
-rm -f "${GCLOUD_CALL_LOG}"
+rm -rf "${GCLOUD_CALL_LOG}" "${GCLOUD_CALL_LOG}.state"
 
 DESCRIBE_COUNT="$(printf '%s\n' "$LOG" | grep -cx 'projects describe solo-project' || true)"
 
@@ -154,6 +138,7 @@ GCLOUD_CALL_LOG="$(mktemp)"
 export GCLOUD_CALL_LOG
 SAIDA="$(
   PATH="${FAKE_BIN_DIR}:${PATH}" \
+    GCLOUD_DESCRIBE_FAILS_ALL=1 \
     SPARK_GCP_PROJECT=infra-project \
     SPARK_FIREBASE_PROJECT=firebase-inacessivel \
     SPARK_GCP_REGION=southamerica-east1 \
@@ -161,7 +146,7 @@ SAIDA="$(
     "${OPS_DIR}/gcp/bootstrap-cloud-run.sh" 2>&1
 )" && CODIGO=0 || CODIGO=$?
 LOG="$(cat "${GCLOUD_CALL_LOG}")"
-rm -f "${GCLOUD_CALL_LOG}"
+rm -rf "${GCLOUD_CALL_LOG}" "${GCLOUD_CALL_LOG}.state"
 
 check "bootstrap falha" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
 check "a mensagem aponta o projeto Firebase" "sim" \
@@ -181,9 +166,4 @@ COM_GCP_PROJECT="$(grep -Fc "FIREBASE_PROJECT_ID=\${SPARK_GCP_PROJECT}" "${DEPLO
 check "API e Maintenance recebem FIREBASE_PROJECT_ID de SPARK_FIREBASE_PROJECT" "2" "${COM_FIREBASE_PROJECT}"
 check "nenhuma ocorrência usa SPARK_GCP_PROJECT para FIREBASE_PROJECT_ID" "0" "${COM_GCP_PROJECT}"
 
-echo
-if [ "$failures" -gt 0 ]; then
-  printf '=== %d verificação(ões) falharam ===\n' "$failures" >&2
-  exit 1
-fi
-echo "=== SPARK_GCP_PROJECT e SPARK_FIREBASE_PROJECT são tratados como projetos independentes ==="
+finish_checks "SPARK_GCP_PROJECT e SPARK_FIREBASE_PROJECT são tratados como projetos independentes"

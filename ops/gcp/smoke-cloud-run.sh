@@ -11,6 +11,13 @@
 #
 # Uso:
 #   ops/gcp/smoke-cloud-run.sh <url-base>
+#   SPARK_SMOKE_INVOKER_TOKEN=<identity token> ops/gcp/smoke-cloud-run.sh <url-privada>
+#
+# `SPARK_SMOKE_INVOKER_TOKEN` (T18.3 §21): para um serviço Cloud Run PRIVADO (o temporário do
+# primeiro deploy), o identity token do operador vai em `X-Serverless-Authorization`. O Cloud Run
+# valida e REMOVE esse header antes de entregar a requisição ao container — `Authorization` continua
+# livre para o Firebase Bearer, e as expectativas abaixo (401 sem token de conta, 200 com um real)
+# não mudam. O token nunca é impresso e nunca entra no argv: só no header da chamada.
 #
 # Sai com código != 0 na primeira falha — "candidate health FAIL" não pode deixar o deploy
 # continuar (§5/§10).
@@ -24,13 +31,21 @@ require_cmd curl
 BASE_URL="${1:?uso: smoke-cloud-run.sh <url-base>}"
 BASE_URL="${BASE_URL%/}"
 
+# O header de invocação IAM, quando o alvo é privado. Um array vazio quando não é: `curl` recebe
+# exatamente os mesmos argumentos de sempre.
+INVOKER_HEADER=()
+if [ -n "${SPARK_SMOKE_INVOKER_TOKEN:-}" ]; then
+  INVOKER_HEADER=(-H "X-Serverless-Authorization: Bearer ${SPARK_SMOKE_INVOKER_TOKEN}")
+  log "alvo privado: usando X-Serverless-Authorization (o token não é impresso)"
+fi
+
 check_status() {
   local method="$1" path="$2" expected="$3" auth_header="${4:-}"
   local got
   if [ -n "${auth_header}" ]; then
-    got="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" -H "${auth_header}" "${BASE_URL}${path}")"
+    got="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" "${INVOKER_HEADER[@]}" -H "${auth_header}" "${BASE_URL}${path}")"
   else
-    got="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" "${BASE_URL}${path}")"
+    got="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" "${INVOKER_HEADER[@]}" "${BASE_URL}${path}")"
   fi
   if [ "${got}" != "${expected}" ]; then
     fail "smoke falhou: ${method} ${path} esperava ${expected}, recebeu ${got}"

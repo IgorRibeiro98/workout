@@ -157,6 +157,24 @@ jobs:
       - name: Build image
         run: docker build -t spark-backend:ci .
 
+      # T18.3 §2 — a imagem traz as ferramentas nativas do PostgreSQL na major 17 (≥ a do servidor:
+      # um `pg_dump` mais antigo que o servidor se recusa a rodar) e os três comandos de DR/auditoria.
+      # Sem isto o Job `spark-db-backup` subiria e falharia no primeiro `pg_dump`.
+      - name: Ferramentas de DR na imagem (pg_dump/pg_restore/psql 17 + CLIs)
+        run: |
+          set -euo pipefail
+          for tool in pg_dump pg_restore psql; do
+            docker run --rm --entrypoint "$tool" spark-backend:ci --version | grep -q '(PostgreSQL) 17\.' \
+              || { echo "$tool não é a major 17 na imagem"; exit 1; }
+          done
+          for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions; do
+            docker run --rm --entrypoint test spark-backend:ci -f "dist/cli/${cli}.js" \
+              || { echo "dist/cli/${cli}.js ausente na imagem"; exit 1; }
+          done
+          # O usuário continua sem privilégio: os binários entraram, o `USER node` ficou.
+          [ "$(docker run --rm --entrypoint id spark-backend:ci -u)" = "1000" ] || { echo "a imagem não roda como node"; exit 1; }
+          echo "ferramentas de DR presentes"
+
       # Sobe a imagem de verdade com um volume, confere o health e valida que o dado sobrevive
       # à destruição e recriação do container — o invariante que a T16.0 precisa garantir.
       - name: Smoke test (health + persistência + schema de restore)
@@ -455,6 +473,41 @@ jobs:
       # (sucesso e falha do smoke), e que o serviço real nunca é criado se o smoke reprovar.
       - name: Primeiro deploy vs. deploy seguinte do spark-backend
         run: ops/tests/deploy-first-run.test.sh
+
+      # T18.3 — o deploy endurecido, provado sem GCP: versões de secret pinadas (nunca `:latest`),
+      # o Job spark-db-backup com a Service Account própria, o gate de DR antes da migration
+      # (backup recente → segue; antigo → executa backup e espera; policy=fail → aborta), o
+      # build sem provenance/SBOM e o Scheduler diário do backup.
+      - name: Deploy endurecido (secrets pinados, gate de DR, jobs, scheduler)
+        run: ops/tests/deploy-hardening.test.sh
+
+      # T18.3 §22 — rollback e rollback drill offline: A → B → A com smoke depois de cada
+      # movimento, sem rebuild e sem banco; revision inexistente é recusada antes de mover tráfego.
+      - name: Rollback e rollback drill (offline)
+        run: ops/tests/rollback-drill.test.sh
+
+      # T18.3 §16/§18/§25 — as três auditorias (drift de configuração, IAM, custo) contra
+      # fixtures: PASS no cenário esperado, DRIFT em cada desvio injetado (inclusive o drift REAL
+      # encontrado nesta tarefa: runtime SA com acesso ao secret direto), NOT_VERIFIED quando uma
+      # API/permissão falta — e nenhum comando que altera algo.
+      - name: Auditorias de drift, IAM e custo (offline)
+        run: ops/tests/gcp-audits.test.sh
+
+      # T18.3 §15 — canal, métricas log-based e políticas de alerta, idempotentes; `--list` não
+      # cria nada.
+      - name: Alertas do Cloud Monitoring (offline)
+        run: ops/tests/monitoring-alerts.test.sh
+
+      # T18.3 §17 — a política nativa de retenção do Artifact Registry e a auditoria que reprova
+      # quando um digest em uso por uma revision ativa cairia fora da janela de retenção.
+      - name: Retenção do Artifact Registry (offline)
+        run: ops/tests/artifact-registry-retention.test.sh
+
+      # T18.3 §26 — regras de segurança dos scripts, verificadas sobre o código: `set -euo
+      # pipefail`, `rm -rf` só com guard, segredo nunca no argv de `docker run`, nenhum
+      # `secret:latest`, ensaio de restauração cego para a URL de produção.
+      - name: Segurança dos scripts operacionais (estático)
+        run: ops/tests/ops-scripts-safety.test.sh
 
       # A proibição de `777`/`666` (T16.8 §145/§146). Ela existia como regra escrita e não como
       # verificação — e `ops/verify-backup.sh` tinha um `chmod 777` no ensaio de restauração, que
@@ -1038,3 +1091,50 @@ jobs:
       # backup quando não existe — que é pior que não ter backup, porque dá confiança.
       - name: Todo desfecho do backup vira estado (sucesso e todas as falhas)
         run: SPARK_IMAGE=spark-backend:local ops/tests/backup-status.test.sh
+
+  dr-drill:
+    name: ensaio de DR (backup real, destino limpo, anti-ressurreição)
+    runs-on: ubuntu-latest
+    # O PostgreSQL do ensaio (T18.3 §7/§23). `spark_dev` faz o papel de produção; o ensaio cria e
+    # descarta o próprio banco de destino (`spark_drill_ci_<pid>`) a partir do banco de manutenção
+    # `postgres` — nunca restaura por cima de `spark_dev`.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: spark
+          POSTGRES_DB: spark_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U spark -d spark_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t spark-backend:local backend
+
+      # O ensaio de ponta a ponta com `pg_dump`/`pg_restore` REAIS (os da imagem) e a imagem REAL:
+      #
+      #   seed → db-backup.js (manifesto + sha256 conferidos) → "produção" perde dado E ganha uma
+      #   tabela que o snapshot não conhece → db-restore-drill.js num banco NOVO → o dado voltou, a
+      #   tabela nova NÃO existe no restaurado, produção segue intocada → ledger externo +
+      #   reconcile-account-deletions: a conta excluída depois do backup NÃO ressuscita → o backend
+      #   real sobe sobre o restaurado (/health/ready 200, /v1 fechado) → retenção mantém só os N
+      #   mais recentes → backup com banco inalcançável falha fechado, sem deixar pasta.
+      #
+      # É a prova executável do §7 e do §23 — e o que fecha o risco conhecido das T18.0.x de um
+      # snapshot antigo deixar objetos novos no schema.
+      - name: Ensaio de DR de ponta a ponta
+        env:
+          SPARK_IMAGE: spark-backend:local
+          SPARK_TEST_DATABASE_URL: postgresql://spark:spark@127.0.0.1:5432/spark_dev
+          SPARK_DRILL_ADMIN_URL: postgresql://spark:spark@127.0.0.1:5432/postgres
+        run: ops/gcp/dr-backup-drill.sh

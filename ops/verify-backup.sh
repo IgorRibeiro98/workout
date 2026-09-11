@@ -68,6 +68,9 @@ done
 
 DRILL_URL="${SPARK_DRILL_DATABASE_URL:-}"
 [ -n "$DRILL_URL" ] || fail "SPARK_DRILL_DATABASE_URL é obrigatório: o banco DESCARTÁVEL onde o dump será restaurado"
+# O banco descartável precisa ser nomeado explicitamente (T18.3 §4): uma URL sem path cairia no
+# banco default do papel — que pode ser produção.
+require_pg_url_database "$DRILL_URL" "SPARK_DRILL_DATABASE_URL"
 # A defesa contra restaurar sobre produção (T18.0.3 P0). `same_postgres_database` não compara só a
 # string: um endpoint Neon pooled e o direto do mesmo projeto são hosts diferentes com o mesmo
 # `/spark` no fim — e essa checagem falha **antes** de qualquer `pg_restore --clean`, aqui, bem
@@ -87,7 +90,11 @@ cleanup() {
   # container, parte da árvore restaurada pode pertencer a outro usuário, e um `rm` que falha aí
   # não diz nada sobre a validade do backup. O resíduo é temporário e visível; o veredito é o que
   # importa.
-  rm -rf "$DRILL_DIR" 2> /dev/null || log "aviso: não foi possível limpar ${DRILL_DIR}"
+  # `DRILL_DIR` nasce de `mktemp -d` ou de `SPARK_DRILL_DIR` (vazio cai no mktemp) — nunca é
+  # vazio; o guard é a regra da T18.3 §26 tornada explícita.
+  if [ -n "${DRILL_DIR}" ] && [ -d "${DRILL_DIR}" ]; then
+    rm -rf "${DRILL_DIR}" 2> /dev/null || log "aviso: não foi possível limpar ${DRILL_DIR}"
+  fi
 }
 trap cleanup EXIT
 
@@ -165,8 +172,10 @@ fi
 # `SPARK_DRILL_DATABASE_URL` — que pode ser `127.0.0.1` numa máquina de desenvolvimento ou no CI.
 log "subindo o backend sobre o banco restaurado (porta ${PORT}, grupo ${DRILL_GID}, uid do host $(id -u))"
 # `-e DATABASE_URL` (sem valor) + `DATABASE_URL="$DRILL_URL"` no ambiente do comando (T18.0.3 P1):
-# a connection string do banco descartável não passa pela linha de comando do host.
-DATABASE_URL="$DRILL_URL" docker run -d --name "$CONTAINER" \
+# a connection string do banco descartável não passa pela linha de comando do host. A chave HMAC
+# segue a mesma regra (T18.3 §26): `-e ACCOUNT_DELETION_HMAC_KEY` sem valor, nunca `NOME=valor`.
+DATABASE_URL="$DRILL_URL" ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
+  docker run -d --name "$CONTAINER" \
   --network host \
   --group-add "$DRILL_GID" \
   -v "${MEDIA_DIR}:/media" \
@@ -174,7 +183,7 @@ DATABASE_URL="$DRILL_URL" docker run -d --name "$CONTAINER" \
   -e DATABASE_URL \
   -e SOCIAL_MEDIA_ROOT=/media \
   -e NODE_ENV=production \
-  -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
+  -e ACCOUNT_DELETION_HMAC_KEY \
   -e LOG_LEVEL=warn \
   "$SPARK_IMAGE" > /dev/null
 

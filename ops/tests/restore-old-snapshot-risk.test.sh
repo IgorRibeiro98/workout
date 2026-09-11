@@ -46,6 +46,7 @@ WORK="$(mktemp -d)"
 cleanup() {
   pg_run "$BASE_URL" "
     psql -d \"\$SPARK_PG_CONN\" -X -q -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS ${NEW_DB} WITH (FORCE)\"
+    psql -d \"\$SPARK_PG_CONN\" -X -q -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS spark_dr_clean_$$ WITH (FORCE)\"
   " > /dev/null 2>&1 || true
   rm -rf "$WORK" 2> /dev/null || true
 }
@@ -124,6 +125,53 @@ check "t2 (criada DEPOIS do snapshot V1) sobrevive à restauração — --clean 
   "true" "$T2_EXISTS"
 check "schema_migrations volta a mostrar só a V1 — a bookkeeping 'esquece' a V2" \
   "1" "$MIGRATIONS"
+
+# ------------------------------------------------------------------ T18.3 §5: a guarda e o destino limpo
+#
+# O risco acima deixa de ser só documentado: `pg_dump_extra_tables` (ops/lib.sh) é o que
+# `ops/restore.sh --install` consulta ANTES do `pg_restore --clean`, e o que faz um snapshot mais
+# antigo que o schema atual ser RECUSADO por cima de produção. E um destino novo — o caminho da
+# T18.3 — não tem a tabela extra por construção.
+echo
+echo "=== T18.3 §5: a guarda detecta o objeto fora do dump; o destino limpo não o tem ==="
+
+# O banco ainda tem t2 (sobreviveu à restauração acima): a guarda precisa apontá-la.
+EXTRA="$(pg_dump_extra_tables "$TEST_URL" "${WORK}/snapshot-v1.dump" | tr -d '[:space:]')"
+check "pg_dump_extra_tables aponta a tabela que o dump não contém" "t2" "$EXTRA"
+
+# Um destino LIMPO (banco novo) restaurado do mesmo snapshot: sem --clean, sem t2, migrations = V1.
+CLEAN_DB="spark_dr_clean_$$"
+CLEAN_URL="${BEFORE_DB}/${CLEAN_DB}${AFTER_DB}"
+pg_run "$BASE_URL" "
+  psql -d \"\$SPARK_PG_CONN\" -X -q -v ON_ERROR_STOP=1 -c \"CREATE DATABASE ${CLEAN_DB}\"
+" > /dev/null
+pg_run "$CLEAN_URL" "
+  set -e
+  pg_restore -d \"\$SPARK_PG_CONN\" --no-owner --no-privileges --single-transaction --exit-on-error /work/snapshot-v1.dump
+" -v "${WORK}:/work" > /dev/null
+CLEAN_RESULT="$(pg_run "$CLEAN_URL" "
+  psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 -c \"
+    SELECT (SELECT val FROM t1 WHERE id = 1)
+      || '|' || (SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 't2'))
+      || '|' || (SELECT string_agg(version::text, ',' ORDER BY version) FROM schema_migrations)
+  \"
+")"
+check "destino limpo: t1 é o conteúdo do snapshot" "v1-original" "$(printf '%s' "$CLEAN_RESULT" | cut -d'|' -f1)"
+check "destino limpo: t2 NÃO existe — nada além do snapshot" "false" "$(printf '%s' "$CLEAN_RESULT" | cut -d'|' -f2)"
+check "destino limpo: schema_migrations descreve exatamente o que está lá" "1" "$(printf '%s' "$CLEAN_RESULT" | cut -d'|' -f3)"
+check "a guarda não acusa nada num destino que é exatamente o snapshot" "" \
+  "$(pg_dump_extra_tables "$CLEAN_URL" "${WORK}/snapshot-v1.dump" | tr -d '[:space:]')"
+
+pg_run "$BASE_URL" "
+  psql -d \"\$SPARK_PG_CONN\" -X -q -v ON_ERROR_STOP=1 -c \"DROP DATABASE IF EXISTS ${CLEAN_DB} WITH (FORCE)\"
+" > /dev/null 2>&1 || true
+
+# `ops/restore.sh --install` consulta a guarda antes de qualquer `pg_restore --clean` (estrutural).
+RESTORE_SCRIPT="${OPS_DIR}/restore.sh"
+GUARD_LINE="$(grep -n 'pg_dump_extra_tables' "$RESTORE_SCRIPT" | head -1 | cut -d: -f1)"
+CLEAN_LINE="$(grep -n 'pg_restore -d .* --clean --if-exists' "$RESTORE_SCRIPT" | head -1 | cut -d: -f1)"
+check "restore.sh consulta pg_dump_extra_tables" "sim" "$( [ -n "$GUARD_LINE" ] && echo sim || echo não )"
+check "...antes do pg_restore --clean" "sim" "$( [ -n "$GUARD_LINE" ] && [ -n "$CLEAN_LINE" ] && [ "$GUARD_LINE" -lt "$CLEAN_LINE" ] && echo sim || echo não )"
 
 echo
 if [ "$failures" -gt 0 ]; then

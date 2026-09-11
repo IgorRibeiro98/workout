@@ -246,34 +246,57 @@ spark_data_gid() {
 
 # ---------------------------------------------------------------- PostgreSQL
 
-# A connection string do banco de produção, para os scripts operacionais (T18.0.2).
+# A connection string do banco de produção, para os scripts operacionais (T18.0.2; T18.3 §4).
 #
-# Ordem: `SPARK_DATABASE_URL` no ambiente → `DATABASE_URL` no ambiente → `DATABASE_URL` do `.env`
-# do compose. A última é a fonte normal na VPS: é o mesmo arquivo de onde `docker-compose.prod.yml`
-# lê a variável para o serviço, então backup e servidor apontam para o mesmo banco por construção.
+# Ordem: a URL **direta/admin** primeiro (`SPARK_DATABASE_URL_DIRECT` → `DATABASE_URL_DIRECT` no
+# ambiente → `DATABASE_URL_DIRECT` do `.env`), e só depois a pooled (`SPARK_DATABASE_URL` →
+# `DATABASE_URL` → `DATABASE_URL` do `.env`). `pg_dump`/`pg_restore` são operações administrativas:
+# num pooler (PgBouncer, o endpoint pooled do Neon) elas podem esbarrar em limitação de sessão, e a
+# T18.3 pede que prefiram a conexão direta quando ela existe. Vazio conta como ausente — é o que o
+# Compose injeta para `${DATABASE_URL_DIRECT:-}`.
+#
+# O `.env` é a fonte normal na VPS: é o mesmo arquivo de onde `docker-compose.prod.yml` lê a
+# variável para o serviço, então backup e servidor apontam para o mesmo banco por construção.
 #
 # O valor é **segredo** (carrega a senha). Ele nunca é impresso, nunca vai para `backup-status.json`
 # e entra nos containers de ferramenta por variável de ambiente, não por argumento — argumento
 # aparece em `ps` da máquina inteira.
 spark_database_url() {
-  if [ -n "${SPARK_DATABASE_URL:-}" ]; then
-    printf '%s' "$SPARK_DATABASE_URL"
-    return 0
-  fi
-  if [ -n "${DATABASE_URL:-}" ]; then
-    printf '%s' "$DATABASE_URL"
-    return 0
-  fi
+  local candidate
+  for candidate in "${SPARK_DATABASE_URL_DIRECT:-}" "${DATABASE_URL_DIRECT:-}"; do
+    if [ -n "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
   if [ -f "${SPARK_COMPOSE_DIR}/.env" ]; then
-    local value
-    value="$( sed -n 's/^DATABASE_URL=//p' "${SPARK_COMPOSE_DIR}/.env" | head -1 \
-      | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/" )"
-    if [ -n "$value" ]; then
-      printf '%s' "$value"
+    candidate="$( env_file_value "${SPARK_COMPOSE_DIR}/.env" DATABASE_URL_DIRECT )"
+    if [ -n "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+  for candidate in "${SPARK_DATABASE_URL:-}" "${DATABASE_URL:-}"; do
+    if [ -n "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  if [ -f "${SPARK_COMPOSE_DIR}/.env" ]; then
+    candidate="$( env_file_value "${SPARK_COMPOSE_DIR}/.env" DATABASE_URL )"
+    if [ -n "$candidate" ]; then
+      printf '%s' "$candidate"
       return 0
     fi
   fi
   return 1
+}
+
+# O valor de uma variável num arquivo `.env`, sem aspas envolventes. Vazio quando ausente.
+env_file_value() {
+  local file="$1" name="$2"
+  sed -n "s/^${name}=//p" "$file" | head -1 \
+    | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
 require_database_url() {
@@ -301,7 +324,19 @@ pg_url_database() {
   printf '%s' "$path"
 }
 
-# Dois endereços PostgreSQL podem ser o MESMO banco (T18.0.3 P0)?
+# Exige que uma connection string diga, sem ambiguidade, qual database manipula (T18.3 §4).
+#
+# `postgres://host` e `postgres://host/` são válidas para o driver — ele cai no banco default do
+# papel — e é exatamente por isso que uma operação administrativa (backup, restore, migration) as
+# recusa: "o banco default de quem estiver logado" não é uma identidade, é uma surpresa. A senha
+# nunca é impressa: só o rótulo de qual variável falhou.
+require_pg_url_database() {
+  local url="$1" label="${2:-connection string}"
+  [ -n "$(pg_url_database "$url")" ] \
+    || fail "${label} não declara o database no path (postgres://host/NOME): operação administrativa recusada"
+}
+
+# Dois endereços PostgreSQL podem ser o MESMO banco (T18.0.3 P0; falha fechada desde a T18.3 §4)?
 #
 # Comparação de string pura não basta: no Neon, o endpoint pooled (`ep-xxx-pooler.../spark`) e o
 # direto (`ep-xxx.../spark`) são hosts **diferentes** que servem o **mesmo** banco. A defesa aqui é
@@ -309,6 +344,11 @@ pg_url_database() {
 # hosts diferentes. Um falso positivo (recusar um ensaio legítimo porque duas VPS distintas usam o
 # nome "spark" por convenção) é um incômodo que o operador contorna nomeando o banco descartável de
 # outro jeito; um falso negativo (`pg_restore --clean` sobre produção) não tem contorno.
+#
+# Uma URL **sem** nome de banco também é tratada como perigosa (T18.3 §4): antes, "vazio" de um
+# lado fazia a função responder "bancos diferentes", e um ensaio com uma URL sem path passava pela
+# checagem e restaurava no banco default do papel — que pode ser produção. Não saber qual banco é
+# não é o mesmo que saber que são diferentes.
 same_postgres_database() {
   local url_a="$1" url_b="$2"
   [ "$url_a" = "$url_b" ] && return 0
@@ -316,7 +356,36 @@ same_postgres_database() {
   local db_a db_b
   db_a="$(pg_url_database "$url_a")"
   db_b="$(pg_url_database "$url_b")"
-  [ -n "$db_a" ] && [ -n "$db_b" ] && [ "$db_a" = "$db_b" ]
+  [ -z "$db_a" ] && return 0
+  [ -z "$db_b" ] && return 0
+  [ "$db_a" = "$db_b" ]
+}
+
+# As tabelas do schema `public` do banco de destino que o dump NÃO contém (T18.3 §5).
+#
+#   pg_dump_extra_tables <connection-url> <arquivo.dump>
+#
+# `pg_restore --clean --if-exists` só recria o que está no dump: um objeto que o destino ganhou
+# depois do snapshot (uma migration mais nova) sobrevive à restauração, e `schema_migrations`
+# restaurada deixa de descrevê-lo — o risco provado por `ops/tests/restore-old-snapshot-risk.test.sh`.
+# Esta função é o que permite a `ops/restore.sh --install` **recusar** exatamente esse caso: uma
+# linha por tabela extra em stdout; vazio quando o destino não tem nada além do dump.
+#
+# O dump é montado somente-leitura; a conexão entra pelo ambiente do container (`pg_run`).
+pg_dump_extra_tables() {
+  local url="$1" dump="$2"
+  local dump_dir dump_name
+  dump_dir="$(cd "$(dirname "$dump")" && pwd)"
+  dump_name="$(basename "$dump")"
+  pg_run "$url" "
+    set -e
+    pg_restore --list '/restore/${dump_name}' \
+      | sed -n 's/^[0-9]*; [0-9]* [0-9]* TABLE public \([^ ]*\) .*$/\1/p' | sort -u > /tmp/dump-tables
+    psql -d \"\$SPARK_PG_CONN\" -X -q -t -A -v ON_ERROR_STOP=1 -c \
+      \"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY 1\" \
+      | sort -u > /tmp/target-tables
+    comm -13 /tmp/dump-tables /tmp/target-tables
+  " -v "${dump_dir}:/restore:ro"
 }
 
 # Executa um script de shell com as ferramentas do PostgreSQL contra uma connection string.

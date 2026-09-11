@@ -875,6 +875,102 @@ disfarçado de conveniência.
   falha antes de tocar infraestrutura se `SPARK_FIREBASE_PROJECT` for inexistente ou inacessível.
 - **Testes.** `ops/tests/gcp-cross-project.test.sh` e `shellcheck ops/gcp/*.sh`.
 
+## 13.8.4 Hardening operacional, DR e observabilidade da produção Cloud Run (T18.3)
+
+A T18.3 não muda nenhum contrato de produto, de sync, de backup pessoal ou de restore. Ela
+transforma a infraestrutura funcional da T18.2 numa operação preparada para falha real. As regras
+abaixo são o que impede "existe um script" de virar "achamos que funciona". Detalhes em
+[`docs/operations/DISASTER_RECOVERY.md`](docs/operations/DISASTER_RECOVERY.md),
+[`OBSERVABILITY.md`](docs/operations/OBSERVABILITY.md) e
+[`OPERATIONS_CHECKLIST.md`](docs/operations/OPERATIONS_CHECKLIST.md).
+
+- **O backup de DR do PostgreSQL vive fora da conta do provedor, e só é válido depois de relido.**
+  `spark-db-backup` (Cloud Run Job, Service Account própria `spark-backend-backup`, só o secret
+  **direto** e o prefixo `system/dr/postgres/` do bucket) faz `pg_dump --format=custom`, confere o
+  arquivo (`pg_restore --list`), calcula SHA-256, sobe o dump, **relê** o objeto (tamanho e hash) e só
+  então grava `manifest.json`. Uma pasta sem manifesto **não é backup**: a retenção a ignora, o
+  auditor a aponta, ninguém a restaura por engano. O manifesto carrega identidade (host, porta,
+  nome do banco), proveniência (commit, digest), versão do servidor, migrations e tabelas — e
+  nunca URL, senha, HMAC, chave ou token (há teste que procura).
+- **Retenção só remove o que provou ser válido e antigo, e nunca o último.** `planDrRetention` é
+  uma função pura: os `SPARK_DR_RETENTION_COUNT` (7) válidos mais recentes ficam; o resto dos
+  válidos sai (manifesto antes do dump); incompletos e inválidos **nunca** são tocados — "na
+  dúvida, preserva". Idempotente por construção.
+- **Restore nunca aponta para produção, e o destino é sempre um banco NOVO.** `db-restore-drill`
+  não conhece `DATABASE_URL` nem `DATABASE_URL_DIRECT` (há teste estático). Exige
+  `SPARK_DRILL_DATABASE` explícito na forma `spark_drill_*`, recusa o nome do banco do manifesto,
+  recusa uma conexão administrativa que **seja** o banco de produção do manifesto, recusa destino já
+  existente (salvo `--replace`, que só alcança nomes no padrão), e restaura **sem `--clean`** num
+  `CREATE DATABASE` recém-feito. A prova do destino limpo é a comparação "tabelas restauradas ==
+  tabelas do manifesto": um snapshot antigo não deixa objeto novo porque não há objeto novo onde
+  restaurar. `ops/restore.sh --install` (VPS) passou a **recusar** um destino com tabelas que o dump
+  não contém (`pg_dump_extra_tables`) — o risco documentado das T18.0.x deixou de ser possível.
+- **Backup sem ensaio não é DR.** O CI roda `ops/gcp/dr-backup-drill.sh` com `pg_dump`/`pg_restore`
+  reais e a imagem real: seed → backup → destruição de dado + tabela criada depois → restore limpo →
+  dado de volta, tabela nova ausente, produção intocada → ledger externo + reconciliação (conta
+  excluída depois do backup **não** ressuscita) → backend real ready → retenção → falha fechada. O
+  operador roda `ops/gcp/dr-restore-drill.sh` contra o bucket real num PostgreSQL local descartável.
+  O veredito é literal: `RESTORE_DRILL_PASS`, ou falha.
+- **Nenhuma migration roda sem backup independente recente.** O deploy consulta o bucket (mesmo
+  critério de validade do backend) e, sem backup válido com ≤ `SPARK_DR_MAX_BACKUP_AGE_HOURS`, ou
+  executa `spark-db-backup` e espera SUCCESS (`SPARK_DR_PREDEPLOY_POLICY=run-backup`) ou aborta
+  (`fail`). "Seguir sem backup" não é uma opção configurável.
+- **Uma connection string sem database explícito é recusada em operação administrativa.**
+  `postgres://host` e `postgres://host/` cairiam no banco default do papel — backup, restore,
+  migration e o ensaio de VPS (`ops/lib.sh#require_pg_url_database`, `same_postgres_database` falha
+  fechada) recusam. "Não sei qual banco é" nunca vira "são bancos diferentes".
+- **A política de TLS do PostgreSQL é explícita: `verify-full`.** `normalizeSslMode` reescreve
+  `require|prefer|verify-ca` para `verify-full` na string efetiva (o que o `pg` 8 já fazia por baixo
+  dos panos, com um SECURITY WARNING); produção recusa `disable|no-verify|uselibpqcompat`; a libpq
+  dos Jobs recebe `PGSSLMODE=verify-full` + `PGSSLROOTCERT=system`. Um teste falha quando a major do
+  `pg` mudar — a atualização que enfraqueceria `require` não passa despercebida.
+- **Segredo nunca no argv.** `pg_dump`/`pg_restore` recebem a conexão pelas variáveis da libpq; os
+  `docker run` de `ops/` usam `-e NOME` sem valor (inclusive para `ACCOUNT_DELETION_HMAC_KEY`, que
+  antes vazava no argv de `restore.sh`/`verify-backup.sh`); o token de invocação do smoke vai por
+  variável e nunca é impresso. Há teste estático (`ops/tests/ops-scripts-safety.test.sh`), junto com
+  `set -euo pipefail` em todo script e `rm -rf` só de variável guardada.
+- **Revision X → secret versão Y.** O deploy resolve a versão habilitada mais recente de cada
+  secret por metadata (nunca lê valor) e grava `secret:<versão>` em cada revision e job; `:latest`
+  não existe mais em `ops/gcp/`. Rotacionar exige deploy; rollback devolve também as versões
+  pinadas; a auditoria de drift confere a correlação.
+- **A validação do primeiro deploy é privada.** `spark-backend-validate` nasce com
+  `--no-allow-unauthenticated`; o smoke o chama com o identity token do operador em
+  `X-Serverless-Authorization` (o Cloud Run valida e remove o header; `Authorization` continua livre
+  para o Firebase Bearer). A configuração do processo é idêntica à do serviço real — só o acesso
+  difere.
+- **O maintenance tem heartbeat persistido, e "parado" tem definição.** Cada ciclo grava início,
+  fim, sucesso/falha e duração em `server_metadata`; `GET /internal/maintenance/status` (privado)
+  expõe `stale` (sem sucesso há mais de `MAINTENANCE_STALE_AFTER_MS`, 5 min), o tamanho do banco e
+  o frescor do backup de DR. O tamanho (`pg_database_size`) é medido na cadência de
+  `DATABASE_SIZE_CHECK_INTERVAL_MS` — nunca por requisição — e classificado por
+  `DATABASE_SIZE_THRESHOLDS_MB` (`300,350,400,450` → ATTENTION/INVESTIGATE/PLAN/ACTION_REQUIRED) em
+  **um** lugar (`database-size.policy.ts`); só PLAN e ACTION_REQUIRED alertam.
+- **O auditor PostgreSQL ↔ GCS é somente leitura.** `spark-storage-audit` classifica
+  (`MISSING_OBJECT`, `ORPHAN_OBJECT`, `RECENT_UNREFERENCED`, `INVALID_METADATA`, `HASH_MISMATCH`,
+  `INCOMPLETE_BACKUP`, `TOMBSTONE_INCONSISTENT`, `UNKNOWN`), conta e reporta — e nunca apaga; há
+  teste de que `remove` não é chamado. As chaves vão no relatório (stdout), nunca no log.
+- **Auditorias reportam; pessoas remediam.** `config-drift-audit.sh`, `iam-audit.sh` e
+  `cost-audit.sh` respondem `PASS`/`DRIFT`/`NOT_VERIFIED` e não emitem comando que altera nada
+  (há teste). Uma API desabilitada ou permissão ausente é `NOT_VERIFIED`, nunca `PASS` por omissão.
+  A retenção do Artifact Registry é política nativa (Keep das 10 mais recentes; untagged > 7 d;
+  tagged > 90 d), o build é sem provenance/SBOM (um digest por release), e a auditoria reprova
+  quando um digest em uso por revision ativa cairia fora da janela.
+- **Alertas são eventos, não esperança.** Os componentes emitem `db_backup_*`, `db_restore_*`,
+  `maintenance_*`, `database_size_*`, `db_backup_stale`, `storage_audit_*`, `migration_*` como JSON
+  estruturado; `monitoring-alerts.sh` cria as métricas log-based e as 12 políticas de forma
+  idempotente. "Maintenance parado" é ausência de `maintenance_completed` por 10 min. Um alerta
+  só é `VERIFIED` depois de disparar de verdade.
+- **O que continua fora, e é decisão:** um segundo bucket em outra região (custo sem incidente
+  que o justifique; soft delete de 7 dias + PAP + UBLA são a proteção); restore automático de
+  qualquer tipo sobre produção; remoção automática de órfãos pelo auditor; remediação automática de
+  IAM; rotação da chave HMAC.
+- **Testes.** `postgres-url.spec.ts`, `dr-backup.spec.ts`, `dr-restore-drill.spec.ts`,
+  `storage-auditor.spec.ts`, `maintenance-heartbeat.spec.ts`, `dr-anti-resurrection.spec.ts` (Jest,
+  sem binários nem GCP); `ops/tests/deploy-hardening.test.sh`, `rollback-drill.test.sh`,
+  `gcp-audits.test.sh`, `monitoring-alerts.test.sh`, `artifact-registry-retention.test.sh`,
+  `ops-scripts-safety.test.sh`, `database-identity.test.sh`, `restore-old-snapshot-risk.test.sh`
+  (shell, com fakes e com `pg_dump` real); `ops/gcp/dr-backup-drill.sh` (CI, imagem real).
+
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 
 O Spark ganhou identidade **pública**. As regras abaixo são o que impede essa identidade de

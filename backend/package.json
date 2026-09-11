@@ -21,7 +21,10 @@
     "migrate:social-media": "node dist/cli/migrate-social-media-to-object-storage.js",
     "migrate:database": "node dist/cli/migrate-database.js",
     "migrate:deletion-ledger": "node dist/cli/migrate-deletion-ledger-to-object-storage.js",
-    "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js"
+    "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js",
+    "dr:backup": "node dist/cli/db-backup.js",
+    "dr:restore-drill": "node dist/cli/db-restore-drill.js",
+    "audit:storage": "node dist/cli/storage-audit.js"
   },
   "dependencies": {
     "@google-cloud/storage": "8.1.0",

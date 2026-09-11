@@ -47,12 +47,19 @@ SPARK_RUN_API_SERVICE="${SPARK_RUN_API_SERVICE:-spark-backend}"
 SPARK_RUN_API_VALIDATE_SERVICE="${SPARK_RUN_API_VALIDATE_SERVICE:-${SPARK_RUN_API_SERVICE}-validate}"
 SPARK_RUN_MAINTENANCE_SERVICE="${SPARK_RUN_MAINTENANCE_SERVICE:-spark-maintenance}"
 SPARK_RUN_MIGRATE_JOB="${SPARK_RUN_MIGRATE_JOB:-spark-db-migrate}"
+# T18.3: o Job de backup de DR do PostgreSQL e o Job do auditor PostgreSQL ↔ GCS. Mesma imagem,
+# comandos próprios (`dist/cli/db-backup.js`, `dist/cli/storage-audit.js`).
+SPARK_RUN_BACKUP_JOB="${SPARK_RUN_BACKUP_JOB:-spark-db-backup}"
+SPARK_RUN_STORAGE_AUDIT_JOB="${SPARK_RUN_STORAGE_AUDIT_JOB:-spark-storage-audit}"
 
 # ---------------------------------------------------------------- Service Accounts
 
 SPARK_SA_RUNTIME="${SPARK_SA_RUNTIME:-spark-backend-runtime}"
 SPARK_SA_MIGRATOR="${SPARK_SA_MIGRATOR:-spark-backend-migrator}"
 SPARK_SA_SCHEDULER="${SPARK_SA_SCHEDULER:-spark-maintenance-scheduler}"
+# T18.3 §2: a identidade do backup de DR. Só o secret direto e o prefixo de DR do bucket — nada
+# de Firebase, Gemini, HMAC ou deploy.
+SPARK_SA_BACKUP="${SPARK_SA_BACKUP:-spark-backend-backup}"
 
 sa_email() { printf '%s@%s.iam.gserviceaccount.com' "$1" "${SPARK_GCP_PROJECT}"; }
 
@@ -66,6 +73,13 @@ SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY="${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY
 # ---------------------------------------------------------------- Object Storage
 
 SPARK_GCS_BUCKET="${SPARK_GCS_BUCKET:-spark-private-assets-prod}"
+# O namespace dos backups de DR dentro do bucket (T18.3 §2). Precisa ser o mesmo que
+# `backend/src/dr/dr-manifest.ts` (`DR_POSTGRES_PREFIX`) — o Job grava aqui, o gate do deploy e o
+# `dr-status.sh` leem daqui.
+SPARK_DR_PREFIX="${SPARK_DR_PREFIX:-system/dr/postgres/}"
+# Soft delete do bucket (T18.3 §16/§25): a proteção contra exclusão acidental de foto, backup
+# pessoal, ledger e dump de DR. Sete dias é o default do GCS e o mínimo aceito pela auditoria.
+SPARK_GCS_SOFT_DELETE_MIN_SECONDS="${SPARK_GCS_SOFT_DELETE_MIN_SECONDS:-604800}"
 
 # ---------------------------------------------------------------- Cloud Scheduler
 
@@ -75,6 +89,28 @@ SPARK_SCHEDULER_JOB="${SPARK_SCHEDULER_JOB:-spark-maintenance-cycle}"
 # frequência (mídia, backup) só executam quando o próprio ciclo decide que já é hora, via o CAS em
 # `server_metadata` que `MaintenanceCoordinator.claimDue` já aplica.
 SPARK_SCHEDULER_CRON="${SPARK_SCHEDULER_CRON:-* * * * *}"
+# T18.3 §9: o backup de DR tem o próprio agendamento — uma vez por dia, de madrugada (UTC), nunca
+# acoplado ao ciclo de 1 minuto da manutenção. O Scheduler dispara o Cloud Run Job pela API de
+# administração (`jobs.run`), com token OAuth da mesma Service Account do Scheduler.
+SPARK_BACKUP_SCHEDULER_JOB="${SPARK_BACKUP_SCHEDULER_JOB:-spark-db-backup-daily}"
+SPARK_BACKUP_SCHEDULER_CRON="${SPARK_BACKUP_SCHEDULER_CRON:-15 3 * * *}"
+
+# ---------------------------------------------------------------- DR (T18.3)
+
+# Quantos backups válidos o Job mantém (retenção). Configurável num lugar só.
+SPARK_DR_RETENTION_COUNT="${SPARK_DR_RETENTION_COUNT:-7}"
+# Idade máxima do backup válido mais recente para o deploy prosseguir com a migration (§10).
+SPARK_DR_MAX_BACKUP_AGE_HOURS="${SPARK_DR_MAX_BACKUP_AGE_HOURS:-24}"
+# O que o deploy faz sem um backup válido dentro da janela: `run-backup` (executa o Job de backup
+# e espera SUCCESS antes da migration — o default) ou `fail` (aborta o deploy). Nunca "segue".
+SPARK_DR_PREDEPLOY_POLICY="${SPARK_DR_PREDEPLOY_POLICY:-run-backup}"
+# Recursos do Job de backup: o dump nasce em tmpfs (conta como memória) e é carregado para o
+# upload — 1 GiB cobre com folga um banco no limiar ACTION_REQUIRED (450 MB) com custom format
+# comprimido. Timeout em segundos.
+SPARK_RUN_BACKUP_CPU="${SPARK_RUN_BACKUP_CPU:-1}"
+SPARK_RUN_BACKUP_MEMORY="${SPARK_RUN_BACKUP_MEMORY:-1Gi}"
+SPARK_RUN_BACKUP_TIMEOUT="${SPARK_RUN_BACKUP_TIMEOUT:-1800}"
+SPARK_RUN_STORAGE_AUDIT_TIMEOUT="${SPARK_RUN_STORAGE_AUDIT_TIMEOUT:-1800}"
 
 # ---------------------------------------------------------------- configuração centralizada do Cloud Run (§12/§58)
 #
@@ -123,4 +159,34 @@ gcloud_json() {
 # fica mais claro nomeado.
 resource_exists() {
   gcloud --project "${SPARK_GCP_PROJECT}" "$@" > /dev/null 2>&1
+}
+
+# Uma variável obrigatória que não pode estar vazia (T18.3 §26). Para o que um script destrutivo
+# usa como alvo: `rm`, `delete`, `DROP` — nunca com um valor que possa ser "".
+require_var() {
+  local name="$1"
+  [ -n "${!name:-}" ] || fail "variável obrigatória vazia ou ausente: ${name}"
+}
+
+# ---------------------------------------------------------------- Secret Manager: versão pinada (T18.3 §19)
+
+# A versão HABILITADA mais recente de um secret — o número, e só o número.
+#
+# O deploy referencia `secret:<versão>` em cada revision, nunca `secret:latest`: uma revision passa
+# a declarar exatamente com que versão de cada secret ela sobe, e rotacionar um secret exige um
+# deploy deliberado (uma revision nova) em vez de mudar o comportamento da revision atual no
+# próximo cold start. Sem versão habilitada, o deploy falha aqui — antes de criar qualquer
+# revision que não conseguiria subir. O valor do secret nunca é lido nem impresso.
+resolve_secret_version() {
+  local secret="$1" version
+  version="$(gcloud secrets versions list "${secret}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --filter='state:enabled' \
+    --sort-by='~createTime' \
+    --limit=1 \
+    --format='value(name.basename())')"
+  case "${version}" in
+    ''|*[!0-9]*) fail "secret '${secret}' sem versão habilitada (ou versão ilegível: '${version}') — defina o valor antes do deploy" ;;
+  esac
+  printf '%s' "${version}"
 }

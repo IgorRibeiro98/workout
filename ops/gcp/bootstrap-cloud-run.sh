@@ -95,9 +95,14 @@ ensure_service_account() {
 ensure_service_account "${SPARK_SA_RUNTIME}" "Spark Backend — runtime (API + Maintenance)"
 ensure_service_account "${SPARK_SA_MIGRATOR}" "Spark Backend — migration job"
 ensure_service_account "${SPARK_SA_SCHEDULER}" "Spark Backend — invocador do Cloud Scheduler"
+# T18.3 §2: a identidade do backup de DR — separada de runtime e migrator de propósito: ela lê o
+# secret direto (como o migrator) e escreve só no prefixo de DR do bucket (que o migrator não
+# alcança), e nunca ganha Firebase, Gemini, HMAC ou permissão de deploy.
+ensure_service_account "${SPARK_SA_BACKUP}" "Spark Backend — backup de DR do PostgreSQL"
 
 RUNTIME_SA_EMAIL="$(sa_email "${SPARK_SA_RUNTIME}")"
 MIGRATOR_SA_EMAIL="$(sa_email "${SPARK_SA_MIGRATOR}")"
+BACKUP_SA_EMAIL="$(sa_email "${SPARK_SA_BACKUP}")"
 # A e-mail da SA do Scheduler não é usada aqui: o binding run.invoker (seção 8 abaixo) só pode
 # acontecer depois de `spark-maintenance` existir, e isso é responsabilidade de deploy-cloud-run.sh,
 # que calcula seu próprio SCHEDULER_SA_EMAIL quando precisa dele.
@@ -149,10 +154,12 @@ log "concedendo Secret Accessor mínimo por secret"
 grant_secret_accessor "${SPARK_SECRET_DATABASE_URL}" "${RUNTIME_SA_EMAIL}"
 grant_secret_accessor "${SPARK_SECRET_GEMINI_API_KEY}" "${RUNTIME_SA_EMAIL}"
 grant_secret_accessor "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}" "${RUNTIME_SA_EMAIL}"
-# O runtime NUNCA recebe acesso ao secret direto (§9/§21) — só o migrator.
+# O runtime NUNCA recebe acesso ao secret direto (§9/§21) — só o migrator e, desde a T18.3, o
+# backup de DR (o `pg_dump` usa a conexão direta/admin, nunca o pooler).
 grant_secret_accessor "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${MIGRATOR_SA_EMAIL}"
+grant_secret_accessor "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${BACKUP_SA_EMAIL}"
 
-# ---------------------------------------------------------------- 6. IAM do bucket (T18.1, revisado)
+# ---------------------------------------------------------------- 6. IAM do bucket (T18.1, revisado; DR na T18.3)
 
 log "concedendo acesso mínimo ao bucket '${SPARK_GCS_BUCKET}' para a runtime SA"
 gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
@@ -160,6 +167,24 @@ gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
   --role roles/storage.objectAdmin \
   > /dev/null \
   || log "AVISO: não foi possível conceder IAM no bucket — confirme que '${SPARK_GCS_BUCKET}' existe (T18.1) e tente de novo manualmente."
+
+# A backup SA só alcança objetos sob o prefixo de DR (T18.3 §2/§18): `objectAdmin` com uma IAM
+# Condition sobre o nome do recurso. Listar (`storage.objects.list`) é permissão de BUCKET, e uma
+# condição sobre nome de objeto não a concede — por isso o segundo papel, `legacyBucketReader`
+# (listar nomes e metadata; nunca ler conteúdo), sem condição. Foto e backup pessoal continuam
+# ilegíveis para esta identidade: a condição não cobre `social/` nem `backups/`.
+log "concedendo à backup SA escrita/leitura/remoção só sob ${SPARK_DR_PREFIX} e listagem do bucket"
+gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
+  --member "serviceAccount:${BACKUP_SA_EMAIL}" \
+  --role roles/storage.objectAdmin \
+  --condition "expression=resource.name.startsWith(\"projects/_/buckets/${SPARK_GCS_BUCKET}/objects/${SPARK_DR_PREFIX}\"),title=spark-dr-prefix-only,description=T18.3: backup de DR só sob ${SPARK_DR_PREFIX}" \
+  > /dev/null \
+  || log "AVISO: não foi possível conceder o IAM condicional da backup SA no bucket — confira manualmente."
+gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
+  --member "serviceAccount:${BACKUP_SA_EMAIL}" \
+  --role roles/storage.legacyBucketReader \
+  > /dev/null \
+  || log "AVISO: não foi possível conceder legacyBucketReader à backup SA — confira manualmente."
 
 # ---------------------------------------------------------------- 7. IAM do Firebase Admin (§19, T18.2.1)
 #
@@ -196,6 +221,13 @@ log "  (o binding run.invoker em si é aplicado por deploy-cloud-run.sh, após o
 # `gcloud run deploy` já cria o serviço na primeira execução; não há necessidade de um "create"
 # antecipado aqui — o bootstrap só garante que a *infraestrutura de apoio* (registry, SAs, IAM,
 # secrets, bucket) existe antes do primeiro deploy tentar usá-la.
+
+# ---------------------------------------------------------------- 10. Artifact Registry — retenção (T18.3 §17)
+#
+# A política nativa de limpeza do repositório (mantém as N versões tagueadas mais recentes, apaga
+# untagged antigas). Idempotente; o script também é a auditoria de que nenhum digest em uso por
+# uma revision ativa é candidato à limpeza.
+"${SCRIPT_DIR}/artifact-registry-retention.sh" --apply
 
 log "bootstrap concluído. Nenhum valor de secret foi impresso."
 log "Próximo passo: garantir os valores reais dos secrets (fora deste script) e rodar deploy-cloud-run.sh."

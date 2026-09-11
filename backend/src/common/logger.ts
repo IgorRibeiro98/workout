@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import pino, { type Logger } from 'pino';
-import { APP_CONFIG, AppConfig } from '../config/app-config';
+import { APP_CONFIG } from '../config/app-config';
+import type { LoggerSettings } from '../config/dr-job-config';
 
 /**
  * Logging estruturado do Spark Backend.
@@ -17,7 +18,8 @@ import { APP_CONFIG, AppConfig } from '../config/app-config';
 export class SparkLogger {
   private readonly logger: Logger;
 
-  constructor(@Inject(APP_CONFIG) config: AppConfig) {
+  // `AppConfig` satisfaz `LoggerSettings`; os Jobs de DR (T18.3) passam `DrJobConfig`.
+  constructor(@Inject(APP_CONFIG) config: LoggerSettings) {
     this.logger = pino({
       level: config.logLevel,
       base: { service: 'spark-backend' },

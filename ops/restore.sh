@@ -159,6 +159,26 @@ fi
 compose_running && fail "o backend está de pé; pare-o antes de instalar (docker compose down)"
 require_database_url
 PRODUCTION_URL="$(spark_database_url)"
+# A URL precisa dizer qual banco está sendo restaurado (T18.3 §4): uma connection string sem path
+# cairia no banco default do papel — nunca um alvo aceitável para um `pg_restore --clean`.
+require_pg_url_database "$PRODUCTION_URL" "DATABASE_URL"
+
+# --- o destino precisa ser exatamente o que o dump descreve (T18.3 §5) ----------------------
+#
+# `--clean --if-exists` só recria o que está **no dump**. Uma tabela que o banco ganhou depois
+# deste snapshot (uma migration mais nova) sobreviveria à restauração, e `schema_migrations`
+# restaurada deixaria de descrevê-la — o risco documentado desde a T18.0.3 e provado por
+# `ops/tests/restore-old-snapshot-risk.test.sh`. Aqui ele deixa de ser um risco documentado e
+# passa a ser uma recusa: um snapshot mais antigo que o schema atual **não** se instala por cima.
+# O caminho para isso é o destino limpo — um banco novo, restaurado do zero e depois apontado
+# pela configuração (ver docs/operations/DISASTER_RECOVERY.md).
+EXTRA_TABLES="$(pg_dump_extra_tables "$PRODUCTION_URL" "$RESTORED_DB")" \
+  || fail "não foi possível comparar o schema do destino com o dump; a restauração NÃO começou"
+if [ -n "$EXTRA_TABLES" ]; then
+  fail "o banco de destino tem tabelas que este snapshot não contém ($(printf '%s' "$EXTRA_TABLES" | tr '\n' ' ')).
+  Restaurar por cima deixaria objetos fora do snapshot e uma schema_migrations que não os descreve.
+  Restaure num banco NOVO (destino limpo) e aponte DATABASE_URL para ele — ver docs/operations/DISASTER_RECOVERY.md."
+fi
 
 # Preservar, nunca apagar (§130): o estado atual pode ser a única cópia de alguma coisa que ninguém
 # percebeu que faltava no backup. O dump pré-restauração fica em `$SPARK_STAGING_DIR`, e removê-lo
@@ -260,9 +280,13 @@ fi
 # mesmo lugar de onde o compose a lê — o `backend.env` do diretório de segredos.
 log "reconciliando tombstones de exclusão sobre o banco restaurado"
 
+# A chave nunca passa pelo argv do `docker run` (T18.3 §26): `-e ACCOUNT_DELETION_HMAC_KEY` sem
+# valor declara que a variável atravessa para o container, e o valor vem do ambiente do próprio
+# comando — a forma `-e NOME=valor` grava o segredo no argv, visível a qualquer `ps` da máquina
+# (a mesma regra que `pg_run` já aplica à connection string desde a T18.0.3).
 RECONCILE_ENV=()
 if [ -n "${SPARK_ACCOUNT_DELETION_HMAC_KEY:-}" ]; then
-  RECONCILE_ENV=(-e "ACCOUNT_DELETION_HMAC_KEY=${SPARK_ACCOUNT_DELETION_HMAC_KEY}")
+  RECONCILE_ENV=(-e ACCOUNT_DELETION_HMAC_KEY)
 elif [ -f "${SPARK_SECRETS_DIR}/backend.env" ]; then
   RECONCILE_ENV=(--env-file "${SPARK_SECRETS_DIR}/backend.env")
 else
@@ -273,8 +297,10 @@ fi
 
 # `--network host` pelo mesmo motivo de `pg_run`: o comando precisa alcançar exatamente o endereço
 # de `DATABASE_URL`, que não passa pela linha de comando do host (T18.0.3 P1): `-e DATABASE_URL`
-# sem valor, com o valor vindo do ambiente do próprio `docker run` — nunca do argv.
-DATABASE_URL="$PRODUCTION_URL" docker run --rm --network host \
+# sem valor, com o valor vindo do ambiente do próprio `docker run` — nunca do argv. O mesmo para a
+# chave HMAC (T18.3 §26).
+DATABASE_URL="$PRODUCTION_URL" ACCOUNT_DELETION_HMAC_KEY="${SPARK_ACCOUNT_DELETION_HMAC_KEY:-}" \
+  docker run --rm --network host \
   --group-add "$DATA_GID" \
   -v "${SPARK_DATA_DIR}:/data" \
   -v "${SPARK_MEDIA_DIR}:/media" \

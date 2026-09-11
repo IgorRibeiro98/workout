@@ -1,5 +1,5 @@
 import { SparkLogger } from '../common/logger';
-import { AppConfig } from '../config/app-config';
+import type { ObjectStorageSettings } from '../config/dr-job-config';
 import { LocalObjectStorageClient } from './local-object-storage.client';
 import type { ObjectStorageClient } from './object-storage.client';
 
@@ -25,7 +25,9 @@ export class ObjectStorageConfigurationError extends Error {
  * ser verificável (`test/object-storage-structure.spec.ts`), e não uma promessa.
  */
 export async function createObjectStorageClient(
-  config: AppConfig,
+  // `AppConfig` satisfaz `ObjectStorageSettings` por estrutura; os Jobs de DR (T18.3) passam
+  // `DrJobConfig`, que só carrega estes quatro campos — a escolha do provider continua aqui.
+  config: ObjectStorageSettings,
   logger: SparkLogger,
 ): Promise<ObjectStorageClient> {
   switch (config.objectStorageProvider) {

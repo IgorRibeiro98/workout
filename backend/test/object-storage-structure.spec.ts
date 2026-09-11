@@ -212,6 +212,12 @@ describe('T18.1 — invariantes estruturais do Object Storage', () => {
         'migrate-backup-payloads-to-object-storage.ts',
         'migrate-social-media-to-object-storage.ts',
         'object-storage-smoke.ts',
+        // T18.3 — os comandos de DR e o auditor passam pela mesma factory: o backup de DR vai
+        // para o MESMO provider que guarda foto, backup pessoal e ledger, nunca para um escolhido
+        // à mão.
+        'db-backup.ts',
+        'db-restore-drill.ts',
+        'storage-audit.ts',
       ]) {
         const source = stripComments(read(join(SRC, 'cli', cli)));
         expect(source).toContain('createObjectStorageClient(');

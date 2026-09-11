@@ -70,10 +70,35 @@ montar nada. A matriz muda de forma, não de princípio:
 | `ACCOUNT_DELETION_HMAC_KEY` | Secret Manager (`spark-account-deletion-hmac-key`) | `--set-secrets` na revision | `spark-backend-runtime` |
 | Credencial do bucket (GCS) | identidade da Service Account anexada (ADC) | nenhum arquivo, nenhuma `GCS_PRIVATE_KEY`/`GCS_CLIENT_EMAIL` | mesma runtime SA, `roles/storage.objectAdmin` só sobre `spark-private-assets-prod` |
 
+| `DATABASE_URL_DIRECT` (backup de DR, T18.3) | o mesmo secret `spark-database-url-direct` | `--set-secrets` **só no Job `spark-db-backup`** | `spark-backend-backup` — o `pg_dump` recebe a senha por variável da libpq, nunca por argv |
+
 `roles/secretmanager.secretAccessor` é concedido **por secret**, nunca
 `roles/secretmanager.admin` sobre o projeto — nenhum script de `ops/gcp/` imprime valor de secret.
 Ver [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](./CLOUD_RUN_DEPLOYMENT.md) para o bootstrap e o
 deploy completos.
+
+**Versões pinadas (T18.3 §19).** Nenhuma revision referencia `secret:latest`: o deploy resolve a
+versão habilitada mais recente por metadata e a grava na revision. Rotacionar um secret é
+`gcloud secrets versions add` **+ um deploy** — sem o deploy, produção continua na versão anterior,
+por desenho. `ops/gcp/config-drift-audit.sh` aponta `DRIFT` quando uma revision pina uma versão que
+já não é a habilitada mais recente. `ops/gcp/iam-audit.sh` confirma que cada secret tem exatamente
+os accessors esperados e que nenhuma das quatro Service Accounts tem chave JSON gerenciada por
+usuário.
+
+### TLS do PostgreSQL: `verify-full`, explícito (T18.3 §20)
+
+O `pg` 8 trata `sslmode=require` (a URL que o Neon entrega) como `verify-full` — e avisa nos logs de
+produção (`SECURITY WARNING`) que a próxima major (`pg` 9) adotará a semântica libpq, em que
+`require` **não** verifica certificado nem hostname. A política do Spark é `verify-full`: o
+certificado do Neon é emitido por CA pública presente na cadeia do Node, então a verificação
+completa funciona sem `sslrootcert`. `backend/src/database/postgres-url.ts#normalizeSslMode`
+reescreve `require|prefer|verify-ca` para `verify-full` na string efetiva (o que já valia, agora
+declarado — e imune à mudança de major); `AppConfig.missingRequirements()` **recusa subir em
+produção** com `sslmode=disable|no-verify` ou `uselibpqcompat=true` sem `verify-full`;
+`database.ready` loga `sslMode` e `sslNormalized`. O `pg_dump`/`pg_restore` dos Jobs de DR recebem
+`PGSSLMODE=verify-full` + `PGSSLROOTCERT=system` pela libpq. `backend/test/postgres-url.spec.ts`
+prova a normalização, que o aviso não dispara para a string normalizada, e falha deliberadamente
+quando a major do `pg` mudar — para a atualização não passar despercebida.
 
 ## O que já é garantido por teste
 

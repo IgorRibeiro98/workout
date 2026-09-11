@@ -19,6 +19,7 @@ import {
   runMigrations,
   type Migration,
 } from './postgres-migration-runner';
+import { normalizeSslMode } from './postgres-url';
 
 /**
  * O banco não está disponível para esta chamada: pool inexistente, encerrado ou encerrando.
@@ -68,13 +69,19 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       return;
     }
 
+    // T18.3 §20 — a política de TLS é explícita na string efetiva, nunca implícita no driver:
+    // `sslmode=require` (o que o Neon entrega) vira `verify-full` — exatamente o que o `pg` 8 já
+    // fazia por baixo dos panos com um SECURITY WARNING —, para que a próxima major do driver não
+    // enfraqueça a conexão em silêncio. Ver `postgres-url.ts`.
+    const ssl = normalizeSslMode(this.config.databaseUrl);
+
     // Se search_path foi especificado na connection string (ex: em testes com esquemas isolados),
     // garante que o schema exista antes de instanciar o pool principal
-    const searchPathMatch = /search_path(?:%3D|=)([^&]+)/i.exec(this.config.databaseUrl);
+    const searchPathMatch = /search_path(?:%3D|=)([^&]+)/i.exec(ssl.connectionString);
     if (searchPathMatch) {
       const schemaName = decodeURIComponent(searchPathMatch[1]).trim().split(',')[0].trim();
       if (schemaName && /^[a-zA-Z0-9_]+$/.test(schemaName)) {
-        const cleanUrl = this.config.databaseUrl.replace(/[?&]options=[^&]+/g, '');
+        const cleanUrl = ssl.connectionString.replace(/[?&]options=[^&]+/g, '');
         const adminPool = new Pool({ connectionString: cleanUrl, max: 1 });
         try {
           await adminPool.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
@@ -85,7 +92,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
     }
 
     const pool = new Pool({
-      connectionString: this.config.databaseUrl,
+      connectionString: ssl.connectionString,
       min: this.config.databasePoolMin,
       max: this.config.databasePoolMax,
       connectionTimeoutMillis: this.config.databaseConnectionTimeoutMs,
@@ -116,6 +123,10 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
         poolMax: this.config.databasePoolMax,
         migrationMode: 'verify',
         schemaVersion: this.expectedVersions().at(-1) ?? 0,
+        // Só o modo — nunca a string. `sslNormalized: true` significa que a URL dizia
+        // `require`/`prefer`/`verify-ca` e a política a tornou `verify-full` explícita.
+        sslMode: ssl.effectiveSslMode ?? 'none',
+        sslNormalized: ssl.normalized,
       });
       return;
     }
@@ -124,7 +135,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
     let migrationPool = pool;
     if (this.config.databaseUrlDirect !== this.config.databaseUrl) {
       this.directPoolInstance = new Pool({
-        connectionString: this.config.databaseUrlDirect,
+        connectionString: normalizeSslMode(this.config.databaseUrlDirect).connectionString,
         max: 2,
         connectionTimeoutMillis: this.config.databaseConnectionTimeoutMs,
       });
@@ -151,6 +162,8 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       migrationMode: 'apply',
       migrationsApplied: applied.length,
       schemaVersion,
+      sslMode: ssl.effectiveSslMode ?? 'none',
+      sslNormalized: ssl.normalized,
     });
   }
 
