@@ -1,5 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { AiRequestRegistry } from '../src/modules/ai/ai-request.registry';
 import { AiProviderError } from '../src/modules/ai/provider/ai-provider.gateway';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
@@ -179,6 +180,47 @@ describe('Quota e concorrência do Coach', () => {
     await waitFor(() => provider.callCount === 2);
     provider.releaseAll();
     expect((await third).status).toBe(201);
+  });
+
+  /**
+   * T18.3.1 — a causa raiz do 409 observado em produção: o Android desistia (transporte, 20 s)
+   * antes de o backend terminar de esperar o Gemini (30 s), e a vaga da primeira chamada
+   * continuava reservada até o timeout do provider realmente estourar. O `finally` de
+   * `AiCoachService.handle()` já liberava a vaga também neste caminho — mas nada testava
+   * exatamente isso, distinto do caminho de sucesso já coberto acima.
+   */
+  it('timeout do provider libera a vaga, e a próxima chamada não encontra lock preso', async () => {
+    const provider = new BlockingFakeAiProviderGateway(fixtures.analysisOutput());
+    await start(provider, { AI_MAX_REQUESTS_PER_USER_DAY: '50' });
+
+    const first = call(TOKEN_A, 'cli-000000000001').then((response) => response);
+    await waitFor(() => provider.callCount === 1);
+
+    // Enquanto a primeira ainda está presa, uma segunda tentativa real vê a vaga ocupada.
+    const second = await call(TOKEN_A, 'cli-000000000002');
+    expect(second.status).toBe(409);
+    expect(second.body.error.code).toBe('AI_REQUEST_CONFLICT');
+
+    const registry = app.get(AiRequestRegistry);
+    expect(registry.activeFor(UID_A)).toBe(1);
+
+    // A primeira estoura exatamente como o AbortController real do GeminiAiProviderGateway faria.
+    provider.failAll(new AiProviderError('TIMEOUT', 'provider não respondeu no tempo permitido'));
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(504);
+    expect(firstResponse.body.error.code).toBe('AI_PROVIDER_TIMEOUT');
+    expect(registry.activeFor(UID_A)).toBe(0);
+
+    // A vaga está livre: a próxima chamada válida não encontra lock preso. O provider dublê ainda
+    // bloqueia por chamada, então esta também precisa do padrão fire → espera → libera → aguarda.
+    const third = call(TOKEN_A, 'cli-000000000003').then((response) => response);
+    await waitFor(() => provider.callCount === 2);
+    expect(registry.activeFor(UID_A)).toBe(1);
+    provider.releaseAll();
+
+    const thirdResponse = await third;
+    expect(thirdResponse.status).toBe(201);
+    expect(registry.activeFor(UID_A)).toBe(0);
   });
 
   it('toque duplo com o mesmo clientRequestId não vira duas chamadas', async () => {

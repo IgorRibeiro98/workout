@@ -32,11 +32,22 @@ object AiModelConfig {
     /**
      * Teto de leitura do HTTP para uma chamada do Coach, em segundos.
      *
-     * Maior que o timeout do provider no servidor (30 s) de propósito: assim quem responde
-     * primeiro é o backend, com um erro tipado (`AI_PROVIDER_TIMEOUT`), em vez de o socket cair
-     * e o app ter que adivinhar o que aconteceu.
+     * Maior que o timeout do provider no servidor (60 s — `AI_TIMEOUT_MS` em
+     * `backend/src/config/env.schema.ts`) de propósito: assim quem responde primeiro é o
+     * backend, com um erro tipado (`AI_PROVIDER_TIMEOUT`), em vez de o socket cair e o app ter
+     * que adivinhar o que aconteceu.
+     *
+     * **Autoridade efetiva desde a T18.3.1.** Antes desta tarefa esta constante existia mas não
+     * era lida em nenhum lugar: o transporte real usava o teto padrão e compartilhado de
+     * [com.example.data.remote.spark.SparkBackendClient] (`READ_TIMEOUT_SECONDS`, 20 s) — menor
+     * que o timeout do provider de então (30 s), então o app desistia (`IOException` →
+     * `AiCoachErrorKind.NETWORK`, "precisa de internet") antes de o backend legitimamente
+     * terminar de esperar o Gemini. `SparkBackendAiCoachGateway` agora passa este valor para
+     * `SparkBackendClient.postJson(readTimeoutSeconds = ...)`, que o aplica só à chamada do
+     * Coach — sync, backup, social, mídia e auth continuam no teto padrão de 20 s, porque a
+     * latência deles não depende do provider de IA.
      */
-    const val HTTP_READ_TIMEOUT_SECONDS: Long = 45L
+    const val HTTP_READ_TIMEOUT_SECONDS: Long = 75L
 
     /**
      * Teto absoluto de uma chamada do Coach no app.
@@ -44,8 +55,12 @@ object AiModelConfig {
      * É a última linha: se nem o servidor nem o socket concluírem, a corrotina encerra e a tela
      * sai do estado de carregamento. Nenhuma chamada fica pendurada, e não há repetição
      * automática — quem decide tentar de novo é o usuário.
+     *
+     * Maior que [HTTP_READ_TIMEOUT_SECONDS] de propósito (T18.3.1): a cadeia inteira é
+     * provider do backend (60 s) < HTTP do Coach no Android (75 s) < absoluto no Android (90 s),
+     * e cada camada precisa de margem para a de baixo responder primeiro com um erro tipado.
      */
-    const val REQUEST_TIMEOUT_MS: Long = 60_000L
+    const val REQUEST_TIMEOUT_MS: Long = 90_000L
 
     /**
      * Quantas execuções concluídas de **cada** exercício entram no contexto.

@@ -205,7 +205,11 @@ class SparkBackendAiCoachGateway(
 
         val outcome = try {
             com.example.domain.ai.AiCoachCall.withTimeout {
-                backend.postJson(COACH_PATH, json.encodeToString(JsonObject.serializer(), body))
+                backend.postJson(
+                    COACH_PATH,
+                    json.encodeToString(JsonObject.serializer(), body),
+                    readTimeoutSeconds = AiModelConfig.HTTP_READ_TIMEOUT_SECONDS
+                )
             }
         } catch (e: CancellationException) {
             // Sair da tela cancela a corrotina. Nada é reenviado e nenhuma tela é alterada.

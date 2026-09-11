@@ -149,8 +149,18 @@ export const envSchema = z.object({
    */
   GEMINI_MODEL: z.string().min(1).default('gemini-3.6-flash'),
 
-  /** Teto de tempo de uma chamada ao provider. O default é o mesmo da T14 (30 s). */
-  AI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+  /**
+   * Teto de tempo de uma chamada ao provider.
+   *
+   * A cadeia de timeout do Coach (T18.3.1) exige `provider < HTTP do Coach no Android <
+   * absoluto no Android`: `AiModelConfig.HTTP_READ_TIMEOUT_SECONDS` = 75 s e
+   * `AiModelConfig.REQUEST_TIMEOUT_MS` = 90 000 ms (`app/src/main/java/com/example/domain/ai/AiModelConfig.kt`).
+   * O máximo aqui é por isso 60 000 — o Android publicado não sustenta uma resposta mais lenta
+   * que isso sem o socket já ter caído antes, o que produzia "precisa de internet" com internet
+   * real. O default subiu de 30 000 (T14) para 60 000 pelo mesmo motivo: a latência real
+   * observada em produção (Cloud Run) passou de 30 s em pelo menos uma chamada legítima.
+   */
+  AI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(60_000),
 
   /** Temperatura: análise pede consistência, não criatividade. Mesmo valor da T14. */
   AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),

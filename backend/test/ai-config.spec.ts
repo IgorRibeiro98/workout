@@ -31,7 +31,36 @@ describe('Configuração do provider de IA', () => {
     expect(config.aiTemperature).toBe(0.2);
     expect(config.aiMaxOutputTokens).toBe(2048);
     expect(config.aiThinkingLevel).toBe('MEDIUM');
-    expect(config.aiTimeoutMs).toBe(30_000);
+    expect(config.aiTimeoutMs).toBe(60_000);
+  });
+
+  // ------------------------------------------------------- cadeia de timeout do Coach (T18.3.1)
+
+  /**
+   * O 504 observado em produção (Cloud Run) coexistindo com um 409 da chamada seguinte veio de
+   * uma cadeia de timeout invertida: o Android desistia (20 s, transporte) antes de o backend
+   * legitimamente terminar de esperar o Gemini (30 s). A correção fixa a relação
+   * `provider < HTTP do Coach no Android < absoluto no Android` dos dois lados; este teste vigia
+   * o lado do servidor. O espelho do lado do Android é
+   * `app/src/test/java/com/example/domain/ai/AiModelConfigTest.kt` — as duas linguagens não
+   * compartilham código, então cada lado testa sua metade da mesma invariante.
+   */
+  it('o teto do provider nunca ultrapassa a cadeia suportada pelo Android publicado', () => {
+    // Espelha app/src/main/java/com/example/domain/ai/AiModelConfig.kt.
+    const ANDROID_HTTP_READ_TIMEOUT_MS = 75_000;
+    const ANDROID_ABSOLUTE_TIMEOUT_MS = 90_000;
+
+    expect(ANDROID_HTTP_READ_TIMEOUT_MS).toBeLessThan(ANDROID_ABSOLUTE_TIMEOUT_MS);
+    expect(configWith().aiTimeoutMs).toBeLessThan(ANDROID_HTTP_READ_TIMEOUT_MS);
+    expect(configWith({ AI_TIMEOUT_MS: '60000' }).aiTimeoutMs).toBe(60_000);
+  });
+
+  it('uma configuração de provider maior que a cadeia suportada é recusada no startup', () => {
+    // 75000 é exatamente o HTTP do Coach no Android: o provider precisa ficar estritamente
+    // abaixo disso, nunca igual ou maior — senão o Android pode desistir antes do backend.
+    expect(() => configWith({ AI_TIMEOUT_MS: '75000' })).toThrow();
+    expect(() => configWith({ AI_TIMEOUT_MS: '120000' })).toThrow();
+    expect(() => configWith({ AI_TIMEOUT_MS: '60000' })).not.toThrow();
   });
 
   it('quotas e concorrência são configuráveis, com default conservador', () => {

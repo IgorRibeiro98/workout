@@ -61,7 +61,7 @@ export class FakeAiProviderGateway implements AiProviderGateway {
 /** Um provider que fica pendurado até o teste liberar. */
 export class BlockingFakeAiProviderGateway implements AiProviderGateway {
   readonly calls: AiProviderRequest[] = [];
-  private readonly gates: Array<() => void> = [];
+  private readonly pending: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
 
   constructor(private readonly payload: unknown) {}
 
@@ -71,15 +71,28 @@ export class BlockingFakeAiProviderGateway implements AiProviderGateway {
 
   generate(request: AiProviderRequest): Promise<AiProviderResult> {
     this.calls.push(request);
-    return new Promise<AiProviderResult>((resolve) => {
-      this.gates.push(() => resolve({ text: JSON.stringify(this.payload), model: 'fake-model' }));
+    return new Promise<AiProviderResult>((resolve, reject) => {
+      this.pending.push({
+        resolve: () => resolve({ text: JSON.stringify(this.payload), model: 'fake-model' }),
+        reject,
+      });
     });
   }
 
-  /** Libera todas as chamadas presas. */
+  /** Libera todas as chamadas presas, com sucesso. */
   releaseAll(): void {
-    while (this.gates.length > 0) {
-      this.gates.shift()?.();
+    while (this.pending.length > 0) {
+      this.pending.shift()?.resolve();
+    }
+  }
+
+  /**
+   * Estoura todas as chamadas presas com o erro dado — simula o `AbortController` real
+   * (`GeminiAiProviderGateway`) abortando por timeout, em vez do teste resolver a promessa à mão.
+   */
+  failAll(error: unknown): void {
+    while (this.pending.length > 0) {
+      this.pending.shift()?.reject(error);
     }
   }
 }

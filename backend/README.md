@@ -144,7 +144,7 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial (ou é declarado explicitamente em modo `adc`) |
 | `GEMINI_API_KEY` | não | — | Credencial do Gemini. **Server-only.** Sem ela, `/v1/ai/coach` responde `503` e o núcleo do Spark segue intacto |
 | `GEMINI_MODEL` | não | `gemini-3.6-flash` | O mesmo modelo que a T14 usava; trocar é decisão explícita |
-| `AI_TIMEOUT_MS` | não | `30000` | Teto de uma chamada ao provider |
+| `AI_TIMEOUT_MS` | não | `60000` | Teto de uma chamada ao provider. Máximo `60000`: a cadeia de timeout do Coach no Android (T18.3.1) é provider < HTTP do Coach (75 s) < absoluto (90 s) |
 | `AI_TEMPERATURE` | não | `0.2` | Análise pede consistência, não criatividade |
 | `AI_MAX_OUTPUT_TOKENS` | não | `2048` | Teto de saída |
 | `AI_THINKING_LEVEL` | não | `MEDIUM` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` \| `OFF` |

@@ -67,9 +67,18 @@ class SparkBackendClient(
      *
      * O que continua igual: um cliente HTTP, um interceptor, um lugar montando
      * `Authorization: Bearer`. Nenhum caminho novo de autenticação foi criado.
+     *
+     * `readTimeoutSeconds`, quando informado, vale **só nesta chamada** (T18.3.1): o Coach passa
+     * `AiModelConfig.HTTP_READ_TIMEOUT_SECONDS` para ter uma política própria, mais generosa que
+     * o teto padrão de [READ_TIMEOUT_SECONDS] que continua servindo sync, backup, social, mídia e
+     * auth — features cuja latência não depende do provider de IA. Ver [callClient].
      */
-    suspend fun postJson(path: String, jsonBody: String): SparkHttpOutcome =
-        sendJson("POST", path, jsonBody)
+    suspend fun postJson(
+        path: String,
+        jsonBody: String,
+        readTimeoutSeconds: Long? = null
+    ): SparkHttpOutcome =
+        sendJson("POST", path, jsonBody, readTimeoutSeconds)
 
     /**
      * `PATCH` autenticado com corpo JSON, devolvendo status e corpo crus.
@@ -235,7 +244,8 @@ class SparkBackendClient(
     private suspend fun sendJson(
         method: String,
         path: String,
-        jsonBody: String
+        jsonBody: String,
+        readTimeoutSeconds: Long? = null
     ): SparkHttpOutcome =
         withContext(Dispatchers.IO) {
             if (!isConfigured) return@withContext SparkHttpOutcome.NotConfigured
@@ -247,7 +257,7 @@ class SparkBackendClient(
                 .build()
 
             try {
-                client.newCall(request).execute().use { response ->
+                callClient(readTimeoutSeconds).newCall(request).execute().use { response ->
                     SparkHttpOutcome.Response(
                         code = response.code,
                         // O corpo é lido inteiro porque as respostas desta API são pequenas e
@@ -263,6 +273,21 @@ class SparkBackendClient(
                 Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
                 SparkHttpOutcome.NetworkFailure
             }
+        }
+
+    /**
+     * O cliente para esta chamada: o compartilhado, ou um derivado com teto de leitura próprio
+     * (T18.3.1).
+     *
+     * `OkHttpClient.newBuilder()` reaproveita pool de conexões, dispatcher e interceptors do
+     * cliente base — não há segunda pilha HTTP nem segundo lugar montando `Authorization:
+     * Bearer`, só um valor de timeout diferente para esta chamada específica.
+     */
+    private fun callClient(readTimeoutSeconds: Long?): OkHttpClient =
+        if (readTimeoutSeconds == null) {
+            client
+        } else {
+            client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build()
         }
 
     /**
