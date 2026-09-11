@@ -175,20 +175,53 @@ atualiza spark-db-migrate com o MESMO digest
       ↓
 executa o Job — falha bloqueia o deploy, nenhuma API nova recebe este digest
       ↓
-deploy do candidate da API — --no-traffic --tag candidate
-      ↓
-smoke contra o candidate (ops/gcp/smoke-cloud-run.sh)
-      ↓
-falha do smoke → tráfego antigo permanece, nada mudou
-      ↓
-100% do tráfego para o candidate
-      ↓
-deploy de spark-maintenance com o MESMO digest (privado, sem troca de tráfego)
+spark-backend já existe?
+      ↓                                              ↓
+     SIM (deploy seguinte)                          NÃO (primeiro deploy — §4.1)
+deploy do candidate — --no-traffic --tag candidate    deploy da MESMA imagem/config num serviço
+      ↓                                               TEMPORÁRIO (spark-backend-validate)
+smoke contra o candidate                                    ↓
+      ↓                                              smoke contra o serviço temporário
+falha do smoke → tráfego antigo permanece                  ↓
+      ↓                                              remove o temporário, cria spark-backend
+100% do tráfego para o candidate                      de verdade (já validado)
+      ↓                                                     ↓
+              deploy de spark-maintenance com o MESMO digest (privado, sem troca de tráfego)
       ↓
 garante o job do Cloud Scheduler
 ```
 
 `--skip-maintenance` pula as duas últimas etapas quando só a API muda.
+
+### 4.1 Primeiro deploy: por que `--no-traffic` não basta (T18.2.1)
+
+`--no-traffic` não tem efeito na **primeira** revision de um serviço Cloud Run: sem nenhuma outra
+revision para reter o tráfego, o Cloud Run roteia 100% do único tráfego que existe para ela, mesmo
+com a flag. O par candidate→smoke→promove tráfego protege uma **substituição** — no primeiro
+deploy não há nada para substituir, então validar precisa acontecer **antes** de `spark-backend`
+existir.
+
+`ops/gcp/deploy-cloud-run.sh` detecta isso (`gcloud run services describe spark-backend` — existe
+ou não) e segue um caminho diferente só no primeiro deploy:
+
+1. A mesma imagem/configuração (`deploy_api_revision`, uma função só — candidate, validação e
+   primeiro deploy real nunca divergem entre si) é publicada num serviço **temporário**,
+   `spark-backend-validate` (`SPARK_RUN_API_VALIDATE_SERVICE`), sem `--no-traffic`/`--tag`.
+2. `smoke-cloud-run.sh` roda contra ele. Ninguém além deste script conhece sua URL — não é tráfego
+   de produção.
+3. Smoke FALHA → `spark-backend-validate` é removido, `spark-backend` **nunca** é criado, o script
+   aborta.
+4. Smoke PASSA → `spark-backend-validate` é removido, e só então `spark-backend` é criado com a
+   mesma imagem/configuração já validada. Sem `--no-traffic`/`--tag`: não têm efeito no primeiro
+   deploy, e a imagem já foi provada boa.
+
+Nenhuma mudança em migrations, secrets ou IAM: o serviço temporário usa a mesma Service Account
+(`spark-backend-runtime`) e os mesmos secrets do serviço real — o IAM de Secret Manager, bucket e
+Firebase Admin é concedido à Service Account, não a um serviço Cloud Run específico (§6/§7), então
+já cobre o temporário sem nenhuma concessão nova.
+
+Teste: `ops/tests/deploy-first-run.test.sh` — com `gcloud`/`docker`/`git`/`curl` fakes, cobre os
+dois caminhos (serviço já existe / primeiro deploy) e o primeiro deploy com smoke falhando.
 
 ### Rastreabilidade
 

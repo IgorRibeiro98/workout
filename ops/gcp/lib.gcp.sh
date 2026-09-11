@@ -41,6 +41,10 @@ SPARK_AR_IMAGE_BASE="${SPARK_AR_HOST}/${SPARK_GCP_PROJECT}/${SPARK_AR_REPO}/${SP
 # ---------------------------------------------------------------- Cloud Run — serviços e job
 
 SPARK_RUN_API_SERVICE="${SPARK_RUN_API_SERVICE:-spark-backend}"
+# Serviço temporário só do primeiro deploy (T18.2.1 §deploy-cloud-run): valida a mesma
+# imagem/configuração com um smoke antes de criar SPARK_RUN_API_SERVICE de verdade — nunca serve
+# tráfego de produção, e é removido depois de validar (sucesso) ou antes de abortar (falha).
+SPARK_RUN_API_VALIDATE_SERVICE="${SPARK_RUN_API_VALIDATE_SERVICE:-${SPARK_RUN_API_SERVICE}-validate}"
 SPARK_RUN_MAINTENANCE_SERVICE="${SPARK_RUN_MAINTENANCE_SERVICE:-spark-maintenance}"
 SPARK_RUN_MIGRATE_JOB="${SPARK_RUN_MIGRATE_JOB:-spark-db-migrate}"
 

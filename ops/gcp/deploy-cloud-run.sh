@@ -13,16 +13,28 @@
 #         ↓
 #   executa o Job e espera SUCCESS
 #         ↓
-#   deploy do candidate da API, SEM tráfego (--no-traffic --tag candidate)
-#         ↓
-#   smoke contra o candidate
-#         ↓
-#   100% do tráfego para o candidate
-#         ↓
-#   deploy do spark-maintenance com o MESMO digest (privado, sem tráfego a mover)
+#   SPARK_RUN_API_SERVICE já existe?
+#     SIM (deploy seguinte)                    NÃO (primeiro deploy — T18.2.1)
+#     ─────────────────────                    ──────────────────────────────
+#     deploy do candidate, SEM tráfego          deploy da MESMA imagem/config num serviço
+#     (--no-traffic --tag candidate)            TEMPORÁRIO (SPARK_RUN_API_VALIDATE_SERVICE)
+#         ↓                                         ↓
+#     smoke contra o candidate                  smoke contra o serviço temporário
+#         ↓                                         ↓
+#     100% do tráfego para o candidate          remove o serviço temporário, cria
+#                                                SPARK_RUN_API_SERVICE de verdade (já validado)
+#         ↓                                         ↓
+#              deploy do spark-maintenance com o MESMO digest (privado, sem tráfego a mover)
 #
-# Falha cedo: migration FAIL, candidate health FAIL ou smoke FAIL abortam antes de qualquer
-# tráfego real ser movido (§5/§10 — bloqueantes do enunciado da T18.2).
+# Por que o primeiro deploy é um caminho à parte: `--no-traffic` não tem efeito na primeira
+# revision de um serviço Cloud Run novo — ela recebe 100% do (único) tráfego que existe,
+# independente da flag. O par candidate→smoke→promove tráfego protege uma SUBSTITUIÇÃO; no
+# primeiro deploy não há nada para substituir, então validar precisa acontecer ANTES de
+# SPARK_RUN_API_SERVICE existir — daí o serviço temporário.
+#
+# Falha cedo: migration FAIL, candidate/validação health FAIL ou smoke FAIL abortam antes de
+# qualquer tráfego real ser movido ou de SPARK_RUN_API_SERVICE ser criado (§5/§10 — bloqueantes do
+# enunciado da T18.2; T18.2.1 estende a garantia ao primeiro deploy).
 #
 # Uso:
 #   SPARK_GCP_PROJECT=meu-projeto ops/gcp/deploy-cloud-run.sh
@@ -110,66 +122,111 @@ if ! gcloud run jobs execute "${SPARK_RUN_MIGRATE_JOB}" \
 fi
 log "migration job: SUCCESS"
 
-# ---------------------------------------------------------------- 6. candidate da API, sem tráfego
-
-log "deploy do candidate ${SPARK_RUN_API_SERVICE} (--no-traffic, tag=candidate)"
-gcloud run deploy "${SPARK_RUN_API_SERVICE}" \
-  --project "${SPARK_GCP_PROJECT}" \
-  --region "${SPARK_GCP_REGION}" \
-  --image "${IMAGE_DIGEST}" \
-  --no-traffic \
-  --tag candidate \
-  --service-account "${RUNTIME_SA_EMAIL}" \
-  --port "${SPARK_RUN_PORT}" \
-  --cpu "${SPARK_RUN_API_CPU}" \
-  --memory "${SPARK_RUN_API_MEMORY}" \
-  --min-instances "${SPARK_RUN_API_MIN_INSTANCES}" \
-  --max-instances "${SPARK_RUN_API_MAX_INSTANCES}" \
-  --concurrency "${SPARK_RUN_API_CONCURRENCY}" \
-  --timeout "${SPARK_RUN_API_TIMEOUT}" \
-  --allow-unauthenticated \
-  --set-secrets "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:latest,GEMINI_API_KEY=${SPARK_SECRET_GEMINI_API_KEY}:latest,ACCOUNT_DELETION_HMAC_KEY=${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}:latest" \
-  --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX}" \
-  --quiet
-
-# `GOOGLE_APPLICATION_CREDENTIALS` e `DATABASE_URL_DIRECT` NUNCA aparecem nas duas listas acima —
-# ausência deliberada, não esquecimento (§16/§21/§22 do enunciado). `FIREBASE_PROJECT_ID` usa
-# SPARK_FIREBASE_PROJECT, não SPARK_GCP_PROJECT (T18.2.1) — os dois só coincidem quando a
+# ---------------------------------------------------------------- 6. candidate da API (ou primeiro deploy — T18.2.1)
+#
+# `GOOGLE_APPLICATION_CREDENTIALS` e `DATABASE_URL_DIRECT` NUNCA aparecem nas duas listas abaixo —
+# ausência deliberada, não esquecimento (§16/§21/§22 do enunciado da T18.2). `FIREBASE_PROJECT_ID`
+# usa SPARK_FIREBASE_PROJECT, não SPARK_GCP_PROJECT (T18.2.1) — os dois só coincidem quando a
 # instalação usa um único projeto.
+#
+# Um lugar só para a imagem/configuração validada: o candidate (deploy seguinte), o serviço de
+# validação e o primeiro deploy real usam exatamente esta função — nunca três listas de flags que
+# podem divergir entre si.
+deploy_api_revision() {
+  local service="$1"
+  shift
+  gcloud run deploy "${service}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --image "${IMAGE_DIGEST}" \
+    --service-account "${RUNTIME_SA_EMAIL}" \
+    --port "${SPARK_RUN_PORT}" \
+    --cpu "${SPARK_RUN_API_CPU}" \
+    --memory "${SPARK_RUN_API_MEMORY}" \
+    --min-instances "${SPARK_RUN_API_MIN_INSTANCES}" \
+    --max-instances "${SPARK_RUN_API_MAX_INSTANCES}" \
+    --concurrency "${SPARK_RUN_API_CONCURRENCY}" \
+    --timeout "${SPARK_RUN_API_TIMEOUT}" \
+    --allow-unauthenticated \
+    --set-secrets "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:latest,GEMINI_API_KEY=${SPARK_SECRET_GEMINI_API_KEY}:latest,ACCOUNT_DELETION_HMAC_KEY=${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}:latest" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX}" \
+    --quiet \
+    "$@"
+}
 
-# A URL de uma revision com `--tag candidate` segue o padrão documentado do Cloud Run:
-# `https://<tag>---<url-padrão-do-serviço-sem-o-https://>`. Mais direto e determinístico do que
-# tentar extrair `status.traffic[].url` por tag via `--filter` num `describe` (que descreve **um**
-# recurso, não uma lista, e não filtra elementos de array de forma confiável entre versões do
-# `gcloud`).
-SERVICE_URL="$(gcloud run services describe "${SPARK_RUN_API_SERVICE}" \
-  --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
-  --format='value(status.url)')"
-CANDIDATE_URL="${SERVICE_URL/https:\/\//https://candidate---}"
-log "candidate URL: ${CANDIDATE_URL}"
+api_service_url() {
+  gcloud run services describe "$1" \
+    --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
+    --format='value(status.url)'
+}
 
-# ---------------------------------------------------------------- 7. smoke do candidate
+if resource_exists run services describe "${SPARK_RUN_API_SERVICE}" --region "${SPARK_GCP_REGION}"; then
+  # ---------------------------------------------------------------- deploy seguinte (fluxo original)
 
-log "rodando smoke contra o candidate — falha aqui bloqueia a troca de tráfego (§10/§54)"
-if ! "${SCRIPT_DIR}/smoke-cloud-run.sh" "${CANDIDATE_URL}"; then
-  fail "smoke do candidate FALHOU — tráfego antigo permanece. Corrija e repita o deploy."
+  log "${SPARK_RUN_API_SERVICE} já existe — deploy do candidate (--no-traffic, tag=candidate)"
+  deploy_api_revision "${SPARK_RUN_API_SERVICE}" --no-traffic --tag candidate
+
+  # A URL de uma revision com `--tag candidate` segue o padrão documentado do Cloud Run:
+  # `https://<tag>---<url-padrão-do-serviço-sem-o-https://>`. Mais direto e determinístico do que
+  # tentar extrair `status.traffic[].url` por tag via `--filter` num `describe` (que descreve **um**
+  # recurso, não uma lista, e não filtra elementos de array de forma confiável entre versões do
+  # `gcloud`).
+  SERVICE_URL="$(api_service_url "${SPARK_RUN_API_SERVICE}")"
+  CANDIDATE_URL="${SERVICE_URL/https:\/\//https://candidate---}"
+  log "candidate URL: ${CANDIDATE_URL}"
+
+  log "rodando smoke contra o candidate — falha aqui bloqueia a troca de tráfego (§10/§54)"
+  if ! "${SCRIPT_DIR}/smoke-cloud-run.sh" "${CANDIDATE_URL}"; then
+    fail "smoke do candidate FALHOU — tráfego antigo permanece. Corrija e repita o deploy."
+  fi
+
+  log "smoke PASS — movendo 100% do tráfego para o candidate"
+  PREVIOUS_REVISION="$(gcloud run services describe "${SPARK_RUN_API_SERVICE}" \
+    --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
+    --format='value(status.traffic[0].revisionName)')"
+  log "revision anterior, para rollback se necessário: ${PREVIOUS_REVISION}"
+  log "  rollback: ops/gcp/rollback-cloud-run.sh ${PREVIOUS_REVISION}"
+
+  gcloud run services update-traffic "${SPARK_RUN_API_SERVICE}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --to-tags candidate=100
+
+  log "100% do tráfego em ${SPARK_RUN_API_SERVICE} está no digest ${IMAGE_DIGEST}"
+else
+  # ---------------------------------------------------------------- primeiro deploy (T18.2.1)
+  #
+  # `--no-traffic` não tem efeito na primeira revision de um serviço novo (o Cloud Run sempre
+  # roteia 100% do único tráfego que existe para ela) — então o par candidate→smoke→promove
+  # tráfego não protege nada aqui: o tráfego "de produção" já estaria naquela revision antes do
+  # smoke rodar. A mesma imagem/configuração é validada num serviço TEMPORÁRIO primeiro; só depois
+  # do smoke passar nele é que ${SPARK_RUN_API_SERVICE} é criado de verdade.
+
+  log "${SPARK_RUN_API_SERVICE} ainda não existe — primeiro deploy: validando a mesma imagem/configuração em ${SPARK_RUN_API_VALIDATE_SERVICE} antes de criar o serviço real"
+  deploy_api_revision "${SPARK_RUN_API_VALIDATE_SERVICE}"
+
+  VALIDATE_URL="$(api_service_url "${SPARK_RUN_API_VALIDATE_SERVICE}")"
+  log "URL de validação: ${VALIDATE_URL}"
+
+  log "rodando smoke contra o serviço de validação — falha aqui impede a criação de ${SPARK_RUN_API_SERVICE} (§10/§54)"
+  if ! "${SCRIPT_DIR}/smoke-cloud-run.sh" "${VALIDATE_URL}"; then
+    log "removendo ${SPARK_RUN_API_VALIDATE_SERVICE} antes de abortar"
+    gcloud run services delete "${SPARK_RUN_API_VALIDATE_SERVICE}" \
+      --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --quiet || true
+    fail "smoke do serviço de validação FALHOU — ${SPARK_RUN_API_SERVICE} NÃO foi criado. Corrija e repita o deploy."
+  fi
+
+  log "smoke PASS — removendo ${SPARK_RUN_API_VALIDATE_SERVICE} e criando ${SPARK_RUN_API_SERVICE}"
+  gcloud run services delete "${SPARK_RUN_API_VALIDATE_SERVICE}" \
+    --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --quiet
+
+  # Mesma imagem/configuração que acabou de passar no smoke acima — `--no-traffic`/`--tag` não são
+  # passados porque não têm efeito no primeiro deploy de um serviço (a única revision recebe 100%
+  # do tráfego de qualquer forma).
+  deploy_api_revision "${SPARK_RUN_API_SERVICE}"
+
+  log "primeiro deploy de ${SPARK_RUN_API_SERVICE} concluído — 100% do tráfego no digest ${IMAGE_DIGEST} (já validado antes de criar o serviço)"
 fi
-
-# ---------------------------------------------------------------- 8. tráfego para o candidate
-
-log "smoke PASS — movendo 100% do tráfego para o candidate"
-PREVIOUS_REVISION="$(gcloud run services describe "${SPARK_RUN_API_SERVICE}" \
-  --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
-  --format='value(status.traffic[0].revisionName)')"
-log "revision anterior, para rollback se necessário: ${PREVIOUS_REVISION}"
-log "  rollback: ops/gcp/rollback-cloud-run.sh ${PREVIOUS_REVISION}"
-
-gcloud run services update-traffic "${SPARK_RUN_API_SERVICE}" \
-  --project "${SPARK_GCP_PROJECT}" \
-  --region "${SPARK_GCP_REGION}" \
-  --to-tags candidate=100
-
-log "100% do tráfego em ${SPARK_RUN_API_SERVICE} está no digest ${IMAGE_DIGEST}"
 
 # ---------------------------------------------------------------- 9. spark-maintenance (mesmo digest, privado)
 

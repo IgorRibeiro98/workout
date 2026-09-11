@@ -446,6 +446,16 @@ jobs:
       - name: Topologia cross-project GCP/Firebase
         run: ops/tests/gcp-cross-project.test.sh
 
+      # Primeiro deploy do spark-backend vs. deploy seguinte (T18.2.1): `--no-traffic` não tem
+      # efeito na primeira revision de um serviço Cloud Run novo — ela recebe 100% do único
+      # tráfego que existe de qualquer forma, então candidate→smoke→promove tráfego não protege
+      # nada nesse caso. Prova, com `gcloud`/`docker`/`git`/`curl` fakes (sem rede, sem projeto
+      # real), que o primeiro deploy valida a mesma imagem/configuração num serviço temporário
+      # antes de criar o serviço real, que o serviço temporário é removido nos dois desfechos
+      # (sucesso e falha do smoke), e que o serviço real nunca é criado se o smoke reprovar.
+      - name: Primeiro deploy vs. deploy seguinte do spark-backend
+        run: ops/tests/deploy-first-run.test.sh
+
       # A proibição de `777`/`666` (T16.8 §145/§146). Ela existia como regra escrita e não como
       # verificação — e `ops/verify-backup.sh` tinha um `chmod 777` no ensaio de restauração, que
       # além de proibido tornava o ensaio incapaz de detectar o problema de permissão que ele
