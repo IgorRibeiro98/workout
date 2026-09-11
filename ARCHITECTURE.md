@@ -1904,9 +1904,9 @@ social. O que nasce é uma camada operacional com provas executáveis.
    chaves no relatório (stdout do Job `spark-storage-audit`).
 6. **Uma imagem, cinco superfícies.** O Dockerfile ganhou `pg_dump`/`pg_restore`/`psql` 17 (PGDG,
    extraídos sem arrastar o Perl dos wrappers) — API, manutenção e os três Jobs (migrate, backup,
-   storage-audit) continuam no mesmo digest. O build é sem provenance/SBOM: um release, um digest,
-   para a retenção nativa do Artifact Registry (Keep 10 / untagged > 7 d / tagged > 90 d) nunca
-   apagar um manifesto filho de baixo de uma tag.
+   storage-audit) continuam no mesmo digest. O build é sem provenance/SBOM: um release, um digest.
+   A retenção nativa do Artifact Registry é Keep 10 / tagged > 90 d — **sem** regra para untagged,
+   porque as imagens pré-T18.3 são índices com filhos untagged que as revisions ativas ainda puxam.
 7. **O deploy sabe o que está fazendo.** `ops/gcp/deploy-cloud-run.sh`: versões de secret
    resolvidas por metadata e **pinadas** por revision (nunca `:latest`); Jobs de DR e auditoria com
    o digest da release; **gate de DR** antes da migration (`SPARK_DR_PREDEPLOY_POLICY`:

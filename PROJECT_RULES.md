@@ -952,8 +952,9 @@ abaixo são o que impede "existe um script" de virar "achamos que funciona". Det
 - **Auditorias reportam; pessoas remediam.** `config-drift-audit.sh`, `iam-audit.sh` e
   `cost-audit.sh` respondem `PASS`/`DRIFT`/`NOT_VERIFIED` e não emitem comando que altera nada
   (há teste). Uma API desabilitada ou permissão ausente é `NOT_VERIFIED`, nunca `PASS` por omissão.
-  A retenção do Artifact Registry é política nativa (Keep das 10 mais recentes; untagged > 7 d;
-  tagged > 90 d), o build é sem provenance/SBOM (um digest por release), e a auditoria reprova
+  A retenção do Artifact Registry é política nativa (Keep das 10 mais recentes; tagged > 90 d;
+  **nenhuma** regra para untagged — os índices pré-T18.3 têm filhos untagged que as revisions
+  ativas ainda puxam), o build é sem provenance/SBOM (um digest por release), e a auditoria reprova
   quando um digest em uso por revision ativa cairia fora da janela.
 - **Alertas são eventos, não esperança.** Os componentes emitem `db_backup_*`, `db_restore_*`,
   `maintenance_*`, `database_size_*`, `db_backup_stale`, `storage_audit_*`, `migration_*` como JSON

@@ -8,14 +8,16 @@
 # ## A política (`artifact-registry-cleanup-policy.json`)
 #
 #   keep   as 10 versões mais recentes (Keep vence Delete, sempre)
-#   delete untagged com mais de 7 dias
-#   delete tagged   com mais de 90 dias
+#   delete tagged com mais de 90 dias
 #
-# `deploy-cloud-run.sh` publica cada release como UMA versão tagueada pelo git SHA (build sem
-# provenance/SBOM — `--provenance=false --sbom=false` — para não nascerem manifestos filhos
-# untagged que a regra de untagged apagaria de baixo de uma tag). Rollback pela revision anterior
-# continua possível enquanto o digest dela estiver entre as 10 mais recentes; além disso, a
-# reconstrução a partir do git SHA é o caminho — documentado em CLOUD_RUN_DEPLOYMENT.md.
+# **Nenhuma regra apaga untagged**, de propósito: as imagens publicadas antes da T18.3 foram
+# construídas com provenance/SBOM (o BuildKit publica um índice tagueado + manifestos FILHOS
+# untagged), e as revisions ativas apontam para o índice — apagar um filho untagged "velho" quebraria
+# o pull de uma revision que está servindo. `deploy-cloud-run.sh` passou a buildar com
+# `--provenance=false --sbom=false` (uma versão tagueada por release, sem filhos), então nada novo
+# fica untagged; os poucos filhos antigos custam alguns MB e são inofensivos. Rollback pela revision
+# anterior continua possível enquanto o digest dela estiver entre as 10 mais recentes; além disso,
+# a reconstrução a partir do git SHA é o caminho — documentado em CLOUD_RUN_DEPLOYMENT.md.
 #
 # ## A auditoria
 #

@@ -46,8 +46,8 @@ POLICY_FILE="${OPS_DIR}/gcp/artifact-registry-cleanup-policy.json"
 echo "=== a política nativa ==="
 check "existe uma regra Keep com keepCount ≥ 2 (a atual e a anterior, para rollback)" "sim" \
   "$(jq -e '[.[] | select(.action.type == "Keep") | .mostRecentVersions.keepCount] | max >= 2' "${POLICY_FILE}" > /dev/null && echo sim || echo não)"
-check "apaga untagged antigas (≥ 7 dias)" "sim" \
-  "$(jq -e '[.[] | select(.action.type == "Delete" and .condition.tagState == "UNTAGGED") | (.condition.olderThan | rtrimstr("s") | tonumber)] | min >= 604800' "${POLICY_FILE}" > /dev/null && echo sim || echo não)"
+check "NENHUMA regra apaga untagged (os filhos dos índices pré-T18.3 sustentam revisions ativas)" "0" \
+  "$(jq '[.[] | select(.action.type == "Delete" and .condition.tagState == "UNTAGGED")] | length' "${POLICY_FILE}")"
 check "apaga tagged só depois de muito tempo (≥ 60 dias)" "sim" \
   "$(jq -e '[.[] | select(.action.type == "Delete" and .condition.tagState == "TAGGED") | (.condition.olderThan | rtrimstr("s") | tonumber)] | min >= 5184000' "${POLICY_FILE}" > /dev/null && echo sim || echo não)"
 check "o deploy builda sem provenance/SBOM (um digest por release, nada untagged por baixo da tag)" "sim" \
