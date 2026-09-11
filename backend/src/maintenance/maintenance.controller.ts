@@ -1,4 +1,10 @@
-import { Controller, Get, Post, VERSION_NEUTRAL } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  ServiceUnavailableException,
+  VERSION_NEUTRAL,
+} from '@nestjs/common';
 import {
   MaintenanceCoordinator,
   type MaintenanceCycleResult,
@@ -25,9 +31,19 @@ import {
 export class MaintenanceController {
   constructor(private readonly coordinator: MaintenanceCoordinator) {}
 
+  /**
+   * Um ciclo. `2xx` quando rodou ou quando desistiu do lock com o heartbeat ainda fresco (retry do
+   * Scheduler). `503` quando desistiu do lock E o heartbeat já está velho: o ciclo está preso, e um
+   * `2xx` aqui esconderia isso de todo mundo — do Scheduler (que registra o erro), do alerta de
+   * ausência de `2xx` (`spark-maintenance-stale`) e de quem lê `status.code` do último attempt.
+   */
   @Post('run')
   async run(): Promise<MaintenanceCycleResult> {
-    return this.coordinator.runCycle();
+    const result = await this.coordinator.runCycle();
+    if (result.staleWhileLocked) {
+      throw new ServiceUnavailableException({ ...result, errorName: 'MAINTENANCE_LOCKED_STALE' });
+    }
+    return result;
   }
 
   /**

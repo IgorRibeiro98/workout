@@ -29,6 +29,13 @@ export interface MaintenanceCycleResult {
   readonly databaseSizeChecked: boolean;
   readonly drBackupChecked: boolean;
   readonly durationMs: number;
+  /**
+   * Só em resultado `skipped`: o lock estava tomado E o último sucesso já passou de
+   * `MAINTENANCE_STALE_AFTER_MS`. Um `skipped` isolado é normal (retry do Scheduler); um `skipped`
+   * com o heartbeat velho é o ciclo preso — e o controller responde 503 para o Scheduler e os
+   * alertas verem (T18.3 §12: foi este o modo de falha real do lock de sessão no pooler).
+   */
+  readonly staleWhileLocked?: { readonly ageMs: number | null; readonly staleAfterMs: number };
 }
 
 const SKIPPED_RESULT: MaintenanceCycleResult = {
@@ -108,17 +115,31 @@ const KEYS = {
  *
  * §39 é explícito: retry do Scheduler ou um deploy no meio de uma execução podem sobrepor duas
  * chamadas de verdade, mesmo com a configuração mais conservadora do Cloud Run. `runCycle()` tenta
- * `pg_try_advisory_lock` numa conexão dedicada do pool **antes** de tocar em qualquer worker; se
- * não conseguir, devolve `skipped: true` sem processar nada — nunca bloqueia esperando, porque um
- * ciclo que não rodou agora roda no próximo minuto.
+ * `pg_try_advisory_xact_lock` numa conexão dedicada do pool **antes** de tocar em qualquer worker;
+ * se não conseguir, devolve `skipped: true` sem processar nada — nunca bloqueia esperando, porque
+ * um ciclo que não rodou agora roda no próximo minuto.
  *
- * O lock é de **sessão** (não de transação): ele precisa cobrir o ciclo inteiro, que faz chamadas
- * de rede lentas (FCM, GCS) intercaladas com consultas ao banco em conexões diferentes do pool — um
- * lock de transação (`pg_advisory_xact_lock`) exigiria manter uma transação aberta por toda essa
- * janela, e uma transação longa segurando uma conexão do pool durante I/O de rede é exatamente o
- * tipo de recurso que este processo não pode desperdiçar com `DATABASE_POOL_MAX` pequeno (T18.2
- * §23). Por isso a conexão é obtida e devolvida manualmente (`pool.connect()`), e não por
- * `PostgresService.transaction()`.
+ * ## Por que o lock é de TRANSAÇÃO, numa transação aberta pelo ciclo inteiro (T18.3)
+ *
+ * A T18.2 usava `pg_try_advisory_lock` de **sessão**, e isso quebrou em produção no primeiro dia
+ * de heartbeat: `DATABASE_URL` é o endpoint *pooled* do Neon (PgBouncer em modo transação), onde
+ * cada statement fora de transação pode cair numa conexão de servidor diferente. O lock ficava na
+ * conexão que executou o `pg_try_advisory_lock`; o `pg_advisory_unlock` caía em outra e não
+ * liberava nada; a conexão presa voltava ao pooler segurando o lock, e todo ciclo seguinte era
+ * `skipped_locked` — foi o `maintenance_stale` da T18.3 que denunciou. O próprio Neon documenta
+ * que lock consultivo de sessão não é suportado no endpoint pooled; é a mesma razão pela qual o
+ * `migrate-database` exige `DATABASE_URL_DIRECT`.
+ *
+ * Uma transação aberta prende a conexão de servidor ao cliente até o fim (é a definição do modo
+ * transação), então `pg_try_advisory_xact_lock` dentro de `BEGIN … ROLLBACK` tem exatamente a
+ * semântica que o ciclo precisa — e ainda ganha: se o processo morrer no meio, o pooler aborta a
+ * transação e o lock some, em vez de sobreviver numa conexão órfã. O custo é uma conexão do pool
+ * (de `DATABASE_POOL_MAX`) ociosa em transação enquanto o ciclo faz I/O de rede — aceitável para
+ * um ciclo de segundos, num processo que só faz isto. A chave mudou junto
+ * (`spark_maintenance_cycle_xact`): um lock de sessão que tenha vazado para o pooler sob o esquema
+ * antigo não pode bloquear o novo; ele evapora quando o pooler recicla a conexão. A conexão é
+ * obtida e devolvida manualmente (`pool.connect()`), e não por `PostgresService.transaction()`,
+ * porque os workers do ciclo usam as OUTRAS conexões do pool — esta só segura o lock.
  *
  * ## Por que cadência diferente por worker, e não "roda tudo toda vez"
  *
@@ -154,16 +175,17 @@ export class MaintenanceCoordinator {
 
   async runCycle(): Promise<MaintenanceCycleResult> {
     const client = await this.postgres.pool.connect();
-    let locked = false;
+    let inTransaction = false;
     const startedAt = this.clock.now();
     try {
+      await client.query('BEGIN');
+      inTransaction = true;
       const { rows } = await client.query<{ locked: boolean }>(
-        `SELECT pg_try_advisory_lock(hashtext('spark_maintenance_cycle')) AS locked`,
+        `SELECT pg_try_advisory_xact_lock(hashtext('spark_maintenance_cycle_xact')) AS locked`,
       );
-      locked = rows[0]?.locked ?? false;
-      if (!locked) {
+      if (!(rows[0]?.locked ?? false)) {
         this.logger.info('maintenance.cycle.skipped_locked', {});
-        return SKIPPED_RESULT;
+        return this.skippedResult();
       }
 
       await this.recordStarted(startedAt);
@@ -252,13 +274,36 @@ export class MaintenanceCoordinator {
         throw error;
       }
     } finally {
-      if (locked) {
-        await client
-          .query(`SELECT pg_advisory_unlock(hashtext('spark_maintenance_cycle'))`)
-          .catch(() => undefined);
+      // ROLLBACK encerra a transação que segura o lock (não há nada a commitar nela). Se nem isso
+      // funcionar, a conexão está em estado desconhecido: sai do pool destruída, nunca reciclada.
+      let releaseBroken = false;
+      if (inTransaction) {
+        await client.query('ROLLBACK').catch(() => {
+          releaseBroken = true;
+        });
       }
-      client.release();
+      client.release(releaseBroken || undefined);
     }
+  }
+
+  /**
+   * Um ciclo que não conseguiu o lock. Enquanto o heartbeat está fresco, é só um retry do Scheduler
+   * chegando cedo. Com o heartbeat velho, "alguém tem o lock" já dura mais que o aceitável: o ciclo
+   * está preso (ou o lock vazou), e isso precisa sair do log `info` — vira `maintenance_locked_stale`
+   * em `error`, e o controller devolve 503.
+   */
+  private async skippedResult(): Promise<MaintenanceCycleResult> {
+    const status = await this.status().catch(() => null);
+    if (!status?.stale) {
+      return SKIPPED_RESULT;
+    }
+    const staleWhileLocked = { ageMs: status.ageMs, staleAfterMs: status.staleAfterMs };
+    this.logger.error('maintenance_locked_stale', {
+      operation: 'maintenance_cycle',
+      status: 'SKIPPED',
+      ...staleWhileLocked,
+    });
+    return { ...SKIPPED_RESULT, staleWhileLocked };
   }
 
   /** O heartbeat, lido de `server_metadata`. Nunca lança por ausência: "nunca rodou" é `stale`. */

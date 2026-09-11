@@ -213,6 +213,90 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
     }
   });
 
+  describe('lock tomado × heartbeat (o modo de falha real do lock de sessão no pooler)', () => {
+    async function holdCycleLock(): Promise<() => Promise<void>> {
+      const holder = await app.get(PostgresService).pool.connect();
+      await holder.query('BEGIN');
+      const { rows } = await holder.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(hashtext('spark_maintenance_cycle_xact')) AS locked`,
+      );
+      expect(rows[0]?.locked).toBe(true);
+      return async () => {
+        await holder.query('ROLLBACK').catch(() => undefined);
+        holder.release();
+      };
+    }
+
+    async function httpRun(): Promise<request.Response> {
+      const moduleRef = await Test.createTestingModule({
+        imports: [MaintenanceHttpModule.forRoot(coordinator)],
+      }).compile();
+      const httpApp = moduleRef.createNestApplication({ logger: false });
+      await httpApp.init();
+      try {
+        return await request(httpApp.getHttpServer()).post('/internal/maintenance/run');
+      } finally {
+        await httpApp.close();
+      }
+    }
+
+    it('lock tomado com heartbeat fresco: skipped comum, 2xx — é só um retry do Scheduler', async () => {
+      await boot();
+      await coordinator.runCycle();
+      const release = await holdCycleLock();
+      try {
+        clock.advance(60 * 1000);
+        const result = await coordinator.runCycle();
+        expect(result.skipped).toBe(true);
+        expect(result.staleWhileLocked).toBeUndefined();
+        const res = await httpRun();
+        expect(res.status).toBe(201);
+        expect(res.body.skipped).toBe(true);
+      } finally {
+        await release();
+      }
+    });
+
+    it('lock tomado com heartbeat velho: staleWhileLocked, maintenance_locked_stale e 503', async () => {
+      await boot();
+      await coordinator.runCycle();
+      const release = await holdCycleLock();
+      try {
+        clock.advance(5 * 60 * 1000 + 1);
+        const result = await coordinator.runCycle();
+        expect(result.skipped).toBe(true);
+        expect(result.staleWhileLocked).toEqual({
+          ageMs: 5 * 60 * 1000 + 1,
+          staleAfterMs: 5 * 60 * 1000,
+        });
+        const res = await httpRun();
+        expect(res.status).toBe(503);
+        expect(res.body.errorName).toBe('MAINTENANCE_LOCKED_STALE');
+        expect(res.body.skipped).toBe(true);
+        expect(JSON.stringify(res.body)).not.toMatch(/postgres:\/\/|password|secret/i);
+      } finally {
+        await release();
+      }
+      // Solto o lock, o próximo ciclo roda e o heartbeat volta a ser fresco.
+      const recovered = await coordinator.runCycle();
+      expect(recovered.skipped).toBe(false);
+      expect((await coordinator.status()).stale).toBe(false);
+    });
+
+    it('lock tomado antes de qualquer sucesso registrado também é 503 — "nunca rodou" é stale', async () => {
+      await boot();
+      const release = await holdCycleLock();
+      try {
+        const result = await coordinator.runCycle();
+        expect(result.skipped).toBe(true);
+        expect(result.staleWhileLocked).toEqual({ ageMs: null, staleAfterMs: 5 * 60 * 1000 });
+        expect((await httpRun()).status).toBe(503);
+      } finally {
+        await release();
+      }
+    });
+  });
+
   describe('classifyDatabaseSize — a política num lugar só', () => {
     const thresholds = [300, 350, 400, 450];
     const mb = (n: number) => n * 1024 * 1024;

@@ -843,9 +843,10 @@ A T18.2 coloca o Spark Backend em Cloud Run sem alterar nenhum dos invariantes a
   `BACKGROUND_JOBS_MODE=disabled` desliga o auto-agendamento de
   `NotificationDispatcher`/`AccountDeletionReconciler`/`SocialMediaCleaner`/`BackupPayloadCleaner`;
   os métodos de uma passagem continuam existindo. `spark-maintenance` (Cloud Run Service privado,
-  mesma imagem, entrypoint próprio) os chama via `MaintenanceCoordinator`, com `pg_try_advisory_lock`
-  contra sobreposição e um CAS sobre `server_metadata` para os dois workers de baixa cadência não
-  escanearem o bucket a cada chamada de 1 minuto do Cloud Scheduler.
+  mesma imagem, entrypoint próprio) os chama via `MaintenanceCoordinator`, com
+  `pg_try_advisory_xact_lock` (transação aberta pelo ciclo — lock de sessão não funciona no endpoint
+  pooled do Neon; T18.3) contra sobreposição e um CAS sobre `server_metadata` para os dois workers
+  de baixa cadência não escanearem o bucket a cada chamada de 1 minuto do Cloud Scheduler.
 - **Uma imagem, três superfícies, sem `latest` como identidade de deploy.** API, manutenção e Job
   de migration compartilham o mesmo Dockerfile e o mesmo `dist/`; o deploy rastreia até um digest
   exato do Artifact Registry.

@@ -461,9 +461,13 @@ nenhuma rota de produto é exposta) e um módulo HTTP minúsculo com uma única 
 
 Cada chamada executa um ciclo bounded (`MaintenanceCoordinator.runCycle()`):
 
-1. `pg_try_advisory_lock` numa conexão dedicada — se outra execução já está rodando, esta
-   **desiste imediatamente** (`skipped: true`), nunca espera. É a defesa contra retry do Scheduler
-   ou deploy sobrepondo duas chamadas reais (§39), mesmo com `max instances=1`/`concurrency=1`.
+1. `pg_try_advisory_xact_lock` numa conexão dedicada, dentro de uma transação que dura o ciclo —
+   se outra execução já está rodando, esta **desiste imediatamente** (`skipped: true`), nunca
+   espera. É a defesa contra retry do Scheduler ou deploy sobrepondo duas chamadas reais (§39),
+   mesmo com `max instances=1`/`concurrency=1`. Lock de **transação**, não de sessão, porque
+   `DATABASE_URL` é o endpoint pooled do Neon (PgBouncer em modo transação): um lock de sessão fica
+   preso numa conexão de servidor que o `unlock` nunca reencontra — aconteceu em produção
+   (T18.3, `maintenance_stale`), e a transação aberta é o que prende a conexão ao cliente.
 2. `NotificationDispatcher.runDispatchCycle()` — só se `SOCIAL_PUSH_ENABLED=true`.
 3. `AccountDeletionReconciler.processDueJobs()` — sempre.
 4. `SocialMediaCleaner.sweep()` — só quando um CAS sobre `server_metadata` confirma que já passou

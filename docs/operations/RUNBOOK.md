@@ -415,8 +415,15 @@ gcloud run services logs read spark-maintenance --region southamerica-east1 --li
 `stale: true` com `lastErrorName` preenchido é um ciclo que **falha** (veja `maintenance_failed` no
 log); `stale: true` com `lastStartedAt` parado é o Scheduler que **não chama** (estado, IAM
 `run.invoker`, `status.code` do último attempt). Procure por `maintenance.cycle.skipped_locked` —
-se aparecer em toda chamada, outra execução pode estar presa segurando o `pg_try_advisory_lock`.
-Quando o ciclo volta, ele registra `maintenance_stale` com `ageMs` (quanto tempo ficou parado).
+se aparecer em toda chamada, outra execução está segurando o lock do ciclo. O lock é
+`pg_try_advisory_xact_lock` numa transação que dura o ciclo: some quando a transação termina, ou
+quando o processo morre (o pooler aborta a transação). Se mesmo assim persistir, o suspeito é uma
+conexão presa no pooler do Neon; reiniciar a revision (`gcloud run services update spark-maintenance
+--region southamerica-east1 --update-labels restart=$(date +%s)`) fecha as conexões do processo.
+Foi exatamente assim que a T18.2 quebrou no primeiro dia de heartbeat — com lock de **sessão**
+(`pg_try_advisory_lock`) sobre o endpoint pooled, o `unlock` caía noutra conexão e o lock ficava
+preso para sempre; a T18.3 trocou para lock de transação e chave nova. Quando o ciclo volta, ele
+registra `maintenance_stale` com `ageMs` (quanto tempo ficou parado).
 
 ### O backup de DR falhou ou está velho (alertas `spark-job-backup-failed`, `spark-db-backup-stale`)
 

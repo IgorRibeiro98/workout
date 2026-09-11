@@ -45,6 +45,7 @@ Todo evento carrega, quando aplicável: `event`, `operation`, `status`, `duratio
 | `db_restore_drill_completed` | `ops/gcp/dr-restore-drill.sh --record` | veredito do ensaio do operador, no log `spark-dr-drill` |
 | `maintenance_started` / `maintenance_completed` / `maintenance_failed` | `spark-maintenance` | um ciclo (a cada minuto) |
 | `maintenance_stale` | `spark-maintenance` | o ciclo voltou depois de mais de `MAINTENANCE_STALE_AFTER_MS` sem sucesso |
+| `maintenance_locked_stale` (ERROR) | `spark-maintenance` | a chamada não conseguiu o lock **e** o heartbeat já está velho: o ciclo está preso; `POST /internal/maintenance/run` responde **503** (o Scheduler registra erro; `spark-maintenance-stale` dispara em 10 min) |
 | `database_size_checked` / `database_size_threshold_exceeded` | `spark-maintenance` | `pg_database_size` e o nível (ver limiares) |
 | `db_backup_freshness_checked` / `db_backup_stale` | `spark-maintenance` | idade do backup válido mais recente × `DR_BACKUP_MAX_AGE_MS` |
 | `storage_audit_completed` / `storage_audit_issue` | Job `spark-storage-audit` | auditoria PostgreSQL ↔ GCS (contagens por classe; as chaves vão no relatório em stdout) |
@@ -87,6 +88,12 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$MAINT_
 
 - `stale: true` = nenhum sucesso registrado, ou o último há mais de `MAINTENANCE_STALE_AFTER_MS`
   (5 min). O Scheduler roda a cada minuto; cinco minutos absorvem retry e deploy.
+- Um ciclo que **desiste do lock** com o heartbeat fresco é normal (retry do Scheduler): `2xx`,
+  `skipped: true`. Com o heartbeat velho é o ciclo preso: `503`, `errorName:
+  MAINTENANCE_LOCKED_STALE`, evento `maintenance_locked_stale`. Foi exatamente o que aconteceu no
+  primeiro dia real da T18.3 — o lock de sessão da T18.2 ficou preso no pooler do Neon e todo
+  ciclo era `skipped_locked` com `201`; o alerta de ausência de `2xx` não teria visto. Hoje o lock é
+  de transação (`pg_try_advisory_xact_lock`) e o `503` torna o estado visível.
 - Tudo é lido de `server_metadata` (`maintenance_last_*`, `database_size_*`, `dr_backup_*`):
   sobrevive a restart, revision nova e scale-to-zero.
 - `ops/gcp/dr-status.sh` imprime isto junto com a lista de backups do bucket.

@@ -1,9 +1,12 @@
 import { INestApplication } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { configFor, createTempDb, type TempDb } from './support/temp-db';
 import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeClock } from './support/fake-clock';
 import { MaintenanceCoordinator } from '../src/maintenance/maintenance.coordinator';
+import { PostgresService } from '../src/database/postgres.service';
 import { SocialMediaCleaner } from '../src/modules/social/social-media.cleaner';
 import { BackupPayloadCleaner } from '../src/modules/backup/backup-payload.cleaner';
 
@@ -18,6 +21,15 @@ import { BackupPayloadCleaner } from '../src/modules/backup/backup-payload.clean
  * espera a primeira, ela **desiste** na hora e devolve `skipped: true`. É por isso que o teste não
  * precisa de nenhum truque de sincronização: a corrida real já produz um resultado determinístico
  * (uma corrida, um `skipped`), porque só uma das duas consegue o lock.
+ *
+ * ## O lock é de transação (T18.3)
+ *
+ * Em produção `DATABASE_URL` é o endpoint pooled do Neon (PgBouncer em modo transação), onde um
+ * lock consultivo de SESSÃO fica preso numa conexão de servidor que o `unlock` nunca reencontra —
+ * aconteceu no primeiro dia de heartbeat: todo ciclo `skipped_locked`, `maintenance_stale`. Os
+ * três últimos testes fixam o desenho que corrige isso: lock `xact` numa transação aberta pelo
+ * ciclo, chave nova (um lock de sessão vazado sob a chave antiga não bloqueia), e nenhum lock de
+ * sessão no código do coordenador.
  */
 describe('T18.2 — MaintenanceCoordinator', () => {
   let temp: TempDb;
@@ -57,6 +69,61 @@ describe('T18.2 — MaintenanceCoordinator', () => {
 
     expect(first.skipped).toBe(false);
     expect(second.skipped).toBe(false);
+  });
+
+  it('o lock é de transação: outra sessão segurando-o numa transação aberta faz o ciclo desistir; ao fim dela, o ciclo volta', async () => {
+    temp = createTempDb();
+    app = await createTestApp(
+      configFor(temp.path, { BACKGROUND_JOBS_MODE: 'disabled' }),
+      new FakeAuthTokenVerifier(),
+    );
+    const coordinator = app.get(MaintenanceCoordinator);
+    const other = await app.get(PostgresService).pool.connect();
+    try {
+      await other.query('BEGIN');
+      const { rows } = await other.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(hashtext('spark_maintenance_cycle_xact')) AS locked`,
+      );
+      expect(rows[0]?.locked).toBe(true);
+
+      expect((await coordinator.runCycle()).skipped).toBe(true);
+
+      await other.query('ROLLBACK');
+      // O fim da transação alheia libera o lock — sem `unlock` explícito, sem sessão a reencontrar.
+      expect((await coordinator.runCycle()).skipped).toBe(false);
+      expect((await coordinator.runCycle()).skipped).toBe(false);
+    } finally {
+      other.release();
+    }
+  });
+
+  it('um lock de SESSÃO vazado sob a chave antiga (T18.2) não bloqueia o ciclo', async () => {
+    temp = createTempDb();
+    app = await createTestApp(
+      configFor(temp.path, { BACKGROUND_JOBS_MODE: 'disabled' }),
+      new FakeAuthTokenVerifier(),
+    );
+    const coordinator = app.get(MaintenanceCoordinator);
+    const leaked = await app.get(PostgresService).pool.connect();
+    try {
+      await leaked.query(`SELECT pg_advisory_lock(hashtext('spark_maintenance_cycle'))`);
+      expect((await coordinator.runCycle()).skipped).toBe(false);
+    } finally {
+      await leaked.query('SELECT pg_advisory_unlock_all()').catch(() => undefined);
+      leaked.release();
+    }
+  });
+
+  it('o coordenador nunca usa lock consultivo de sessão — o endpoint pooled do Neon não o suporta', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../src/maintenance/maintenance.coordinator.ts'),
+      'utf8',
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/pg_(try_)?advisory_lock\s*\(/);
+    expect(code).not.toMatch(/pg_advisory_unlock(_all)?\s*\(/);
+    expect(code).toMatch(/pg_try_advisory_xact_lock\s*\(/);
+    expect(code).toMatch(/query\('BEGIN'\)/);
   });
 
   it('respeita SOCIAL_PUSH_ENABLED: sem ele, notificação nunca é despachada no ciclo', async () => {

@@ -1777,9 +1777,10 @@ roda e **quem** tem autoridade sobre o quê entre deploys, nunca o desenho de do
    `BackupPayloadCleaner`) agenda `setInterval`; os métodos de uma passagem continuam existindo
    e continuam sendo o que `spark-maintenance` chama. `MaintenanceCoordinator.runCycle()` — um
    segundo Cloud Run Service, privado, mesma imagem, entrypoint próprio
-   (`maintenance-main.ts`) — usa `pg_try_advisory_lock` para nunca sobrepor dois ciclos, e um CAS
-   sobre `server_metadata` para os dois workers de baixa cadência não escanearem o bucket a cada
-   chamada do Cloud Scheduler (que roda a cada minuto).
+   (`maintenance-main.ts`) — usa `pg_try_advisory_xact_lock` numa transação que dura o ciclo para
+   nunca sobrepor dois ciclos (lock de sessão fica preso no pooler do Neon; corrigido na T18.3), e
+   um CAS sobre `server_metadata` para os dois workers de baixa cadência não escanearem o bucket a
+   cada chamada do Cloud Scheduler (que roda a cada minuto).
 5. **Uma imagem, três superfícies.** O mesmo Dockerfile e o mesmo `dist/` servem a API
    (`node dist/main.js`), a manutenção (`node dist/maintenance-main.js`) e o Job de migration
    (`node dist/cli/migrate-database.js`) — a diferença é comando e Service Account, nunca o
