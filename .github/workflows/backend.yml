@@ -157,15 +157,16 @@ jobs:
       - name: Build image
         run: docker build -t spark-backend:ci .
 
-      # T18.3 §2 — a imagem traz as ferramentas nativas do PostgreSQL na major 17 (≥ a do servidor:
-      # um `pg_dump` mais antigo que o servidor se recusa a rodar) e os três comandos de DR/auditoria.
-      # Sem isto o Job `spark-db-backup` subiria e falharia no primeiro `pg_dump`.
-      - name: Ferramentas de DR na imagem (pg_dump/pg_restore/psql 17 + CLIs)
+      # T18.3 §2 — a imagem traz as ferramentas nativas do PostgreSQL na major 18 (≥ a do servidor:
+      # o Neon de produção roda PostgreSQL 18, e um `pg_dump` mais antigo que o servidor se recusa a
+      # rodar — o primeiro backup real com a 17 falhou exatamente assim) e os três comandos de
+      # DR/auditoria. Sem isto o Job `spark-db-backup` subiria e falharia no primeiro `pg_dump`.
+      - name: Ferramentas de DR na imagem (pg_dump/pg_restore/psql 18 + CLIs)
         run: |
           set -euo pipefail
           for tool in pg_dump pg_restore psql; do
-            docker run --rm --entrypoint "$tool" spark-backend:ci --version | grep -q '(PostgreSQL) 17\.' \
-              || { echo "$tool não é a major 17 na imagem"; exit 1; }
+            docker run --rm --entrypoint "$tool" spark-backend:ci --version | grep -q '(PostgreSQL) 18\.' \
+              || { echo "$tool não é a major 18 na imagem"; exit 1; }
           done
           for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions; do
             docker run --rm --entrypoint test spark-backend:ci -f "dist/cli/${cli}.js" \

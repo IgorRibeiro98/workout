@@ -7,7 +7,7 @@ import { libpqEnvironment, parsePostgresUrl } from '../database/postgres-url';
  * ## Por que uma interface
  *
  * `pg_dump` e `pg_restore` são binários: um dump consistente e um restore em transação única não
- * têm equivalente em `pg` (o driver). A imagem do backend os traz (`postgresql-client-17`, ver o
+ * têm equivalente em `pg` (o driver). A imagem do backend os traz (`postgresql-client-18`, ver o
  * Dockerfile), e os dois Jobs de DR os invocam por processo. A suíte Jest, porém, roda onde eles
  * podem não existir — ou existir numa major menor que a do servidor —, então a lógica que **cerca**
  * os binários (hash, upload, manifesto, retenção, verificação, guardas de destino) é testada com

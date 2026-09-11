@@ -51,7 +51,7 @@ backup diário (03:15 UTC) + backup pré-deploy quando o último tem > 24 h
 RPO                                     até 24 h de estado REMOTO (o Room de cada aparelho não é afetado)
 
 RTO — o PostgreSQL foi perdido:
-  criar um banco novo (Neon ou outro PG 17)           5 min
+  criar um banco novo (Neon ou outro PG 18)           5 min
   restaurar (db-restore-drill.js, ~1 GB de dump)     5–15 min
   reconcile-account-deletions                        1 min
   versões novas dos dois secrets + deploy            10 min
@@ -67,7 +67,7 @@ explícito — o desenho da T16.7, não um efeito colateral.
 ```text
 [ ] acesso ao projeto GCP (gcloud auth login) — o bucket, os secrets, o Cloud Run
 [ ] a chave HMAC continua no Secret Manager (spark-account-deletion-hmac-key) — insubstituível
-[ ] acesso ao provedor do banco (Neon), ou a capacidade de subir um PostgreSQL 17 em outro lugar
+[ ] acesso ao provedor do banco (Neon), ou a capacidade de subir um PostgreSQL 18 em outro lugar
 [ ] docker na máquina (para o ensaio local) — opcional para a recuperação real
 ```
 
@@ -82,7 +82,8 @@ ops/gcp/dr-restore-drill.sh --record            # o backup válido mais recente
 ops/gcp/dr-restore-drill.sh --backup-id 2026-09-11T031500Z
 ```
 
-O que ele faz: sobe um `postgres:17-alpine` descartável local → roda `dist/cli/db-restore-drill.js`
+O que ele faz: sobe um `postgres:18-alpine` descartável local (a major do Neon; `SPARK_DRILL_PG_IMAGE`
+para outra) → roda `dist/cli/db-restore-drill.js`
 **na imagem que está em produção** (ela lê o bucket com a sua ADC) → `CREATE DATABASE spark_drill_<ts>`
 → verifica SHA-256 e tamanho contra o manifesto → `pg_restore --single-transaction` (sem `--clean`:
 não há o que limpar) → confere `schema_migrations` e a lista de tabelas **exatamente** iguais ao
@@ -109,7 +110,7 @@ antigo, se ainda existir, fica intacto até você decidir apagá-lo.
    commit). Prefira o mais recente válido, salvo se o incidente for "dado corrompido às X horas".
 
 3. **Restaure num banco novo.** A CLI é a mesma do ensaio, apontada para o servidor de destino
-   (um projeto/branch novo no Neon, ou qualquer PostgreSQL 17). A conexão administrativa é um banco
+   (um projeto/branch novo no Neon, ou qualquer PostgreSQL 18). A conexão administrativa é um banco
    de **manutenção** desse servidor (`neondb`/`postgres`, com `CREATEDB`); o banco de destino nasce
    dentro da CLI, com nome no padrão `spark_drill_*`, e fica (`SPARK_DRILL_KEEP_DATABASE=true`):
 

@@ -50,7 +50,7 @@ Cinco superfícies de execução, uma imagem só:
 
 Nenhum deles monta a API pública e a manutenção no mesmo processo, e todos compartilham o **mesmo
 digest de imagem** em cada deploy — a diferença é comando e identidade, nunca o artefato. A imagem
-traz `pg_dump`/`pg_restore`/`psql` 17 (PGDG) para os dois comandos de DR.
+traz `pg_dump`/`pg_restore`/`psql` 18 (PGDG) para os dois comandos de DR.
 
 ## 2. Pré-requisito
 

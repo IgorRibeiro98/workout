@@ -2,7 +2,7 @@
 # Ensaio de restauração de DR contra o bucket REAL, num PostgreSQL descartável local (T18.3 §5/§6).
 #
 #   backup no GCS ──▶ dist/cli/db-restore-drill.js (na imagem do backend, com ADC do operador)
-#                       ↓ CREATE DATABASE spark_drill_<ts> num postgres:17 efêmero local
+#                       ↓ CREATE DATABASE spark_drill_<ts> num postgres:18 efêmero local
 #                       ↓ pg_restore --single-transaction · schema == manifesto · migrations · readiness
 #                     backend REAL sobe sobre o banco restaurado ──▶ /health/ready 200, /v1 fechado (401)
 #                       ↓
@@ -19,7 +19,8 @@
 # O ponto do ensaio é provar que o backup restaura SEM o provedor do banco: um PostgreSQL novo,
 # em qualquer lugar, a partir só do bucket. Um banco descartável no próprio Neon duplicaria o
 # armazenamento do projeto (o plano gratuito tem teto) e provaria menos. Aqui o destino é um
-# container `postgres:17-alpine` que nasce e morre com o ensaio; nada aponta para produção — este
+# container `postgres:18-alpine` (a mesma major do Neon: um dump de 18 restaura num 18) que nasce e
+# morre com o ensaio; nada aponta para produção — este
 # script não recebe `DATABASE_URL` nem `DATABASE_URL_DIRECT`, e a CLI que ele chama tampouco.
 #
 # Pré-requisitos: docker; gcloud com ADC (`gcloud auth application-default login`) para o SDK do
@@ -94,7 +95,7 @@ log "subindo o PostgreSQL descartável (${PG_CONTAINER}, porta ${PG_PORT})"
 docker run -d --name "${PG_CONTAINER}" \
   -e POSTGRES_USER=spark -e POSTGRES_PASSWORD=spark -e POSTGRES_DB=postgres \
   -p "127.0.0.1:${PG_PORT}:5432" \
-  postgres:17-alpine > /dev/null
+  "${SPARK_DRILL_PG_IMAGE:-postgres:18-alpine}" > /dev/null
 for _ in $(seq 1 30); do
   if docker exec "${PG_CONTAINER}" pg_isready -U spark -d postgres > /dev/null 2>&1; then break; fi
   sleep 1

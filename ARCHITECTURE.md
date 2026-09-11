@@ -1902,7 +1902,7 @@ social. O que nasce é uma camada operacional com provas executáveis.
    `MISSING_OBJECT`, `ORPHAN_OBJECT`, `RECENT_UNREFERENCED`, `INVALID_METADATA`, `HASH_MISMATCH`,
    `INCOMPLETE_BACKUP`, `TOMBSTONE_INCONSISTENT`, `UNKNOWN`. Nunca chama `remove`. Contagens no log;
    chaves no relatório (stdout do Job `spark-storage-audit`).
-6. **Uma imagem, cinco superfícies.** O Dockerfile ganhou `pg_dump`/`pg_restore`/`psql` 17 (PGDG,
+6. **Uma imagem, cinco superfícies.** O Dockerfile ganhou `pg_dump`/`pg_restore`/`psql` 18 (PGDG,
    extraídos sem arrastar o Perl dos wrappers) — API, manutenção e os três Jobs (migrate, backup,
    storage-audit) continuam no mesmo digest. O build é sem provenance/SBOM: um release, um digest.
    A retenção nativa do Artifact Registry é Keep 10 / tagged > 90 d — **sem** regra para untagged,

@@ -13,7 +13,7 @@ nenhum é infraestrutura que ninguém consegue repetir depois de um desastre.
 > [`docs/operations/OPERATIONS_CHECKLIST.md`](../docs/operations/OPERATIONS_CHECKLIST.md).
 
 O banco é o PostgreSQL de `DATABASE_URL` (T18.0). Os scripts o alcançam com `pg_dump`,
-`pg_restore` e `psql` rodando **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:17-alpine`),
+`pg_restore` e `psql` rodando **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:18-alpine`),
 com `--network host`, e leem a connection string de `SPARK_DATABASE_URL`, de `DATABASE_URL` ou do
 `.env` do compose — nunca a imprimem. Não há mais arquivo de banco em `/opt/spark/data`: o que
 vive lá é o ledger de exclusões, e o modelo de permissão por grupo compartilhado continua valendo

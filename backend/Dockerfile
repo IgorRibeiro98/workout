@@ -36,9 +36,11 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-# As ferramentas nativas do PostgreSQL (T18.3 §2): `pg_dump`, `pg_restore` e `psql` da major 17,
+# As ferramentas nativas do PostgreSQL (T18.3 §2): `pg_dump`, `pg_restore` e `psql` da major 18,
 # do repositório oficial PGDG — o `postgresql-client` do próprio bookworm é a 15, e um `pg_dump`
-# com major MENOR que a do servidor se recusa a rodar. É o que o Job `spark-db-backup`
+# com major MENOR que a do servidor se recusa a rodar ("server version mismatch" — foi exatamente o
+# que o primeiro backup real reportou com a 17: o Neon roda PostgreSQL 18). Uma major MAIOR que a
+# do servidor é aceita, então a 18 serve ao Neon (18) e ao PostgreSQL 17 do CI. É o que o Job `spark-db-backup`
 # (`dist/cli/db-backup.js`) e o ensaio de restauração (`dist/cli/db-restore-drill.js`) invocam por
 # processo, com a conexão entrando por variáveis de ambiente da libpq — nunca pelo argv.
 #
@@ -48,10 +50,10 @@ WORKDIR /app
 # simplesmente não chama. `ca-certificates` fica: é o que `PGSSLROOTCERT=system` (verify-full
 # contra o Neon) lê. `curl` e `gnupg` entram só para registrar o repositório e saem na mesma camada.
 #
-# O pacote `postgresql-client-17` é **extraído** (`dpkg-deb -x`), não instalado: instalá-lo
+# O pacote `postgresql-client-18` é **extraído** (`dpkg-deb -x`), não instalado: instalá-lo
 # arrasta `postgresql-client-common` e, com ele, o Perl inteiro (~50 MB) só para os wrappers de
 # `/usr/bin` — que aqui não servem para nada, porque os binários reais vivem em
-# `/usr/lib/postgresql/17/bin` e entram no `PATH` diretamente. As bibliotecas de que eles
+# `/usr/lib/postgresql/18/bin` e entram no `PATH` diretamente. As bibliotecas de que eles
 # dependem (`libpq5`, readline, zlib, lz4, zstd) são instaladas normalmente, e o `--version` no
 # fim prova que os três binários carregam.
 RUN set -eux; \
@@ -63,15 +65,15 @@ RUN set -eux; \
       > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends libpq5 libreadline8 zlib1g liblz4-1 libzstd1; \
-    cd /tmp && apt-get download postgresql-client-17; \
-    dpkg-deb -x /tmp/postgresql-client-17_*.deb /; \
-    rm -f /tmp/postgresql-client-17_*.deb; \
+    cd /tmp && apt-get download postgresql-client-18; \
+    dpkg-deb -x /tmp/postgresql-client-18_*.deb /; \
+    rm -f /tmp/postgresql-client-18_*.deb; \
     apt-get purge -y --auto-remove curl gnupg; \
     rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/pgdg.list; \
-    /usr/lib/postgresql/17/bin/pg_dump --version; \
-    /usr/lib/postgresql/17/bin/pg_restore --version; \
-    /usr/lib/postgresql/17/bin/psql --version
-ENV PATH="/usr/lib/postgresql/17/bin:${PATH}"
+    /usr/lib/postgresql/18/bin/pg_dump --version; \
+    /usr/lib/postgresql/18/bin/pg_restore --version; \
+    /usr/lib/postgresql/18/bin/psql --version
+ENV PATH="/usr/lib/postgresql/18/bin:${PATH}"
 
 # `node` é um usuário sem privilégios já presente na imagem base (uid 1000). O processo nunca roda
 # como root, e `/media` pertence a ele para que o volume seja gravável sem elevar privilégio.

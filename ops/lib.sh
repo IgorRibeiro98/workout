@@ -55,8 +55,9 @@ SPARK_IMAGE="${SPARK_IMAGE:-spark-backend:latest}"
 # Os utilitários do PostgreSQL rodam por container, e não pelo pacote do host: a versão do
 # `pg_dump` precisa ser **igual ou mais nova** que a do servidor, e a que o `apt` da VPS instala não
 # tem essa garantia. Versão fixada pelo mesmo motivo do Caddy — uma ferramenta que se atualiza
-# sozinha muda de comportamento sem deploy. Suba a major aqui quando subir a do servidor.
-SPARK_PG_TOOLS_IMAGE="${SPARK_PG_TOOLS_IMAGE:-postgres:17-alpine}"
+# sozinha muda de comportamento sem deploy. Suba a major aqui quando subir a do servidor — o Neon
+# de produção está na 18 (T18.3), e a 18 serve também ao PostgreSQL 17 do CI.
+SPARK_PG_TOOLS_IMAGE="${SPARK_PG_TOOLS_IMAGE:-postgres:18-alpine}"
 # Arquivo de exclusão mútua do backup. Configuração, e não parâmetro de função: ele precisa ser o
 # mesmo para todas as execuções da máquina, e uma função que aceitasse outro por chamada tornaria
 # possível dois backups simultâneos com locks diferentes — que é exatamente o que ele impede.
