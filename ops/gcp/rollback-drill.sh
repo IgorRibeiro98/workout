@@ -51,9 +51,7 @@ move_traffic() {
     > /dev/null
 }
 
-resource_exists run revisions describe "${TARGET}" \
-  --region "${SPARK_GCP_REGION}" --service "${SPARK_RUN_API_SERVICE}" \
-  || fail "revision inexistente: ${TARGET} — confira com rollback-cloud-run.sh --list"
+require_api_revision "${TARGET}"
 
 ORIGIN="$(current_revision)"
 [ -n "${ORIGIN}" ] || fail "não foi possível determinar a revision atual de ${SPARK_RUN_API_SERVICE}"

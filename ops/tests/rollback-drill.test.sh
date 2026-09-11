@@ -50,6 +50,19 @@ check "...sem mover tráfego" "não" \
 check "...com a mensagem apontando --list" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q -- '--list' && echo sim || echo não)"
 
+# Uma revision de OUTRO serviço (typo, ou o nome errado copiado da Console) nunca vira update-traffic.
+# E a existência é conferida SEM `--service` — o gcloud real recusa o flag (o fake também).
+CODIGO=0
+run_script "${OPS_DIR}/gcp/rollback-cloud-run.sh" spark-maintenance-00003-abc || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "revision de outro serviço é recusada" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...sem mover tráfego" "não" \
+  "$(printf '%s\n' "$LOG" | grep -q 'update-traffic' && echo sim || echo não)"
+check "...dizendo a quem a revision pertence" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q "pertence ao serviço 'spark-maintenance'" && echo sim || echo não)"
+check "...e a existência foi conferida sem --service (o gcloud real recusa o flag)" "não" \
+  "$(printf '%s\n' "$LOG" | grep 'run revisions describe' | grep -q -- '--service' && echo sim || echo não)"
+
 echo
 echo "=== rollback-drill.sh: A → B → A ==="
 # A revision atual (fake): spark-backend-00001-xyz. O alvo B: spark-backend-00002-abc.

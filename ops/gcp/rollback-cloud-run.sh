@@ -24,9 +24,7 @@ fi
 
 REVISION="${1:?uso: rollback-cloud-run.sh <revision> (ou --list)}"
 
-resource_exists run revisions describe "${REVISION}" \
-  --region "${SPARK_GCP_REGION}" --service "${SPARK_RUN_API_SERVICE}" \
-  || fail "revision inexistente: ${REVISION} — confira com --list"
+require_api_revision "${REVISION}"
 
 log "movendo 100% do tráfego de ${SPARK_RUN_API_SERVICE} para ${REVISION}"
 gcloud run services update-traffic "${SPARK_RUN_API_SERVICE}" \

@@ -16,6 +16,10 @@
 #   ... describe <nome> --format=value(status.url)              https://<nome>-abc123-uc.a.run.app
 #   ... describe <nome> --format=value(status.traffic[0]...)    <nome>-00001-xyz
 #   ... describe <nome> --format=value(spec.template...image)   fake.registry/img@sha256:<zeros>
+#   run revisions describe <rev> --format=value(metadata.labels."serving.knative.dev/service")
+#                                                                o serviço dono (<rev> sem -00001-xyz);
+#                                                                falha se <rev> em GCLOUD_MISSING;
+#                                                                `--service` é recusado como no real
 #   secrets versions list <secret> ...                           GCLOUD_SECRET_VERSION (default 3),
 #                                                                vazio se <secret> em GCLOUD_SECRET_NO_VERSION
 #   storage ls gs://<bucket>/<prefixo>/                          um "diretório" por id em FAKE_DR_BACKUPS
@@ -160,6 +164,17 @@ if [ "${1:-}" = "run" ] && [ "${2:-}" = "jobs" ] && [ "${3:-}" = "execute" ]; th
   exit 0
 fi
 
+# `run revisions describe` não aceita --service — o gcloud real recusa, e o fake recusa igual
+# (foi exatamente o que um ensaio real de rollback pegou; o fake permissivo tinha escondido).
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "revisions" ] && [ "${3:-}" = "describe" ]; then
+  for arg in "$@"; do
+    if [ "${arg}" = "--service" ] || [ "${arg#--service=}" != "${arg}" ]; then
+      echo 'ERROR: (gcloud.run.revisions.describe) unrecognized arguments: --service' >&2
+      exit 2
+    fi
+  done
+fi
+
 is_describe=0
 has_format=0
 format_value=""
@@ -194,6 +209,13 @@ FAKE_DIGEST='sha256:000000000000000000000000000000000000000000000000000000000000
 
 if [ "${is_describe}" -eq 1 ] && [ "${has_format}" -eq 1 ]; then
   case "${format_value}" in
+    # o serviço dono de uma revision: `<serviço>-00001-xyz` → `<serviço>`; ausente = vazio + falha
+    *serving.knative.dev/service*)
+      for missing in ${GCLOUD_MISSING:-}; do
+        [ "${name}" = "${missing}" ] && exit 1
+      done
+      printf '%s\n' "$(printf '%s' "${name}" | sed -E 's/-[0-9]{5}-[a-z0-9]+$//')"
+      ;;
     *status.url*) printf 'https://%s-abc123-uc.a.run.app\n' "${name}" ;;
     *status.traffic*) printf '%s-00001-xyz\n' "${name}" ;;
     *containers*image*) printf 'fake.registry/spark-backend@%s\n' "${FAKE_DIGEST}" ;;

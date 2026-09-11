@@ -161,6 +161,20 @@ resource_exists() {
   gcloud --project "${SPARK_GCP_PROJECT}" "$@" > /dev/null 2>&1
 }
 
+# A revision existe E pertence ao serviço da API (T18.3 §22). `gcloud run revisions describe` não
+# aceita `--service` (o gcloud real recusa com "unrecognized arguments"; o fake dos testes recusa
+# igual): a pertinência vem do label `serving.knative.dev/service`. Assim a revision de OUTRO
+# serviço, por typo, nunca chega a um `update-traffic`.
+require_api_revision() {
+  local revision="$1" owner
+  owner="$(gcloud run revisions describe "${revision}" \
+    --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
+    --format='value(metadata.labels."serving.knative.dev/service")' 2> /dev/null || true)"
+  [ -n "${owner}" ] || fail "revision inexistente: ${revision} — confira com rollback-cloud-run.sh --list"
+  [ "${owner}" = "${SPARK_RUN_API_SERVICE}" ] \
+    || fail "a revision ${revision} pertence ao serviço '${owner}', não a ${SPARK_RUN_API_SERVICE}"
+}
+
 # Uma variável obrigatória que não pode estar vazia (T18.3 §26). Para o que um script destrutivo
 # usa como alvo: `rm`, `delete`, `DROP` — nunca com um valor que possa ser "".
 require_var() {
