@@ -49,6 +49,18 @@ cat > "${FAKE_BIN_DIR}/gcloud" <<'FAKE_GCLOUD'
 set -euo pipefail
 printf '%s\n' "$*" >> "${GCLOUD_CALL_LOG}"
 
+# `--data-file=-` (usado por `secrets versions add`, inclusive na geração da chave HMAC via
+# `openssl rand -hex 32 | gcloud ... --data-file=-`) precisa ser drenado antes de sair: um `gcloud`
+# fake que retorna sem ler stdin fecha o pipe cedo, e o `openssl` do outro lado pode receber SIGPIPE
+# — sob `pipefail` (como em bootstrap-cloud-run.sh) isso derruba o script com uma falha que não tem
+# nada a ver com a lógica de produção sendo testada.
+for arg in "$@"; do
+  if [ "${arg}" = "--data-file=-" ]; then
+    cat > /dev/null
+    break
+  fi
+done
+
 if [ "${1:-}" = "projects" ] && [ "${2:-}" = "describe" ]; then
   target="${3:-}"
   [ "${target}" = "${GCLOUD_FAIL_PROJECT:-}" ] && exit 1
