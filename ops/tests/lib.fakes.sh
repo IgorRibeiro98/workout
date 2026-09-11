@@ -54,7 +54,10 @@ FAKE_GIT
 set -euo pipefail
 [ -z "${DOCKER_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "${DOCKER_CALL_LOG}"
 if [ "${1:-}" = "inspect" ]; then
-  printf 'fake.registry/spark-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000\n'
+  # Como o containerd real: a tag local também aparece em RepoDigests, sem registry — o deploy
+  # precisa escolher a entrada do Artifact Registry, nunca `index 0`.
+  printf 'spark-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000\n'
+  printf 'southamerica-east1-docker.pkg.dev/infra-project/spark/spark-backend@sha256:0000000000000000000000000000000000000000000000000000000000000000\n'
 fi
 exit 0
 FAKE_DOCKER

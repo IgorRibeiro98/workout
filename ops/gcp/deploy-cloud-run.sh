@@ -113,8 +113,14 @@ docker push "${IMAGE_TAG}"
 # O deploy rastreia até um digest exato, nunca até `latest` nem só a tag mutável do SHA (§2/§10 —
 # em tese uma tag pode ser sobrescrita; o digest não pode).
 
-IMAGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_TAG}")"
-[ -n "${IMAGE_DIGEST}" ] || fail "não foi possível resolver o digest da imagem recém-publicada"
+#
+# `RepoDigests` lista um digest por repositório que a imagem conhece — com o image store do
+# containerd, a tag LOCAL também aparece (`spark-backend@sha256:…`, sem registry), e `index 0`
+# devolvia justamente essa (visto no deploy real da T18.3: o Cloud Run tentou puxar de
+# `mirror.gcr.io/library/spark-backend`). Só serve a entrada do Artifact Registry.
+IMAGE_DIGEST="$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "${IMAGE_TAG}" \
+  | grep -m1 "^${SPARK_AR_IMAGE_BASE}@sha256:" || true)"
+[ -n "${IMAGE_DIGEST}" ] || fail "não foi possível resolver o digest da imagem recém-publicada em ${SPARK_AR_IMAGE_BASE}"
 log "digest: ${IMAGE_DIGEST}"
 
 RUNTIME_SA_EMAIL="$(sa_email "${SPARK_SA_RUNTIME}")"

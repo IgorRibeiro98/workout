@@ -68,6 +68,10 @@ check "o deploy imprime a correlação revision → versão de secret" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q 'secrets pinados nesta release: spark-database-url=v7 spark-database-url-direct=v7 spark-gemini-api-key=v7 spark-account-deletion-hmac-key=v7' && echo sim || echo não)"
 check "§17 build sem provenance/SBOM" "sim" \
   "$(printf '%s\n' "$DOCKER" | grep '^build ' | grep -q -- '--provenance=false --sbom=false' && echo sim || echo não)"
+check "o digest usado nos jobs/serviços é o do Artifact Registry, nunca o da tag local" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-migrate ' | grep -q -- '--image southamerica-east1-docker.pkg.dev/infra-project/spark/spark-backend@sha256:' && echo sim || echo não)"
+check "nenhuma referência de imagem sem registry" "0" \
+  "$(printf '%s\n' "$LOG" | grep -c -- '--image spark-backend@' || true)"
 
 echo
 echo "=== §2 Jobs de DR e auditoria ==="
