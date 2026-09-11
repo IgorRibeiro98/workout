@@ -6,11 +6,17 @@
 # Rodar este script de novo, sem mudar nada, não deve fazer nada (recurso existe → reutiliza;
 # não existe → cria) — é o que "idempotente" quer dizer aqui, e o que o §4 exige.
 #
-# Uso:
+# Uso (projeto único — GCP e Firebase são o mesmo projeto):
 #   SPARK_GCP_PROJECT=meu-projeto ops/gcp/bootstrap-cloud-run.sh
 #
+# Uso (projetos separados — T18.2.1, o caso real do Spark):
+#   SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943 \
+#   SPARK_FIREBASE_PROJECT=spark-36b11 \
+#     ops/gcp/bootstrap-cloud-run.sh
+#
 # Pré-requisitos: `gcloud` autenticado (`gcloud auth login`) com permissão para habilitar APIs,
-# criar Service Accounts, conceder IAM e criar recursos Cloud Run/Scheduler no projeto.
+# criar Service Accounts, conceder IAM e criar recursos Cloud Run/Scheduler no projeto GCP — e
+# permissão para conceder IAM de Firebase Admin no projeto Firebase, quando ele é diferente.
 #
 # Este script NUNCA imprime valor de secret (§4 — "não imprimir secretos"). Os secrets de banco e
 # Gemini são criados aqui como *placeholders vazios* apenas se ainda não existirem — o valor real é
@@ -22,12 +28,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 require_cmd gcloud
 
-log "projeto: ${SPARK_GCP_PROJECT} | região: ${SPARK_GCP_REGION}"
+log "projeto GCP (infraestrutura): ${SPARK_GCP_PROJECT} | projeto Firebase (identidade): ${SPARK_FIREBASE_PROJECT} | região: ${SPARK_GCP_REGION}"
 
 # ---------------------------------------------------------------- 1. validação de projeto/região
+#
+# Os dois projetos são confirmados aqui, antes de qualquer recurso ser criado ou qualquer IAM ser
+# aplicado (T18.2.1) — inclusive quando são o mesmo projeto. Um SPARK_FIREBASE_PROJECT inexistente
+# ou inacessível precisa falhar antes do binding de Firebase Admin (§3 do enunciado da T18.2.1),
+# não depois de já ter criado Artifact Registry, Service Accounts e secrets.
 
 gcloud projects describe "${SPARK_GCP_PROJECT}" > /dev/null \
   || fail "projeto GCP inexistente ou sem acesso: ${SPARK_GCP_PROJECT}"
+
+gcloud projects describe "${SPARK_FIREBASE_PROJECT}" > /dev/null \
+  || fail "projeto Firebase inexistente ou sem acesso: ${SPARK_FIREBASE_PROJECT} (SPARK_FIREBASE_PROJECT) — nenhum IAM de Firebase Admin é aplicado sem os dois projetos confirmados"
 
 case "${SPARK_GCP_REGION}" in
   southamerica-east1) : ;;
@@ -84,7 +98,9 @@ ensure_service_account "${SPARK_SA_SCHEDULER}" "Spark Backend — invocador do C
 
 RUNTIME_SA_EMAIL="$(sa_email "${SPARK_SA_RUNTIME}")"
 MIGRATOR_SA_EMAIL="$(sa_email "${SPARK_SA_MIGRATOR}")"
-SCHEDULER_SA_EMAIL="$(sa_email "${SPARK_SA_SCHEDULER}")"
+# A e-mail da SA do Scheduler não é usada aqui: o binding run.invoker (seção 8 abaixo) só pode
+# acontecer depois de `spark-maintenance` existir, e isso é responsabilidade de deploy-cloud-run.sh,
+# que calcula seu próprio SCHEDULER_SA_EMAIL quando precisa dele.
 
 # ---------------------------------------------------------------- 5. Secret Manager
 #
@@ -145,18 +161,23 @@ gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
   > /dev/null \
   || log "AVISO: não foi possível conceder IAM no bucket — confirme que '${SPARK_GCS_BUCKET}' existe (T18.1) e tente de novo manualmente."
 
-# ---------------------------------------------------------------- 7. IAM do Firebase Admin (§19)
+# ---------------------------------------------------------------- 7. IAM do Firebase Admin (§19, T18.2.1)
 #
 # `verifyIdToken` não exige papel do Firebase — as chaves públicas do Google são de acesso livre.
 # `deleteUser` exige escrita no Firebase Authentication; FCM exige envio de mensagens quando
 # SOCIAL_PUSH_ENABLED=true. Nunca Owner/Editor.
+#
+# O binding é aplicado em SPARK_FIREBASE_PROJECT, não em SPARK_GCP_PROJECT — os dois só coincidem
+# quando a instalação usa um único projeto. O membro continua sendo a runtime SA do projeto de
+# infraestrutura: uma Service Account pode receber IAM num projeto diferente do seu próprio sem
+# nenhum JSON de credencial, e é exatamente essa concessão cross-project que este passo faz.
 
-log "concedendo IAM mínimo de Firebase Admin à runtime SA (verifyIdToken, deleteUser, FCM)"
-gcloud projects add-iam-policy-binding "${SPARK_GCP_PROJECT}" \
+log "concedendo IAM mínimo de Firebase Admin à runtime SA (verifyIdToken, deleteUser, FCM) no projeto Firebase '${SPARK_FIREBASE_PROJECT}'"
+gcloud projects add-iam-policy-binding "${SPARK_FIREBASE_PROJECT}" \
   --member "serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role roles/firebaseauth.admin \
   > /dev/null
-gcloud projects add-iam-policy-binding "${SPARK_GCP_PROJECT}" \
+gcloud projects add-iam-policy-binding "${SPARK_FIREBASE_PROJECT}" \
   --member "serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role roles/firebasecloudmessaging.admin \
   > /dev/null

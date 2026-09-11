@@ -61,18 +61,88 @@ ops/gcp/bootstrap-cloud-run.sh
 
 Idempotente (§4): recurso existente é reutilizado, recurso ausente é criado. Garante, nesta ordem:
 
-1. APIs habilitadas (`run`, `artifactregistry`, `secretmanager`, `cloudscheduler`, `cloudbuild`, `iam`).
-2. Repositório Artifact Registry `spark` (Docker, regional, `southamerica-east1`).
-3. Três Service Accounts: `spark-backend-runtime`, `spark-backend-migrator`,
+1. Os dois projetos são validados (`gcloud projects describe`) antes de qualquer recurso ser criado
+   ou qualquer IAM ser aplicado — ver §3.1 quando o projeto Firebase é diferente do projeto GCP.
+2. APIs habilitadas (`run`, `artifactregistry`, `secretmanager`, `cloudscheduler`, `cloudbuild`, `iam`).
+3. Repositório Artifact Registry `spark` (Docker, regional, `southamerica-east1`).
+4. Três Service Accounts: `spark-backend-runtime`, `spark-backend-migrator`,
    `spark-maintenance-scheduler`.
-4. Os quatro secrets do Secret Manager (`spark-database-url`, `spark-database-url-direct`,
+5. Os quatro secrets do Secret Manager (`spark-database-url`, `spark-database-url-direct`,
    `spark-gemini-api-key`, `spark-account-deletion-hmac-key`) — a chave HMAC é **gerada** com
    `openssl rand -hex 32` na primeira execução, e nunca rotacionada automaticamente depois (§20 —
    trocá-la sem migração destruiria o reconhecimento de tombstones históricos).
-5. IAM por secret: `spark-backend-runtime` só acessa os três da API; `spark-backend-migrator` só o
+6. IAM por secret: `spark-backend-runtime` só acessa os três da API; `spark-backend-migrator` só o
    secret direto (§9/§21).
-6. IAM mínimo de Firebase Admin (`roles/firebaseauth.admin`, `roles/firebasecloudmessaging.admin`)
-   e de bucket (`roles/storage.objectAdmin` sobre `spark-private-assets-prod`) para a runtime SA.
+7. IAM mínimo de Firebase Admin (`roles/firebaseauth.admin`, `roles/firebasecloudmessaging.admin`,
+   aplicado no projeto **Firebase** — §3.1) e de bucket (`roles/storage.objectAdmin` sobre
+   `spark-private-assets-prod`, no projeto GCP) para a runtime SA.
+
+### 3.1 Cross-project: infraestrutura GCP ≠ projeto Firebase (T18.2.1)
+
+O projeto GCP que hospeda a infraestrutura (Cloud Run, Artifact Registry, Secret Manager, Service
+Accounts, Cloud Scheduler, GCS) pode ser **diferente** do projeto Firebase usado pelo Android para
+identidade e FCM. É o caso real do Spark:
+
+```text
+Firebase / identidade                    Cloud Run / infraestrutura
+spark-36b11                              project-47b17b25-909d-4ae8-943
+      ▲                                        │
+      │ Firebase ID Tokens, Admin, FCM         ├── Artifact Registry
+      │                                        ├── Secret Manager
+      └──────── IAM cross-project ─────────────┤   (runtime SA do projeto GCP
+               (sem Service Account             │    recebe papel no projeto Firebase)
+                duplicada, sem JSON key)        ├── Cloud Scheduler
+                                                 ├── GCS
+                                                 └── Cloud Run
+```
+
+Declare os dois nomes explicitamente:
+
+```bash
+export SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943
+export SPARK_FIREBASE_PROJECT=spark-36b11
+export SPARK_GCP_REGION=southamerica-east1
+
+ops/gcp/bootstrap-cloud-run.sh
+# depois de garantir os valores reais dos secrets (§3):
+ops/gcp/deploy-cloud-run.sh
+```
+
+Sem `SPARK_FIREBASE_PROJECT` declarado, `ops/gcp/lib.gcp.sh` faz
+`SPARK_FIREBASE_PROJECT="${SPARK_FIREBASE_PROJECT:-${SPARK_GCP_PROJECT}}"` — uma instalação de
+projeto único (o caso mais simples, e o único que existia antes da T18.2.1) continua funcionando
+sem nenhuma variável nova.
+
+A divisão de responsabilidade:
+
+| | `SPARK_GCP_PROJECT` | `SPARK_FIREBASE_PROJECT` |
+| --- | --- | --- |
+| Cloud Run (API, manutenção, Job de migration) | ✓ | |
+| Artifact Registry | ✓ | |
+| Secret Manager (os quatro secrets) | ✓ | |
+| Service Accounts (as três) | ✓ | |
+| Cloud Scheduler | ✓ | |
+| GCS (`spark-private-assets-prod`) | ✓ | |
+| `FIREBASE_PROJECT_ID` (API, manutenção) | | ✓ |
+| `roles/firebaseauth.admin` | | ✓ |
+| `roles/firebasecloudmessaging.admin` | | ✓ |
+
+O binding de Firebase Admin é concedido **no projeto Firebase**, com o membro sendo a runtime
+Service Account **do projeto GCP** — `serviceAccount:spark-backend-runtime@<gcp-project>.iam.gserviceaccount.com`.
+Não existe, e não é criada, uma segunda `spark-backend-runtime` dentro do projeto Firebase: uma
+Service Account recebe papéis num projeto diferente do seu perfeitamente bem, sem chave JSON, sem
+impersonation e sem nada além de permissão para quem já a chama (`gcloud`, com as credenciais do
+operador que roda o bootstrap).
+
+`bootstrap-cloud-run.sh` valida os dois projetos (`gcloud projects describe`) antes de habilitar
+qualquer API, criar qualquer recurso ou aplicar qualquer IAM — um `SPARK_FIREBASE_PROJECT`
+inexistente ou inacessível falha imediatamente, nunca depois de a infraestrutura já ter sido criada
+no projeto GCP.
+
+O Migration Job (`spark-db-migrate`) não ganha nenhuma configuração de Firebase — ele só recebe
+`DATABASE_URL_DIRECT`, como sempre.
+
+Teste: `ops/tests/gcp-cross-project.test.sh` — com um `gcloud` fake (sem rede, sem projeto real).
 
 **Nunca imprime valor de secret.** Os valores reais de `DATABASE_URL`, `DATABASE_URL_DIRECT` e
 `GEMINI_API_KEY` são responsabilidade do operador, fora deste script e fora do Git:
@@ -200,14 +270,16 @@ modos.
 
 ### IAM mínimo (§19)
 
-| Capacidade | Papel | Por quê |
-| --- | --- | --- |
-| `verifyIdToken` | nenhum (chaves públicas do Google) | validação local contra JWKS público |
-| `deleteUser` | `roles/firebaseauth.admin` | escrita no Firebase Authentication |
-| FCM (`SOCIAL_PUSH_ENABLED=true`) | `roles/firebasecloudmessaging.admin` | envio de mensagens |
+| Capacidade | Papel | Projeto | Por quê |
+| --- | --- | --- | --- |
+| `verifyIdToken` | nenhum (chaves públicas do Google) | — | validação local contra JWKS público |
+| `deleteUser` | `roles/firebaseauth.admin` | `SPARK_FIREBASE_PROJECT` | escrita no Firebase Authentication |
+| FCM (`SOCIAL_PUSH_ENABLED=true`) | `roles/firebasecloudmessaging.admin` | `SPARK_FIREBASE_PROJECT` | envio de mensagens |
 
 Nunca `roles/owner` nem `roles/editor`. `spark-backend-runtime` é a única Service Account com estes
-dois papéis — `spark-backend-migrator` e `spark-maintenance-scheduler` não os têm.
+dois papéis — `spark-backend-migrator` e `spark-maintenance-scheduler` não os têm. Os dois papéis
+são concedidos no projeto **Firebase** (`SPARK_FIREBASE_PROJECT`), que pode ser diferente do projeto
+GCP de infraestrutura onde a própria Service Account vive — ver §3.1 (T18.2.1).
 
 ## 7. Secret Manager
 
@@ -356,7 +428,7 @@ não é declarado funcional.
 | `GCS_BUCKET_NAME` | `spark-private-assets-prod` |
 | `REQUIRE_FIREBASE_ADMIN` | `true` |
 | `FIREBASE_ADMIN_CREDENTIAL_MODE` | `adc` |
-| `FIREBASE_PROJECT_ID` | `<projeto>` |
+| `FIREBASE_PROJECT_ID` | `${SPARK_FIREBASE_PROJECT}` — pode ser diferente de `${SPARK_GCP_PROJECT}` (§3.1) |
 | `AI_ENABLED` | `true` |
 | `REQUIRE_GEMINI` | `false` |
 | `SYNC_WRITE_ENABLED` | `true` |

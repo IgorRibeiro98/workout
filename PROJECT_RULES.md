@@ -854,6 +854,27 @@ A T18.2 coloca o Spark Backend em Cloud Run sem alterar nenhum dos invariantes a
   `migrate-deletion-ledger-cli.spec.ts`, `background-jobs-mode.spec.ts`,
   `maintenance-coordinator.spec.ts`.
 
+### 13.8.3.1 Cross-project: infraestrutura GCP ≠ projeto Firebase (T18.2.1)
+
+O projeto GCP que hospeda a infraestrutura (`SPARK_GCP_PROJECT`) e o projeto Firebase que emite
+identidade/FCM (`SPARK_FIREBASE_PROJECT`) podem ser projetos diferentes — é o caso real do Spark. As
+regras abaixo são o que impede essa separação de conceder IAM no projeto errado ou de virar `Owner`
+disfarçado de conveniência.
+
+- **`SPARK_FIREBASE_PROJECT` cai em `SPARK_GCP_PROJECT` quando não declarado.** Uma instalação de
+  projeto único continua funcionando sem configuração adicional — nada além disso muda.
+- **Só o que é Firebase usa `SPARK_FIREBASE_PROJECT`.** `FIREBASE_PROJECT_ID` e os dois bindings de
+  IAM (`roles/firebaseauth.admin`, `roles/firebasecloudmessaging.admin`). Tudo o mais — Artifact
+  Registry, Service Accounts, Secret Manager, Cloud Run, Cloud Scheduler, GCS — continua em
+  `SPARK_GCP_PROJECT`, sem exceção.
+- **IAM cross-project, sem Service Account duplicada.** O binding de Firebase Admin é concedido no
+  projeto Firebase, com o membro sendo a runtime Service Account do projeto GCP. Não existe, e não
+  deve existir, uma segunda `spark-backend-runtime` dentro do projeto Firebase — nem chave JSON
+  baixada para viabilizar isso.
+- **Os dois projetos são validados antes de qualquer recurso ou IAM.** `bootstrap-cloud-run.sh`
+  falha antes de tocar infraestrutura se `SPARK_FIREBASE_PROJECT` for inexistente ou inacessível.
+- **Testes.** `ops/tests/gcp-cross-project.test.sh` e `shellcheck ops/gcp/*.sh`.
+
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 
 O Spark ganhou identidade **pública**. As regras abaixo são o que impede essa identidade de

@@ -408,11 +408,13 @@ jobs:
       # a única coisa pior que não ter o teste. `ops/gcp/` entra desde a T18.2 (Cloud Run) —
       # bootstrap, deploy, smoke e rollback são scripts de produção como qualquer outro em `ops/`.
       #
-      # Os avisos são **corrigidos**, nunca silenciados em bloco (T16.8.1 §5). As duas únicas
-      # supressões que restam em `ops/` são pontuais e documentadas na linha de cima: `SC2086` onde
-      # a divisão em palavras é o comportamento pretendido (`SPARK_RESTIC_CMD` carrega comando com
-      # argumentos) e `SC1090`/`SC1091` onde o caminho do `source` é configuração operacional e não
-      # existe em tempo de análise.
+      # Os avisos são **corrigidos**, nunca silenciados em bloco (T16.8.1 §5). As supressões que
+      # restam em `ops/` são pontuais e documentadas na linha de cima: `SC2086` onde a divisão em
+      # palavras é o comportamento pretendido (`SPARK_RESTIC_CMD` carrega comando com argumentos),
+      # `SC1090`/`SC1091` onde o caminho do `source` é configuração operacional e não existe em
+      # tempo de análise, e `SC2034` em `ops/gcp/lib.gcp.sh` (T18.2.1) onde a variável é consumida
+      # por `deploy-cloud-run.sh` depois do `source` — invisível para o ShellCheck ao analisar
+      # `lib.gcp.sh` isoladamente.
       - name: shellcheck
         run: shellcheck ops/*.sh ops/tests/*.sh ops/gcp/*.sh
 
@@ -434,6 +436,15 @@ jobs:
             esac
           done < <(grep -rn 'shellcheck disable=' ops/ || true)
           echo "supressões pontuais e justificadas"
+
+      # Topologia cross-project GCP/Firebase (T18.2.1): a infraestrutura do Spark Backend pode
+      # rodar num projeto GCP diferente do projeto Firebase do Android. Prova, com um `gcloud` fake
+      # (sem rede, sem projeto real), que SPARK_FIREBASE_PROJECT cai em SPARK_GCP_PROJECT quando não
+      # declarado, que o bootstrap valida os dois projetos antes de aplicar IAM, que o binding de
+      # Firebase Admin alveja o projeto Firebase (nunca o de infraestrutura) e que
+      # FIREBASE_PROJECT_ID no deploy vem de SPARK_FIREBASE_PROJECT.
+      - name: Topologia cross-project GCP/Firebase
+        run: ops/tests/gcp-cross-project.test.sh
 
       # A proibição de `777`/`666` (T16.8 §145/§146). Ela existia como regra escrita e não como
       # verificação — e `ops/verify-backup.sh` tinha um `chmod 777` no ensaio de restauração, que

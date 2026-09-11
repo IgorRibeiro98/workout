@@ -686,6 +686,7 @@ persistência do domínio        validação da resposta
 | T18.1 | Object Storage: fotos e documentos de backup no GCS privado (ADC); PostgreSQL só metadata | **implementado** (bucket real NOT VERIFIED sem ADC local) |
 | T18.1.1 | Endurecimento: Account Mutation Fence, migração de mídia legada, coleta honesta | **implementado** (bucket real NOT VERIFIED sem ADC local) |
 | T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | **implementado** (Cloud Run real NOT VERIFIED sem gcloud/rede GCP) |
+| T18.2.1 | Cross-project: projeto GCP de infraestrutura ≠ projeto Firebase | **implementado** (bootstrap real NOT VERIFIED sem gcloud/rede GCP) |
 | T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | pendente |
 
 ### Identidade global dos dados e Outbox (T16.3)
@@ -1791,6 +1792,49 @@ Testes: `firebase-admin-credential.spec.ts` (modo `adc`), `database-migration-mo
 `migrate-database-cli.spec.ts`, `deletion-ledger-object-storage.spec.ts`,
 `migrate-deletion-ledger-cli.spec.ts`, `background-jobs-mode.spec.ts`,
 `maintenance-coordinator.spec.ts`.
+
+#### Cross-project: infraestrutura GCP ≠ projeto Firebase (T18.2.1)
+
+> **Status (verificado em 2026-09-11): implementado no código.** Bootstrap real contra o par de
+> projetos reais segue **NOT VERIFIED** — este ambiente de desenvolvimento não tem `gcloud` nem
+> rede para o Google Cloud. Ver
+> [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](docs/operations/CLOUD_RUN_DEPLOYMENT.md) §3.1.
+
+A T18.2 assumia implicitamente que o projeto GCP da infraestrutura (Cloud Run, Artifact Registry,
+Secret Manager, Service Accounts, Cloud Scheduler, GCS) e o projeto Firebase (identidade, FCM) são
+o mesmo projeto. No Spark real não são: a infraestrutura roda em `project-47b17b25-...` e o
+Firebase é `spark-36b11`. Rodar o bootstrap/deploy antigos contra essa topologia concederia IAM de
+Firebase no projeto errado e configuraria `FIREBASE_PROJECT_ID` incorretamente — o Firebase Admin
+verificaria/operaria contra o projeto de infraestrutura, não contra o Firebase real.
+
+- **Dois nomes de projeto, uma variável cai no default da outra.** `SPARK_GCP_PROJECT` (obrigatória,
+  sem default) e `SPARK_FIREBASE_PROJECT` (`ops/gcp/lib.gcp.sh`:
+  `SPARK_FIREBASE_PROJECT="${SPARK_FIREBASE_PROJECT:-${SPARK_GCP_PROJECT}}"`). Uma instalação onde
+  os dois são o mesmo projeto não precisa declarar nada novo — é exatamente o comportamento da T18.2
+  antes desta tarefa.
+- **A divisão de responsabilidade não mudou de lado, só de rótulo.** Tudo que já vivia em
+  `SPARK_GCP_PROJECT` continua lá: Artifact Registry, as três Service Accounts, os quatro secrets,
+  Cloud Run (API, manutenção, Job de migration) e Cloud Scheduler. Só o que é genuinamente Firebase
+  — `FIREBASE_PROJECT_ID` e os dois bindings de IAM (`roles/firebaseauth.admin`,
+  `roles/firebasecloudmessaging.admin`) — passou a usar `SPARK_FIREBASE_PROJECT`.
+- **IAM cross-project sem JSON de credencial.** O binding de Firebase Admin é concedido *no projeto
+  Firebase*, com o membro sendo a runtime Service Account *do projeto GCP*
+  (`spark-backend-runtime@<gcp-project>.iam.gserviceaccount.com`) — `gcloud projects
+  add-iam-policy-binding <firebase-project> --member serviceAccount:...@<gcp-project>...`. Não
+  existe uma segunda Service Account dentro do projeto Firebase, e não é necessária: uma Service
+  Account pode receber papéis num projeto que não é o seu, e é exatamente essa concessão
+  cross-project que o bootstrap faz.
+- **Os dois projetos são validados antes de qualquer coisa.** `bootstrap-cloud-run.sh` chama
+  `gcloud projects describe` para `SPARK_GCP_PROJECT` **e** `SPARK_FIREBASE_PROJECT` antes de
+  habilitar API, criar recurso ou aplicar IAM — um projeto Firebase inacessível falha imediatamente,
+  nunca depois de já ter criado infraestrutura no projeto GCP.
+- **Migration Job não ganhou Firebase.** `spark-db-migrate` continua recebendo só
+  `DATABASE_URL_DIRECT` — Firebase não tem relação com aplicar schema.
+
+Testes: `ops/tests/gcp-cross-project.test.sh` — com um `gcloud` fake (sem rede, sem projeto real),
+prova o fallback de compatibilidade, a validação dos dois projetos, que o binding de Firebase Admin
+alveja o projeto Firebase (nunca o de infraestrutura) mesmo quando são projetos diferentes, e que
+`FIREBASE_PROJECT_ID` no deploy vem de `SPARK_FIREBASE_PROJECT`.
 
 ### Conta opcional e identidade (T16.1)
 

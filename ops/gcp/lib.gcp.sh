@@ -12,7 +12,18 @@ set -euo pipefail
 
 # Nunca um default aqui: aplicar a configuração de produção contra o projeto GCP errado por causa
 # de um valor esquecido é exatamente o tipo de engano que este script existe para impedir.
+#
+# SPARK_GCP_PROJECT     → projeto onde a infraestrutura roda: Cloud Run, Artifact Registry, Secret
+#                         Manager, Service Accounts, Cloud Scheduler, GCS.
+# SPARK_FIREBASE_PROJECT → projeto que emite os Firebase ID Tokens e hospeda Firebase
+#                         Authentication/FCM. Pode ser um projeto GCP diferente de
+#                         SPARK_GCP_PROJECT (T18.2.1) — é o caso real do Spark, onde a
+#                         infraestrutura roda em `project-...` e o Firebase é `spark-36b11`. Sem
+#                         declaração explícita, cai no mesmo projeto de infraestrutura: uma
+#                         instalação onde os dois são o mesmo projeto continua funcionando sem
+#                         configuração adicional.
 SPARK_GCP_PROJECT="${SPARK_GCP_PROJECT:?defina SPARK_GCP_PROJECT (o project id do GCP)}"
+SPARK_FIREBASE_PROJECT="${SPARK_FIREBASE_PROJECT:-${SPARK_GCP_PROJECT}}"
 SPARK_GCP_REGION="${SPARK_GCP_REGION:-southamerica-east1}"
 
 # ---------------------------------------------------------------- Artifact Registry
@@ -22,6 +33,9 @@ SPARK_AR_IMAGE="${SPARK_AR_IMAGE:-spark-backend}"
 SPARK_AR_HOST="${SPARK_GCP_REGION}-docker.pkg.dev"
 # `<sha>` é resolvido por quem chama (`deploy-cloud-run.sh`) a partir de `git rev-parse HEAD` — não
 # existe `latest` como identidade de deploy em lugar nenhum destes scripts (§2/§58 do enunciado).
+# Consumida por deploy-cloud-run.sh depois do `source` — ShellCheck não enxerga isso ao analisar
+# este arquivo isoladamente (falso positivo entre arquivos).
+# shellcheck disable=SC2034
 SPARK_AR_IMAGE_BASE="${SPARK_AR_HOST}/${SPARK_GCP_PROJECT}/${SPARK_AR_REPO}/${SPARK_AR_IMAGE}"
 
 # ---------------------------------------------------------------- Cloud Run — serviços e job

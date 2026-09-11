@@ -163,7 +163,7 @@ baixada. O mesmo mecanismo que `GcsObjectStorageClient` já usa para o bucket de
 
 ```bash
 FIREBASE_ADMIN_CREDENTIAL_MODE=adc
-FIREBASE_PROJECT_ID=<projeto>
+FIREBASE_PROJECT_ID=<projeto Firebase>
 # GOOGLE_APPLICATION_CREDENTIALS NÃO é definida — nem aqui, nem na revision Cloud Run.
 ```
 
@@ -171,6 +171,24 @@ O IAM mínimo da Service Account (`roles/firebaseauth.admin` para `deleteUser`,
 `roles/firebasecloudmessaging.admin` se `SOCIAL_PUSH_ENABLED=true`; `verifyIdToken` não exige papel
 nenhum) é aplicado por `ops/gcp/bootstrap-cloud-run.sh` — nunca `roles/owner`/`roles/editor`. Ver
 [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](./operations/CLOUD_RUN_DEPLOYMENT.md) §6/§19.
+
+#### Projeto Firebase ≠ projeto GCP de infraestrutura (T18.2.1)
+
+`FIREBASE_PROJECT_ID` e o IAM acima usam o **projeto Firebase** — no Spark real, `spark-36b11`, o
+mesmo projeto do passo 1 acima. Ele pode ser um projeto GCP diferente daquele onde o Cloud Run, o
+Artifact Registry e o Secret Manager rodam (no Spark real, `project-47b17b25-909d-4ae8-943`). Os
+scripts em `ops/gcp/` distinguem os dois com duas variáveis — `SPARK_GCP_PROJECT` (infraestrutura) e
+`SPARK_FIREBASE_PROJECT` (identidade/FCM, cai em `SPARK_GCP_PROJECT` quando não declarado):
+
+```bash
+export SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943
+export SPARK_FIREBASE_PROJECT=spark-36b11
+```
+
+A runtime Service Account continua sendo uma só, do projeto GCP; ela só recebe papéis de Firebase
+Admin *no* projeto Firebase — nunca uma segunda Service Account dentro dele. Ver
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](./operations/CLOUD_RUN_DEPLOYMENT.md) §3.1 para a
+topologia completa e o exemplo de execução.
 
 O preflight de startup (`REQUIRE_FIREBASE_ADMIN=true`) valida os dois modos sem chamada de rede:
 em `file`, arquivo/JSON/forma/`cert()`; em `adc`, só que `applicationDefault()` +
