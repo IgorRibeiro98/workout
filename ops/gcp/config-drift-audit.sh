@@ -38,11 +38,13 @@ done
 # ---------------------------------------------------------------- Service Accounts
 audit_section "service accounts"
 for sa in "${RUNTIME_SA_EMAIL}" "${MIGRATOR_SA_EMAIL}" "${SCHEDULER_SA_EMAIL}" "${BACKUP_SA_EMAIL}"; do
-  disabled="$(gcloud iam service-accounts describe "${sa}" --project "${SPARK_GCP_PROJECT}" --format='value(disabled)' 2> /dev/null || true)"
-  if [ -z "${disabled}" ]; then
+  # `disabled` só aparece na resposta quando é true; a existência é conferida pelo e-mail.
+  email="$(gcloud iam service-accounts describe "${sa}" --project "${SPARK_GCP_PROJECT}" --format='value(email)' 2> /dev/null || true)"
+  if [ -z "${email}" ]; then
     audit_drift "service account ${sa} inexistente ou sem acesso"
   else
-    audit_expect "service account ${sa%%@*} disabled" "False" "${disabled}"
+    disabled="$(gcloud iam service-accounts describe "${sa}" --project "${SPARK_GCP_PROJECT}" --format='value(disabled)' 2> /dev/null || true)"
+    audit_expect "service account ${sa%%@*} disabled" "False" "${disabled:-False}"
   fi
 done
 

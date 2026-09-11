@@ -38,9 +38,9 @@ audit_section "budget (alerta, nunca teto)"
 if [ -z "${BILLING_ACCOUNT}" ]; then
   audit_not_verified "budget: conta de billing desconhecida"
 else
-  BUDGETS="$(gcloud billing budgets list --billing-account="${BILLING_ACCOUNT#billingAccounts/}" --format=json 2> /dev/null || printf 'ERR')"
+  BUDGETS="$(gcloud_json_or_empty billing budgets list --billing-account="${BILLING_ACCOUNT#billingAccounts/}")"
   case "${BUDGETS}" in
-    ERR) audit_not_verified "budget: API billingbudgets desabilitada ou sem permissão — habilite/configure pela Console (ver docs/operations/OPERATIONS_CHECKLIST.md)" ;;
+    '') audit_not_verified "budget: API billingbudgets desabilitada ou sem permissão — habilite/configure pela Console (ver docs/operations/OPERATIONS_CHECKLIST.md)" ;;
     *)
       count="$(printf '%s' "${BUDGETS}" | jq 'length')"
       if [ "${count}" -ge 1 ]; then

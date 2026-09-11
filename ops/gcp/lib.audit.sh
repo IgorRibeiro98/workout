@@ -61,7 +61,18 @@ audit_finish() {
   exit 0
 }
 
-# `gcloud ... --format=json`, ou vazio quando o comando falha (para quem chama decidir NOT_VERIFIED).
+# `gcloud ... --format=json`, ou vazio quando o comando falha OU não devolve JSON (para quem chama
+# decidir NOT_VERIFIED). `--quiet` desliga qualquer prompt interativo ("habilitar a API? (y/N)"),
+# que num terminal viraria uma pergunta e num script viraria texto no lugar do JSON.
 gcloud_json_or_empty() {
-  gcloud "$@" --format=json 2> /dev/null || true
+  local output
+  # Só a saída de um comando que TERMINOU BEM conta: `gcloud billing budgets list` com a API
+  # desabilitada imprime `[]` em stdout e sai com 1 — e `[]` seria lido como "nenhum budget" (DRIFT)
+  # em vez de "não consegui saber" (NOT_VERIFIED).
+  if ! output="$(gcloud --quiet "$@" --format=json 2> /dev/null)"; then
+    return 0
+  fi
+  if printf '%s' "${output}" | jq -e . > /dev/null 2>&1; then
+    printf '%s' "${output}"
+  fi
 }

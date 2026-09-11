@@ -27,7 +27,7 @@ cat > "${FAKE_BIN_DIR}/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${GCLOUD_CALL_LOG}"
-key="$(printf '%s ' "$@" | sed -E 's/--(project|region|location)(=| )[^ ]* //g; s/ $//' | tr -c 'A-Za-z0-9.\n' '_')"
+key="$(printf '%s ' "$@" | sed -E 's/--quiet //; s/--(project|region|location)(=| )[^ ]* //g; s/ $//' | tr -c 'A-Za-z0-9.\n' '_')"
 file="${FIXTURES}/${key}"
 if [ -f "${file}" ]; then
   cat "${file}"
@@ -40,7 +40,7 @@ chmod +x "${FAKE_BIN_DIR}/gcloud"
 # fxfile <args...> — o caminho da fixture de uma chamada (mesma normalização do fake).
 fxfile() {
   local key
-  key="$(printf '%s ' "$@" | sed -E 's/--(project|region|location)(=| )[^ ]* //g; s/ $//' | tr -c 'A-Za-z0-9.\n' '_')"
+  key="$(printf '%s ' "$@" | sed -E 's/--quiet //; s/--(project|region|location)(=| )[^ ]* //g; s/ $//' | tr -c 'A-Za-z0-9.\n' '_')"
   printf '%s/%s' "${FIXTURES}" "${key}"
 }
 # fx <args...> — grava stdin como fixture da chamada com esses argumentos.
@@ -70,7 +70,9 @@ build_pass_fixtures() {
     printf 'ACTIVE\n' | fx projects describe "${project}" --format=value\(lifecycleState\)
   done
   for sa in "${RUNTIME}" "${MIGRATOR}" "${SCHEDULER}" "${BACKUP}"; do
-    printf 'False\n' | fx iam service-accounts describe "${sa}" --format=value\(disabled\)
+    printf '%s\n' "${sa}" | fx iam service-accounts describe "${sa}" --format=value\(email\)
+    # `disabled` ausente na resposta real quando é false — a fixture reproduz isso (vazio).
+    printf '' | fx iam service-accounts describe "${sa}" --format=value\(disabled\)
     printf '' | fx iam service-accounts keys list --iam-account "${sa}" --managed-by user --format=value\(name\)
   done
   for secret in spark-database-url spark-database-url-direct spark-gemini-api-key spark-account-deletion-hmac-key; do

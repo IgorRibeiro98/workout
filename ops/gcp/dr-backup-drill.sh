@@ -55,8 +55,17 @@ OBJECTS_GID="$(stat -c %g "${OBJECTS}")"
 cleanup() {
   docker rm -f "${APP_CONTAINER}" > /dev/null 2>&1 || true
   psql_admin "DROP DATABASE IF EXISTS ${DRILL_DB} WITH (FORCE)" > /dev/null 2>&1 || true
+  # Os objetos foram criados pelo container (uid 1000, `node`), e o runner do CI tem outro uid
+  # (T16.8.1 §3): o que o container criou, o container remove. Depois, o que sobrou do host. A
+  # limpeza NUNCA transforma um ensaio aprovado em falha — o veredito já saiu; um resíduo em
+  # `mktemp` é visível e inofensivo.
   if [ -n "${WORK}" ] && [ -d "${WORK}" ]; then
-    rm -rf "${WORK}"
+    # Só o diretório de objetos é montado (o `mktemp -d` de cima é 700 do host e o container não o
+    # atravessa); com `--group-add` o container entra nele pelo grupo compartilhado e remove o que
+    # ele mesmo criou.
+    docker run --rm --group-add "${OBJECTS_GID}" -v "${OBJECTS}:/objects" \
+      --entrypoint sh "${SPARK_IMAGE}" -c 'rm -rf /objects/system /objects/backups /objects/checkins' > /dev/null 2>&1 || true
+    rm -rf "${WORK}" 2> /dev/null || log "aviso: não foi possível limpar ${WORK} por completo"
   fi
 }
 trap cleanup EXIT
