@@ -25,8 +25,11 @@ Duas camadas, deliberadamente:
    `server_metadata` e o expõe em `GET /internal/maintenance/status`; mede `pg_database_size` e o
    frescor do backup de DR. Nada disso depende do Cloud Monitoring existir — `ops/gcp/dr-status.sh`
    lê tudo pela CLI.
-2. **O Cloud Monitoring reage aos eventos.** Um alerta é uma métrica log-based que subiu, ou (para
-   "a manutenção parou") a **ausência** de um evento por 10 minutos.
+2. **O Cloud Monitoring reage aos eventos.** Um alerta de evento é *log-based alerting* (casa a
+   entrada de log diretamente, sem depender de métrica); os de taxa/ausência usam métricas
+   **nativas** do Cloud Run (`request_count`, `job/completed_task_attempt_count`). As métricas
+   log-based `spark_*` existem para painéis e consultas — nenhuma política depende delas, porque
+   uma métrica log-based recém-criada leva dezenas de minutos para o alerting a reconhecer.
 
 ## Os eventos estruturados
 
@@ -107,7 +110,8 @@ Só `PLAN` e `ACTION_REQUIRED` alertam (`spark-db-size-critical`); os dois prime
 
 ## Os alertas
 
-`ops/gcp/monitoring-alerts.sh` cria (idempotente) o canal, 10 métricas log-based e 12 políticas:
+`ops/gcp/monitoring-alerts.sh` cria (idempotente) o canal, 10 métricas log-based (painéis) e 12
+políticas (8 por log, 3 por métrica nativa, 1 de ausência sobre métrica nativa):
 
 ```bash
 SPARK_GCP_PROJECT=... SPARK_ALERT_EMAIL=voce@exemplo.com ops/gcp/monitoring-alerts.sh
@@ -121,7 +125,7 @@ SPARK_GCP_PROJECT=... ops/gcp/monitoring-alerts.sh --list     # o que existe
 | `spark-job-migrate-failed` / `-task-failed` | `migration_failed` ou task do Job com `result=failed` | RUNBOOK → "O Job spark-db-migrate falhou" |
 | `spark-job-backup-failed` / `-task-failed` | `db_backup_failed` ou task do Job com `result=failed` | `ops/gcp/dr-status.sh`; logs do Job; `ops/gcp/dr-backup-now.sh` |
 | `spark-db-backup-stale` | o maintenance mediu o backup mais recente acima de 26 h | Scheduler `spark-db-backup-daily` (ENABLED? último status?); `dr-backup-now.sh` |
-| `spark-maintenance-stale` | 10 min sem `maintenance_completed` | Scheduler `spark-maintenance-cycle`; `spark-maintenance` responde? `/internal/maintenance/status` |
+| `spark-maintenance-stale` | 10 min sem resposta 2xx de `spark-maintenance` (métrica nativa `request_count`) | Scheduler `spark-maintenance-cycle`; `spark-maintenance` responde? `/internal/maintenance/status` |
 | `spark-maintenance-failed` | `maintenance_failed` (`errorName`) | logs do ciclo; um worker quebrou — notificação, exclusão, cleaners |
 | `spark-scheduler-failed` | o Scheduler registrou erro (HTTP ≠ 2xx, timeout, IAM) | `gcloud scheduler jobs describe …`; IAM `run.invoker` |
 | `spark-db-size-critical` | nível `PLAN` ou `ACTION_REQUIRED` | tabela acima |

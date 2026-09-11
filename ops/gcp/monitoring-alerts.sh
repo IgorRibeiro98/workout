@@ -7,13 +7,14 @@
 # O que ele cria (ou atualiza, se já existir com o mesmo displayName):
 #
 #   canal      spark-ops-email (e-mail)                     ← SPARK_ALERT_EMAIL
-#   métricas   log-based, uma por evento estruturado do backend (jsonPayload.event=...)
+#   métricas   log-based, uma por evento estruturado do backend (para painéis e para a política de
+#              ausência) — as políticas de evento alertam por LOG, sem depender delas
 #   políticas  spark-run-5xx                 ≥ 5 respostas 5xx em 5 min na API
 #              spark-run-revision-failed     revision do Cloud Run que não sobe
 #              spark-job-migrate-failed      migration_failed OU task do Job com result=failed
 #              spark-job-backup-failed       db_backup_failed OU task do Job com result=failed
 #              spark-db-backup-stale         db_backup_stale (o maintenance mediu a idade do último válido)
-#              spark-maintenance-stale       10 min sem maintenance_completed (o Scheduler parou, ou o serviço)
+#              spark-maintenance-stale       10 min sem resposta 2xx do spark-maintenance (o Scheduler parou, ou o serviço)
 #              spark-maintenance-failed      maintenance_failed
 #              spark-scheduler-failed        erro do Cloud Scheduler (HTTP != 2xx no alvo)
 #              spark-db-size-critical        database_size_threshold_exceeded em PLAN/ACTION_REQUIRED
@@ -115,6 +116,23 @@ threshold_policy() {
   }'
 }
 
+# log_policy <displayName> <filtro de LOG> <documentação> — alerta por entrada de log (Cloud
+# Monitoring "log-based alerting"). Não depende de métrica: dispara na primeira entrada que casa
+# com o filtro, com um limite de uma notificação a cada 5 min por política. É a forma escolhida
+# para os eventos estruturados do backend — uma métrica log-based recém-criada leva minutos para
+# ficar visível ao Monitoring (visto na execução real), e um alerta que espera por isso é um alerta
+# que pode não existir quando o primeiro incidente acontecer.
+log_policy() {
+  local name="$1" filter="$2" doc="$3"
+  jq -n --arg name "${name}" --arg filter "${filter}" --arg doc "${doc}" --arg channel "${CHANNEL}" '{
+    displayName: $name, combiner: "OR",
+    conditions: [{ displayName: $name, conditionMatchedLog: { filter: $filter } }],
+    notificationChannels: [$channel],
+    alertStrategy: { notificationRateLimit: { period: "300s" }, autoClose: "1800s" },
+    documentation: { content: $doc, mimeType: "text/markdown" }
+  }'
+}
+
 # absence_policy <displayName> <filtro> <duração> <documentação>
 absence_policy() {
   local name="$1" filter="$2" duration="$3" doc="$4"
@@ -134,22 +152,43 @@ absence_policy() {
   }'
 }
 
+# Uma métrica log-based recém-criada leva até ~10 min para o Cloud Monitoring a enxergar ("Cannot
+# find metric(s) that match type"), e uma política que a referencia é recusada até lá — visto na
+# primeira execução real. Por isso cada política tenta de novo, com espera, antes de desistir:
+# SPARK_ALERT_RETRIES tentativas (12) com SPARK_ALERT_RETRY_SLEEP segundos (30) entre elas.
 apply_policy() {
-  local json="$1" name file existing
+  local json="$1" name file existing attempt output
   name="$(printf '%s' "${json}" | jq -r .displayName)"
   file="${WORK}/${name}.json"
   printf '%s' "${json}" > "${file}"
   existing="$(gcloud alpha monitoring policies list --project "${SPARK_GCP_PROJECT}" \
     --filter="displayName=\"${name}\"" --format='value(name)' 2> /dev/null | head -1)"
-  if [ -n "${existing}" ]; then
-    gcloud alpha monitoring policies update "${existing}" --project "${SPARK_GCP_PROJECT}" \
-      --policy-from-file "${file}" > /dev/null
-    log "política atualizada: ${name}"
-  else
-    gcloud alpha monitoring policies create --project "${SPARK_GCP_PROJECT}" \
-      --policy-from-file "${file}" > /dev/null
-    log "política criada: ${name}"
-  fi
+  for attempt in $(seq 1 "${SPARK_ALERT_RETRIES:-12}"); do
+    if [ -n "${existing}" ]; then
+      if output="$(gcloud alpha monitoring policies update "${existing}" --project "${SPARK_GCP_PROJECT}" \
+          --policy-from-file "${file}" 2>&1)"; then
+        log "política atualizada: ${name}"
+        return 0
+      fi
+    else
+      if output="$(gcloud alpha monitoring policies create --project "${SPARK_GCP_PROJECT}" \
+          --policy-from-file "${file}" 2>&1)"; then
+        log "política criada: ${name}"
+        return 0
+      fi
+    fi
+    case "${output}" in
+      *"Cannot find metric"*)
+        log "política ${name}: a métrica ainda não está visível (tentativa ${attempt}); aguardando ${SPARK_ALERT_RETRY_SLEEP:-30}s"
+        sleep "${SPARK_ALERT_RETRY_SLEEP:-30}"
+        ;;
+      *)
+        printf '%s\n' "${output}" >&2
+        fail "política ${name}: falha ao aplicar"
+        ;;
+    esac
+  done
+  fail "política ${name}: a métrica não ficou visível depois de ${SPARK_ALERT_RETRIES:-12} tentativas"
 }
 
 user_metric() { printf 'metric.type="logging.googleapis.com/user/%s"' "$1"; }
@@ -158,23 +197,29 @@ RUNBOOK="Ver docs/operations/OBSERVABILITY.md e docs/operations/RUNBOOK.md (Clou
 apply_policy "$(threshold_policy spark-run-5xx \
   "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SPARK_RUN_API_SERVICE}\" AND metric.labels.response_code_class=\"5xx\"" \
   5 ALIGN_SUM "≥ 5 respostas 5xx em 5 min em ${SPARK_RUN_API_SERVICE}. ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-run-revision-failed "$(user_metric spark_revision_start_failed) AND resource.type=\"cloud_run_revision\"" 0 ALIGN_SUM "Uma revision do Cloud Run não conseguiu iniciar. ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-job-migrate-failed \
-  "$(user_metric spark_migration_failed) AND resource.type=\"cloud_run_job\"" 0 ALIGN_SUM "O Job ${SPARK_RUN_MIGRATE_JOB} registrou migration_failed. O deploy abortou antes da API. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-run-revision-failed 'resource.type="cloud_run_revision" AND severity>=ERROR AND (textPayload:"failed to start" OR textPayload:"probe failed" OR textPayload:"STARTUP")' "Uma revision do Cloud Run não conseguiu iniciar. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-job-migrate-failed 'resource.type="cloud_run_job" AND jsonPayload.event="migration_failed"' "O Job ${SPARK_RUN_MIGRATE_JOB} registrou migration_failed. O deploy abortou antes da API. ${RUNBOOK}")"
 apply_policy "$(threshold_policy spark-job-migrate-task-failed \
   "metric.type=\"run.googleapis.com/job/completed_task_attempt_count\" AND resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${SPARK_RUN_MIGRATE_JOB}\" AND metric.labels.result=\"failed\"" \
   0 ALIGN_SUM "Uma tentativa do Job ${SPARK_RUN_MIGRATE_JOB} terminou com result=failed (inclusive crash antes de logar). ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-job-backup-failed \
-  "$(user_metric spark_db_backup_failed) AND resource.type=\"cloud_run_job\"" 0 ALIGN_SUM "O Job ${SPARK_RUN_BACKUP_JOB} registrou db_backup_failed. Rode ops/gcp/dr-status.sh. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-job-backup-failed 'resource.type="cloud_run_job" AND jsonPayload.event="db_backup_failed"' "O Job ${SPARK_RUN_BACKUP_JOB} registrou db_backup_failed. Rode ops/gcp/dr-status.sh. ${RUNBOOK}")"
 apply_policy "$(threshold_policy spark-job-backup-task-failed \
   "metric.type=\"run.googleapis.com/job/completed_task_attempt_count\" AND resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${SPARK_RUN_BACKUP_JOB}\" AND metric.labels.result=\"failed\"" \
   0 ALIGN_SUM "Uma tentativa do Job ${SPARK_RUN_BACKUP_JOB} terminou com result=failed. ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-db-backup-stale "$(user_metric spark_db_backup_stale) AND resource.type=\"cloud_run_revision\"" 0 ALIGN_SUM "O maintenance mediu o backup de DR mais recente e ele está acima da janela. Rode ops/gcp/dr-status.sh e ops/gcp/dr-backup-now.sh. ${RUNBOOK}")"
-apply_policy "$(absence_policy spark-maintenance-stale "$(user_metric spark_maintenance_completed) AND resource.type=\"cloud_run_revision\"" 600s "10 min sem maintenance_completed: o Cloud Scheduler parou, o serviço não sobe, ou o ciclo está preso. GET /internal/maintenance/status. ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-maintenance-failed "$(user_metric spark_maintenance_failed) AND resource.type=\"cloud_run_revision\"" 0 ALIGN_SUM "Um ciclo de manutenção falhou (maintenance_failed, com errorName). ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-scheduler-failed "$(user_metric spark_scheduler_failed) AND resource.type=\"cloud_scheduler_job\"" 0 ALIGN_SUM "O Cloud Scheduler registrou erro ao chamar o alvo (HTTP != 2xx, timeout, IAM). ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-db-size-critical "$(user_metric spark_db_size_critical) AND resource.type=\"cloud_run_revision\"" 0 ALIGN_SUM "pg_database_size acima de PLAN (400 MB) ou ACTION_REQUIRED (450 MB). Ver os limiares em docs/operations/OBSERVABILITY.md. ${RUNBOOK}")"
-apply_policy "$(threshold_policy spark-restore-drill-failed "$(user_metric spark_restore_drill_failed) AND resource.type=\"global\"" 0 ALIGN_SUM "Um ensaio de restauração registrado com --record reprovou. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-db-backup-stale "${MAINT_FILTER} AND jsonPayload.event=\"db_backup_stale\"" "O maintenance mediu o backup de DR mais recente e ele está acima da janela. Rode ops/gcp/dr-status.sh e ops/gcp/dr-backup-now.sh. ${RUNBOOK}")"
+# "Ausência" só existe sobre séries temporais, e sobre uma métrica NATIVA: a de contagem de
+# requisições 2xx do serviço de manutenção (o Scheduler o chama a cada minuto). Dez minutos sem
+# resposta 2xx cobrem "o Scheduler parou", "o serviço não sobe" e "o ciclo falha" (um ciclo que
+# lança responde 5xx). Uma métrica log-based recém-criada pode levar dezenas de minutos até o
+# alerting a reconhecer (visto na execução real, mesmo com pontos já ingeridos); a nativa existe
+# desde o primeiro deploy.
+apply_policy "$(absence_policy spark-maintenance-stale \
+  "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SPARK_RUN_MAINTENANCE_SERVICE}\" AND metric.labels.response_code_class=\"2xx\"" \
+  600s "10 min sem resposta 2xx de ${SPARK_RUN_MAINTENANCE_SERVICE}: o Cloud Scheduler parou, o serviço não sobe, ou o ciclo está falhando. GET /internal/maintenance/status. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-maintenance-failed "${MAINT_FILTER} AND jsonPayload.event=\"maintenance_failed\"" "Um ciclo de manutenção falhou (maintenance_failed, com errorName). ${RUNBOOK}")"
+apply_policy "$(log_policy spark-scheduler-failed 'resource.type="cloud_scheduler_job" AND severity>=ERROR' "O Cloud Scheduler registrou erro ao chamar o alvo (HTTP != 2xx, timeout, IAM). ${RUNBOOK}")"
+apply_policy "$(log_policy spark-db-size-critical "${MAINT_FILTER} AND jsonPayload.event=\"database_size_threshold_exceeded\" AND (jsonPayload.level=\"PLAN\" OR jsonPayload.level=\"ACTION_REQUIRED\")" "pg_database_size acima de PLAN (400 MB) ou ACTION_REQUIRED (450 MB). Ver os limiares em docs/operations/OBSERVABILITY.md. ${RUNBOOK}")"
+apply_policy "$(log_policy spark-restore-drill-failed 'logName:"logs/spark-dr-drill" AND jsonPayload.status="RESTORE_DRILL_FAIL"' "Um ensaio de restauração registrado com --record reprovou. ${RUNBOOK}")"
 
 log "alertas aplicados. Canal: ${CHANNEL} (${SPARK_ALERT_EMAIL})."
 log "NOT VERIFIED até um alerta real chegar: confirme o e-mail do canal na Console (Monitoring → Alerting → Notification channels)."

@@ -39,6 +39,18 @@ case "$*" in
   "beta monitoring channels create"*) printf 'projects/infra-project/notificationChannels/222\n'; exit 0 ;;
   "logging metrics describe"*) exit 1 ;;
   "alpha monitoring policies list"*) exit 0 ;;
+  "alpha monitoring policies create"*)
+    # Simula a métrica ainda invisível nas primeiras N tentativas (FAKE_METRIC_NOT_READY_TIMES).
+    if [ -n "${FAKE_METRIC_NOT_READY_TIMES:-}" ]; then
+      count_file="${POLICIES}/.not-ready-count"
+      count="$(cat "${count_file}" 2> /dev/null || printf 0)"
+      if [ "${count}" -lt "${FAKE_METRIC_NOT_READY_TIMES}" ]; then
+        printf '%s' "$((count + 1))" > "${count_file}"
+        printf 'ERROR: Cannot find metric(s) that match type = "logging.googleapis.com/user/x"\n' >&2
+        exit 1
+      fi
+    fi
+    exit 0 ;;
 esac
 exit 0
 FAKE
@@ -48,7 +60,8 @@ GCLOUD_CALL_LOG="${WORK}/calls.log"
 export GCLOUD_CALL_LOG POLICIES
 run_alerts() {
   : > "${GCLOUD_CALL_LOG}"
-  PATH="${FAKE_BIN_DIR}:${PATH}" SPARK_GCP_PROJECT=infra-project SPARK_GCP_REGION=southamerica-east1 "$@" \
+  rm -f "${POLICIES}/.not-ready-count"
+  PATH="${FAKE_BIN_DIR}:${PATH}" SPARK_GCP_PROJECT=infra-project SPARK_GCP_REGION=southamerica-east1 SPARK_ALERT_RETRY_SLEEP=0 "$@" \
     "${OPS_DIR}/gcp/monitoring-alerts.sh" "${ALERT_ARGS[@]}" > "${WORK}/out" 2>&1
 }
 
@@ -70,7 +83,13 @@ for policy in spark-run-5xx spark-run-revision-failed spark-job-migrate-failed s
 done
 check "toda política notifica o canal criado" "12" "$(grep -l '"projects/infra-project/notificationChannels/222"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
 check "5xx: limiar 5 em 5 min, na API" "sim" "$(jq -e '.conditions[0].conditionThreshold | .thresholdValue == 5 and (.filter | test("service_name=\"spark-backend\"")) and (.aggregations[0].alignmentPeriod == "300s")' "${POLICIES}/spark-run-5xx.json" > /dev/null && echo sim || echo não)"
-check "maintenance-stale é ausência de dados por 600s" "sim" "$(jq -e '.conditions[0].conditionAbsent.duration == "600s"' "${POLICIES}/spark-maintenance-stale.json" > /dev/null && echo sim || echo não)"
+check "maintenance-stale é ausência de 2xx no spark-maintenance por 600s (métrica nativa)" "sim" "$(jq -e '.conditions[0].conditionAbsent.duration == "600s" and (.conditions[0].conditionAbsent.filter | test("run.googleapis.com/request_count") and test("service_name=\"spark-maintenance\"") and test("response_code_class=\"2xx\""))' "${POLICIES}/spark-maintenance-stale.json" > /dev/null && echo sim || echo não)"
+check "nenhuma política depende de métrica log-based (propagação lenta): só nativas e log-match" "0" \
+  "$(grep -l 'logging.googleapis.com/user/' "${POLICIES}"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+check "8 políticas de evento alertam por LOG (conditionMatchedLog), com limite de 1 notificação/5 min" "8" \
+  "$(jq -e '.conditions[0].conditionMatchedLog.filter and .alertStrategy.notificationRateLimit.period == "300s"' "${POLICIES}"/*.json 2>/dev/null | grep -c true || true)"
+check "backup-failed casa o evento estruturado do Job" "sim" "$(jq -e '.conditions[0].conditionMatchedLog.filter | test("jsonPayload.event=\"db_backup_failed\"")' "${POLICIES}/spark-job-backup-failed.json" > /dev/null && echo sim || echo não)"
+check "db-size-critical só casa PLAN/ACTION_REQUIRED" "sim" "$(jq -e '.conditions[0].conditionMatchedLog.filter | test("PLAN") and test("ACTION_REQUIRED")' "${POLICIES}/spark-db-size-critical.json" > /dev/null && echo sim || echo não)"
 check "job-migrate-task-failed usa a métrica nativa de tarefas do Job" "sim" "$(jq -e '.conditions[0].conditionThreshold.filter | test("job/completed_task_attempt_count") and test("job_name=\"spark-db-migrate\"") and test("result=\"failed\"")' "${POLICIES}/spark-job-migrate-task-failed.json" > /dev/null && echo sim || echo não)"
 check "toda política fecha sozinha em 30 min e tem documentação" "12" "$(jq -e '.alertStrategy.autoClose == "1800s" and (.documentation.content | length > 0)' "${POLICIES}"/*.json 2>/dev/null | grep -c true || true)"
 check "nenhuma política ou métrica menciona segredo" "não" "$(grep -qiE 'password|secret|token' "${POLICIES}"/*.json && echo sim || echo não)"
@@ -82,6 +101,19 @@ run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_CHANNEL_EXISTS=1 || CODIGO
 check "termina com sucesso" "0" "${CODIGO}"
 check "não cria canal" "não" "$(grep -q 'channels create' "${GCLOUD_CALL_LOG}" && echo sim || echo não)"
 check "usa o canal existente nas políticas" "12" "$(grep -l '"projects/infra-project/notificationChannels/111"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
+
+echo
+echo "=== métrica recém-criada ainda invisível: a política tenta de novo (e desiste com honestidade) ==="
+ALERT_ARGS=()
+CODIGO=0
+run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_METRIC_NOT_READY_TIMES=3 || CODIGO=$?
+check "termina com sucesso depois de esperar a métrica" "0" "${CODIGO}"
+check "registrou as tentativas em que a métrica não estava visível" "3" "$(grep -c 'a métrica ainda não está visível' "${WORK}/out" || true)"
+check "todas as 12 políticas foram aplicadas mesmo assim" "12" "$(grep -c 'política criada:' "${WORK}/out" || true)"
+CODIGO=0
+run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_METRIC_NOT_READY_TIMES=99 SPARK_ALERT_RETRIES=2 || CODIGO=$?
+check "com a métrica nunca visível, falha em vez de fingir" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...dizendo qual política e quantas tentativas" "sim" "$(grep -q 'não ficou visível depois de 2 tentativas' "${WORK}/out" && echo sim || echo não)"
 
 echo
 echo "=== --list não cria nem altera nada; sem e-mail é recusado ==="
