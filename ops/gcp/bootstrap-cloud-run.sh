@@ -161,10 +161,14 @@ grant_secret_accessor "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${BACKUP_SA_EMAIL}"
 
 # ---------------------------------------------------------------- 6. IAM do bucket (T18.1, revisado; DR na T18.3)
 
+# `--condition=None` nos bindings SEM condição: assim que a política do bucket ganha um binding
+# condicional (o da backup SA, abaixo), o gcloud exige que todo binding novo declare explicitamente
+# "sem condição" — sem isso, a segunda execução do bootstrap falharia aqui (visto na T18.3 real).
 log "concedendo acesso mínimo ao bucket '${SPARK_GCS_BUCKET}' para a runtime SA"
 gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
   --member "serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role roles/storage.objectAdmin \
+  --condition=None \
   > /dev/null \
   || log "AVISO: não foi possível conceder IAM no bucket — confirme que '${SPARK_GCS_BUCKET}' existe (T18.1) e tente de novo manualmente."
 
@@ -183,6 +187,7 @@ gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
 gcloud storage buckets add-iam-policy-binding "gs://${SPARK_GCS_BUCKET}" \
   --member "serviceAccount:${BACKUP_SA_EMAIL}" \
   --role roles/storage.legacyBucketReader \
+  --condition=None \
   > /dev/null \
   || log "AVISO: não foi possível conceder legacyBucketReader à backup SA — confira manualmente."
 

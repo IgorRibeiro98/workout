@@ -70,23 +70,27 @@ RECENT_DIGESTS="$(gcloud artifacts docker images list "${SPARK_AR_IMAGE_BASE}" \
 
 # Os digests que produção usa agora: revisions com tráfego + latest ready dos dois serviços, e os
 # Jobs. `image` nas revisions é `...@sha256:...`; extraímos só o digest.
+#
+# `status.imageDigest` da revision é o manifesto que o Cloud Run REALMENTE puxa — para uma imagem
+# publicada como índice (builds pré-T18.3, com provenance), é o manifesto FILHO, não o índice
+# tagueado. É exatamente por isso que a política não apaga untagged.
 active_digests() {
-  local service job
+  local service job revision
   for service in "${SPARK_RUN_API_SERVICE}" "${SPARK_RUN_MAINTENANCE_SERVICE}"; do
-    gcloud run services describe "${service}" \
-      --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
-      --format='value(status.traffic[].revisionName,status.latestReadyRevisionName)' 2> /dev/null \
-      | tr ';,' '\n' | sed '/^$/d' | sort -u \
-      | while IFS= read -r revision; do
-          gcloud run revisions describe "${revision}" \
-            --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
-            --format='value(status.imageDigest)' 2> /dev/null
-        done
+    # Os campos vêm separados por TAB (e os elementos de lista por `;`).
+    for revision in $(gcloud run services describe "${service}" \
+        --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
+        --format='value(status.traffic[].revisionName,status.latestReadyRevisionName)' 2> /dev/null \
+        | tr ';,\t' '\n' | sed '/^$/d' | sort -u || true); do
+      gcloud run revisions describe "${revision}" \
+        --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
+        --format='value(status.imageDigest)' 2> /dev/null || true
+    done
   done
   for job in "${SPARK_RUN_MIGRATE_JOB}" "${SPARK_RUN_BACKUP_JOB}" "${SPARK_RUN_STORAGE_AUDIT_JOB}"; do
     gcloud run jobs describe "${job}" \
       --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
-      --format='value(spec.template.spec.template.spec.containers[0].image)' 2> /dev/null
+      --format='value(spec.template.spec.template.spec.containers[0].image)' 2> /dev/null || true
   done
 }
 
