@@ -291,7 +291,8 @@ Decida primeiro **qual banco** é o destino:
   eles vêm do snapshot (ver "só a mídia e o ledger", abaixo). Só restaure o dump por cima se a
   intenção for **voltar o banco** ao ponto do snapshot;
 - **o banco foi perdido ou corrompido** — crie um PostgreSQL novo (um projeto/branch no Neon, ou
-  qualquer PostgreSQL 18 (o cliente precisa ser ≥ o servidor; o Neon roda 18.x)), coloque a `DATABASE_URL` dele em `backend/.env` e restaure o dump.
+  qualquer PostgreSQL 18 — o cliente precisa ser ≥ o servidor, e o Neon roda 18.x), coloque a
+  `DATABASE_URL` dele em `backend/.env` e restaure o dump.
 
 ```bash
 cd /opt/spark/repo
