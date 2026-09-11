@@ -153,6 +153,38 @@ próprio snapshot; se ele não estiver nem lá nem no disco, o `--install` **par
 como saber quais contas já foram excluídas, e prosseguir as devolveria ao ar. Ver
 [../runbooks/account-deletion-dr.md](../runbooks/account-deletion-dr.md).
 
+### 4b. Cloud Run — o cenário muda de forma (T18.2)
+
+Este procedimento (§0–§8) é o da topologia VPS: container efêmero, banco/mídia/ledger externos ao
+container mas ainda geridos por scripts que rodam **nele**. No Cloud Run não existe "a VPS morreu"
+— não há VPS, container recriado é o comportamento normal (não um desastre), e mídia, backup e
+ledger já vivem fora do container por desenho (bucket privado, ADC). O cenário de desastre que
+resta é mais estreito: **o PostgreSQL gerenciado foi perdido ou restaurado de um backup antigo**.
+
+```text
+PostgreSQL restaurado de um ponto anterior
+         +
+ledger de exclusão (GCS, independente do PostgreSQL)
+         =
+contas excluídas depois do ponto do backup continuam excluídas
+```
+
+```bash
+# reconciliação, contra o PostgreSQL já restaurado — a mesma fábrica de ledger da API:
+OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod \
+DATABASE_URL=<postgres restaurado> \
+  node dist/cli/reconcile-account-deletions.js
+```
+
+Sem "instalar" nada: o ledger no bucket não faz parte do dump do PostgreSQL nem do container —
+ele já está lá, independente do que aconteceu com o banco. A reconciliação lê o bucket, varre o
+banco restaurado e purga qualquer conta cujo HMAC já estivesse no ledger.
+
+DR completo de Cloud Run — provisionamento do próprio projeto GCP do zero, runbook de restauração
+do bucket, RPO/RTO formais desta topologia — é **T18.3, pendente**. O que existe hoje (T18.2) é o
+suficiente para a garantia central de Account Deletion sobreviver a um restore de PostgreSQL; não
+é, ainda, um runbook de recuperação de desastre completo para Cloud Run.
+
 ### 5. Subir
 
 ```bash

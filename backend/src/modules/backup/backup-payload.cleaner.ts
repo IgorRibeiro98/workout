@@ -55,6 +55,14 @@ export class BackupPayloadCleaner implements OnModuleInit, OnApplicationShutdown
   ) {}
 
   onModuleInit(): void {
+    if (this.config.backgroundJobsMode === 'disabled') {
+      // T18.2 §32 — em Cloud Run, `spark-maintenance` dispara `sweep()`, respeitando o mesmo
+      // `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` como cadência mínima entre ciclos.
+      this.logger.info('backup.storage.cleaner.disabled', {
+        reason: 'BACKGROUND_JOBS_MODE=disabled',
+      });
+      return;
+    }
     this.timer = setInterval(() => {
       void this.sweep();
     }, this.config.backupPayloadCleanupIntervalMs);

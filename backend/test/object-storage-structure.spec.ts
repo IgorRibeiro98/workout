@@ -227,7 +227,19 @@ describe('T18.1 — invariantes estruturais do Object Storage', () => {
         // lê `objectStorageProvider` só para **recusar rodar** sem `gcs` configurado (uma
         // pré-condição da migração), nunca para escolher entre construir um cliente `local` ou
         // `gcs` — a origem é sempre `local`, construída à mão; o destino sempre vem da factory.
-        .filter((file) => !file.endsWith('/cli/migrate-social-media-to-object-storage.ts'))
+        //
+        // `deletion-tombstone-ledger.factory.ts` e `migrate-deletion-ledger-to-object-storage.ts`
+        // são a exceção deliberada da T18.2 §26: o ledger anti-ressurreição escolhe entre disco e
+        // Object Storage pela **mesma** `OBJECT_STORAGE_PROVIDER` — nunca constroem
+        // `LocalObjectStorageClient`/`GcsObjectStorageClient` por conta própria, e o CLI de
+        // migração do ledger só lê a variável para recusar rodar fora de `gcs`, no mesmo espírito
+        // do CLI de mídia acima.
+        .filter(
+          (file) =>
+            !file.endsWith('/cli/migrate-social-media-to-object-storage.ts') &&
+            !file.endsWith('/modules/account-deletion/deletion-tombstone-ledger.factory.ts') &&
+            !file.endsWith('/cli/migrate-deletion-ledger-to-object-storage.ts'),
+        )
         .filter((file) =>
           /objectStorageProvider|OBJECT_STORAGE_PROVIDER/.test(stripComments(read(file))),
         );

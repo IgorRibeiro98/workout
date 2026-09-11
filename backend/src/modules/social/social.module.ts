@@ -232,6 +232,9 @@ import { CheckInProjector } from './checkin.projector';
     SocialAccessPolicy,
     NotificationService,
     NotificationRepository,
+    // T18.2 §33 — `spark-maintenance` chama estas duas passagens diretamente, fora do timer.
+    NotificationDispatcher,
+    SocialMediaCleaner,
     BlockService,
     BlockRepository,
     WorkoutShareService,

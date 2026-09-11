@@ -1,5 +1,9 @@
-# Spark — Implantação em produção
+# Spark — Implantação em produção (VPS / Docker Compose)
 
+> **Topologia VPS.** Para Cloud Run (recomendado a partir da T18.2), ver
+> [`CLOUD_RUN_DEPLOYMENT.md`](./CLOUD_RUN_DEPLOYMENT.md). As duas coexistem — este documento
+> continua funcional e não foi substituído.
+>
 > **Estado:** `IMPLEMENTED` (repositório) · `MANUAL SETUP REQUIRED` (VPS) · `NOT VERIFIED` (produção real).
 >
 > Tudo o que está neste documento existe no repositório e foi exercitado localmente com Docker.

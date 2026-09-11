@@ -100,6 +100,29 @@ OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod npm run sm
 Ele grava, lê, compara bytes e SHA-256, prova a recusa de sobrescrita, apaga e confirma a ausência
 — tudo sob `_smoke/`, nunca em `social/` ou `backups/`, e nunca deixa objeto para trás.
 
+### Migrations, sem o processo da API (T18.2)
+
+```bash
+DATABASE_URL_DIRECT=postgresql://... npm run migrate:database
+```
+
+Comando dedicado, independente de `AppConfig`: só lê `DATABASE_URL_DIRECT` (sem fallback para a
+pooled), aplica migrations pendentes com o mesmo runner e o mesmo advisory lock da API, confere o
+schema resultante e encerra. É o que o Job Cloud Run `spark-db-migrate` executa — nunca a própria
+API, que em produção Cloud Run sobe com `DATABASE_MIGRATION_MODE=verify` e nunca migra.
+
+O ledger anti-ressurreição de exclusão de conta também tem um migrador manual, do disco legado
+para o Object Storage, antes do cutover para `OBJECT_STORAGE_PROVIDER=gcs`:
+
+```bash
+OBJECT_STORAGE_PROVIDER=gcs GCS_BUCKET_NAME=spark-private-assets-prod \
+DELETION_TOMBSTONES_FILE_PATH=/caminho/deletion_tombstones.tsv \
+  npm run migrate:deletion-ledger
+```
+
+Idempotente, nunca apaga a origem. Ver
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md) §9.
+
 ## Configuração
 
 Toda configuração vem do ambiente e é validada no startup. Configuração obrigatória inválida
@@ -116,8 +139,9 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `DATABASE_STATEMENT_TIMEOUT_MS` | não | `30000` | Timeout por instrução SQL |
 | `LOG_LEVEL` | não | `info` | |
 | `SHUTDOWN_TIMEOUT_MS` | não | `10000` | Drenagem em SIGTERM/SIGINT |
-| `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Sem ele, rota autenticada responde `503` |
-| `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial |
+| `FIREBASE_ADMIN_CREDENTIAL_MODE` | não | `file` | `file` (`GOOGLE_APPLICATION_CREDENTIALS`, VPS/dev/teste) \| `adc` (Cloud Run, T18.2 — identidade da service account anexada, sem arquivo) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Só lido em modo `file`. Sem ele, rota autenticada responde `503` |
+| `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial (ou é declarado explicitamente em modo `adc`) |
 | `GEMINI_API_KEY` | não | — | Credencial do Gemini. **Server-only.** Sem ela, `/v1/ai/coach` responde `503` e o núcleo do Spark segue intacto |
 | `GEMINI_MODEL` | não | `gemini-3.6-flash` | O mesmo modelo que a T14 usava; trocar é decisão explícita |
 | `AI_TIMEOUT_MS` | não | `30000` | Teto de uma chamada ao provider |
@@ -138,21 +162,25 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `OBJECT_STORAGE_PROVIDER` | não | `local` | `local` (disco sob `SOCIAL_MEDIA_ROOT`) \| `gcs` (bucket privado, ADC). A escolha mora em `object-storage.factory.ts`, e só lá (T18.1) |
 | `GCS_BUCKET_NAME` | com `gcs` | — | Obrigatório quando `OBJECT_STORAGE_PROVIDER=gcs`; a ausência derruba o startup. Nunca há bucket default no código. Vazio = ausente |
 | `OBJECT_STORAGE_TIMEOUT_MS` | não | `30000` | Teto de uma requisição ao bucket; o retry do SDK é bounded por cima dele |
-| `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` | não | `21600000` | Coleta de objetos de backup órfãos (carência de 24 h). Longo: cada varredura é uma listagem paga |
+| `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` | não | `21600000` | Coleta de objetos de backup órfãos (carência de 24 h). Longo: cada varredura é uma listagem paga. Em `BACKGROUND_JOBS_MODE=disabled` é a cadência mínima entre duas varreduras do ciclo de manutenção (T18.2 §38), não o período de um `setInterval` |
 | `SOCIAL_MEDIA_ROOT` | produção com `local` | derivado fora de produção | Raiz do provider `local`: `checkins/…` (mídia, layout de sempre) e `backups/…`. Não participa de nada com `gcs` |
+| `DATABASE_MIGRATION_MODE` | não | `apply` | `apply` (o processo aplica migrations pendentes no boot, como sempre) \| `verify` (Cloud Run: nunca aplica — só confirma que o schema já está no nível esperado; schema pendente é `/health/ready` indisponível, nunca crash) |
+| `BACKGROUND_JOBS_MODE` | não | `interval` | `interval` (cada worker agenda o próprio `setInterval`, como sempre) \| `disabled` (Cloud Run: nenhum timer nasce; `spark-maintenance` chama os métodos de uma passagem) |
 
 Nenhuma credencial é versionada. `.env`, chaves, service accounts e Caddyfile real estão no
 `.gitignore` e no `.dockerignore`, e há teste que varre a árvore procurando chave privada,
 service account e API key.
 
 O bucket do GCS **não tem credencial na aplicação**: o SDK autentica por Application Default
-Credentials — a service account anexada ao serviço no Cloud Run (T18.2) ou o
+Credentials — a service account anexada ao serviço no Cloud Run ou o
 `gcloud auth application-default login` do operador. Não existe `GCS_PRIVATE_KEY`,
 `GCS_CLIENT_EMAIL` nem JSON de service account, e há teste estrutural sobre isso.
 
-A credencial do Admin entra por **caminho**, nunca por valor: o arquivo vive fora do repositório e
-é montado somente-leitura no container. Passo a passo em
-[`docs/FIREBASE_AUTH_SETUP.md`](../docs/FIREBASE_AUTH_SETUP.md).
+A credencial do Admin entra por **caminho** em modo `file` (VPS/dev/teste) — o arquivo vive fora do
+repositório e é montado somente-leitura no container — ou por ADC em modo `adc` (Cloud Run,
+T18.2): nenhum arquivo, identidade da service account anexada. Passo a passo dos dois modos em
+[`docs/FIREBASE_AUTH_SETUP.md`](../docs/FIREBASE_AUTH_SETUP.md); deploy Cloud Run completo em
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md).
 
 ## Endpoints
 
@@ -368,22 +396,29 @@ fixture com marcas reconhecíveis e varre a saída do logger procurando por elas
 ```text
 backend/
 ├── src/
-│   ├── main.ts                  entrada: config → banco → HTTP, e graceful shutdown
+│   ├── main.ts                  entrada da API: config → banco → HTTP, e graceful shutdown
+│   ├── maintenance-main.ts      entrada de spark-maintenance (T18.2): mesma imagem, mesma
+│   │                             validação de config, entrypoint HTTP mínimo próprio
 │   ├── bootstrap/create-app.ts  montagem (usada igual em produção e nos testes)
 │   ├── config/                  schema do ambiente + AppConfig
 │   ├── database/                conexão PostgreSQL (Pool), health check, runner de migrations,
 │   │                             Account Mutation Fence (T18.1.1)
 │   ├── object-storage/          fronteira neutra de bytes: provider local (disco) e GCS (ADC);
 │   │                             a factory é o único ponto que escolhe entre os dois (T18.1)
+│   ├── maintenance/              MaintenanceCoordinator (ciclo bounded, lock consultivo, CAS de
+│   │                             cadência) + o módulo HTTP mínimo de spark-maintenance (T18.2)
 │   ├── cli/                     comandos operacionais: reconciliação de DR, migrador de payloads
 │   │                             legados de backup, migrador de mídia social legada, smoke do
-│   │                             Object Storage real
+│   │                             Object Storage real, migration dedicada (T18.2), migrador do
+│   │                             ledger de exclusão para Object Storage (T18.2)
 │   ├── common/                  logger, request ID, log de acesso, envelope de erro
 │   ├── modules/health/          liveness e readiness
-│   ├── modules/auth/            verificação de Firebase ID Token, guard e principal
+│   ├── modules/auth/            verificação de Firebase ID Token (file ou ADC, T18.2), guard e principal
 │   ├── modules/ai/              Coach IA: contrato, prompts, validação, quota e provider
 │   ├── modules/backup/          Backup: contrato, registry, forma canônica, validação, retenção
 │   ├── modules/sync/            Sync incremental: contrato, política, validação, change log
+│   ├── modules/account-deletion/ Exclusão de conta; ledger anti-ressurreição (disco ou Object
+│   │                             Storage — T18.2)
 │   └── modules/social/          Social: identidade pública, privacidade, política de acesso
 │                                 e o grafo (friendship.*): pedidos e amizade bilateral
 ├── migrations/                  NNNN_nome.sql, versionadas (PostgreSQL)
@@ -483,6 +518,37 @@ durabilidade desses objetos é a do bucket. Ver
 
 Os três respondem `503`, que o Android já trata como indisponibilidade recuperável desde a T16.2 —
 desligar uma capacidade no servidor não exige publicar APK novo.
+
+## Produção — Cloud Run (T18.2)
+
+```text
+Spark Android ──HTTPS──▶ Cloud Run (spark-backend) ──▶ Neon PostgreSQL (pooled, DATABASE_MIGRATION_MODE=verify)
+                               │                     ├──▶ Google Cloud Storage (ADC)
+                               │                     ├──▶ Firebase / FCM (ADC)
+                               │                     └──▶ Gemini (Secret Manager)
+                               │
+                        spark-maintenance (privado) ◀── Cloud Scheduler (OIDC)
+                               │
+                        spark-db-migrate (Job) ──▶ Neon PostgreSQL (direct)
+```
+
+Uma imagem, três superfícies — API (`node dist/main.js`), manutenção
+(`node dist/maintenance-main.js`) e migration (`node dist/cli/migrate-database.js`) — nunca três
+imagens quase iguais. Stateless: nenhuma foto, backup ou tombstone de exclusão vive no filesystem
+do container; os três vivem em PostgreSQL/Neon e no bucket privado do GCS.
+
+```bash
+ops/gcp/bootstrap-cloud-run.sh   # uma vez por projeto — idempotente
+ops/gcp/deploy-cloud-run.sh      # build → push → migration → candidate → smoke → tráfego
+```
+
+Passo a passo completo, IAM, Secret Manager, ADC, o ciclo de manutenção e o Cloud Scheduler em
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md).
+
+> **Cloud Run real NOT VERIFIED neste repositório.** O código, os testes offline e os scripts
+> existem e passam localmente; a execução real contra um projeto GCP (build, push, migration job,
+> candidate, smoke, troca de tráfego) exige `gcloud` e rede para o Google Cloud, que este ambiente
+> de desenvolvimento não tem.
 
 ## Documentação
 

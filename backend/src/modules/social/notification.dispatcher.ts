@@ -42,6 +42,15 @@ export class NotificationDispatcher implements OnApplicationBootstrap, OnApplica
       });
       return;
     }
+    if (this.config.backgroundJobsMode === 'disabled') {
+      // T18.2 §32 — Cloud Run request-based/min-instances=0 não garante CPU fora de uma
+      // requisição: quem agenda o ciclo é `spark-maintenance` (Cloud Scheduler), chamando
+      // `runDispatchCycle()` diretamente. Nenhum `setInterval` nasce aqui neste modo.
+      this.logger.info('notification.dispatcher.disabled', {
+        reason: 'BACKGROUND_JOBS_MODE=disabled',
+      });
+      return;
+    }
 
     const intervalMs = this.config.pushDispatchIntervalMs;
     this.logger.info('notification.dispatcher.started', { intervalMs });

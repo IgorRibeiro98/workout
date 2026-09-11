@@ -8,6 +8,15 @@
 > (`dist/cli/reconcile-account-deletions.js`), o `ops/restore.sh --install` o executa sozinho, e o
 > ledger deixou de ser best-effort. Este documento descrevia uma rotina que não existia; as seções
 > abaixo descrevem o que o código faz hoje.
+>
+> **Mudou na T18.2.** Este documento descreve o ledger em **disco** (`deletion_tombstones.tsv`,
+> `DELETION_TOMBSTONES_FILE_PATH`) — o provider `local`, usado por VPS, desenvolvimento e teste.
+> Desde a T18.2 existe também o provider `gcs` (`ObjectStorageDeletionTombstoneLedger`), usado por
+> Cloud Run: cada tombstone é um objeto em `system/deletion-tombstones/<hash>` no bucket, a mesma
+> reconciliação (`reconcile-account-deletions.js`) funciona nos dois providers pela mesma fábrica, e
+> não há arquivo `.tsv` nem `--install` de ledger para fazer. Ver
+> [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../operations/CLOUD_RUN_DEPLOYMENT.md) §9 e
+> [`docs/operations/DISASTER_RECOVERY.md`](../operations/DISASTER_RECOVERY.md) §4b.
 
 ---
 

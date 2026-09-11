@@ -1,8 +1,12 @@
 # `ops/` — scripts operacionais do Spark (T16.8; PostgreSQL desde a T18.0.2)
 
-Scripts que rodam **na VPS**, contra o banco e o backup de produção. Eles são versionados de
-propósito: infraestrutura escrita em um terminal e não guardada em lugar nenhum é infraestrutura
-que ninguém consegue repetir depois de um desastre.
+Scripts que rodam **na VPS**, contra o banco e o backup de produção — a topologia Docker Compose.
+Eles são versionados de propósito: infraestrutura escrita em um terminal e não guardada em lugar
+nenhum é infraestrutura que ninguém consegue repetir depois de um desastre.
+
+> Para a topologia **Cloud Run** (T18.2), os scripts equivalentes vivem em
+> [`ops/gcp/`](./gcp/) — bootstrap, deploy, smoke e rollback. Ver
+> [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md).
 
 O banco é o PostgreSQL de `DATABASE_URL` (T18.0). Os scripts o alcançam com `pg_dump`,
 `pg_restore` e `psql` rodando **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:17-alpine`),

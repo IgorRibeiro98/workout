@@ -405,7 +405,8 @@ jobs:
       # não acontece. O shellcheck já vem instalado no runner do GitHub.
       #
       # `ops/tests/` entra junto: um teste operacional com defeito de shell dá falso verde, que é
-      # a única coisa pior que não ter o teste.
+      # a única coisa pior que não ter o teste. `ops/gcp/` entra desde a T18.2 (Cloud Run) —
+      # bootstrap, deploy, smoke e rollback são scripts de produção como qualquer outro em `ops/`.
       #
       # Os avisos são **corrigidos**, nunca silenciados em bloco (T16.8.1 §5). As duas únicas
       # supressões que restam em `ops/` são pontuais e documentadas na linha de cima: `SC2086` onde
@@ -413,7 +414,7 @@ jobs:
       # argumentos) e `SC1090`/`SC1091` onde o caminho do `source` é configuração operacional e não
       # existe em tempo de análise.
       - name: shellcheck
-        run: shellcheck ops/*.sh ops/tests/*.sh
+        run: shellcheck ops/*.sh ops/tests/*.sh ops/gcp/*.sh
 
       # Nenhuma supressão em bloco (T16.8.1 §5): a saída fácil para deixar o passo acima verde é
       # um `# shellcheck disable=` com meia dúzia de códigos no topo do arquivo, e ela apaga os

@@ -73,4 +73,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Sem shell wrapper: o Node é PID 1 e recebe SIGTERM/SIGINT diretamente, que é o que o graceful
 # shutdown do `main.ts` escuta.
+#
+# Esta é a única imagem do Spark Backend (T18.2 §2): o Cloud Run API service usa este `CMD` como
+# está; o Cloud Run service `spark-maintenance` e o Job `spark-db-migrate` sobrepõem o comando na
+# própria definição do serviço/job (`--command`/`--args` do `gcloud`, ver `ops/gcp/deploy-cloud-
+# run.sh`) para `node dist/maintenance-main.js` e `node dist/cli/migrate-database.js`,
+# respectivamente — nunca três imagens quase iguais, e nunca `latest` como identidade de deploy.
 CMD ["node", "dist/main.js"]

@@ -102,6 +102,24 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
     this.poolInstance = pool;
     this.closed = false;
 
+    this.migrations = loadMigrations(migrationsDirectory);
+
+    // T18.2 §6 — `verify` nunca aplica migration e nunca abre o pool direto: o schema já precisa
+    // estar no nível esperado quando este modo está ativo (Cloud Run API). `checkHealth()` — a
+    // mesma verificação que `/health/ready` já fazia — é quem confere isso, agora também para
+    // quem chama `initialize()`. Um schema pendente não derruba o processo: ele sobe e
+    // `/health/ready` responde `unavailable`, exatamente como uma dependência externa fora do ar.
+    if (this.config.databaseMigrationMode === 'verify') {
+      this.logger.info('database.ready', {
+        engine: 'PostgreSQL',
+        poolMin: this.config.databasePoolMin,
+        poolMax: this.config.databasePoolMax,
+        migrationMode: 'verify',
+        schemaVersion: this.expectedVersions().at(-1) ?? 0,
+      });
+      return;
+    }
+
     // Se DATABASE_URL_DIRECT foi configurada diferente da pooled, cria pool dedicado para migrations
     let migrationPool = pool;
     if (this.config.databaseUrlDirect !== this.config.databaseUrl) {
@@ -112,8 +130,6 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       });
       migrationPool = this.directPoolInstance;
     }
-
-    this.migrations = loadMigrations(migrationsDirectory);
 
     // Executa as migrations
     const applied = await runMigrations(migrationPool, this.migrations);
@@ -132,6 +148,7 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       engine: 'PostgreSQL',
       poolMin: this.config.databasePoolMin,
       poolMax: this.config.databasePoolMax,
+      migrationMode: 'apply',
       migrationsApplied: applied.length,
       schemaVersion,
     });

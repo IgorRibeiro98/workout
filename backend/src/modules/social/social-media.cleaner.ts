@@ -70,6 +70,15 @@ export class SocialMediaCleaner implements OnModuleInit, OnApplicationShutdown {
   ) {}
 
   onModuleInit(): void {
+    if (this.config.backgroundJobsMode === 'disabled') {
+      // T18.2 §32 — em Cloud Run request-based/min-instances=0, quem dispara `sweep()` é
+      // `spark-maintenance`, com o intervalo lido do mesmo `SOCIAL_MEDIA_CLEANUP_INTERVAL_MS`
+      // (agora como cadência mínima entre ciclos, não como período de `setInterval`).
+      this.logger.info('social.media.cleaner.disabled', {
+        reason: 'BACKGROUND_JOBS_MODE=disabled',
+      });
+      return;
+    }
     this.timer = setInterval(() => {
       void this.sweep();
     }, this.config.socialMediaCleanupIntervalMs);

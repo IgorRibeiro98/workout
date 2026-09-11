@@ -8,7 +8,8 @@ import { createTestApp } from './support/create-test-app';
 import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { AccountDeletionService } from '../src/modules/account-deletion/account-deletion.service';
 import { AccountDeletionReconciler } from '../src/modules/account-deletion/account-deletion.reconciler';
-import { DeletionTombstoneLedger } from '../src/modules/account-deletion/deletion-tombstone.ledger';
+import { DELETION_TOMBSTONE_LEDGER } from '../src/modules/account-deletion/deletion-tombstone-ledger.port';
+import type { DeletionTombstoneLedgerPort } from '../src/modules/account-deletion/deletion-tombstone-ledger.port';
 import { PostgresService } from '../src/database/postgres.service';
 
 const ACCOUNTS = {
@@ -313,7 +314,9 @@ describe('T17.13.1 — durabilidade e atomicidade da exclusão de conta', () => 
     // Um retry depois de uma falha parcial pode reescrever a mesma linha.
     appendFileSync(ledgerPath, first, 'utf8');
 
-    const contents = app.get(DeletionTombstoneLedger).readHashes();
+    const contents = await app
+      .get<DeletionTombstoneLedgerPort>(DELETION_TOMBSTONE_LEDGER)
+      .readHashes();
     expect(contents.lineCount).toBe(2);
     expect(contents.hashes.size).toBe(1);
     expect(contents.hashes.has(hash)).toBe(true);

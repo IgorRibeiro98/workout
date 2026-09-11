@@ -8,7 +8,10 @@ import { AUTH_TOKEN_VERIFIER, type AuthTokenVerifier } from '../auth/auth-token-
 import { BACKUP_PAYLOAD_STORE, type BackupPayloadStore } from '../backup/backup-payload.store';
 import { SOCIAL_MEDIA_STORE, type SocialMediaStore } from '../social/social-media.store';
 import { AccountDeletionRepository, type StoredDeletionJob } from './account-deletion.repository';
-import { DeletionTombstoneLedger } from './deletion-tombstone.ledger';
+import {
+  DELETION_TOMBSTONE_LEDGER,
+  type DeletionTombstoneLedgerPort,
+} from './deletion-tombstone-ledger.port';
 import type { AccountDeletionResponseDto } from './account-deletion.contract';
 
 @Injectable()
@@ -25,8 +28,9 @@ export class AccountDeletionService {
     // saem por aqui, depois do commit.
     @Inject(BACKUP_PAYLOAD_STORE) private readonly backupPayloads: BackupPayloadStore,
     // T17.13.1 §8 — o registro anti-ressurreição deixou de ser um `appendFileSync` best-effort e
-    // virou um colaborador que **falha**. Ver `deletion-tombstone.ledger.ts`.
-    private readonly ledger: DeletionTombstoneLedger,
+    // virou um colaborador que **falha**. Desde a T18.2 §26 é uma interface (disco ou Object
+    // Storage) — ver `deletion-tombstone-ledger.port.ts`.
+    @Inject(DELETION_TOMBSTONE_LEDGER) private readonly ledger: DeletionTombstoneLedgerPort,
     private readonly logger: SparkLogger,
   ) {}
 
@@ -116,7 +120,7 @@ export class AccountDeletionService {
     if (current.phase === 'LEDGER_PENDING') {
       // §10 — a falha propaga. Este `append` é o registro anti-ressurreição obrigatório, e sem ele
       // a exclusão não pode ser declarada terminada.
-      this.ledger.appendDurably(current.uid_hash, now);
+      await this.ledger.appendDurably(current.uid_hash, now);
       await this.repo.updateJobPhase(current.id, 'FIREBASE_PENDING', now);
       current = { ...current, phase: 'FIREBASE_PENDING' };
       this.logger.info('account.deletion.ledger_persisted', {
@@ -151,7 +155,7 @@ export class AccountDeletionService {
    * Reconcilia tombstones em caso de restauração de backup antigo (Disaster Recovery).
    * Varre o banco restaurado e expurga qualquer conta cujo HMAC coincida com a lista de tombstones.
    */
-  async reconcileTombstones(tombstoneHashes: Set<string>): Promise<number> {
+  async reconcileTombstones(tombstoneHashes: ReadonlySet<string>): Promise<number> {
     const ownerUids = await this.repo.listAllOwnerUidsInDatabase();
     let purgedCount = 0;
     const now = this.clock.now();

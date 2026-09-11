@@ -358,7 +358,73 @@ Para sair, `SPARK_MAINTENANCE_MODE=false` e suba de novo.
 
 ---
 
+## Cloud Run (T18.2) — os mesmos sintomas, outra topologia
+
+Esta seção só se aplica a quem fez deploy pela topologia Cloud Run
+([CLOUD_RUN_DEPLOYMENT.md](./CLOUD_RUN_DEPLOYMENT.md)). Para VPS/Docker Compose, use as seções
+acima.
+
+### O deploy abortou no smoke do candidate
+
+O tráfego antigo **continua servindo** — `deploy-cloud-run.sh` só move tráfego depois do smoke
+passar. Não há nada a "reverter": a revision candidate simplesmente não recebeu tráfego.
+
+```bash
+ops/gcp/smoke-cloud-run.sh <url-do-candidate>   # repita manualmente para ver a falha exata
+gcloud run services logs read spark-backend --region southamerica-east1 --limit 50
+```
+
+Corrija a causa e rode `ops/gcp/deploy-cloud-run.sh` de novo — um novo commit produz um novo
+digest, e o fluxo inteiro (migration → candidate → smoke → tráfego) roda de novo do zero.
+
+### O Job `spark-db-migrate` falhou
+
+O deploy já abortou antes de qualquer candidate nascer — é o comportamento correto (§10: nenhuma
+API nova pode receber tráfego com migration pendente ou falha).
+
+```bash
+gcloud run jobs executions list --job spark-db-migrate --region southamerica-east1
+gcloud run jobs executions logs read <execution-id> --region southamerica-east1
+```
+
+Causas comuns: `DATABASE_URL_DIRECT` desatualizada, migration com erro de SQL, ou um lock
+consultivo preso por uma execução anterior travada (raro; o advisory lock é liberado quando a
+conexão termina).
+
+### Preciso voltar para a revision anterior
+
+```bash
+ops/gcp/rollback-cloud-run.sh --list
+ops/gcp/rollback-cloud-run.sh <revision-anterior>
+```
+
+Nunca rebuilda imagem — só move tráfego de volta para uma revision que já existe. Lembre-se: uma
+migration já aplicada **não** é desfeita pelo rollback (§56) — é por isso que migrations de
+produção são sempre additive.
+
+### `spark-maintenance` parece não estar rodando
+
+```bash
+gcloud scheduler jobs describe spark-maintenance-cycle --location southamerica-east1
+gcloud scheduler jobs run spark-maintenance-cycle --location southamerica-east1   # dispara um ciclo agora
+gcloud run services logs read spark-maintenance --region southamerica-east1 --limit 50
+```
+
+Procure por `maintenance.cycle.skipped_locked` no log — se aparecer em toda chamada, outra
+execução pode estar presa segurando o `pg_try_advisory_lock`; confirme se há uma execução anterior
+ainda em andamento antes de investigar mais.
+
+### Notificação social não está sendo entregue em Cloud Run
+
+Confirme, nesta ordem: `SOCIAL_PUSH_ENABLED=true` na revision de `spark-maintenance` (não só na
+API — é a manutenção que despacha); `spark-maintenance` está recebendo chamadas do Scheduler
+(seção acima); e o IAM de FCM da Service Account (`roles/firebasecloudmessaging.admin`).
+
+---
+
 ## Referência rápida
+
+### VPS / Docker Compose
 
 | Preciso de | Comando |
 | --- | --- |
@@ -372,5 +438,18 @@ Para sair, `SPARK_MAINTENANCE_MODE=false` e suba de novo.
 | Restaurar (verificando) | `ops/restore.sh --to /tmp/x` |
 | Restaurar (instalando) | `ops/restore.sh --to /tmp/x --install` |
 | Listar backups | `restic snapshots --host spark --tag spark-db` |
+
+### Cloud Run
+
+| Preciso de | Comando |
+| --- | --- |
+| Bootstrap (uma vez) | `ops/gcp/bootstrap-cloud-run.sh` |
+| Deploy | `ops/gcp/deploy-cloud-run.sh` |
+| Smoke manual | `ops/gcp/smoke-cloud-run.sh <url>` |
+| Rollback | `ops/gcp/rollback-cloud-run.sh <revision>` |
+| Migration manual (fora do deploy) | `gcloud run jobs execute spark-db-migrate --region southamerica-east1 --wait` |
+| Disparar um ciclo de manutenção agora | `gcloud scheduler jobs run spark-maintenance-cycle --location southamerica-east1` |
+| Logs da API | `gcloud run services logs read spark-backend --region southamerica-east1` |
+| Logs da manutenção | `gcloud run services logs read spark-maintenance --region southamerica-east1` |
 | Log do backend | `docker compose -f docker-compose.prod.yml logs -f backend` |
 | Versão no ar | `docker compose -f docker-compose.prod.yml ps --format '{{.Image}}'` |

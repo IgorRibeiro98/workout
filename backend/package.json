@@ -10,6 +10,7 @@
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",
+    "start:maintenance": "node dist/maintenance-main.js",
     "start:dev": "nest start --watch",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "format": "prettier --write \"{src,test}/**/*.ts\"",
@@ -18,6 +19,8 @@
     "smoke:object-storage": "node dist/cli/object-storage-smoke.js",
     "migrate:backup-payloads": "node dist/cli/migrate-backup-payloads-to-object-storage.js",
     "migrate:social-media": "node dist/cli/migrate-social-media-to-object-storage.js",
+    "migrate:database": "node dist/cli/migrate-database.js",
+    "migrate:deletion-ledger": "node dist/cli/migrate-deletion-ledger-to-object-storage.js",
     "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js"
   },
   "dependencies": {

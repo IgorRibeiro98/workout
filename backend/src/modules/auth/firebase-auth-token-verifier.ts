@@ -1,9 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { Inject, Injectable } from '@nestjs/common';
-import { type App, cert, deleteApp, getApps, initializeApp } from 'firebase-admin/app';
+import {
+  applicationDefault,
+  type App,
+  cert,
+  type Credential,
+  deleteApp,
+  getApps,
+  initializeApp,
+} from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { SparkLogger } from '../../common/logger';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import type { SparkEnv } from '../../config/env.schema';
 import type { AuthenticatedPrincipal } from './authenticated-principal';
 import {
   type AuthTokenVerifier,
@@ -133,35 +142,41 @@ export class FirebaseAuthTokenVerifier implements AuthTokenVerifier {
       throw new VerifierUnavailableError(this.initializationFailure);
     }
 
-    const credentialsPath = this.config.googleApplicationCredentials;
-    if (!credentialsPath) {
-      // Configuração ausente é uma condição estável: registra uma vez e não tenta de novo a cada
-      // requisição só para falhar igual.
-      this.initializationFailure = 'credencial do Firebase Admin não configurada';
-      this.logger.error('auth.verifier.unconfigured');
-      throw new VerifierUnavailableError(this.initializationFailure);
+    const mode = this.config.firebaseAdminCredentialMode;
+    let credential: Credential;
+    if (mode === 'adc') {
+      // Cloud Run (T18.2 §15/§16): nenhum arquivo, nenhuma `GOOGLE_APPLICATION_CREDENTIALS`. O SDK
+      // resolve a identidade anexada ao serviço por conta própria — o mesmo mecanismo que
+      // `GcsObjectStorageClient` já usa desde a T18.1.
+      credential = applicationDefault();
+    } else {
+      const credentialsPath = this.config.googleApplicationCredentials;
+      if (!credentialsPath) {
+        // Configuração ausente é uma condição estável: registra uma vez e não tenta de novo a cada
+        // requisição só para falhar igual.
+        this.initializationFailure = 'credencial do Firebase Admin não configurada';
+        this.logger.error('auth.verifier.unconfigured');
+        throw new VerifierUnavailableError(this.initializationFailure);
+      }
+      // `cert` aceita o caminho do arquivo: a chave privada é lida do disco, nunca de uma
+      // variável de ambiente e nunca de dentro da imagem.
+      credential = cert(credentialsPath);
     }
 
     try {
       const existing = getApps().find((candidate) => candidate.name === ADMIN_APP_NAME);
       this.app =
         existing ??
-        initializeApp(
-          {
-            // `cert` aceita o caminho do arquivo: a chave privada é lida do disco, nunca de uma
-            // variável de ambiente e nunca de dentro da imagem.
-            credential: cert(credentialsPath),
-            projectId: this.config.firebaseProjectId,
-          },
-          ADMIN_APP_NAME,
-        );
-      this.logger.info('auth.verifier.ready');
+        initializeApp({ credential, projectId: this.config.firebaseProjectId }, ADMIN_APP_NAME);
+      this.logger.info('auth.verifier.ready', { credentialMode: mode });
       return this.app;
     } catch (error) {
       this.initializationFailure = 'credencial do Firebase Admin inválida';
-      // Só o nome do erro: a mensagem do Admin SDK carrega o caminho do arquivo de credencial.
+      // Só o nome do erro: a mensagem do Admin SDK pode carregar o caminho do arquivo de
+      // credencial no modo `file`.
       this.logger.error('auth.verifier.init.failed', {
         errorName: error instanceof Error ? error.name : 'UnknownError',
+        credentialMode: mode,
       });
       throw new VerifierUnavailableError(this.initializationFailure);
     }
@@ -239,12 +254,43 @@ const REQUIRED_FIELDS = ['project_id', 'client_email', 'private_key'] as const;
  * jeito, e mais forte — o processo não chega a escutar a porta, então não existe janela em que
  * `/health/ready` responda `200` num servidor que prometeu verificar identidade e não consegue.
  *
+ * ## Modo `adc` (T18.2 §18)
+ *
+ * Com `mode === 'adc'` nada disto se aplica: não há arquivo para ler, e a única verificação
+ * possível sem chamada de rede é a que o Admin SDK já faz ao montar a credencial —
+ * `applicationDefault()` + `initializeApp()`. Se a Application Default Credential não existir no
+ * ambiente (nenhuma service account anexada, nenhum `gcloud auth application-default login`), o
+ * SDK recusa na hora, local e offline, e cai no mesmo `catch` de baixo.
+ *
  * @throws {FirebaseAdminCredentialError} quando a credencial não existe ou não é utilizável.
  */
 export async function verifyFirebaseAdminCredential(
   credentialsPath: string | undefined,
   projectId?: string,
+  mode: SparkEnv['FIREBASE_ADMIN_CREDENTIAL_MODE'] = 'file',
 ): Promise<void> {
+  if (mode === 'adc') {
+    let adcApp: App | undefined;
+    try {
+      const stale = getApps().find((candidate) => candidate.name === PREFLIGHT_APP_NAME);
+      if (stale) {
+        await deleteApp(stale);
+      }
+      adcApp = initializeApp({ credential: applicationDefault(), projectId }, PREFLIGHT_APP_NAME);
+    } catch {
+      // Sem detalhe da causa: mesmo raciocínio do modo `file` — o que sobra depois de "ADC
+      // ausente"/"ADC malformada" não vale um vazamento na mensagem.
+      throw new FirebaseAdminCredentialError(
+        'a Application Default Credential não pôde ser resolvida',
+      );
+    } finally {
+      if (adcApp) {
+        await deleteApp(adcApp);
+      }
+    }
+    return;
+  }
+
   if (!credentialsPath) {
     throw new FirebaseAdminCredentialError('GOOGLE_APPLICATION_CREDENTIALS não está definido');
   }

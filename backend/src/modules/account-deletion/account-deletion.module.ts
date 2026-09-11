@@ -1,8 +1,14 @@
 import { Module } from '@nestjs/common';
 import { DatabaseModule } from '../../database/database.module';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import {
+  OBJECT_STORAGE_CLIENT,
+  type ObjectStorageClient,
+} from '../../object-storage/object-storage.client';
 import { AuthModule } from '../auth/auth.module';
 import { AccountDeletionRepository } from './account-deletion.repository';
-import { DeletionTombstoneLedger } from './deletion-tombstone.ledger';
+import { DELETION_TOMBSTONE_LEDGER } from './deletion-tombstone-ledger.port';
+import { createDeletionTombstoneLedger } from './deletion-tombstone-ledger.factory';
 import { AccountDeletionService } from './account-deletion.service';
 import { AccountDeletionReconciler } from './account-deletion.reconciler';
 import { AccountDeletionController } from './account-deletion.controller';
@@ -25,10 +31,21 @@ import { BackupModule } from '../backup/backup.module';
   controllers: [AccountDeletionController],
   providers: [
     AccountDeletionRepository,
-    DeletionTombstoneLedger,
+    {
+      provide: DELETION_TOMBSTONE_LEDGER,
+      useFactory: (config: AppConfig, objectStorage: ObjectStorageClient) =>
+        createDeletionTombstoneLedger(config, objectStorage),
+      inject: [APP_CONFIG, OBJECT_STORAGE_CLIENT],
+    },
     AccountDeletionService,
     AccountDeletionReconciler,
   ],
-  exports: [AccountDeletionService, AccountDeletionRepository, DeletionTombstoneLedger],
+  exports: [
+    AccountDeletionService,
+    AccountDeletionRepository,
+    DELETION_TOMBSTONE_LEDGER,
+    // T18.2 §33 — `spark-maintenance` chama `processDueJobs()` diretamente, fora do timer.
+    AccountDeletionReconciler,
+  ],
 })
 export class AccountDeletionModule {}

@@ -2,6 +2,7 @@ import { Injectable, OnApplicationShutdown, OnModuleInit } from '@nestjs/common'
 import { SparkLogger } from '../../common/logger';
 import { CLOCK, type Clock } from '../../common/clock';
 import { Inject } from '@nestjs/common';
+import { APP_CONFIG, AppConfig } from '../../config/app-config';
 import { AccountDeletionRepository } from './account-deletion.repository';
 import { AccountDeletionService } from './account-deletion.service';
 
@@ -24,9 +25,18 @@ export class AccountDeletionReconciler implements OnModuleInit, OnApplicationShu
     private readonly service: AccountDeletionService,
     @Inject(CLOCK) private readonly clock: Clock,
     private readonly logger: SparkLogger,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   onModuleInit(): void {
+    if (this.config.backgroundJobsMode === 'disabled') {
+      // T18.2 §32 — em Cloud Run, `spark-maintenance` chama `processDueJobs()` a cada invocação
+      // do Cloud Scheduler; nenhum `setInterval` nasce neste processo.
+      this.logger.info('account.deletion.reconciler.disabled', {
+        reason: 'BACKGROUND_JOBS_MODE=disabled',
+      });
+      return;
+    }
     // Roda uma verificação inicial e agenda o intervalo
     void this.processDueJobs().catch(() => undefined);
     this.timer = setInterval(() => {

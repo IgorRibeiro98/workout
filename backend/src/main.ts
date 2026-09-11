@@ -57,6 +57,7 @@ async function bootstrap(): Promise<void> {
       await verifyFirebaseAdminCredential(
         config.googleApplicationCredentials,
         config.firebaseProjectId,
+        config.firebaseAdminCredentialMode,
       );
     } catch (error) {
       if (error instanceof FirebaseAdminCredentialError) {

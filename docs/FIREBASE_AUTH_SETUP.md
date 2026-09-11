@@ -112,9 +112,19 @@ Deve aparecer ao menos um item com `"client_type": 3`. É ele que vira `default_
 > foi alterada aqui. Consequência conhecida: um checkout limpo falha em
 > `processDebugGoogleServices` até o arquivo existir.
 
-## 4. Service account do Admin SDK, para o backend — MANUAL ACTION REQUIRED
+## 4. Credencial do Admin SDK, para o backend
 
-O Spark Backend roda em VPS — ambiente não-Google —, então precisa da credencial explicitamente.
+Desde a T18.2 existem **dois** modos, escolhidos por `FIREBASE_ADMIN_CREDENTIAL_MODE`. Um deploy
+declara qual usa — não existe detecção automática de ambiente, porque configuração explícita é
+mais segura que adivinhar por que o processo está rodando onde está.
+
+```text
+FIREBASE_ADMIN_CREDENTIAL_MODE
+├── file   (default) — VPS, desenvolvimento, teste
+└── adc                — Cloud Run (T18.2)
+```
+
+### 4a. Modo `file` — VPS, desenvolvimento, teste — MANUAL ACTION REQUIRED
 
 1. **⚙ Project settings → Service accounts → Firebase Admin SDK → Generate new private key**.
 2. Guarde o arquivo **fora do repositório**. Na VPS, por exemplo:
@@ -127,6 +137,7 @@ O Spark Backend roda em VPS — ambiente não-Google —, então precisa da cred
 
    ```bash
    # backend/.env  (não versionado)
+   FIREBASE_ADMIN_CREDENTIAL_MODE=file   # default — pode ser omitido
    GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/spark-firebase-admin.json
    ```
 
@@ -144,9 +155,34 @@ O Spark Backend roda em VPS — ambiente não-Google —, então precisa da cred
 `docker-compose.yml`, no `.env.example` ou no Android. O Android **nunca** recebe credencial de
 Admin — ele só produz ID Tokens.
 
-Sem essa credencial, o backend sobe normalmente, `/health/live` e `/health/ready` continuam
-públicos e `/v1/auth/me` responde **503** (incapaz de verificar). Ele nunca responde 200 sem ter
-verificado o token: não existe modo "autenticação desligada".
+### 4b. Modo `adc` — Cloud Run (T18.2)
+
+No Cloud Run, a identidade vem da Service Account **anexada à revision**
+(`spark-backend-runtime`) — sem arquivo, sem `GOOGLE_APPLICATION_CREDENTIALS`, sem chave JSON
+baixada. O mesmo mecanismo que `GcsObjectStorageClient` já usa para o bucket desde a T18.1.
+
+```bash
+FIREBASE_ADMIN_CREDENTIAL_MODE=adc
+FIREBASE_PROJECT_ID=<projeto>
+# GOOGLE_APPLICATION_CREDENTIALS NÃO é definida — nem aqui, nem na revision Cloud Run.
+```
+
+O IAM mínimo da Service Account (`roles/firebaseauth.admin` para `deleteUser`,
+`roles/firebasecloudmessaging.admin` se `SOCIAL_PUSH_ENABLED=true`; `verifyIdToken` não exige papel
+nenhum) é aplicado por `ops/gcp/bootstrap-cloud-run.sh` — nunca `roles/owner`/`roles/editor`. Ver
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](./operations/CLOUD_RUN_DEPLOYMENT.md) §6/§19.
+
+O preflight de startup (`REQUIRE_FIREBASE_ADMIN=true`) valida os dois modos sem chamada de rede:
+em `file`, arquivo/JSON/forma/`cert()`; em `adc`, só que `applicationDefault()` +
+`initializeApp()` não lançam — a resolução real da credencial (a identidade anexada, de verdade)
+só acontece no primeiro uso, fora do preflight de propósito.
+
+### Sem essa credencial, nos dois modos
+
+O backend sobe normalmente, `/health/live` e `/health/ready` continuam públicos e `/v1/auth/me`
+responde **503** (incapaz de verificar). Ele nunca responde 200 sem ter verificado o token: não
+existe modo "autenticação desligada". Com `REQUIRE_FIREBASE_ADMIN=true`, uma credencial inutilizável
+(nos dois modos) derruba o **startup**, e não fica escondida atrás de 503 por requisição.
 
 ## 5. Apontar o app para o backend — opcional
 

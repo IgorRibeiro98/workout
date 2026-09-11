@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
-import { AppConfig } from '../src/config/app-config';
+import { AppConfig, ConfigValidationError } from '../src/config/app-config';
 import {
   FirebaseAdminCredentialError,
   verifyFirebaseAdminCredential,
@@ -168,5 +168,85 @@ describe('Verificação da credencial do Firebase Admin no startup', () => {
 
     expect(config.requireGemini).toBe(false);
     expect(config.missingRequirements()).toEqual([]);
+  });
+});
+
+/**
+ * T18.2 §15/§16/§18 — o modo `adc` do Firebase Admin (Cloud Run).
+ *
+ * ## O que esta suíte prova, e o que ela não pode provar
+ *
+ * `applicationDefault()` do Admin SDK nunca consulta rede na **construção** da credencial — a
+ * resolução real (env var, arquivo bem-conhecido, metadata server do Cloud Run) só acontece no
+ * primeiro uso de verdade (`verifyIdToken`, `deleteUser`), fora do preflight de propósito (§18: "não
+ * fazer uma chamada remota destrutiva apenas como preflight"). Por isso `initializeApp({credential:
+ * applicationDefault()})` **nunca lança**, com ou sem ADC real disponível — inclusive neste
+ * container de CI, que não tem nenhuma. O que esta suíte prova é exatamente esse contrato: o modo
+ * `adc` não exige arquivo, não lê `GOOGLE_APPLICATION_CREDENTIALS`, e o preflight não distingue
+ * "ADC presente" de "ADC ausente" — a única coisa capaz de provar isso de verdade é uma workload
+ * rodando com identidade real do Google Cloud, e isso é Cloud Run real, não teste unitário
+ * (ver o relatório final da T18.2, seção 15 — "Cloud Run smoke real").
+ */
+describe('Firebase Admin — modo ADC (T18.2)', () => {
+  it('adc não exige GOOGLE_APPLICATION_CREDENTIALS: o preflight passa sem arquivo nenhum', async () => {
+    const originalAdc = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    try {
+      await expect(
+        verifyFirebaseAdminCredential(undefined, 'projeto-qualquer', 'adc'),
+      ).resolves.toBeUndefined();
+    } finally {
+      if (originalAdc !== undefined) {
+        process.env.GOOGLE_APPLICATION_CREDENTIALS = originalAdc;
+      }
+    }
+  });
+
+  it('adc funciona mesmo com um caminho de arquivo definido no ambiente — ele é ignorado', async () => {
+    // Configuração explícita vence detecção implícita (§16): declarar `adc` não é "tentar ADC e
+    // cair para arquivo se der errado" — é usar ADC, ponto, mesmo que a variável de arquivo exista
+    // por outro motivo (um resquício de configuração anterior, por exemplo).
+    await expect(
+      verifyFirebaseAdminCredential('/caminho/que/nao/existe.json', undefined, 'adc'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('o default do modo continua `file` — nenhum deploy existente muda de comportamento sem declarar', () => {
+    const config = AppConfig.fromEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+    });
+    expect(config.firebaseAdminCredentialMode).toBe('file');
+  });
+
+  it('REQUIRE_FIREBASE_ADMIN=true com modo adc não exige GOOGLE_APPLICATION_CREDENTIALS em missingRequirements()', () => {
+    const config = AppConfig.fromEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+      REQUIRE_FIREBASE_ADMIN: 'true',
+      FIREBASE_ADMIN_CREDENTIAL_MODE: 'adc',
+    });
+    expect(config.missingRequirements()).toEqual([]);
+  });
+
+  it('REQUIRE_FIREBASE_ADMIN=true com modo file (default) continua exigindo o caminho', () => {
+    const config = AppConfig.fromEnv({
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+      REQUIRE_FIREBASE_ADMIN: 'true',
+    });
+    expect(config.missingRequirements()).toEqual([
+      'REQUIRE_FIREBASE_ADMIN=true e FIREBASE_ADMIN_CREDENTIAL_MODE=file, mas GOOGLE_APPLICATION_CREDENTIALS não está definido',
+    ]);
+  });
+
+  it('um valor fora de file/adc derruba o startup, como qualquer enum fechado do schema', () => {
+    expect(() =>
+      AppConfig.fromEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://spark:spark@localhost:5432/spark_dev',
+        FIREBASE_ADMIN_CREDENTIAL_MODE: 'metadata-server',
+      }),
+    ).toThrow(ConfigValidationError);
   });
 });

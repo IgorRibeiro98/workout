@@ -63,6 +63,29 @@ export class AppConfig {
     return this.env.DATABASE_URL_DIRECT ?? this.env.DATABASE_URL;
   }
 
+  /**
+   * `DATABASE_URL_DIRECT` **sem** o fallback de `databaseUrlDirect` (T18.2 §7).
+   *
+   * Só o CLI de migration (`migrate:database`) usa este getter: ele precisa distinguir "não foi
+   * declarada" de "é igual à pooled", porque cair silenciosamente no endpoint pooled para rodar
+   * migration é exatamente o defeito que a separação da T18.2 existe para impedir. A API nunca lê
+   * este getter — ela só conhece `databaseUrlDirect`, com fallback, e só quando
+   * `databaseMigrationMode === 'apply'`.
+   */
+  get databaseUrlDirectExplicit(): string | undefined {
+    return this.env.DATABASE_URL_DIRECT;
+  }
+
+  /** `apply` (default) ou `verify` (Cloud Run, T18.2 §6). Ver `env.schema.ts`. */
+  get databaseMigrationMode(): SparkEnv['DATABASE_MIGRATION_MODE'] {
+    return this.env.DATABASE_MIGRATION_MODE;
+  }
+
+  /** `interval` (default) ou `disabled` (Cloud Run, T18.2 §32). Ver `env.schema.ts`. */
+  get backgroundJobsMode(): SparkEnv['BACKGROUND_JOBS_MODE'] {
+    return this.env.BACKGROUND_JOBS_MODE;
+  }
+
   get logLevel(): SparkEnv['LOG_LEVEL'] {
     return this.env.LOG_LEVEL;
   }
@@ -102,6 +125,11 @@ export class AppConfig {
   /** Caminho do arquivo de service account do Firebase Admin, quando configurado. */
   get googleApplicationCredentials(): string | undefined {
     return this.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+
+  /** `file` (VPS/dev/teste) ou `adc` (Cloud Run, T18.2 §15). Ver `env.schema.ts`. */
+  get firebaseAdminCredentialMode(): SparkEnv['FIREBASE_ADMIN_CREDENTIAL_MODE'] {
+    return this.env.FIREBASE_ADMIN_CREDENTIAL_MODE;
   }
 
   get firebaseProjectId(): string | undefined {
@@ -278,9 +306,16 @@ export class AppConfig {
    */
   missingRequirements(): string[] {
     const missing: string[] = [];
-    if (this.requireFirebaseAdmin && !this.googleApplicationCredentials) {
+    // T18.2 §15/§18 — o modo `adc` não tem arquivo: a identidade vem da service account anexada
+    // ao serviço (Cloud Run). Exigir `GOOGLE_APPLICATION_CREDENTIALS` nesse modo pediria de volta
+    // exatamente o que a ADC existe para eliminar.
+    if (
+      this.requireFirebaseAdmin &&
+      this.firebaseAdminCredentialMode === 'file' &&
+      !this.googleApplicationCredentials
+    ) {
       missing.push(
-        'REQUIRE_FIREBASE_ADMIN=true, mas GOOGLE_APPLICATION_CREDENTIALS não está definido',
+        'REQUIRE_FIREBASE_ADMIN=true e FIREBASE_ADMIN_CREDENTIAL_MODE=file, mas GOOGLE_APPLICATION_CREDENTIALS não está definido',
       );
     }
     if (this.requireGemini && !this.geminiApiKey) {

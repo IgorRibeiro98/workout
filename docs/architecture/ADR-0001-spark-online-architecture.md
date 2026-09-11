@@ -2,7 +2,7 @@
 
 - **Status:** aceito e **em vigor**
 - **Data da decisão:** 2026-09-06 (T16.0 — Fundação do Spark Backend)
-- **Estado revisado em:** 2026-09-10 (T18.0.2 — fechamento da migração para PostgreSQL)
+- **Estado revisado em:** 2026-09-10 (T18.2 — Cloud Run)
 - **Substitui:** nada. Complementa `ARCHITECTURE.md`, que continua sendo a autoridade sobre o app Android.
 
 > **Emenda (T18.0 → T18.0.2, 2026-09-10).** A decisão de 2026-09-06 escolheu **SQLite num arquivo da
@@ -15,6 +15,23 @@
 > autoridades, o local-first, a fronteira do Coach, a política de custo, o Caddy à frente, o backup
 > off-site criptografado — continua em vigor. O estado atual está em `ARCHITECTURE.md` §17,
 > `PROJECT_RULES.md` §13.8 e `docs/operations/`.
+>
+> **Emenda (T18.2, 2026-09-10).** A política de custo abaixo lista **Cloud Run** e **object storage
+> obrigatório** entre o que fica fora "por decisão, não por falta de tempo" — e pedia, se uma
+> necessidade parecesse exigi-los, "documentar e parar, não introduzir". A T18.1 introduziu object
+> storage (GCS, privado, ADC) para fotos e documentos de backup; a T18.2 introduz Cloud Run como
+> plataforma de execução do backend, substituindo a VPS/Docker Compose como topologia de produção
+> primária. As duas foram documentadas explicitamente antes de serem introduzidas — este parágrafo
+> é esse registro — e não contradizem os princípios da decisão original: continua sendo um único
+> monólito modular, sem Kubernetes, sem service mesh, sem microservices, com scale-to-zero e
+> billing por requisição escolhidos deliberadamente pelo mesmo motivo que motivou a VPS de custo
+> fixo em 2026-09-06 — o Spark continua sendo um app privado para um grupo pequeno, e a
+> infraestrutura continua mínima para esse tamanho. VPS/Docker Compose continuam documentados e
+> funcionais (`docs/operations/PRODUCTION_DEPLOYMENT.md`) como topologia alternativa; Cloud Run é a
+> topologia de produção recomendada a partir da T18.2 — ver
+> `docs/operations/CLOUD_RUN_DEPLOYMENT.md`. Redis, Kafka, RabbitMQ, Cloud SQL/RDS, Cloud Functions,
+> load balancer gerenciado, fila gerenciada, service mesh, Kubernetes e microservices continuam
+> fora, sem mudança.
 
 > **Como ler este documento.** A **decisão** (contexto, autoridades, invariantes, política de custo)
 > é de 2026-09-06 e não mudou. A seção *Estado: implementado x planejado* descreve o que existe

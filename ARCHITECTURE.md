@@ -526,7 +526,7 @@ Be especially cautious around:
 
 ## 17. Spark Backend e arquitetura online (T16)
 
-> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3, T18.1 e T18.1.1 implementadas.** A T16.0 criou o backend em `backend/` com
+> **Status (verificado em 2026-09-10): T16.0 a T16.8.1, T18.0 a T18.0.3, T18.1, T18.1.1 e T18.2 implementadas.** A T16.0 criou o backend em `backend/` com
 > configuração, banco (SQLite até a T17.13; **PostgreSQL desde a T18.0**), migrations, health, logging, Docker e os contratos arquiteturais. A T16.1
 > acrescentou **conta opcional**: Firebase Auth com Sign in with Google no Android, verificação de
 > Firebase ID Token no backend e `GET /v1/auth/me`. A T16.2 migrou o **Coach IA**:
@@ -685,7 +685,7 @@ persistência do domínio        validação da resposta
 | T18.0 → T18.0.3 | Migração SQLite → PostgreSQL / Neon, hardening e fechamento | **implementado** |
 | T18.1 | Object Storage: fotos e documentos de backup no GCS privado (ADC); PostgreSQL só metadata | **implementado** (bucket real NOT VERIFIED sem ADC local) |
 | T18.1.1 | Endurecimento: Account Mutation Fence, migração de mídia legada, coleta honesta | **implementado** (bucket real NOT VERIFIED sem ADC local) |
-| T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | pendente |
+| T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | **implementado** (Cloud Run real NOT VERIFIED sem gcloud/rede GCP) |
 | T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | pendente |
 
 ### Identidade global dos dados e Outbox (T16.3)
@@ -1736,6 +1736,61 @@ COMMIT ou AccountMutationFencedError     COMMIT
 
 Testes: `account-mutation-fence.spec.ts` (PostgreSQL real), `social-media-migration.spec.ts`,
 `gcs-object-storage-client.spec.ts`, `social-media-cleanup-hardening.spec.ts`.
+
+### Cloud Run: deploy stateless, ADC, Secret Manager (T18.2)
+
+> **Status (verificado em 2026-09-10): implementado no código.** Cloud Run real, deploy real e
+> smoke real seguem **NOT VERIFIED** — este ambiente de desenvolvimento não tem `gcloud` nem rede
+> para o Google Cloud. Ver [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](docs/operations/CLOUD_RUN_DEPLOYMENT.md)
+> para o procedimento completo e o relatório final da tarefa para o checklist de aceite.
+
+Substitui os pressupostos de VPS/processo-permanente que a T18.1.1 ainda carregava, sem tocar a
+divisão metadata (PostgreSQL) / bytes (Object Storage) da T18.1: o que muda é **onde** o processo
+roda e **quem** tem autoridade sobre o quê entre deploys, nunca o desenho de domínio.
+
+1. **Firebase Admin por modo declarado, não por ambiente detectado.**
+   `FIREBASE_ADMIN_CREDENTIAL_MODE` (`file` default | `adc`) — `adc` usa
+   `applicationDefault()` do Admin SDK, a mesma família de mecanismo que
+   `GcsObjectStorageClient` já usa desde a T18.1. `FirebaseAuthTokenVerifier` continua sendo o
+   único dono da inicialização; `FirebasePushGateway` continua só localizando o app por nome. O
+   preflight de startup (`REQUIRE_FIREBASE_ADMIN=true`) entende os dois modos sem chamada de rede.
+2. **Migrations saem do caminho crítico da API.** `DATABASE_MIGRATION_MODE` (`apply` default |
+   `verify`) — em `verify`, `PostgresService.initialize()` nunca chama `runMigrations()`; ela abre
+   o pool e confia em `checkHealth()` (a mesma verificação de `/health/ready`) para reportar
+   schema pendente como indisponibilidade, nunca como crash de bootstrap. Quem aplica migration é
+   `npm run migrate:database` (`src/cli/migrate-database.ts`), um CLI independente de `AppConfig`
+   que só lê `DATABASE_URL_DIRECT` — sem fallback para a pooled — e nunca é alcançável pela
+   Service Account da API.
+3. **O ledger anti-ressurreição ganhou uma segunda implementação.**
+   `DeletionTombstoneLedgerPort` (`FileDeletionTombstoneLedger` | `ObjectStorageDeletionTombstoneLedger`),
+   escolhida por `OBJECT_STORAGE_PROVIDER` — a mesma variável que decide onde mídia e backup
+   vivem, nunca uma segunda leitura da configuração. Em `gcs`, cada tombstone é um objeto imutável
+   em `system/deletion-tombstones/<hash>`; `appendDurably` converge (`ObjectAlreadyExistsError` é
+   sucesso), e uma falha real de infraestrutura continua propagando como falha do ledger —
+   `DELETION_PENDING`, nunca `DELETED` sem confirmação. `migrate:deletion-ledger` migra o `.tsv`
+   legado para o bucket sem nunca apagar a origem; `reconcile-account-deletions` funciona nos dois
+   providers pela mesma fábrica.
+4. **Os quatro workers de fundo pararam de presumir CPU entre requisições.**
+   `BACKGROUND_JOBS_MODE` (`interval` default | `disabled`) — em `disabled`, nenhum dos quatro
+   (`NotificationDispatcher`, `AccountDeletionReconciler`, `SocialMediaCleaner`,
+   `BackupPayloadCleaner`) agenda `setInterval`; os métodos de uma passagem continuam existindo
+   e continuam sendo o que `spark-maintenance` chama. `MaintenanceCoordinator.runCycle()` — um
+   segundo Cloud Run Service, privado, mesma imagem, entrypoint próprio
+   (`maintenance-main.ts`) — usa `pg_try_advisory_lock` para nunca sobrepor dois ciclos, e um CAS
+   sobre `server_metadata` para os dois workers de baixa cadência não escanearem o bucket a cada
+   chamada do Cloud Scheduler (que roda a cada minuto).
+5. **Uma imagem, três superfícies.** O mesmo Dockerfile e o mesmo `dist/` servem a API
+   (`node dist/main.js`), a manutenção (`node dist/maintenance-main.js`) e o Job de migration
+   (`node dist/cli/migrate-database.js`) — a diferença é comando e Service Account, nunca o
+   artefato. `ops/gcp/deploy-cloud-run.sh` resolve um digest e o usa nos três.
+6. **Duas Service Accounts, nunca uma só.** `spark-backend-runtime` (API + Maintenance) só acessa
+   os secrets da API e o bucket; `spark-backend-migrator` só acessa o secret direto do banco.
+   Nenhuma tem `Owner`/`Editor`.
+
+Testes: `firebase-admin-credential.spec.ts` (modo `adc`), `database-migration-mode.spec.ts`,
+`migrate-database-cli.spec.ts`, `deletion-ledger-object-storage.spec.ts`,
+`migrate-deletion-ledger-cli.spec.ts`, `background-jobs-mode.spec.ts`,
+`maintenance-coordinator.spec.ts`.
 
 ### Conta opcional e identidade (T16.1)
 

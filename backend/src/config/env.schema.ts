@@ -115,6 +115,21 @@ export const envSchema = z.object({
   GOOGLE_APPLICATION_CREDENTIALS: z.string().min(1).optional(),
 
   /**
+   * Como o Firebase Admin obtém credencial (T18.2 §15–§19).
+   *
+   * `file` é o mecanismo original (T16.1): `GOOGLE_APPLICATION_CREDENTIALS` aponta para um JSON de
+   * service account montado no container. Ele continua sendo o **default** — VPS, desenvolvimento
+   * e teste não mudam de comportamento.
+   *
+   * `adc` é o mecanismo do Cloud Run: nenhum arquivo, nenhuma variável de credencial — o Admin SDK
+   * resolve a identidade anexada ao serviço por conta própria (`applicationDefault()`), exatamente
+   * como `GcsObjectStorageClient` já faz desde a T18.1. Um deploy Cloud Run declara `adc`
+   * explicitamente; não existe detecção automática de ambiente aqui — configuração explícita é
+   * mais segura que adivinhar por que o processo está rodando onde está.
+   */
+  FIREBASE_ADMIN_CREDENTIAL_MODE: z.enum(['file', 'adc']).default('file'),
+
+  /**
    * Projeto Firebase esperado pelo verificador. Opcional: normalmente vem do próprio arquivo de
    * credencial. Quando informado, é o `project_id` contra o qual o token precisa ter sido emitido.
    */
@@ -398,6 +413,41 @@ export const envSchema = z.object({
     .min(10_000)
     .max(24 * 60 * 60 * 1000)
     .default(6 * 60 * 60 * 1000),
+
+  // --- Cloud Run (T18.2) -----------------------------------------------------------------
+
+  /**
+   * Como as migrations do PostgreSQL se relacionam com o startup do processo.
+   *
+   * `apply` é o comportamento original (T16.6–T18.0): o próprio processo aplica as migrations
+   * pendentes antes de escutar a porta. Continua sendo o default — VPS, desenvolvimento, teste e
+   * CI não mudam de comportamento, e `docker-compose.prod.yml` continua correto sem tocar em nada.
+   *
+   * `verify` é o modo Cloud Run: o processo **nunca** aplica migration. Ele só confere se o schema
+   * já está no nível esperado — a mesma verificação que `/health/ready` já fazia
+   * (`PostgresService.checkHealth`), agora também condição do próprio `initialize()` abrir o pool
+   * sem tentar migrar. Quem aplica migration em produção Cloud Run é o Job `spark-db-migrate`, com
+   * `DATABASE_URL_DIRECT` e antes de qualquer revision candidate receber tráfego — nunca uma
+   * instância da API tentando migrar durante cold start, e nunca a API precisando do secret
+   * direto só para isso.
+   */
+  DATABASE_MIGRATION_MODE: z.enum(['apply', 'verify']).default('apply'),
+
+  /**
+   * Como os quatro workers de segundo plano (T17.5/T17.6/T17.9/T18.1) iniciam.
+   *
+   * `interval` é o comportamento original: cada worker agenda o próprio `setInterval` no
+   * `onModuleInit`/`onApplicationBootstrap` e roda dentro do mesmo processo que serve HTTP.
+   * Continua sendo o default — é o que a VPS, com processo permanente, precisa.
+   *
+   * `disabled` é o modo Cloud Run request-based/min-instances=0: nenhum worker agenda timer
+   * nenhum. Os métodos de uma passagem (`runDispatchCycle`, `processDueJobs`, `sweep`) continuam
+   * existindo e continuam podendo ser chamados diretamente — é isso que `spark-maintenance`
+   * (`maintenance-main.ts`) faz, uma vez por invocação do Cloud Scheduler. CPU fora de uma
+   * requisição não é garantida neste modelo de billing, e um `setInterval` que nunca dispara (ou
+   * dispara em CPU que a plataforma já suspendeu) não é proteção — é a ilusão dela.
+   */
+  BACKGROUND_JOBS_MODE: z.enum(['interval', 'disabled']).default('interval'),
 });
 
 export type SparkEnv = z.infer<typeof envSchema>;

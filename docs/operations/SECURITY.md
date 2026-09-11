@@ -50,10 +50,30 @@ Docker da máquina, que é acesso equivalente a root (§54).
 
 ### Escopo da service account
 
-Use uma credencial com o **menor escopo necessário** para verificar Firebase ID Token (§116). O
-backend só chama `verifyIdToken`: ele não lê usuários, não escreve, não usa Firestore, Storage,
-Messaging ou Functions — e há teste estrutural que falha se algum desses SDKs for importado
-(`test/dependency-security.spec.ts`). Não conceda papel amplo por conveniência.
+Use uma credencial com o **menor escopo necessário** para verificar Firebase ID Token, apagar
+usuário (`deleteUser`, T17.6) e enviar FCM (`SOCIAL_PUSH_ENABLED=true`, T17.5). O backend não lê
+Firestore, Storage ou Functions do Firebase — e há teste estrutural que falha se algum desses SDKs
+for importado (`test/dependency-security.spec.ts`). Não conceda papel amplo por conveniência, e
+nunca `Owner`/`Editor` do projeto GCP.
+
+### Cloud Run (T18.2) — a mesma matriz, sem arquivo
+
+No Cloud Run nenhum dos segredos acima entra por bind mount — não há filesystem persistente para
+montar nada. A matriz muda de forma, não de princípio:
+
+| Segredo | Onde vive | Como chega ao runtime | IAM |
+| --- | --- | --- | --- |
+| Credencial do Firebase Admin | identidade da Service Account anexada à revision (`applicationDefault()`) | ADC — nenhum arquivo, nenhuma variável de credencial | Service Account `spark-backend-runtime`; `roles/firebaseauth.admin` + `roles/firebasecloudmessaging.admin`, nunca `Owner`/`Editor` |
+| `DATABASE_URL` (pooled) | Secret Manager (`spark-database-url`) | `--set-secrets` na revision | `spark-backend-runtime` — `secretAccessor` só deste secret |
+| `DATABASE_URL_DIRECT` | Secret Manager (`spark-database-url-direct`) | `--set-secrets` **só no Job de migration** | `spark-backend-migrator` — nunca `spark-backend-runtime` |
+| `GEMINI_API_KEY` | Secret Manager (`spark-gemini-api-key`) | `--set-secrets` na revision | `spark-backend-runtime` |
+| `ACCOUNT_DELETION_HMAC_KEY` | Secret Manager (`spark-account-deletion-hmac-key`) | `--set-secrets` na revision | `spark-backend-runtime` |
+| Credencial do bucket (GCS) | identidade da Service Account anexada (ADC) | nenhum arquivo, nenhuma `GCS_PRIVATE_KEY`/`GCS_CLIENT_EMAIL` | mesma runtime SA, `roles/storage.objectAdmin` só sobre `spark-private-assets-prod` |
+
+`roles/secretmanager.secretAccessor` é concedido **por secret**, nunca
+`roles/secretmanager.admin` sobre o projeto — nenhum script de `ops/gcp/` imprime valor de secret.
+Ver [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](./CLOUD_RUN_DEPLOYMENT.md) para o bootstrap e o
+deploy completos.
 
 ## O que já é garantido por teste
 

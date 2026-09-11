@@ -685,7 +685,7 @@ dado, bucket público ou um segundo domínio.
   existe para impedir.
 - **Credencial é ADC, e só.** `new Storage()` sem `credentials`, sem `keyFilename`, sem chave
   privada em variável, sem JSON de service account no Git, na imagem ou no `.env`. Em Cloud Run
-  (T18.2) a identidade é a service account anexada; na máquina do operador é o
+  (T18.2, ver §13.8.3) a identidade é a service account anexada; na máquina do operador é o
   `gcloud auth application-default login`. Há teste estrutural contra `GCS_PRIVATE_KEY`,
   `GCS_CLIENT_EMAIL`, `GCS_SERVICE_ACCOUNT_JSON` e afins.
 - **O Android nunca fala com o bucket.** Sem credencial GCS no aparelho, sem URL pública, sem
@@ -813,6 +813,46 @@ riscos que uma auditoria pós-T18.1 encontrou: nenhum deles muda a divisão acim
 - **Testes.** `npm test` em `backend/` cobre o fence com PostgreSQL real (`account-mutation-fence.spec.ts`), a migração de mídia (`social-media-migration.spec.ts`), a decisão pura do GCS
   (`gcs-object-storage-client.spec.ts`) e a reivindicação atômica + contagem honesta
   (`social-media-cleanup-hardening.spec.ts`, `backup-object-storage.spec.ts`).
+
+## 13.8.3 Cloud Run: execução stateless, ADC, Secret Manager (T18.2)
+
+A T18.2 coloca o Spark Backend em Cloud Run sem alterar nenhum dos invariantes acima — o que muda é
+**onde** o processo roda e **quem tem autoridade** entre deploys. Detalhes completos em
+[`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](docs/operations/CLOUD_RUN_DEPLOYMENT.md).
+
+- **Nenhum estado durável no filesystem do container.** Foto, backup e o ledger anti-ressurreição
+  de exclusão de conta vivem exclusivamente em serviços externos (PostgreSQL/Neon, Object
+  Storage) — container morto, revision nova, scale-to-zero nunca perdem nenhum dos três.
+- **Migrations saem do caminho crítico da API.** `DATABASE_MIGRATION_MODE=verify` na API e na
+  manutenção: `PostgresService.initialize()` nunca aplica migration nesse modo, só confirma que o
+  schema já está no nível esperado — schema pendente é indisponibilidade (`/health/ready`), nunca
+  crash de bootstrap. Quem aplica é o Job `spark-db-migrate` (`npm run migrate:database`), com
+  `DATABASE_URL_DIRECT` e uma Service Account (`spark-backend-migrator`) que a API nunca tem.
+- **Firebase Admin por modo declarado.** `FIREBASE_ADMIN_CREDENTIAL_MODE=adc` usa
+  `applicationDefault()` — a identidade da Service Account anexada ao serviço, sem arquivo. `file`
+  (default) preserva o comportamento de sempre. Um único arquivo continua sendo o dono da
+  inicialização do Admin SDK; o teste estrutural que limita quem importa `firebase-admin`
+  continua valendo sem alteração.
+- **O ledger anti-ressurreição segue `OBJECT_STORAGE_PROVIDER`, nunca uma variável própria.**
+  `DeletionTombstoneLedgerPort` tem duas implementações (disco, Object Storage) — a mesma
+  variável que decide onde mídia e backup vivem decide onde o ledger vive, para que as duas nunca
+  possam divergir por engano. `test/object-storage-structure.spec.ts` documenta
+  `deletion-tombstone-ledger.factory.ts` e `migrate-deletion-ledger-to-object-storage.ts` como
+  exceção deliberada, no mesmo espírito de `migrate-social-media-to-object-storage.ts`.
+- **Os quatro workers de fundo não presumem CPU fora de uma requisição.**
+  `BACKGROUND_JOBS_MODE=disabled` desliga o auto-agendamento de
+  `NotificationDispatcher`/`AccountDeletionReconciler`/`SocialMediaCleaner`/`BackupPayloadCleaner`;
+  os métodos de uma passagem continuam existindo. `spark-maintenance` (Cloud Run Service privado,
+  mesma imagem, entrypoint próprio) os chama via `MaintenanceCoordinator`, com `pg_try_advisory_lock`
+  contra sobreposição e um CAS sobre `server_metadata` para os dois workers de baixa cadência não
+  escanearem o bucket a cada chamada de 1 minuto do Cloud Scheduler.
+- **Uma imagem, três superfícies, sem `latest` como identidade de deploy.** API, manutenção e Job
+  de migration compartilham o mesmo Dockerfile e o mesmo `dist/`; o deploy rastreia até um digest
+  exato do Artifact Registry.
+- **Testes.** `firebase-admin-credential.spec.ts` (modo `adc`), `database-migration-mode.spec.ts`,
+  `migrate-database-cli.spec.ts`, `deletion-ledger-object-storage.spec.ts`,
+  `migrate-deletion-ledger-cli.spec.ts`, `background-jobs-mode.spec.ts`,
+  `maintenance-coordinator.spec.ts`.
 
 ## 13.8 Domínio social: identidade pública e privacidade (T17.0)
 

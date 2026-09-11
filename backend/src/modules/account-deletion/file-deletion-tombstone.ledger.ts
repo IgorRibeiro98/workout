@@ -10,6 +10,11 @@ import {
 import { dirname } from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import { APP_CONFIG, AppConfig } from '../../config/app-config';
+import {
+  DeletionTombstoneLedgerError,
+  type DeletionTombstoneLedgerPort,
+  type LedgerContents,
+} from './deletion-tombstone-ledger.port';
 
 /**
  * Uma linha do ledger: `<hmac hex de 64 caracteres>\t<epoch em milissegundos>`.
@@ -24,23 +29,15 @@ import { APP_CONFIG, AppConfig } from '../../config/app-config';
  */
 const LEDGER_LINE = /^([0-9a-f]{64})\t(\d{1,15})$/;
 
-/** O ledger não pôde ser lido, escrito ou validado. Nunca é engolida (§8). */
-export class DeletionTombstoneLedgerError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DeletionTombstoneLedgerError';
-  }
-}
-
-export interface LedgerContents {
-  /** Os hashes distintos. Conjunto por contrato (§13): reconciliar o mesmo hash duas vezes é a mesma operação. */
-  readonly hashes: Set<string>;
-  /** Quantas linhas o arquivo tinha, incluindo repetições — o número que o operador confere. */
-  readonly lineCount: number;
+export interface LedgerEntry {
+  readonly hash: string;
+  readonly deletedAt: number;
 }
 
 /**
- * O ledger anti-ressurreição de exclusões de conta (T17.13.1 §8–§13).
+ * O ledger anti-ressurreição de exclusões de conta em disco local (T17.13.1 §8–§13; estreitado
+ * para a interface `DeletionTombstoneLedgerPort` na T18.2 §26 — nome próprio desde então, porque a
+ * variante Object Storage passou a existir ao lado dela).
  *
  * ## O que este arquivo é
  *
@@ -52,6 +49,11 @@ export interface LedgerContents {
  *
  * O ledger vive ao lado do banco e não é sobrescrito pelo restore. É ele que responde "quem já foi
  * excluído?" para a reconciliação que roda depois (`spark-reconcile-account-deletions`).
+ *
+ * Continua sendo a implementação padrão fora do Cloud Run: VPS, desenvolvimento e teste têm um
+ * filesystem durável (ou cujo efêmero é aceitável), e não há Object Storage para depender dele.
+ * Ver `ObjectStorageDeletionTombstoneLedger` para a variante usada quando
+ * `OBJECT_STORAGE_PROVIDER=gcs`.
  *
  * ## Por que ele não é mais best-effort
  *
@@ -82,34 +84,32 @@ export interface LedgerContents {
  *
  * O custo é um `fsync` por exclusão de conta — uma operação rara, iniciada por uma pessoa, cuja
  * latência ninguém percebe. É a troca certa: aqui, durabilidade vale mais que vazão.
+ *
+ * As operações do contrato (`appendDurably`, `readHashes`) são `async` só para satisfazer
+ * [DeletionTombstoneLedgerPort] — a implementação continua inteiramente síncrona por dentro; não
+ * há I/O de rede aqui.
  */
 @Injectable()
-export class DeletionTombstoneLedger {
+export class FileDeletionTombstoneLedger implements DeletionTombstoneLedgerPort {
   constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {}
 
-  get filePath(): string {
+  get location(): string {
     return this.config.deletionTombstonesFilePath;
   }
 
   exists(): boolean {
-    return existsSync(this.filePath);
+    return existsSync(this.location);
   }
 
-  /**
-   * Acrescenta um hash ao ledger e só retorna quando ele está no disco.
-   *
-   * Lança [DeletionTombstoneLedgerError] em qualquer falha. Quem chama **precisa** tratar: um
-   * `DELETED` devolvido depois de uma falha aqui é uma promessa que o servidor não pode cumprir.
-   *
-   * Repetir o mesmo hash é permitido e esperado (§13): o retry depois de uma falha parcial pode
-   * escrever de novo, e o leitor consome hashes como conjunto.
-   */
-  appendDurably(uidHash: string, deletedAt: number): void {
+  // `async` só para satisfazer `DeletionTombstoneLedgerPort`; a durabilidade desta implementação
+  // vem de ser síncrona (fsync bloqueante), nunca de I/O assíncrono.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async appendDurably(uidHash: string, deletedAt: number): Promise<void> {
     if (!/^[0-9a-f]{64}$/.test(uidHash)) {
       throw new DeletionTombstoneLedgerError('hash de tombstone fora do formato esperado');
     }
 
-    const filePath = this.filePath;
+    const filePath = this.location;
     const directory = dirname(filePath);
     let fd: number | undefined;
     try {
@@ -156,15 +156,17 @@ export class DeletionTombstoneLedger {
   }
 
   /**
-   * Lê e **valida** o ledger inteiro (§13/§17/§18).
+   * Lê o ledger inteiro como uma lista de entradas, preservando repetição e ordem.
    *
-   * Ausência do arquivo e linha malformada são erro, e nunca "zero exclusões": as duas
-   * interpretações produzem o mesmo resultado visível — a reconciliação não apaga nada — e uma
-   * delas ressuscita contas. Quem decide se a ausência é aceitável é o chamador, que sabe se está
-   * numa operação de DR declarada; o leitor não adivinha.
+   * Só o migrador para Object Storage (`migrate:deletion-ledger`) precisa disto: ele quer o
+   * `deletedAt` de cada hash, e não só o conjunto. `readHashes()` deriva de aqui.
+   *
+   * `async` só para satisfazer `DeletionTombstoneLedgerPort.readHashes()`; a leitura é síncrona
+   * (sem I/O de rede).
    */
-  readHashes(): LedgerContents {
-    const filePath = this.filePath;
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async readEntries(): Promise<LedgerEntry[]> {
+    const filePath = this.location;
     if (!existsSync(filePath)) {
       throw new DeletionTombstoneLedgerError(
         'o ledger de exclusões não existe no caminho configurado',
@@ -182,8 +184,7 @@ export class DeletionTombstoneLedger {
       );
     }
 
-    const hashes = new Set<string>();
-    let lineCount = 0;
+    const entries: LedgerEntry[] = [];
     const lines = raw.split('\n');
     for (const [index, line] of lines.entries()) {
       // Um arquivo append-only terminado em `\n` produz um último elemento vazio. Só esse é
@@ -198,10 +199,25 @@ export class DeletionTombstoneLedger {
           `linha ${index + 1} do ledger de exclusões está malformada`,
         );
       }
-      hashes.add(match[1]);
-      lineCount += 1;
+      entries.push({ hash: match[1], deletedAt: Number(match[2]) });
     }
+    return entries;
+  }
 
-    return { hashes, lineCount };
+  /**
+   * Lê e **valida** o ledger inteiro (§13/§17/§18).
+   *
+   * Ausência do arquivo e linha malformada são erro, e nunca "zero exclusões": as duas
+   * interpretações produzem o mesmo resultado visível — a reconciliação não apaga nada — e uma
+   * delas ressuscita contas. Quem decide se a ausência é aceitável é o chamador, que sabe se está
+   * numa operação de DR declarada; o leitor não adivinha.
+   */
+  async readHashes(): Promise<LedgerContents> {
+    const entries = await this.readEntries();
+    const hashes = new Set<string>();
+    for (const entry of entries) {
+      hashes.add(entry.hash);
+    }
+    return { hashes, lineCount: entries.length };
   }
 }

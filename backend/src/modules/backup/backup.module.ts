@@ -43,6 +43,8 @@ import { BackupService } from './backup.service';
     // A exclusão de conta (T17.6) precisa apagar os **objetos** de backup da conta (T18.1 §36):
     // o purge do PostgreSQL leva a metadata e não alcança o bucket.
     BACKUP_PAYLOAD_STORE,
+    // T18.2 §33 — `spark-maintenance` chama `sweep()` diretamente, fora do timer.
+    BackupPayloadCleaner,
   ],
 })
 export class BackupModule {}

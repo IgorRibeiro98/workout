@@ -5,10 +5,8 @@ import { SystemClock } from '../common/clock';
 import { PostgresService } from '../database/postgres.service';
 import { AccountDeletionRepository } from '../modules/account-deletion/account-deletion.repository';
 import { AccountDeletionService } from '../modules/account-deletion/account-deletion.service';
-import {
-  DeletionTombstoneLedger,
-  DeletionTombstoneLedgerError,
-} from '../modules/account-deletion/deletion-tombstone.ledger';
+import { DeletionTombstoneLedgerError } from '../modules/account-deletion/deletion-tombstone-ledger.port';
+import { createDeletionTombstoneLedger } from '../modules/account-deletion/deletion-tombstone-ledger.factory';
 import { ObjectStorageSocialMediaStore } from '../modules/social/social-media.store';
 import { ObjectStorageBackupPayloadStore } from '../modules/backup/backup-payload.store';
 import { createObjectStorageClient } from '../object-storage/object-storage.factory';
@@ -43,18 +41,22 @@ export async function runReconciliation(): Promise<number> {
   }
 
   const logger = new SparkLogger(config);
-  const ledger = new DeletionTombstoneLedger(config);
+  // O **mesmo** provider de Object Storage do runtime (T18.1 §38/§39), reaproveitado aqui também
+  // para resolver o ledger (T18.2 §31): com `OBJECT_STORAGE_PROVIDER=gcs` este comando lê o
+  // tombstone do bucket, não de um `/data` que o Cloud Run não tem.
+  const objectStorage = await createObjectStorageClient(config, logger);
+  const ledger = createDeletionTombstoneLedger(config, objectStorage);
 
   // O ledger é lido **antes** de o banco ser aberto. Se ele não serve, nada deve ser tocado.
-  let hashes: Set<string>;
+  let hashes: ReadonlySet<string>;
   let lineCount: number;
   try {
-    ({ hashes, lineCount } = ledger.readHashes());
+    ({ hashes, lineCount } = await ledger.readHashes());
   } catch (error) {
     if (error instanceof DeletionTombstoneLedgerError) {
       process.stderr.write(
         `reconciliação abortada: ${error.message}\n` +
-          `  arquivo: ${ledger.filePath}\n` +
+          `  local: ${ledger.location}\n` +
           `  Em uma operação de recuperação de desastre isto é uma falha, e nunca "nenhuma conta\n` +
           `  excluída": sem o ledger não há como saber quem já foi excluído, e prosseguir\n` +
           `  devolveria essas contas ao ar. Restaure o ledger a partir do backup e rode de novo.\n`,
@@ -73,11 +75,10 @@ export async function runReconciliation(): Promise<number> {
     await postgres.initialize();
 
     const repo = new AccountDeletionRepository(postgres);
-    // O **mesmo** provider de Object Storage do runtime (T18.1 §38/§39): a escolha entre disco
+    // O **mesmo** cliente de Object Storage criado acima para o ledger — a escolha entre disco
     // local e bucket mora na factory, e este comando a reutiliza em vez de instanciar um provider
     // por conta própria. Com `OBJECT_STORAGE_PROVIDER=gcs`, a reconciliação purga o bucket —
     // um `LocalSocialMediaStore` aqui purgaria um diretório vazio e deixaria as fotos no ar.
-    const objectStorage = await createObjectStorageClient(config, logger);
     const mediaStore = new ObjectStorageSocialMediaStore(objectStorage);
     const backupPayloads = new ObjectStorageBackupPayloadStore(objectStorage);
     // A reconciliação não fala com o provedor de autenticação: as contas do ledger já foram
