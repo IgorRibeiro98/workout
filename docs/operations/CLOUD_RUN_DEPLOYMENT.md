@@ -612,10 +612,26 @@ secret, connection string, token, URL assinada, chave HMAC.
 
 A T18.2 e a T18.2.1 foram implantadas e validadas em Cloud Run real (primeiro deploy, migration job,
 `spark-backend-validate`, health, 401 nas rotas `/v1`, `spark-maintenance` privado, Scheduler OIDC —
-revision `spark-backend-00001-gs2`, digest `sha256:bfe4d582…`). Os itens da T18.3 que exigem
-execução real (backup no bucket, ensaio contra o bucket real, alertas, rollback drill, auditorias
-contra o projeto real) têm o estado registrado no relatório final da T18.3 — `VERIFIED` ou
-`NOT VERIFIED`, nunca inferido de inspeção.
+revision `spark-backend-00001-gs2`, digest `sha256:bfe4d582…`).
+
+A T18.3 foi validada no projeto real em 2026-09-11 (revision `spark-backend-00002-nem`, digest
+`sha256:c29b845a…`, secrets pinados na versão 1):
+
+| Item | Estado | Evidência |
+| --- | --- | --- |
+| Bootstrap idempotente (backup SA, IAM condicional no prefixo de DR, política do Artifact Registry) | `VERIFIED` | `bootstrap-cloud-run.sh` duas vezes; `iam-audit.sh` PASS=27 |
+| Deploy com gate de DR, Jobs `spark-db-backup`/`spark-storage-audit`, Scheduler diário | `VERIFIED` | `deploy-cloud-run.sh`; `config-drift-audit.sh` PASS=99 |
+| Backup real no bucket (`2026-09-11T172233Z`, 101 324 bytes, PostgreSQL 18.6, 34 tabelas), SHA-256 conferido contra o objeto, manifesto sem segredo | `VERIFIED` | `dr-status.sh`; `gcloud storage cat` + `sha256sum` |
+| Ensaio de restauração do backup REAL em destino descartável, aplicação real ready sobre ele | `VERIFIED` | `dr-restore-drill.sh --record` → `RESTORE_DRILL_PASS` (registro `spark-dr-drill` no Cloud Logging) |
+| Rollback drill com tráfego real (`00002 → 00001 → 00002`, smoke em cada passo) | `VERIFIED` | `rollback-drill.sh` → `ROLLBACK_DRILL_PASS` |
+| TLS `verify-full` efetivo (`database.ready` com `sslMode=verify-full`, sem SECURITY WARNING) | `VERIFIED` | logs de `spark-backend` e `spark-maintenance` |
+| Heartbeat, tamanho do banco (`NORMAL`), frescor do DR | `VERIFIED` | `dr-status.sh` (`stale=false`) |
+| Auditor PostgreSQL ↔ GCS | `VERIFIED` | Job `spark-storage-audit` → `STORAGE_AUDIT_CLEAN` |
+| Canal, 10 métricas e 12 políticas de alerta | `VERIFIED` (criação) | `monitoring-alerts.sh --list` |
+| Entrega do e-mail de alerta | `NOT VERIFIED` | exige confirmar o canal na Console e um alerta real chegar |
+| Budget (alerta de custo) | `NOT VERIFIED` | API `billingbudgets` desabilitada; configurar pela Console — nunca pelo script |
+| Auth Firebase real no smoke (`SPARK_SMOKE_FIREBASE_ID_TOKEN`) | `NOT VERIFIED` | procedimento em [`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md); sem conta de teste |
+| Retenção de DR removendo um backup antigo no bucket real | `NOT VERIFIED` (só offline) | precisa de > 7 backups válidos; a lógica é `planDrRetention` testada |
 
 ## 19. Hardening operacional, DR e observabilidade (T18.3)
 

@@ -77,10 +77,16 @@ Nada aqui exige a senha antiga do banco: o dump não a contém, e o banco novo t
 
 ```bash
 export SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943
-gcloud auth application-default login          # ADC para o SDK do GCS dentro do container
+gcloud auth login                               # basta: o script baixa o backup com `gcloud storage cp`
 ops/gcp/dr-restore-drill.sh --record            # o backup válido mais recente
 ops/gcp/dr-restore-drill.sh --backup-id 2026-09-11T031500Z
 ```
+
+Com ADC presente (`gcloud auth application-default login`) o SDK do GCS dentro do container lê o
+bucket direto; sem ADC, o script baixa `manifest.json` + `database.dump` para um diretório
+temporário no mesmo layout e a CLI os lê pelo provedor local — mesmos bytes, mesma checagem de
+SHA-256 contra o manifesto, mesmo destino descartável. Foi assim que o ensaio real de 2026-09-11
+passou (`RESTORE_DRILL_PASS backupId=2026-09-11T172233Z … tables=34`).
 
 O que ele faz: sobe um `postgres:18-alpine` descartável local (a major do Neon; `SPARK_DRILL_PG_IMAGE`
 para outra) → roda `dist/cli/db-restore-drill.js`

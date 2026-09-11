@@ -23,8 +23,11 @@
 # morre com o ensaio; nada aponta para produção — este
 # script não recebe `DATABASE_URL` nem `DATABASE_URL_DIRECT`, e a CLI que ele chama tampouco.
 #
-# Pré-requisitos: docker; gcloud com ADC (`gcloud auth application-default login`) para o SDK do
-# GCS dentro do container ler o bucket; `roles/storage.objectViewer` (ou Owner) no bucket.
+# Pré-requisitos: docker; gcloud autenticado com leitura no bucket (`roles/storage.objectViewer`
+# ou Owner). Com ADC (`gcloud auth application-default login`) o SDK do GCS dentro do container lê
+# o bucket direto; sem ADC, o script baixa a pasta do backup com `gcloud storage cp` (a credencial
+# do operador) e a CLI a lê pelo provedor local — mesmos bytes, mesmo manifesto, mesma checagem de
+# SHA-256, mesmo destino descartável. Nas duas vias nada escreve no bucket.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/gcp/lib.gcp.sh
@@ -48,9 +51,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# shellcheck source=ops/gcp/lib.dr.sh
+. "${SCRIPT_DIR}/lib.dr.sh"
+
 # A credencial ADC do operador — o SDK do GCS dentro do container a lê por `GOOGLE_APPLICATION_CREDENTIALS`.
+# Sem ela, a via alternativa: baixar a pasta do backup com o gcloud e ler por provedor local.
 ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-${HOME}/.config/gcloud/application_default_credentials.json}"
-[ -f "${ADC_FILE}" ] || fail "ADC não encontrada em ${ADC_FILE} — rode: gcloud auth application-default login"
+SOURCE_MODE="gcs"
+if [ ! -f "${ADC_FILE}" ]; then
+  SOURCE_MODE="download"
+  log "ADC não encontrada em ${ADC_FILE}: o backup será baixado com \`gcloud storage cp\` e lido pelo provedor local"
+fi
 
 if [ -z "${IMAGE}" ]; then
   # A imagem que ESTÁ em produção: o ensaio prova que a aplicação real restaura e sobe.
@@ -69,6 +80,7 @@ PG_CONTAINER="spark-dr-drill-pg-${STAMP}"
 APP_CONTAINER="spark-dr-drill-app-${STAMP}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 VERDICT="RESTORE_DRILL_FAIL"
+WORK_DIR=""
 
 record() {
   [ "${RECORD}" -eq 1 ] || return 0
@@ -84,6 +96,10 @@ cleanup() {
   # `-v`: o volume anônimo de /media do container do ensaio morre com ele.
   docker rm -f -v "${APP_CONTAINER}" > /dev/null 2>&1 || true
   docker rm -f -v "${PG_CONTAINER}" > /dev/null 2>&1 || true
+  # O dump baixado (via sem ADC) só existe num mktemp deste ensaio; nunca com variável vazia.
+  if [ -n "${WORK_DIR}" ] && [ -d "${WORK_DIR}" ]; then
+    rm -rf "${WORK_DIR}"
+  fi
   record
 }
 trap cleanup EXIT
@@ -106,15 +122,43 @@ docker exec "${PG_CONTAINER}" pg_isready -U spark -d postgres > /dev/null 2>&1 \
 ADMIN_URL="postgresql://spark:spark@127.0.0.1:${PG_PORT}/postgres"
 DRILL_URL="postgresql://spark:spark@127.0.0.1:${PG_PORT}/${DRILL_DB}"
 
-# --- 2. a CLI de ensaio, na imagem do backend, lendo o bucket real ---------------------------
-log "restaurando no destino limpo ${DRILL_DB} (CLI db-restore-drill na imagem)"
+# --- 2. a CLI de ensaio, na imagem do backend, lendo o backup real ---------------------------
+#
+# Via ADC: o SDK do GCS dentro do container lê o bucket. Via download: a pasta do backup
+# (`manifest.json` + `database.dump`) desce com a credencial do gcloud para um mktemp, no MESMO
+# layout do bucket, e a CLI a lê pelo provedor local — a CLI não sabe a diferença, e a checagem de
+# SHA-256 contra o manifesto continua sendo dela.
+SOURCE_ARGS=()
+if [ "${SOURCE_MODE}" = "download" ]; then
+  if [ -z "${BACKUP_ID}" ]; then
+    # `dr_latest_valid_backup` imprime `<backupId> <createdAtEpochMs>`; só o id interessa aqui.
+    BACKUP_ID="$(dr_latest_valid_backup | cut -d' ' -f1 || true)"
+    [ -n "${BACKUP_ID}" ] || fail "nenhum backup válido em $(dr_gs_prefix) — nada para ensaiar"
+  fi
+  case "${BACKUP_ID}" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+    *) fail "backupId inválido: '${BACKUP_ID}' (esperado YYYY-MM-DDTHHMMSSZ)" ;;
+  esac
+  WORK_DIR="$(mktemp -d)"
+  LOCAL_FOLDER="${WORK_DIR}/objects/${SPARK_DR_PREFIX}${BACKUP_ID}"
+  mkdir -p "${LOCAL_FOLDER}"
+  log "baixando $(dr_gs_prefix)${BACKUP_ID}/{manifest.json,database.dump}"
+  gcloud storage cp "$(dr_gs_prefix)${BACKUP_ID}/manifest.json" "$(dr_gs_prefix)${BACKUP_ID}/database.dump" \
+    "${LOCAL_FOLDER}/" --project "${SPARK_GCP_PROJECT}" > /dev/null 2>&1 \
+    || fail "não foi possível baixar o backup ${BACKUP_ID} (a conta do gcloud lê o bucket?)"
+  # O usuário do container (uid 1000 na imagem) precisa ler o que o operador baixou.
+  chmod -R a+rX "${WORK_DIR}"
+  SOURCE_ARGS=(-v "${WORK_DIR}/objects:/objects" -e OBJECT_STORAGE_PROVIDER=local -e SOCIAL_MEDIA_ROOT=/objects)
+else
+  SOURCE_ARGS=(-v "${ADC_FILE}:/adc.json:ro" -e GOOGLE_APPLICATION_CREDENTIALS=/adc.json
+    -e OBJECT_STORAGE_PROVIDER=gcs -e "GCS_BUCKET_NAME=${SPARK_GCS_BUCKET}")
+fi
+
+log "restaurando no destino limpo ${DRILL_DB} (CLI db-restore-drill na imagem; fonte: ${SOURCE_MODE})"
 # A URL do ensaio (senha sintética de um container efêmero) entra por variável de ambiente sem
 # valor no argv, como todas as connection strings destes scripts.
 if ! SPARK_DRILL_ADMIN_URL="${ADMIN_URL}" docker run --rm --network host \
-  -v "${ADC_FILE}:/adc.json:ro" \
-  -e GOOGLE_APPLICATION_CREDENTIALS=/adc.json \
-  -e OBJECT_STORAGE_PROVIDER=gcs \
-  -e "GCS_BUCKET_NAME=${SPARK_GCS_BUCKET}" \
+  "${SOURCE_ARGS[@]}" \
   -e SPARK_DRILL_ADMIN_URL \
   -e "SPARK_DRILL_DATABASE=${DRILL_DB}" \
   -e SPARK_DRILL_KEEP_DATABASE=true \
