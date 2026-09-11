@@ -420,10 +420,12 @@ se aparecer em toda chamada, outra execução está segurando o lock do ciclo. O
 quando o processo morre (o pooler aborta a transação). Se mesmo assim persistir, o suspeito é uma
 conexão presa no pooler do Neon; reiniciar a revision (`gcloud run services update spark-maintenance
 --region southamerica-east1 --update-labels restart=$(date +%s)`) fecha as conexões do processo.
-Foi exatamente assim que a T18.2 quebrou no primeiro dia de heartbeat — com lock de **sessão**
+Foi exatamente assim que a T18.2 quebrou no primeiro dia de heartbeat (2026-09-11, 17:56Z–18:02Z:
+7 ciclos `skipped_locked`, `maintenance_stale ageMs=479368` na volta) — com lock de **sessão**
 (`pg_try_advisory_lock`) sobre o endpoint pooled, o `unlock` caía noutra conexão e o lock ficava
-preso para sempre; a T18.3 trocou para lock de transação e chave nova. Quando o ciclo volta, ele
-registra `maintenance_stale` com `ageMs` (quanto tempo ficou parado).
+preso numa conexão do pooler até ele a reciclar (~7 min naquela ocorrência; sem garantia); a T18.3
+trocou para lock de transação, chave nova e `503` enquanto preso. Quando o ciclo volta, ele registra
+`maintenance_stale` com `ageMs` (quanto tempo ficou parado).
 
 ### O backup de DR falhou ou está velho (alertas `spark-job-backup-failed`, `spark-db-backup-stale`)
 
