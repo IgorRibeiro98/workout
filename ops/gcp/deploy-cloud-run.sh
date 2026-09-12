@@ -94,13 +94,18 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 GIT_SHA="$(git rev-parse --short=12 HEAD)"
-log "commit: ${GIT_SHA}"
+# `gh run list --commit` faz correspondência **exata**: um SHA curto nunca casa com o `headSha`
+# completo que o GitHub Actions guarda, e a consulta volta vazia — não "CI não passou", "CI não
+# existe". A tag da imagem continua curta (convenção; o próprio digest é o identificador exato do
+# que sobe); só o portão de procedência precisa do SHA completo.
+GIT_SHA_FULL="$(git rev-parse HEAD)"
+log "commit: ${GIT_SHA} (${GIT_SHA_FULL})"
 
 # Árvore limpa garante que a TAG descreve o que está sendo construído; ela não diz nada sobre o
 # commit ter sido revisado ou testado. `require_reviewed_commit` é quem exige isso (T18.3.2):
 # presente em origin/main e com o workflow `backend` verde. Emergência:
 # SPARK_DEPLOY_ALLOW_UNVERIFIED=1.
-require_reviewed_commit "${REPO_ROOT}" "${GIT_SHA}"
+require_reviewed_commit "${REPO_ROOT}" "${GIT_SHA_FULL}"
 log "projeto GCP (infraestrutura): ${SPARK_GCP_PROJECT} | projeto Firebase (FIREBASE_PROJECT_ID): ${SPARK_FIREBASE_PROJECT}"
 
 IMAGE_TAG="${SPARK_AR_IMAGE_BASE}:${GIT_SHA}"

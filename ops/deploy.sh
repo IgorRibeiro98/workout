@@ -119,7 +119,12 @@ fi
 # Árvore limpa diz que a tag é honesta; ela não diz que o código foi revisado nem testado. O portão
 # de procedência (T18.3.2) exige as duas coisas: commit em origin/main e workflow `backend` verde.
 # Emergência: SPARK_DEPLOY_ALLOW_UNVERIFIED=1 (com aviso no log).
-require_reviewed_commit "$REPO_ROOT" "$COMMIT"
+#
+# `gh run list --commit` exige o SHA **completo**: o curto de 12 caracteres usado para a tag da
+# imagem nunca casa com o `headSha` que o GitHub Actions guarda, e a consulta volta vazia — o
+# portão então lê "nenhuma execução do workflow" em vez de "CI verde", mesmo com o CI verde.
+COMMIT_FULL="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+require_reviewed_commit "$REPO_ROOT" "$COMMIT_FULL"
 
 PREVIOUS_TAG="$(current_tag)"
 log "deploy de ${COMMIT} (versão atual: ${PREVIOUS_TAG:-nenhuma})"

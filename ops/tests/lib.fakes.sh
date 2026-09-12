@@ -53,7 +53,15 @@ set -euo pipefail
 [ "${1:-}" != "-C" ] || shift 2
 case "${1:-}" in
   status) exit 0 ;;
-  rev-parse) printf 'abcdef123456\n' ;;
+  rev-parse)
+    # `--short=N` (a tag da imagem) e o SHA completo (o portão de procedência, T18.3.2) precisam
+    # ter tamanhos diferentes de propósito: é o que faz um dublê pegar o defeito real de passar o
+    # curto para `gh run list --commit`, que só casa pelo SHA de 40 caracteres.
+    case "${2:-}" in
+      --short=*) printf 'abcdef123456\n' ;;
+      *) printf '0123456789abcdef0123456789abcdef01234567\n' ;;
+    esac
+    ;;
   fetch) [ -z "${GIT_FETCH_FAILS:-}" ] || exit 1 ;;
   merge-base) [ -z "${GIT_NOT_ANCESTOR:-}" ] || exit 1 ;;
   diff) exit 0 ;;
@@ -72,6 +80,17 @@ set -euo pipefail
 [ -z "${GH_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "${GH_CALL_LOG}"
 if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
   [ -z "${GH_RUN_LIST_FAILS:-}" ] || exit 1
+  # A API real do GitHub casa `--commit` pelo SHA **completo**: um valor mais curto nunca encontra
+  # a execução, mesmo que ela exista — foi esse o defeito real (não coberto até este dublê aprender
+  # a distinguir tamanho), e é o que a linha abaixo agora reproduz.
+  commit="" prev=""
+  for arg in "$@"; do
+    [ "${prev}" != "--commit" ] || commit="${arg}"
+    prev="${arg}"
+  done
+  if [ "${#commit}" -ne 40 ]; then
+    printf '\n'; exit 0
+  fi
   [ -z "${GH_NO_RUN:-}" ] || { printf '\n'; exit 0; }
   printf '%s\n' "${GH_RUN_RESULT:-completed:success}"
   exit 0
