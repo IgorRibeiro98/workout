@@ -679,6 +679,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: image
+    # `ops/deploy.sh` chama o portão de procedência (T18.3.2) antes de qualquer coisa — origin/main
+    # + workflow `backend` verde no commit. Este job roda **dentro** desse mesmo workflow, para o
+    # mesmo commit, e a execução ainda não terminou (é ela quem está rodando este job agora):
+    # `gh run list` sempre veria `in_progress` e o portão sempre recusaria, não importa o quão
+    # correto o commit seja — um problema de referência circular, não uma falha real de provenance.
+    #
+    # O que este job prova é operacional (backup pré-deploy, health, rollback automático, árvore
+    # suja), sobre uma imagem sintética construída pelo job `image` — nunca produção de verdade. A
+    # corretude do próprio portão tem teste dedicado, com `git`/`gh` falsos que simulam os dois
+    # lados (ver `ops/tests/deploy-hardening.test.sh`, "T18.3.2 procedência do commit").
+    env:
+      SPARK_DEPLOY_ALLOW_UNVERIFIED: "1"
     services:
       postgres:
         image: postgres:18.6-alpine
