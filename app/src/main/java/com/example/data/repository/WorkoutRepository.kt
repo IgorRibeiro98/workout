@@ -74,21 +74,49 @@ class WorkoutRepository(
         }
     }
 
+    /**
+     * Cria um programa e, se ele for o primeiro, o deixa como atual — numa transação só.
+     *
+     * A checagem era `dao.getCurrentProgram() == null`, que compara um `Flow` com `null`: sempre
+     * falso, e por isso o primeiro programa de uma instalação nova nunca virava o atual. A leitura
+     * agora é suspensa ([WorkoutDao.getCurrentProgramSync]) e acontece **dentro** do mesmo
+     * `mutate`: lá fora, dois caminhos criando programa ao mesmo tempo poderiam marcar os dois.
+     */
     suspend fun addProgram(name: String) {
         val program = WorkoutProgramEntity(name = name)
-        val id = syncMutations.mutate {
+        syncMutations.mutate {
             val id = dao.insertProgram(program)
+            if (dao.getCurrentProgramSync() == null) {
+                dao.setCurrentProgram(id)
+            }
+            // Uma mutação só, registrada depois de o programa estar no estado final: o payload é
+            // montado do Room na hora do push, e `isCurrent` viaja nele.
             upsert(SyncEntityType.WORKOUT_PROGRAM, program.syncId)
-            id
-        }
-        if (dao.getCurrentProgram() == null) {
-            dao.setCurrentProgram(id)
         }
     }
 
+    /**
+     * Troca o programa atual — e conta isso à nuvem.
+     *
+     * `isCurrent` viaja no payload do programa (`SyncAggregateSnapshotBuilder`), então trocar sem
+     * registrar mutação fazia o outro aparelho continuar afirmando o programa antigo e reativá-lo
+     * no ciclo seguinte. São **dois** agregados alterados: o que perdeu a marca e o que a ganhou.
+     *
+     * As duas escritas também passaram a ser uma transação: entre o `clearCurrentProgram` e o
+     * `setCurrentProgram` havia um instante — durável, se o processo morresse ali — em que nenhum
+     * programa era o atual, e a Home não tem o que mostrar nesse estado.
+     */
     suspend fun setCurrentProgram(id: Long) {
-        dao.clearCurrentProgram()
-        dao.setCurrentProgram(id)
+        syncMutations.mutate {
+            val previous = dao.getCurrentProgramSync()
+            if (previous?.id == id) return@mutate
+
+            dao.clearCurrentProgram()
+            dao.setCurrentProgram(id)
+
+            previous?.let { upsert(SyncEntityType.WORKOUT_PROGRAM, it.syncId) }
+            upsert(SyncEntityType.WORKOUT_PROGRAM) { dao.getProgramById(id)?.syncId }
+        }
     }
 
     fun getTemplatesForProgram(programId: Long): Flow<List<WorkoutTemplateEntity>> {
@@ -109,6 +137,33 @@ class WorkoutRepository(
             upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
             id
         }
+    }
+
+    /**
+     * Cria um treino **inteiro** — cabeçalho, exercícios e o registro de quem o pediu — numa
+     * transação só.
+     *
+     * Existe para a importação de treino compartilhado (T17.7), que fazia `addTemplate`, N
+     * `addTemplateExercise` e a gravação do recibo como operações independentes. Uma interrupção
+     * no meio deixava um treino pela metade **sem** recibo — e, como o recibo é a idempotência da
+     * importação, reabrir a oferta criava um segundo treino incompleto ao lado do primeiro.
+     *
+     * [andThen] roda dentro da mesma transação, com o `localId` já atribuído: é onde o recibo
+     * entra. Lançar dali desfaz o treino junto, que é exatamente o ponto.
+     *
+     * Uma mutação de sync só, e do **treino**: os exercícios dele são filhos do agregado e não têm
+     * identidade global própria (T16.3).
+     */
+    suspend fun addTemplateWithExercises(
+        template: WorkoutTemplateEntity,
+        exercises: List<WorkoutTemplateExerciseEntity>,
+        andThen: suspend (templateId: Long) -> Unit = {}
+    ): Long = syncMutations.mutate {
+        val templateId = dao.insertTemplate(template)
+        exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+        andThen(templateId)
+        upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
+        templateId
     }
 
     /**

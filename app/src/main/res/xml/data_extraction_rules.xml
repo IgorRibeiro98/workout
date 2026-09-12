@@ -1,28 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Regras de backup/transferência do Android 12+ — T17.10 §106.
+  Regras de backup/transferência do Android 12+.
 
-  Duas superfícies, e as mesmas exclusões nas duas:
+  Mesma inversão e mesma justificativa de `backup_rules.xml` (auditoria 2026-09-12): lista de
+  inclusão em vez de exclusão, porque os nomes dos arquivos de estado do Firebase são montados em
+  runtime a partir do `applicationId` e não podem ser escritos aqui.
+
+  Duas superfícies, o mesmo conteúdo:
 
   - `cloud-backup`: o backup para o Google Drive da pessoa;
   - `device-transfer`: a cópia direta aparelho a aparelho na configuração inicial.
 
-  A `device-transfer` é a que mais importa aqui, porque é a que mais parece inofensiva: os dois
-  aparelhos são da mesma pessoa. Mas o token FCM continua identificando **um** aparelho, e dois
-  aparelhos anunciando o mesmo token ao backend é entrega de notificação para o lugar errado.
-  Estado técnico de instalação é reconquistado no primeiro registro, nunca restaurado.
+  A `device-transfer` é a que mais parece inofensiva, porque os dois aparelhos são da mesma pessoa.
+  Mas o token FCM e o `deviceId` de sync identificam **um** aparelho: duplicá-los entrega
+  notificação no lugar errado e faz o sync suprimir o eco da origem errada.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="file" path="datastore/social_push_scope.preferences_pb" />
-        <exclude domain="sharedpref" path="com.google.android.gms.appid.xml" />
-        <exclude domain="file" path="PersistedInstallation" />
-        <exclude domain="sharedpref" path="com.google.firebase.auth.api.Store.xml" />
+        <include domain="database" path="workout_database" />
+        <!--
+            O Room abre o banco em WAL: transações recentes vivem em `-wal` até o checkpoint. Uma
+            lista de inclusão copia **apenas** o que está listada, então sem esta linha o backup
+            seria um banco sem os últimos treinos. `-shm` fica de fora de propósito: é memória
+            compartilhada descartável, reconstruída pelo SQLite na abertura. `-journal` cobre o
+            caso de o WAL estar desligado em algum aparelho.
+        -->
+        <include domain="database" path="workout_database-wal" />
+        <include domain="database" path="workout_database-journal" />
+        <include domain="file" path="datastore/settings.preferences_pb" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="file" path="datastore/social_push_scope.preferences_pb" />
-        <exclude domain="sharedpref" path="com.google.android.gms.appid.xml" />
-        <exclude domain="file" path="PersistedInstallation" />
-        <exclude domain="sharedpref" path="com.google.firebase.auth.api.Store.xml" />
+        <include domain="database" path="workout_database" />
+        <!--
+            O Room abre o banco em WAL: transações recentes vivem em `-wal` até o checkpoint. Uma
+            lista de inclusão copia **apenas** o que está listada, então sem esta linha o backup
+            seria um banco sem os últimos treinos. `-shm` fica de fora de propósito: é memória
+            compartilhada descartável, reconstruída pelo SQLite na abertura. `-journal` cobre o
+            caso de o WAL estar desligado em algum aparelho.
+        -->
+        <include domain="database" path="workout_database-wal" />
+        <include domain="database" path="workout_database-journal" />
+        <include domain="file" path="datastore/settings.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

@@ -292,7 +292,12 @@ describe('T18.1 — invariantes estruturais do Object Storage', () => {
   describe('o PostgreSQL não recebe o documento de um backup novo (§18/§19)', () => {
     it('o INSERT de backup_snapshots não escreve `payload`, e o de backup_items também não', () => {
       const source = read(join(SRC, 'modules', 'backup', 'backup.repository.ts'));
-      const inserts = source.match(/INSERT INTO backup_(snapshots|items)[\s\S]*?VALUES/g) ?? [];
+      // O INSERT de `backup_items` é `INSERT ... SELECT ... FROM UNNEST(...)` desde a auditoria de
+      // 2026-09-12 (um statement para os até 5.000 itens, em vez de um por linha); a lista de
+      // colunas termina em `SELECT`, não em `VALUES`. O invariante é o mesmo: nenhuma das duas
+      // listas de colunas contém `payload`.
+      const inserts =
+        source.match(/INSERT INTO backup_(snapshots|items)[\s\S]*?\b(VALUES|SELECT)\b/g) ?? [];
       expect(inserts).toHaveLength(2);
       for (const insert of inserts) {
         // `payload_hash` é metadata e pode; a coluna `payload` não.

@@ -105,7 +105,7 @@ export class BlockRepository {
    * 4. Trata desafios ativos/upcoming compartilhados:
    *    - Blocker creator: retira blocked member (WITHDRAWN);
    *    - Blocker member: retira blocker (WITHDRAWN);
-   * 5. Cancela eventos de notificação pendentes.
+   * 5. Cancela os eventos de notificação pendentes **do par** — e só os do par.
    */
   private async cleanupSharedRelations(
     client: PoolClient,
@@ -207,22 +207,54 @@ export class BlockRepository {
       [now, blockerUid, blockedUid, blockedUid, blockerUid],
     );
 
-    // 7. Cancela notificações de outbox pendentes para ambos
+    // 7. Cancela os eventos de outbox pendentes **deste par**.
+    //
+    // Antes, o filtro era só `recipient_uid = blocker OR recipient_uid = blocked`: bloquear alguém
+    // silenciava todo aviso pendente dos dois, inclusive o pedido de amizade de um terceiro que
+    // não tem nada com este bloqueio. E o `UPDATE` das entregas varria **toda** linha `CANCELLED`
+    // da tabela, de qualquer par, a cada bloqueio.
+    //
+    // O recorte é o `entity_id`: os eventos que este bloqueio torna irrelevantes são os que
+    // nascem de uma relação entre as duas contas — pedido de amizade, convite de desafio, oferta
+    // de treino e convite de Squad —, todos cancelados logo acima. Os eventos de desafio
+    // (`CHALLENGE_STARTING_SOON`/`CHALLENGE_ENDED`) não entram: o `entity_id` deles é o desafio,
+    // não o par, e a saída do participante (passo 4) já os faz cair no `checkRelevance` do
+    // dispatcher, que suprime em vez de entregar.
+    //
+    // As entregas são restritas por `RETURNING`: exatamente os eventos que **esta** transação
+    // cancelou, e nenhum outro.
     await client.query(
-      `UPDATE social_notification_events
-       SET status = 'CANCELLED', completed_at = $1
-       WHERE status = 'PENDING'
-         AND (recipient_uid = $2 OR recipient_uid = $3)`,
+      `WITH pair_entities AS (
+         SELECT request_id AS entity_id FROM friend_requests
+          WHERE (requester_uid = $2 AND recipient_uid = $3)
+             OR (requester_uid = $3 AND recipient_uid = $2)
+         UNION ALL
+         SELECT invitation_id FROM challenge_invitations
+          WHERE (inviter_uid = $2 AND recipient_uid = $3)
+             OR (inviter_uid = $3 AND recipient_uid = $2)
+         UNION ALL
+         SELECT id FROM workout_shares
+          WHERE (sender_uid = $2 AND recipient_uid = $3)
+             OR (sender_uid = $3 AND recipient_uid = $2)
+         UNION ALL
+         SELECT id FROM social_group_invitations
+          WHERE (sender_uid = $2 AND recipient_uid = $3)
+             OR (sender_uid = $3 AND recipient_uid = $2)
+       ),
+       cancelled AS (
+         UPDATE social_notification_events
+            SET status = 'CANCELLED', completed_at = $1
+          WHERE status = 'PENDING'
+            AND recipient_uid IN ($2, $3)
+            AND entity_id IN (SELECT entity_id FROM pair_entities)
+          RETURNING id
+       )
+       UPDATE social_notification_deliveries d
+          SET status = 'FAILED_PERMANENT'
+         FROM cancelled c
+        WHERE d.event_id = c.id
+          AND d.status = 'PENDING'`,
       [now, blockerUid, blockedUid],
-    );
-
-    await client.query(
-      `UPDATE social_notification_deliveries
-       SET status = 'FAILED_PERMANENT'
-       WHERE status = 'PENDING'
-         AND event_id IN (
-           SELECT id FROM social_notification_events WHERE status = 'CANCELLED'
-         )`,
     );
   }
 }

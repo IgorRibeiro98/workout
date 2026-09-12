@@ -32,14 +32,15 @@ import androidx.compose.ui.res.stringResource
 import com.example.R
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutsScreen(viewModel: WorkoutsViewModel, onProgramClick: (Long) -> Unit) {
-    val programs by viewModel.programs.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
-    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
+    val programs by viewModel.programs.collectAsStateWithLifecycle()
+    // A preferência de vibração vem da ViewModel: a tela não lê o `SettingsManager` do
+    // `MainApplication` (§3).
+    val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
 
     var showAddProgramDialog by remember { mutableStateOf(false) }
     var programToDelete by remember { mutableStateOf<WorkoutProgramEntity?>(null) }
@@ -140,8 +141,8 @@ fun WorkoutsScreen(viewModel: WorkoutsViewModel, onProgramClick: (Long) -> Unit)
         }
     }
 
-    if (activeProgramForSheet != null) {
-        val program = activeProgramForSheet!!
+    val program = activeProgramForSheet
+    if (program != null) {
         ActionBottomSheet(
             onDismissRequest = { activeProgramForSheet = null },
             title = stringResource(id = R.string.sheet_program_options),

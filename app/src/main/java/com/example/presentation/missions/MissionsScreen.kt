@@ -32,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +54,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private val PtBr = Locale("pt", "BR")
 private val DayMonthFormatter = DateTimeFormatter.ofPattern("dd/MM", PtBr)
@@ -71,7 +71,7 @@ fun MissionsScreen(
     viewModel: MissionViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     MissionsScreenContent(uiState = uiState, onNavigateBack = onNavigateBack)
 }
 

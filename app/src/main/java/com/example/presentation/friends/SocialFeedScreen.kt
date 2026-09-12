@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,7 +36,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +61,8 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.rememberRelativeNow
 
 const val SOCIAL_FEED_SCREEN_DESCRIPTION = "Feed de check-ins dos amigos"
 
@@ -133,9 +135,9 @@ fun SocialFeedScreen(
     onNavigateBack: () -> Unit,
     onOpenFriendProfile: (socialId: String, displayName: String) -> Unit,
     onOpenCheckIn: (checkInId: String) -> Unit = {},
-    now: Long = System.currentTimeMillis()
+    now: Long = rememberRelativeNow()
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) { viewModel.open() }
 
@@ -235,9 +237,10 @@ private fun SocialFeedBody(
             )
         } else {
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxSize(),
+                // `contentPadding`, e não `padding` no modifier: como padding do container, ele
+                // recortava o conteúdo durante a rolagem em vez de deixá-lo passar sob a borda.
+                contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(phase.items, key = { it.checkInId }) { checkIn ->

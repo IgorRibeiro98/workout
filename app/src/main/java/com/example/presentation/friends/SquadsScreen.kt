@@ -32,7 +32,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +53,7 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 const val SQUADS_SCREEN_DESCRIPTION = "Lista de squads"
 
@@ -92,7 +92,7 @@ fun SquadsScreen(
     onNavigateBack: () -> Unit,
     onOpenSquad: (groupId: String) -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var creating by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { viewModel.open() }

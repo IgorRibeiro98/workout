@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import com.example.data.local.WorkoutShareImportReceiptEntity
 import com.example.data.local.WorkoutShareReceiptDao
+import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.local.WorkoutTemplateExerciseEntity
 import com.example.domain.social.SharedExerciseSnapshot
 import com.example.domain.social.SharedWorkoutSnapshot
@@ -75,19 +76,23 @@ open class WorkoutShareImporter(
         val existingTemplates = repo.dao.getTemplatesForProgramSync(program.id)
         val nextOrder = (existingTemplates.maxOfOrNull { it.orderInProgram } ?: -1) + 1
 
-        // 5. Criar novo WorkoutTemplate
-        val templateId = repo.addTemplate(
-            programId = program.id,
-            name = snapshot.name,
-            shortId = snapshot.shortIdentifier ?: "T",
-            order = nextOrder
-        )
-
-        // 6. Adicionar exercícios com séries, reps e descanso do snapshot (cargas/notas/máquinas nulas)
-        for ((exSnapshot, exerciseLocalId) in resolvedExercises) {
-            repo.addTemplateExercise(
+        // 5-7. Treino, exercícios e recibo — **uma** transação.
+        //
+        // Eram três passos independentes, e uma interrupção entre eles deixava um treino pela
+        // metade sem recibo: como o recibo é a idempotência desta importação, reabrir a oferta
+        // criava um segundo treino ao lado do primeiro. Ou tudo entra, ou nada entra.
+        val templateId = repo.addTemplateWithExercises(
+            template = WorkoutTemplateEntity(
+                programId = program.id,
+                name = snapshot.name,
+                shortIdentifier = snapshot.shortIdentifier ?: "T",
+                orderInProgram = nextOrder
+            ),
+            // Cargas, notas e máquinas ficam nulas: são do treino de quem compartilhou, não de
+            // quem recebe.
+            exercises = resolvedExercises.map { (exSnapshot, exerciseLocalId) ->
                 WorkoutTemplateExerciseEntity(
-                    templateId = templateId,
+                    templateId = 0,
                     exerciseId = exerciseLocalId,
                     sortOrder = exSnapshot.sortOrder,
                     targetSets = exSnapshot.targetSets,
@@ -98,17 +103,16 @@ open class WorkoutShareImporter(
                     machineLabel = null,
                     notes = null
                 )
+            }
+        ) { localTemplateId ->
+            receipts.insertReceipt(
+                WorkoutShareImportReceiptEntity(
+                    shareId = shareId,
+                    importedTemplateLocalId = localTemplateId,
+                    createdAt = clock()
+                )
             )
         }
-
-        // 7. Gravar recibo de importação local
-        receipts.insertReceipt(
-            WorkoutShareImportReceiptEntity(
-                shareId = shareId,
-                importedTemplateLocalId = templateId,
-                createdAt = clock()
-            )
-        )
 
         // 8. Notificar backend que importação concluiu (best effort)
         shareGateway.completeImport(shareId)

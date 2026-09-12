@@ -24,7 +24,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -44,6 +43,7 @@ import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 const val SHARE_CHECKIN_CTA_LABEL = "Compartilhar check-in"
 const val SHARE_CHECKIN_SECTION_DESCRIPTION = "Compartilhar check-in do treino com amigos"
@@ -92,7 +92,7 @@ fun ShareCheckInSection(
     sessionId: Long,
     modifier: Modifier = Modifier
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(sessionId) { viewModel.prepare(sessionId) }
 
@@ -159,7 +159,7 @@ fun ShareCheckInSection(
  */
 @Composable
 fun ShareCheckInDialogs(viewModel: WorkoutCheckInViewModel) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     // O Photo Picker **oficial** do Android (§44).
     //

@@ -202,29 +202,44 @@ export class MaintenanceCoordinator {
 
         let socialMediaSweepRan = false;
         let socialMediaObjectsRemoved = 0;
-        if (await this.claimDue('social_media_cleanup', this.config.socialMediaCleanupIntervalMs)) {
-          socialMediaObjectsRemoved = await this.socialMediaCleaner.sweep();
+        const mediaClaim = await this.claimDue(
+          'social_media_cleanup',
+          this.config.socialMediaCleanupIntervalMs,
+        );
+        if (mediaClaim !== null) {
+          socialMediaObjectsRemoved = await this.withClaim(mediaClaim, () =>
+            this.socialMediaCleaner.sweep(),
+          );
           socialMediaSweepRan = true;
         }
 
         let backupPayloadSweepRan = false;
         let backupPayloadObjectsRemoved = 0;
-        if (
-          await this.claimDue('backup_payload_cleanup', this.config.backupPayloadCleanupIntervalMs)
-        ) {
-          backupPayloadObjectsRemoved = await this.backupPayloadCleaner.sweep();
+        const backupClaim = await this.claimDue(
+          'backup_payload_cleanup',
+          this.config.backupPayloadCleanupIntervalMs,
+        );
+        if (backupClaim !== null) {
+          backupPayloadObjectsRemoved = await this.withClaim(backupClaim, () =>
+            this.backupPayloadCleaner.sweep(),
+          );
           backupPayloadSweepRan = true;
         }
 
         let databaseSizeChecked = false;
-        if (await this.claimDue('database_size_check', this.config.databaseSizeCheckIntervalMs)) {
-          await this.checkDatabaseSize();
+        const sizeClaim = await this.claimDue(
+          'database_size_check',
+          this.config.databaseSizeCheckIntervalMs,
+        );
+        if (sizeClaim !== null) {
+          await this.withClaim(sizeClaim, () => this.checkDatabaseSize());
           databaseSizeChecked = true;
         }
 
         let drBackupChecked = false;
-        if (await this.claimDue('dr_backup_check', this.config.drBackupCheckIntervalMs)) {
-          await this.checkDrBackupFreshness();
+        const drClaim = await this.claimDue('dr_backup_check', this.config.drBackupCheckIntervalMs);
+        if (drClaim !== null) {
+          await this.withClaim(drClaim, () => this.checkDrBackupFreshness());
           drBackupChecked = true;
         }
 
@@ -500,19 +515,74 @@ export class MaintenanceCoordinator {
    *
    * `INSERT ... ON CONFLICT DO UPDATE ... WHERE` é a forma de CAS de uma linha só: sem linha
    * anterior, a reivindicação sempre vence (primeira execução); com linha anterior, só vence se já
-   * passou `intervalMs` desde `updated_at`. Perder a corrida (`rowCount === 0`) significa "outro
-   * ciclo já rodou este worker recentemente" — nunca um erro.
+   * passou `intervalMs` desde `updated_at`. Perder a corrida (`null`) significa "outro ciclo já
+   * rodou este worker recentemente" — nunca um erro.
+   *
+   * A CTE `anterior` lê a linha **antes** do INSERT (todas as partes de uma instrução compartilham
+   * o mesmo snapshot), e é o que permite devolver a janela quando o worker falha — ver
+   * [withClaim]. Um round-trip só: reivindicar e saber o que havia antes é a mesma pergunta.
    */
-  private async claimDue(key: string, intervalMs: number): Promise<boolean> {
+  private async claimDue(key: string, intervalMs: number): Promise<DueClaim | null> {
     const now = this.clock.now();
-    const result = await this.postgres.query(
-      `INSERT INTO server_metadata (key, value, updated_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
-       WHERE ($3 - server_metadata.updated_at) >= $4
-       RETURNING 1`,
+    const { rows } = await this.postgres.query<{
+      claimed: number;
+      previous_updated_at: number | null;
+    }>(
+      `WITH anterior AS (
+         SELECT updated_at FROM server_metadata WHERE key = $1
+       ), reivindicacao AS (
+         INSERT INTO server_metadata (key, value, updated_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+         WHERE ($3 - server_metadata.updated_at) >= $4
+         RETURNING 1
+       )
+       SELECT (SELECT count(*) FROM reivindicacao)::int AS claimed,
+              (SELECT updated_at FROM anterior)         AS previous_updated_at`,
       [key, String(now), now, intervalMs],
     );
-    return (result.rowCount ?? 0) > 0;
+    const row = rows[0];
+    if (row === undefined || row.claimed === 0) {
+      return null;
+    }
+    return { key, previousUpdatedAt: row.previous_updated_at };
   }
+
+  /**
+   * Roda o worker reivindicado e, se ele **falhar**, devolve a janela (T18.3.2).
+   *
+   * `claimDue` consome a janela antes de o trabalho acontecer — é o que impede dois ciclos
+   * simultâneos de varrer a mesma coisa. O efeito colateral era que uma varredura que falhava só
+   * seria tentada de novo um intervalo inteiro depois: seis horas, no caso da limpeza de payloads
+   * de backup. Restaurar o `updated_at` anterior faz o próximo ciclo tentar de novo imediatamente,
+   * sem afrouxar a exclusão mútua enquanto o trabalho está em andamento.
+   *
+   * A devolução é best-effort: se ela falhar, quem manda é o erro original do worker.
+   */
+  private async withClaim<T>(claim: DueClaim, work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      await this.restoreClaim(claim).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async restoreClaim(claim: DueClaim): Promise<void> {
+    if (claim.previousUpdatedAt === null) {
+      // Não havia linha antes: apagar devolve o estado exato de "nunca rodou".
+      await this.postgres.query('DELETE FROM server_metadata WHERE key = $1', [claim.key]);
+      return;
+    }
+    await this.postgres.query(
+      'UPDATE server_metadata SET value = $2, updated_at = $3 WHERE key = $1',
+      [claim.key, String(claim.previousUpdatedAt), claim.previousUpdatedAt],
+    );
+  }
+}
+
+/** Uma janela de cadência reivindicada, e o `updated_at` que havia antes dela. */
+interface DueClaim {
+  readonly key: string;
+  readonly previousUpdatedAt: number | null;
 }

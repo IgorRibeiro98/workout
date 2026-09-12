@@ -20,10 +20,15 @@
 #   ops/deploy.sh                  # deploy do commit atual
 #   ops/deploy.sh --skip-backup    # SÓ para um deploy sem migration nova, e sob decisão explícita
 #   ops/deploy.sh --rollback <tag> # volta para uma imagem anterior
+#
+# Emergência: SPARK_DEPLOY_ALLOW_UNVERIFIED=1 pula a verificação de procedência do commit
+# (origin/main + CI `backend` verde). O aviso fica no log; nada mais é afrouxado.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/lib.sh
 . "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=ops/lib.deploy-gate.sh
+. "${SCRIPT_DIR}/lib.deploy-gate.sh"
 
 load_env_file
 
@@ -110,6 +115,11 @@ if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --q
   # mente sobre o que está no ar.
   fail "há alterações não commitadas; a tag da imagem precisa descrever exatamente o que sobe"
 fi
+
+# Árvore limpa diz que a tag é honesta; ela não diz que o código foi revisado nem testado. O portão
+# de procedência (T18.3.2) exige as duas coisas: commit em origin/main e workflow `backend` verde.
+# Emergência: SPARK_DEPLOY_ALLOW_UNVERIFIED=1 (com aviso no log).
+require_reviewed_commit "$REPO_ROOT" "$COMMIT"
 
 PREVIOUS_TAG="$(current_tag)"
 log "deploy de ${COMMIT} (versão atual: ${PREVIOUS_TAG:-nenhuma})"

@@ -12,8 +12,10 @@ import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
 import com.example.service.WorkoutNotificationManager
 
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.example.domain.engine.ManifestImporter
@@ -34,6 +36,27 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
             .setMinimumLoggingLevel(android.util.Log.WARN)
             .build()
     
+    /**
+     * O escopo de corrotinas da aplicação — um só, supervisionado e com fronteira de exceção.
+     *
+     * Antes da auditoria de 2026-09-12 havia três escopos anônimos aqui (`Dispatchers.Default`
+     * para o sync, `Dispatchers.Main` para a notificação de descanso, `Dispatchers.IO` para o
+     * startup), nenhum com `SupervisorJob` nem `CoroutineExceptionHandler`. Consequência concreta:
+     * uma `SQLiteException` inesperada dentro do ciclo de sync não era capturada por ninguém e
+     * derrubava o processo — e a mesma exceção, por não ser supervisionada, cancelava o escopo,
+     * fazendo os `launch` seguintes virarem no-ops silenciosos.
+     *
+     * O escopo vive enquanto o processo vive, que é o tempo certo: quem observa o temporizador de
+     * descanso precisa continuar observando com a tela fechada.
+     */
+    val applicationScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() +
+            Dispatchers.Default +
+            CoroutineExceptionHandler { _, throwable ->
+                android.util.Log.e(TAG, "falha não tratada no escopo da aplicação", throwable)
+            }
+    )
+
     lateinit var database: AppDatabase
         internal set
         
@@ -130,6 +153,10 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
         internal set
         
     lateinit var notificationManager: WorkoutNotificationManager
+        internal set
+
+    /** Motor de mídia do catálogo. Um por processo — ver o comentário em `onCreate`. */
+    lateinit var exerciseMediaEngine: com.example.domain.engine.ExerciseMediaEngine
         internal set
 
     /**
@@ -641,7 +668,7 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
                     ?.account?.uid
             },
             scheduler = com.example.service.WorkManagerSyncScheduler(this),
-            scope = CoroutineScope(Dispatchers.Default)
+            scope = applicationScope
         )
 
         repository = WorkoutRepository(
@@ -696,22 +723,48 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
             syncMutations = syncMutationCoordinator
         )
         notificationManager = WorkoutNotificationManager(this)
+        // Instância única do motor de mídia (auditoria 2026-09-12). Antes ele era construído solto
+        // dentro de `onCreate` e **de novo** dentro da tela de Configurações, cada um com o seu
+        // provedor remoto e o seu cliente HTTP.
+        exerciseMediaEngine = com.example.domain.engine.ExerciseMediaEngine(
+            dao = database.workoutDao(),
+            remoteDataSource = com.example.data.remote.provider.ExerciseProviderFactory.create(
+                database.workoutDao(),
+                settingsManager
+            ),
+            context = this
+        )
         com.example.service.SocialNotificationChannels.createChannels(this)
 
         // Nada de Firebase, App Check ou IA acontece no startup: o Spark é local-first. O Coach
         // só fala com o Spark Backend dentro de uma chamada que o usuário pediu, e quem instala o
         // App Check da variante de build é o `FirebaseAuthGateway`, quando a conta é usada.
 
-        CoroutineScope(Dispatchers.Main).launch {
+        // Autoridade única da notificação de contagem de descanso (auditoria 2026-09-12).
+        //
+        // Antes havia três: o `ExecutionViewModel` mostrava e cancelava, este bloco cancelava de
+        // novo e o `RestNotificationReceiver` remostrava no "+30s". A do ViewModel era a pior das
+        // três, porque tirava o nome do exercício de `state.value` — que logo após a restauração
+        // do processo ainda é `ExecutionState()`, e a notificação saía como "Descanso: Exercício".
+        //
+        // Aqui o observador vive tanto quanto o processo (a notificação precisa continuar correta
+        // com a tela fechada) e o nome vem de `getActiveExerciseNameForTimer()`, que lê o
+        // `exerciseSessionId` persistido junto com o prazo.
+        applicationScope.launch {
             workoutEngine.restTimerTarget.collect { target ->
                 if (target == null) {
                     notificationManager.cancelNotification()
+                } else {
+                    val exerciseName = runCatching { workoutEngine.getActiveExerciseNameForTimer() }
+                        .getOrNull()
+                        ?: getString(R.string.rest_timer_generic_exercise)
+                    notificationManager.showTimerNotification(exerciseName, target)
                 }
             }
         }
 
 
-        CoroutineScope(Dispatchers.IO).launch {
+        applicationScope.launch(Dispatchers.IO) {
             // Recuperação de restore **antes** de qualquer outra coisa (T16.5).
             //
             // Um restore interrompido pode ter deixado o Room já substituído e as preferências
@@ -723,14 +776,21 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
             // Sem tentativa interrompida, a chamada não faz nada.
             try {
                 restoreRepository.recover()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Um restore que não conclui deixa o app sobre um dataset em transição. Continuar é
+                // correto (o Spark precisa abrir), sumir com o motivo não: `printStackTrace` não
+                // aparece em nenhum filtro de log e não tem tag para procurar.
+                android.util.Log.e(TAG, "recuperação de restore falhou", e)
             }
 
             try {
                 (consistencyRepository as? com.example.data.repository.ConsistencyRepositoryImpl)?.initialize()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e(TAG, "inicialização de consistência falhou", e)
             }
             
             try {
@@ -757,8 +817,10 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
                 // Missões perdidas por um encerramento no meio do caminho voltam ao estado correto
                 // aqui, sem recompensa nem comemoração repetidas.
                 com.example.domain.gamification.mission.MissionReconciler(missionRepository).reconcile()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e(TAG, "reconciliação de gamificação falhou", e)
             }
             
             try {
@@ -768,19 +830,15 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
                 // e assim as 354 entradas não são reimportadas a cada abertura do app.
                 val result = premiumImporter.importFromAssets("catalog/exercise-content-manifest.v2.json")
                 premiumImporter.seedPremiumTestWorkoutIfNeeded()
-                android.util.Log.d("MainApplication", "Premium Import Report:\n${result.formattedReport}")
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d(TAG, "Premium Import Report:\n${result.formattedReport}")
+                }
 
-                val mediaEngine = com.example.domain.engine.ExerciseMediaEngine(
-                    dao = database.workoutDao(),
-                    remoteDataSource = com.example.data.remote.provider.ExerciseProviderFactory.create(
-                        database.workoutDao(),
-                        settingsManager
-                    ),
-                    context = this@MainApplication
-                )
-                mediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 2)
+                exerciseMediaEngine.syncOpportunistic(settingsManager, currentCatalogVersion = 2)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e(TAG, "importação de catálogo/mídia falhou", e)
             }
         }
     }
@@ -797,4 +855,9 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
             .respectCacheHeaders(false)
             .build()
     }
+
+    private companion object {
+        const val TAG = "MainApplication"
+    }
+
 }

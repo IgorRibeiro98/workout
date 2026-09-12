@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SparkLogger } from '../src/common/logger';
+import { loadMigrations } from '../src/database/postgres-migration-runner';
 import { PostgresUrlIdentityError } from '../src/database/postgres-url';
 import { DrBackupError, runDrBackup, type DrBackupDependencies } from '../src/dr/db-backup.runner';
 import { DrBackupStore } from '../src/dr/dr-backup.store';
@@ -19,7 +20,21 @@ import { planDrRetention } from '../src/dr/dr-retention';
 import { FakeClock } from './support/fake-clock';
 import { InMemoryObjectStorageClient } from './support/fake-object-storage';
 import { FakePgTools, fakeToolFailure } from './support/fake-pg-tools';
-import { configFor, createTempDb, postgresFor, type TempDb } from './support/temp-db';
+import {
+  configFor,
+  createTempDb,
+  MIGRATIONS_DIR,
+  postgresFor,
+  type TempDb,
+} from './support/temp-db';
+
+/**
+ * As versões de migration que existem **hoje** no repositório — derivadas, nunca escritas à mão:
+ * o manifesto do backup descreve o schema atual, e um número fixo aqui faria toda migration nova
+ * parecer um defeito do backup.
+ */
+const SCHEMA_VERSIONS = loadMigrations(MIGRATIONS_DIR).map((migration) => migration.version);
+const CURRENT_SCHEMA_VERSION = SCHEMA_VERSIONS[SCHEMA_VERSIONS.length - 1];
 
 const PASSWORD = 'senha-que-nunca-entra-no-manifesto';
 
@@ -79,7 +94,7 @@ describe('T18.3 — backup de DR do PostgreSQL', () => {
     expect(result.backupId).toBe('2026-09-11T120000Z');
     expect(result.dumpSizeBytes).toBe(tools.dumpBytes.length);
     expect(result.sha256).toBe(createHash('sha256').update(tools.dumpBytes).digest('hex'));
-    expect(result.schemaVersion).toBe(2);
+    expect(result.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(result.retention).toEqual({ kept: 1, removed: 0, ignored: 0 });
 
     expect(storage.names()).toEqual([
@@ -101,8 +116,8 @@ describe('T18.3 — backup de DR do PostgreSQL', () => {
     expect(manifest.dumpFormat).toBe('pg_dump-custom');
     expect(manifest.postgresVersion).toContain('PostgreSQL');
     expect(manifest.pgDumpVersion).toContain('pg_dump');
-    expect(manifest.schema.schemaVersion).toBe(2);
-    expect(manifest.schema.migrations.map((m) => m.version)).toEqual([1, 2]);
+    expect(manifest.schema.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    expect(manifest.schema.migrations.map((m) => m.version)).toEqual(SCHEMA_VERSIONS);
     expect(manifest.schema.tables).toContain('schema_migrations');
     expect(manifest.schema.tables).toContain('backup_snapshots');
     // O `pg_dump` recebeu a URL — e só ele; o manifesto nunca.

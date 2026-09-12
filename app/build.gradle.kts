@@ -244,7 +244,10 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
-            isReturnDefaultValues = true
+            // `isReturnDefaultValues` saiu na auditoria de 2026-09-12. Com ele, um teste de JVM puro
+            // que tocasse `android.*` sem Robolectric recebia `null`/`0`/`false` em silêncio, e a
+            // asserção seguinte passava ou falhava por acaso. Sem ele, o mesmo teste falha com
+            // "Method ... not mocked" — que é a informação certa: falta `@RunWith(AndroidJUnit4)`.
         }
     }
     // Fonte canônica dos schemas do Room: `app/schemas`, gerada pelo KSP e versionada no Git.
@@ -268,12 +271,15 @@ android {
     }
 
   namespace = "com.example"
-  compileSdk = 35
+  compileSdk = 36
 
   defaultConfig {
     applicationId = "com.aistudio.workout.v2"
     minSdk = 24
-    targetSdk = 35
+    // API 36 (auditoria 2026-09-12 §2). A política do Play exige a API 36 para atualizações
+    // desde 31/08/2026: com 35 o próximo envio ao console é recusado. O `minSdk` continua 24 — o
+    // que destrava `java.time` nesses aparelhos é o desugaring, não o alvo.
+    targetSdk = 36
     versionCode = 2
     versionName = "1.0"
 
@@ -284,7 +290,14 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      // R8 ligado (auditoria 2026-09-12 §2). O APK saía com 18,5 MB e com
+      // `material-icons-extended` inteiro para 85 ícones usados; sem encolhimento, cada ícone da
+      // biblioteca viajava para o aparelho. Ligar o R8 também torna obrigatórias as regras de
+      // `proguard-rules.pro`: o que é lido por reflexão (Moshi) ou por nome (enums persistidos,
+      // recursos resolvidos por `getIdentifier`) precisa estar declarado lá, senão a quebra
+      // aparece **só** em release.
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 
       // Endereço do Spark Backend em produção (T16.1/T16.2). Não é segredo, mas também não é
@@ -310,6 +323,11 @@ android {
     }
   }
   compileOptions {
+    // `java.time` em `minSdk 24` (auditoria 2026-09-12 §1.1). Sem isto, `LocalDate`, `Instant` e
+    // `DateTimeFormatter` — usados em 14 arquivos, um deles no `onCreate` — lançam
+    // `NoClassDefFoundError` em Android 7.0/7.1. O `lintDebug` acusava 217 erros `NewApi`, e o CI
+    // não rodava `lint` (só `lintVital`), então nada disso aparecia.
+    isCoreLibraryDesugaringEnabled = true
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
@@ -326,6 +344,7 @@ android {
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
   implementation(platform(libs.androidx.compose.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
@@ -417,7 +436,10 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+  // `moshi-kotlin-codegen` saiu daqui na auditoria de 2026-09-12: o projeto não tem **nenhuma**
+  // classe `@JsonClass`, então o processador rodava a cada build sem gerar um adaptador sequer.
+  // Quem serializa por Moshi aqui usa `KotlinJsonAdapterFactory` (reflexão), coberta por
+  // `proguard-rules.pro`.
 }
 
 

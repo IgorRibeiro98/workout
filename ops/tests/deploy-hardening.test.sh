@@ -15,6 +15,13 @@
 #   §9   o Scheduler diário do backup dispara o Job pela API de administração, com OAuth da SA do
 #        Scheduler, que recebe run.invoker sobre o Job.
 #
+# T18.3.2 acrescenta duas propriedades:
+#   - os Jobs spark-db-backup/spark-storage-audit só recebem o digest novo DEPOIS da troca de
+#     tráfego (um deploy abortado nunca os deixa numa imagem que ninguém validou), e o backup do
+#     gate roda com a imagem que o Job já tinha;
+#   - o deploy exige procedência do commit: presente em origin/main e com o workflow `backend`
+#     verde, com SPARK_DEPLOY_ALLOW_UNVERIFIED=1 como saída de emergência documentada.
+#
 # Uso: ops/tests/deploy-hardening.test.sh
 
 set -euo pipefail
@@ -124,8 +131,17 @@ check "o Job de backup foi executado" "sim" \
 BACKUP_LINE="$(line_no "${LOGFILE}" 'run jobs execute spark-db-backup')"
 MIGRATE_LINE="$(line_no "${LOGFILE}" 'run jobs execute spark-db-migrate')"
 BACKUP_DEPLOY_LINE="$(line_no "${LOGFILE}" 'run jobs deploy spark-db-backup')"
-check "o Job de backup recebeu o digest novo ANTES de ser executado" "sim" \
-  "$( [ -n "${BACKUP_DEPLOY_LINE}" ] && [ "${BACKUP_DEPLOY_LINE}" -lt "${BACKUP_LINE}" ] && echo sim || echo não )"
+AUDIT_DEPLOY_LINE="$(line_no "${LOGFILE}" 'run jobs deploy spark-storage-audit')"
+TRAFFIC_LINE="$(line_no "${LOGFILE}" 'update-traffic spark-backend')"
+# T18.3.2 — a ordem invertida: o backup pré-deploy roda com a imagem que o Job JÁ tem (a última
+# validada), e o digest desta release só chega aos Jobs depois que o tráfego mudou. O ponto de
+# recuperação deste deploy não pode ser produzido por código que este deploy ainda não validou.
+check "o Job de backup rodou com a imagem já validada (nenhum deploy dele antes da execução)" "sim" \
+  "$( [ "${BACKUP_DEPLOY_LINE}" -gt "${BACKUP_LINE}" ] && echo sim || echo não )"
+check "o digest novo só chega ao Job de backup DEPOIS da troca de tráfego" "sim" \
+  "$( [ -n "${TRAFFIC_LINE}" ] && [ "${TRAFFIC_LINE}" -lt "${BACKUP_DEPLOY_LINE}" ] && echo sim || echo não )"
+check "...e ao Job de auditoria também" "sim" \
+  "$( [ -n "${AUDIT_DEPLOY_LINE}" ] && [ "${TRAFFIC_LINE}" -lt "${AUDIT_DEPLOY_LINE}" ] && echo sim || echo não )"
 check "o backup terminou ANTES da migration" "sim" \
   "$( [ -n "${BACKUP_LINE}" ] && [ -n "${MIGRATE_LINE}" ] && [ "${BACKUP_LINE}" -lt "${MIGRATE_LINE}" ] && echo sim || echo não )"
 check "o gate explicou que o backup mais recente estava acima da janela" "sim" \
@@ -177,6 +193,76 @@ cleanup_logs
 check "backup pré-deploy que FALHA aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
 check "...sem migration" "não" \
   "$(printf '%s\n' "$LOG" | grep -q 'run jobs execute spark-db-migrate' && echo sim || echo não)"
+
+echo
+echo "=== T18.3.2 deploy abortado nunca deixa os Jobs numa imagem não validada ==="
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GCLOUD_JOB_EXECUTE_FAILS=spark-db-migrate || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; cleanup_logs
+check "migration que falha aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...e o Job de backup NÃO recebeu o digest novo" "não" \
+  "$(printf '%s\n' "$LOG" | grep -q 'run jobs deploy spark-db-backup' && echo sim || echo não)"
+check "...nem o Job de auditoria" "não" \
+  "$(printf '%s\n' "$LOG" | grep -q 'run jobs deploy spark-storage-audit' && echo sim || echo não)"
+
+# Primeiro deploy: o Job de backup ainda não existe, e aí não há imagem anterior a preservar — ele
+# nasce com esta, antes do gate, senão o gate não teria o que executar.
+CODIGO=0
+run_deploy GCLOUD_MISSING=spark-db-backup || CODIGO=$?
+LOGFILE="${GCLOUD_CALL_LOG}"; LOG="$(cat "${GCLOUD_CALL_LOG}")"
+FIRST_BACKUP_DEPLOY="$(line_no "${LOGFILE}" 'run jobs deploy spark-db-backup')"
+FIRST_BACKUP_EXEC="$(line_no "${LOGFILE}" 'run jobs execute spark-db-backup')"
+cleanup_logs
+check "Job de backup inexistente é criado antes do gate poder executá-lo" "sim" \
+  "$( [ -n "${FIRST_BACKUP_DEPLOY}" ] && [ -n "${FIRST_BACKUP_EXEC}" ] && [ "${FIRST_BACKUP_DEPLOY}" -lt "${FIRST_BACKUP_EXEC}" ] && echo sim || echo não )"
+
+echo
+echo "=== T18.3.2 procedência do commit: origin/main + CI verde ==="
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GIT_NOT_ANCESTOR=1 || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; DOCKER="$(cat "${DOCKER_CALL_LOG}")"
+cleanup_logs
+check "commit fora de origin/main aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...antes do build" "0" "$(printf '%s\n' "$DOCKER" | grep -c '^build ' || true)"
+check "...com a mensagem certa" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'NÃO está em origin/main' && echo sim || echo não)"
+
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_RUN_RESULT=completed:failure || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; DOCKER="$(cat "${DOCKER_CALL_LOG}")"
+cleanup_logs
+check "CI vermelho aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...antes do build" "0" "$(printf '%s\n' "$DOCKER" | grep -c '^build ' || true)"
+check "...dizendo que o CI não passou" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'não passou' && echo sim || echo não)"
+
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_RUN_RESULT=in_progress: || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "CI ainda rodando aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...explicando que o deploy não corre na frente do gate" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'ainda está rodando' && echo sim || echo não)"
+
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_NO_RUN=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "commit sem execução do workflow aborta o deploy" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...apontando a saída de emergência" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'SPARK_DEPLOY_ALLOW_UNVERIFIED=1' && echo sim || echo não)"
+
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_RUN_LIST_FAILS=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "consulta ao GitHub que falha aborta o deploy (nunca segue no escuro)" "sim" \
+  "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+
+CODIGO=0
+run_deploy --full FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_NOT_ANCESTOR=1 GH_RUN_RESULT=completed:failure SPARK_DEPLOY_ALLOW_UNVERIFIED=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "a saída de emergência libera o deploy" "0" "${CODIGO}"
+check "...e deixa o aviso no log" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'AVISO: SPARK_DEPLOY_ALLOW_UNVERIFIED=1' && echo sim || echo não)"
 
 echo
 echo "=== §19 secret sem versão habilitada → deploy para antes de qualquer revision ==="

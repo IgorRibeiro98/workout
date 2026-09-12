@@ -13,6 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { pipeline } from 'node:stream/promises';
+import { SparkLogger } from '../../common/logger';
 import type { RequestWithId } from '../../common/request-id.middleware';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { BearerAuthGuard } from '../auth/bearer-auth.guard';
@@ -56,7 +58,10 @@ export const CHECKIN_MEDIA_UPLOAD_PATH = '/v1/social/checkin-media';
 @Controller()
 @UseGuards(BearerAuthGuard)
 export class SocialMediaController {
-  constructor(private readonly service: SocialMediaService) {}
+  constructor(
+    private readonly service: SocialMediaService,
+    private readonly logger: SparkLogger,
+  ) {}
 
   @Post('social/checkin-media')
   @HttpCode(HttpStatus.CREATED)
@@ -123,6 +128,22 @@ export class SocialMediaController {
 
     response.setHeader('Content-Type', found.mimeType);
     response.setHeader('Content-Length', String(found.byteSize));
-    found.stream.pipe(response);
+
+    // `pipeline` no lugar de `stream.pipe(response)`: um erro de leitura no meio do envio — o
+    // arquivo sumiu do disco, o objeto foi removido, o cliente desligou — emite `error` num
+    // `Readable` sem listener, e um `error` sem listener é `uncaughtException`. Com o provider
+    // local isso derruba o processo inteiro por causa de **uma** imagem.
+    //
+    // Os cabeçalhos já foram enviados quando isso acontece, então não há resposta de erro a dar:
+    // o que `pipeline` garante é que os dois streams sejam destruídos, a conexão encerre e o
+    // processo continue de pé. Nada é registrado com conteúdo — só o tipo do erro.
+    try {
+      await pipeline(found.stream, response);
+    } catch (error) {
+      this.logger.warn('social.media.stream_failed', {
+        mediaIdPrefix: mediaId.slice(0, 8),
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
+    }
   }
 }

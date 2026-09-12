@@ -221,18 +221,16 @@ export class WorkoutShareRepository {
   }
 
   /**
-   * Lista recebidos para recipientUid. Auto-expira itens PENDING se now >= expires_at.
+   * Lista recebidos para recipientUid. Uma oferta pendente cujo prazo passou é listada `EXPIRED`.
+   *
+   * A projeção é **derivada na leitura**, e não uma escrita: antes, toda listagem começava por um
+   * `UPDATE` sobre as ofertas do usuário — um `GET` que escreve, em toda abertura de tela, para
+   * carimbar um estado que a própria consulta sabe calcular. Nada depende da linha estar
+   * materialmente `EXPIRED`: `countPendingBySender` já filtra por `expires_at`, `acceptShare` e
+   * `getShareDetail` reconferem o prazo, e não há índice parcial em `PENDING` para liberar (o que
+   * é justamente o caso oposto ao do convite de Squad, onde a materialização é obrigatória).
    */
   async listReceived(recipientUid: string, now: number): Promise<WorkoutShareItemDto[]> {
-    // 1. Auto-expira PENDING passados
-    await this.db.query(
-      `UPDATE workout_shares
-       SET status = 'EXPIRED'
-       WHERE recipient_uid = $1 AND status = 'PENDING' AND expires_at <= $2`,
-      [recipientUid, now],
-    );
-
-    // 2. Busca shares recebidos excluindo usuários com bloqueio bilateral
     const res = await this.db.query<{
       shareId: string;
       status: WorkoutShareStatus;
@@ -242,7 +240,10 @@ export class WorkoutShareRepository {
       otherSocialId: string;
       otherDisplayName: string;
     }>(
-      `SELECT s.id AS "shareId", s.status, s.created_at AS "createdAt", s.expires_at AS "expiresAt",
+      `SELECT s.id AS "shareId",
+              CASE WHEN s.status = 'PENDING' AND s.expires_at <= $2 THEN 'EXPIRED' ELSE s.status END
+                AS status,
+              s.created_at AS "createdAt", s.expires_at AS "expiresAt",
               s.snapshot_json AS "snapshotJson",
               p.social_id AS "otherSocialId", p.display_name AS "otherDisplayName"
        FROM workout_shares s
@@ -254,7 +255,7 @@ export class WorkoutShareRepository {
               OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
          )
        ORDER BY s.created_at DESC`,
-      [recipientUid],
+      [recipientUid, now],
     );
 
     return res.rows.map((r) => {
@@ -275,16 +276,9 @@ export class WorkoutShareRepository {
   }
 
   /**
-   * Lista enviados para senderUid. Auto-expira itens PENDING se now >= expires_at.
+   * Lista enviados para senderUid. `EXPIRED` é derivado na leitura, como em [listReceived].
    */
   async listSent(senderUid: string, now: number): Promise<WorkoutShareItemDto[]> {
-    await this.db.query(
-      `UPDATE workout_shares
-       SET status = 'EXPIRED'
-       WHERE sender_uid = $1 AND status = 'PENDING' AND expires_at <= $2`,
-      [senderUid, now],
-    );
-
     const res = await this.db.query<{
       shareId: string;
       status: WorkoutShareStatus;
@@ -294,7 +288,10 @@ export class WorkoutShareRepository {
       otherSocialId: string;
       otherDisplayName: string;
     }>(
-      `SELECT s.id AS "shareId", s.status, s.created_at AS "createdAt", s.expires_at AS "expiresAt",
+      `SELECT s.id AS "shareId",
+              CASE WHEN s.status = 'PENDING' AND s.expires_at <= $2 THEN 'EXPIRED' ELSE s.status END
+                AS status,
+              s.created_at AS "createdAt", s.expires_at AS "expiresAt",
               s.snapshot_json AS "snapshotJson",
               p.social_id AS "otherSocialId", p.display_name AS "otherDisplayName"
        FROM workout_shares s
@@ -306,7 +303,7 @@ export class WorkoutShareRepository {
               OR (b.blocker_uid = s.recipient_uid AND b.blocked_uid = s.sender_uid)
          )
        ORDER BY s.created_at DESC`,
-      [senderUid],
+      [senderUid, now],
     );
 
     return res.rows.map((r) => {

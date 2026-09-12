@@ -66,6 +66,27 @@ data class PeriodTotals(
     val durationMinutes: Long = 0L
 )
 
+/**
+ * Os números de **uma** sessão, calculados com a mesma regra do período.
+ *
+ * Eles existem porque o card da lista recalculava tudo dentro da Composable — e sem excluir
+ * aquecimento. Resultado: o card do período e a linha da lista mostravam volumes e contagens
+ * diferentes para os mesmos treinos, na mesma tela.
+ */
+data class SessionMetrics(
+    /** Séries concluídas, aquecimento fora. */
+    val completedSets: Int = 0,
+    /** Volume das séries concluídas por carga × repetições, aquecimento e séries por tempo fora. */
+    val volumeKg: Double = 0.0,
+    /**
+     * A sessão tem série planejada que não foi concluída.
+     *
+     * Aqui o aquecimento **conta**: "parcial" responde "fiz tudo o que estava planejado?", e a
+     * regra de excluir aquecimento é sobre volume, distribuição e recordes — não sobre execução.
+     */
+    val isPartial: Boolean = false
+)
+
 data class HistoryState(
     val calendarSummaries: List<SessionCalendarSummary> = emptyList(),
     val selectedDate: Date = Date(),
@@ -78,11 +99,18 @@ data class HistoryState(
     /** Completed sessions inside [period], newest first. */
     val sessionsInPeriod: List<SessionCalendarSummary> = emptyList(),
     val totals: PeriodTotals = PeriodTotals(),
-    val strengthHighlights: List<StrengthHighlight> = emptyList()
+    /** Os mesmos totais, sobre o histórico inteiro — o cabeçalho da tela. */
+    val allTimeTotals: PeriodTotals = PeriodTotals(),
+    val strengthHighlights: List<StrengthHighlight> = emptyList(),
+    /** Métricas por `session.id`, para a lista não recalcular nada em composição. */
+    val sessionMetrics: Map<Long, SessionMetrics> = emptyMap(),
+    /** Preferência de vibração, lida pela ViewModel — a tela não fala com o `MainApplication`. */
+    val hapticEnabled: Boolean = true
 )
 
 class HistoryViewModel(
-    private val workoutEngine: WorkoutEngine
+    private val workoutEngine: WorkoutEngine,
+    private val settingsManager: com.example.data.datastore.SettingsManager
 ) : ViewModel() {
 
     private val _selectedDate = MutableStateFlow(Date())
@@ -90,13 +118,17 @@ class HistoryViewModel(
     private val _analysis = MutableStateFlow(HistoryAnalysis.ALL)
     private val _summaries = workoutEngine.getCalendarHistoryFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _hapticEnabled = settingsManager.hapticEnabledFlow
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     val state: StateFlow<HistoryState> = combine(
         _selectedDate,
         _summaries,
         _period,
-        _analysis
-    ) { selected, summaries, period, analysis ->
+        _analysis,
+        _hapticEnabled
+    ) { selected, summaries, period, analysis, hapticEnabled ->
         val filtered = summaries.filter { summary ->
             isSameDay(Date(summary.session.startedAt), selected)
         }
@@ -142,10 +174,12 @@ class HistoryViewModel(
             }
         }
 
-        val durationMinutes = summariesInRange.sumOf { s ->
-            val finished = s.session.finishedAt ?: s.session.startedAt
-            ((finished - s.session.startedAt) / 60000L).coerceAtLeast(0L)
-        }
+        val durationMinutes = summariesInRange.sumOf { durationMinutesOf(it) }
+
+        // Uma passada sobre o histórico inteiro, com a mesma regra: é ela que alimenta o card de
+        // cada treino e o cabeçalho da tela. Eles recalculavam isso em composição, sem excluir
+        // aquecimento, e por isso divergiam do card do período.
+        val metrics = summaries.associate { it.session.id to metricsOf(it) }
 
         HistoryState(
             calendarSummaries = summaries,
@@ -163,9 +197,17 @@ class HistoryViewModel(
                 volumeKg = volumeTotal,
                 durationMinutes = durationMinutes
             ),
+            allTimeTotals = PeriodTotals(
+                sessions = summaries.size,
+                completedSets = metrics.values.sumOf { it.completedSets },
+                volumeKg = metrics.values.sumOf { it.volumeKg },
+                durationMinutes = summaries.sumOf { durationMinutesOf(it) }
+            ),
             strengthHighlights = bestPerExercise.values
                 .sortedByDescending { it.maxWeight }
-                .take(MAX_STRENGTH_HIGHLIGHTS)
+                .take(MAX_STRENGTH_HIGHLIGHTS),
+            sessionMetrics = metrics,
+            hapticEnabled = hapticEnabled
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HistoryState())
 
@@ -197,11 +239,62 @@ class HistoryViewModel(
         }
     }
 
+    /**
+     * Salva a academia do check-in de uma sessão do histórico.
+     *
+     * Montar a `CheckInEntity` é trabalho de domínio, e estava dentro do `onClick` de um diálogo.
+     *
+     * ATENÇÃO: `WorkoutEngine.updateCheckInDetails` só **atualiza**. Numa sessão que nunca teve
+     * check-in, o `UPDATE` não encontra linha e nada é gravado — comportamento que já era assim
+     * antes desta função existir, e que só um caminho de inserção no motor resolve.
+     */
+    fun saveCheckInGym(summary: SessionCalendarSummary, gymName: String?) {
+        val existing = summary.checkIn ?: CheckInEntity(
+            sessionId = summary.session.id,
+            checkInTime = summary.session.startedAt,
+            checkOutTime = summary.session.finishedAt,
+            gymName = ""
+        )
+        updateCheckInTime(
+            checkIn = existing,
+            newCheckInTime = existing.checkInTime,
+            newCheckOutTime = existing.checkOutTime ?: summary.session.finishedAt,
+            gym = gymName?.takeIf { it.isNotBlank() }
+        )
+    }
+
     private fun isSameDay(date1: Date, date2: Date): Boolean {
         val cal1 = Calendar.getInstance().apply { time = date1 }
         val cal2 = Calendar.getInstance().apply { time = date2 }
         return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
                cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
+    }
+
+    private fun durationMinutesOf(summary: SessionCalendarSummary): Long {
+        val finished = summary.session.finishedAt ?: summary.session.startedAt
+        return ((finished - summary.session.startedAt) / 60000L).coerceAtLeast(0L)
+    }
+
+    private fun metricsOf(summary: SessionCalendarSummary): SessionMetrics {
+        var completed = 0
+        var volume = 0.0
+        var plannedTotal = 0
+        var plannedCompleted = 0
+        summary.exercises.forEach { ex ->
+            ex.sets.forEach { set ->
+                plannedTotal++
+                if (set.completed) plannedCompleted++
+                if (set.completed && set.type != SetType.WARMUP.name) {
+                    completed++
+                    if (!set.isDurationMode) volume += (set.weight * set.repetitions).toDouble()
+                }
+            }
+        }
+        return SessionMetrics(
+            completedSets = completed,
+            volumeKg = volume,
+            isPartial = plannedTotal > 0 && plannedCompleted < plannedTotal
+        )
     }
 
     companion object {

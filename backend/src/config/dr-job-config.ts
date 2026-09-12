@@ -37,13 +37,23 @@ const drEnv = objectStorageEnv.extend({
   /**
    * Teto do arquivo de dump. Acima disto o Job falha com uma mensagem clara em vez de estourar a
    * memória do container ao carregar o arquivo para o upload. Cresce junto com a memória do Job.
+   *
+   * 256 MiB, e o número vem da conta (T18.3.2). O Job roda com 1 GiB
+   * (`SPARK_RUN_BACKUP_MEMORY` em `ops/gcp/lib.gcp.sh`), e um dump de N bytes ocupa **duas** vezes
+   * N ao mesmo tempo: o arquivo em tmpfs (que no Cloud Run conta como memória) e o buffer que o
+   * upload entrega ao provider. Somando o runtime do Node, o teto anterior de 768 MiB descrevia um
+   * arquivo que o Job **não conseguiria processar** — ele morreria por OOM antes de conseguir
+   * registrar `db_backup_failed`, que é o oposto de falhar com mensagem clara. 256 MiB cabe com
+   * folga (2 × 256 MiB + runtime) e continua muito acima do dump real: o limiar mais grave de
+   * tamanho do banco é 450 MB (`DATABASE_SIZE_THRESHOLDS_MB`), e o formato custom é comprimido.
+   * Subir este valor exige subir `SPARK_RUN_BACKUP_MEMORY` junto.
    */
   SPARK_DR_MAX_DUMP_BYTES: z.coerce
     .number()
     .int()
     .min(1024 * 1024)
     .max(8 * 1024 * 1024 * 1024)
-    .default(768 * 1024 * 1024),
+    .default(256 * 1024 * 1024),
   /** Proveniência, injetada pelo deploy. Opcional: um Job disparado à mão pode não saber. */
   SPARK_GIT_COMMIT: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),

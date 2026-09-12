@@ -93,7 +93,11 @@ export interface ListQuery {
  * `limit` fora de forma (texto, zero, negativo, fracionário) é defeito de cliente e é recusado —
  * ele quase sempre significa uma URL montada errado.
  */
-export function parseListQuery(rawLimit: unknown, rawCursor: unknown): ListQuery {
+export function parseListQuery(
+  rawLimit: unknown,
+  rawCursor: unknown,
+  options: ListQueryOptions = {},
+): ListQuery {
   let limit: number = SOCIAL_LIST_PAGE.defaultLimit;
 
   if (rawLimit !== undefined && rawLimit !== '') {
@@ -104,7 +108,19 @@ export function parseListQuery(rawLimit: unknown, rawCursor: unknown): ListQuery
     limit = Math.min(parsed, SOCIAL_LIST_PAGE.maxLimit);
   }
 
-  return { limit, cursor: parseCursor(rawCursor) };
+  return { limit, cursor: parseCursor(rawCursor, options) };
+}
+
+/**
+ * O que a rota espera do cursor.
+ *
+ * `numericPrimary` existe porque a chave de ordenação **não** é a mesma em todas as listas: a de
+ * amigos ordena por nome (texto) e a de pedidos por `createdAt` (número). Onde o repositório faz
+ * `Number(cursor.primary)`, um valor não numérico virava `NaN`, ia para o `WHERE` como parâmetro
+ * e derrubava a consulta — `500` para um cursor malformado, que é `400`.
+ */
+export interface ListQueryOptions {
+  readonly numericPrimary?: boolean;
 }
 
 /**
@@ -120,7 +136,7 @@ export function encodeCursor(cursor: ListCursor): string {
   );
 }
 
-function parseCursor(raw: unknown): ListCursor | null {
+function parseCursor(raw: unknown, options: ListQueryOptions = {}): ListCursor | null {
   if (raw === undefined || raw === '') {
     return null;
   }
@@ -141,6 +157,9 @@ function parseCursor(raw: unknown): ListCursor | null {
     (typeof decoded[0] !== 'string' && typeof decoded[0] !== 'number') ||
     typeof decoded[1] !== 'string'
   ) {
+    throw FriendshipErrors.invalid('cursor inválido');
+  }
+  if (options.numericPrimary && !Number.isFinite(Number(decoded[0]))) {
     throw FriendshipErrors.invalid('cursor inválido');
   }
   return { primary: decoded[0], secondary: decoded[1] };

@@ -20,9 +20,25 @@ import com.example.service.WorkoutNotificationManager
 
 class MainViewModelFactory(
     private val database: com.example.data.local.AppDatabase,
+    /**
+     * Sempre o `applicationContext`.
+     *
+     * Ele entra aqui porque os importadores de catálogo e a exportação precisam de `Context` e são
+     * usados pelo `SettingsViewModel`. Guardar uma Activity numa fábrica que vive enquanto o
+     * Application vive seria vazamento; guardar o Application não é.
+     */
+    private val applicationContext: android.content.Context,
     private val repository: WorkoutRepository,
     private val settingsManager: SettingsManager,
     private val workoutEngine: WorkoutEngine,
+    /**
+     * O motor de mídia do `Application`.
+     *
+     * Opcional porque os testes que constroem esta fábrica não o têm; nulo significa "a tela de
+     * Configurações constrói o seu", que é o comportamento antigo. Em produção ele é passado, e
+     * então existe **um** motor de mídia por processo — com um cliente HTTP, não dois.
+     */
+    private val exerciseMediaEngine: com.example.domain.engine.ExerciseMediaEngine? = null,
     private val notificationManager: WorkoutNotificationManager,
     private val bodyMeasurementRepository: BodyMeasurementRepository,
     private val getEvolutionSummaryUseCase: GetEvolutionSummaryUseCase? = null,
@@ -218,7 +234,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(WorkoutsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return WorkoutsViewModel(repository) as T
+            return WorkoutsViewModel(repository, settingsManager) as T
         }
         if (modelClass.isAssignableFrom(TodayViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
@@ -391,6 +407,17 @@ class MainViewModelFactory(
                 photoSource = checkInPhotoSource
             ) as T
         }
+        if (modelClass.isAssignableFrom(com.example.presentation.friends.ShareWorkoutViewModel::class.java)) {
+            val friends = friendGateway
+                ?: throw IllegalStateException("FriendGateway not provided")
+            val shares = workoutShareGateway
+                ?: throw IllegalStateException("WorkoutShareGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.friends.ShareWorkoutViewModel(
+                friendGateway = friends,
+                shareGateway = shares
+            ) as T
+        }
         if (modelClass.isAssignableFrom(com.example.presentation.friends.SharedWorkoutsViewModel::class.java)) {
             val gateway = workoutShareGateway
                 ?: throw IllegalStateException("WorkoutShareGateway not provided")
@@ -507,7 +534,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(HistoryViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return HistoryViewModel(workoutEngine) as T
+            return HistoryViewModel(workoutEngine, settingsManager) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.execution.SummaryViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
@@ -515,7 +542,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.presentation.workouts.TemplateDetailsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return com.example.presentation.workouts.TemplateDetailsViewModel(repository) as T
+            return com.example.presentation.workouts.TemplateDetailsViewModel(repository, settingsManager) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.exercises.ExerciseDetailsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
@@ -523,7 +550,20 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.presentation.workouts.ProgramDetailsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return com.example.presentation.workouts.ProgramDetailsViewModel(repository) as T
+            return com.example.presentation.workouts.ProgramDetailsViewModel(repository, settingsManager) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.settings.SettingsViewModel::class.java)) {
+            // O `workoutEngine` é o do Application, e é de propósito: a tela construía um segundo
+            // motor sobre o mesmo banco só para reescrever o descanso dos treinos existentes.
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.settings.SettingsViewModel(
+                settingsManager = settingsManager,
+                database = database,
+                workoutEngine = workoutEngine,
+                mediaEngine = exerciseMediaEngine,
+                notificationManager = notificationManager,
+                appContext = applicationContext
+            ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

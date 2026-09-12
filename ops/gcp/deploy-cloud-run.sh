@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy reproduzível do Spark Backend no Cloud Run (T18.2 §5/§10; endurecido na T18.3).
 #
-#   árvore Git limpa
+#   árvore Git limpa + commit em origin/main com o CI `backend` verde (T18.3.2)
 #         ↓
 #   build da imagem (tag = git SHA; sem provenance/SBOM — um digest por release)
 #         ↓
@@ -11,7 +11,7 @@
 #         ↓
 #   resolve a versão HABILITADA de cada secret (revision X → secret versão Y, nunca :latest)
 #         ↓
-#   atualiza os Jobs spark-db-backup e spark-storage-audit com o MESMO digest
+#   garante que o Job spark-db-backup EXISTE (sem trocar a imagem de um que já existe)
 #         ↓
 #   GATE de DR: existe backup válido com ≤ SPARK_DR_MAX_BACKUP_AGE_HOURS?
 #     não → SPARK_DR_PREDEPLOY_POLICY=run-backup: executa spark-db-backup e espera SUCCESS
@@ -33,6 +33,9 @@
 #                                                remove o temporário, cria SPARK_RUN_API_SERVICE
 #                                                de verdade (já validado)
 #         ↓                                         ↓
+#     Jobs spark-db-backup e spark-storage-audit recebem o MESMO digest — depois do tráfego, para
+#     que um deploy abortado nunca os deixe numa imagem que não foi validada (T18.3.2)
+#         ↓
 #              deploy do spark-maintenance com o MESMO digest (privado, sem tráfego a mover)
 #         ↓
 #   garante os dois jobs do Cloud Scheduler (manutenção a cada minuto; backup de DR diário)
@@ -50,12 +53,17 @@
 # Uso:
 #   SPARK_GCP_PROJECT=meu-projeto ops/gcp/deploy-cloud-run.sh
 #   ops/gcp/deploy-cloud-run.sh --skip-maintenance   # só a API + jobs, sem tocar spark-maintenance
+#
+# Emergência (documentada, e registrada no log do deploy): SPARK_DEPLOY_ALLOW_UNVERIFIED=1 pula a
+# verificação de procedência do commit — origin/main e CI verde. Nada mais é afrouxado por ela.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/gcp/lib.gcp.sh
 . "${SCRIPT_DIR}/lib.gcp.sh"
 # shellcheck source=ops/gcp/lib.dr.sh
 . "${SCRIPT_DIR}/lib.dr.sh"
+# shellcheck source=ops/lib.deploy-gate.sh
+. "${SCRIPT_DIR}/../lib.deploy-gate.sh"
 
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BACKEND_DIR="${REPO_ROOT}/backend"
@@ -87,6 +95,12 @@ fi
 
 GIT_SHA="$(git rev-parse --short=12 HEAD)"
 log "commit: ${GIT_SHA}"
+
+# Árvore limpa garante que a TAG descreve o que está sendo construído; ela não diz nada sobre o
+# commit ter sido revisado ou testado. `require_reviewed_commit` é quem exige isso (T18.3.2):
+# presente em origin/main e com o workflow `backend` verde. Emergência:
+# SPARK_DEPLOY_ALLOW_UNVERIFIED=1.
+require_reviewed_commit "${REPO_ROOT}" "${GIT_SHA}"
 log "projeto GCP (infraestrutura): ${SPARK_GCP_PROJECT} | projeto Firebase (FIREBASE_PROJECT_ID): ${SPARK_FIREBASE_PROJECT}"
 
 IMAGE_TAG="${SPARK_AR_IMAGE_BASE}:${GIT_SHA}"
@@ -143,40 +157,59 @@ DIRECT_SECRET="DATABASE_URL_DIRECT=${SPARK_SECRET_DATABASE_URL_DIRECT}:${DATABAS
 
 log "versões de secret desta release (rastreabilidade revision → secret): ${SPARK_SECRET_DATABASE_URL}=v${DATABASE_URL_VERSION} ${SPARK_SECRET_DATABASE_URL_DIRECT}=v${DATABASE_URL_DIRECT_VERSION} ${SPARK_SECRET_GEMINI_API_KEY}=v${GEMINI_API_KEY_VERSION} ${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}=v${HMAC_KEY_VERSION}"
 
-# ---------------------------------------------------------------- 6. Jobs de DR e auditoria — mesmo digest (T18.3 §2/§11)
+# ---------------------------------------------------------------- 6. Jobs de DR e auditoria: só EXISTÊNCIA aqui (T18.3.2)
 #
-# O Job de backup recebe o digest ANTES do gate: se o gate precisar rodar um backup, ele roda com
-# a imagem desta release — a mesma que vai migrar e servir.
+# O digest novo chega a estes Jobs **depois** da troca de tráfego (seção 12), e a ordem é o
+# conserto: antes, eles recebiam o digest logo no começo do deploy, e qualquer aborto posterior —
+# gate de DR reprovado, migration FAIL, smoke FAIL — deixava o backup diário e a auditoria rodando
+# numa imagem que nunca foi validada, indefinidamente, sem que ninguém percebesse (o deploy falhou;
+# quem olharia os Jobs?).
+#
+# O backup pré-deploy do gate roda com a imagem que o Job **já tem**, e isso é melhor do que o
+# comportamento anterior, não pior: ele é o ponto de recuperação DESTE deploy, e um ponto de
+# recuperação produzido por código ainda não validado é exatamente o que não se quer ter quando o
+# deploy dá errado. A única coisa que precisa acontecer antes do gate é o Job **existir** — no
+# primeiro deploy não há imagem anterior para preservar, então ali ele nasce já com esta.
+deploy_backup_job() {
+  log "Job ${SPARK_RUN_BACKUP_JOB} → digest ${IMAGE_DIGEST}"
+  gcloud run jobs deploy "${SPARK_RUN_BACKUP_JOB}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --image "${IMAGE_DIGEST}" \
+    --command node \
+    --args dist/cli/db-backup.js \
+    --service-account "${BACKUP_SA_EMAIL}" \
+    --cpu "${SPARK_RUN_BACKUP_CPU}" \
+    --memory "${SPARK_RUN_BACKUP_MEMORY}" \
+    --set-secrets "${DIRECT_SECRET}" \
+    --set-env-vars "OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},SPARK_DR_RETENTION_COUNT=${SPARK_DR_RETENTION_COUNT},SPARK_GIT_COMMIT=${GIT_SHA},SPARK_IMAGE_DIGEST=${IMAGE_DIGEST##*@},LOG_LEVEL=info" \
+    --max-retries 0 \
+    --task-timeout "${SPARK_RUN_BACKUP_TIMEOUT}" \
+    --quiet
+}
 
-log "atualizando o Job ${SPARK_RUN_BACKUP_JOB} com o digest ${IMAGE_DIGEST}"
-gcloud run jobs deploy "${SPARK_RUN_BACKUP_JOB}" \
-  --project "${SPARK_GCP_PROJECT}" \
-  --region "${SPARK_GCP_REGION}" \
-  --image "${IMAGE_DIGEST}" \
-  --command node \
-  --args dist/cli/db-backup.js \
-  --service-account "${BACKUP_SA_EMAIL}" \
-  --cpu "${SPARK_RUN_BACKUP_CPU}" \
-  --memory "${SPARK_RUN_BACKUP_MEMORY}" \
-  --set-secrets "${DIRECT_SECRET}" \
-  --set-env-vars "OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},SPARK_DR_RETENTION_COUNT=${SPARK_DR_RETENTION_COUNT},SPARK_GIT_COMMIT=${GIT_SHA},SPARK_IMAGE_DIGEST=${IMAGE_DIGEST##*@},LOG_LEVEL=info" \
-  --max-retries 0 \
-  --task-timeout "${SPARK_RUN_BACKUP_TIMEOUT}" \
-  --quiet
+deploy_storage_audit_job() {
+  log "Job ${SPARK_RUN_STORAGE_AUDIT_JOB} → digest ${IMAGE_DIGEST}"
+  gcloud run jobs deploy "${SPARK_RUN_STORAGE_AUDIT_JOB}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --image "${IMAGE_DIGEST}" \
+    --command node \
+    --args dist/cli/storage-audit.js \
+    --service-account "${RUNTIME_SA_EMAIL}" \
+    --set-secrets "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:${DATABASE_URL_VERSION}" \
+    --set-env-vars "NODE_ENV=production,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},DATABASE_MIGRATION_MODE=verify,BACKGROUND_JOBS_MODE=disabled,LOG_LEVEL=info" \
+    --max-retries 0 \
+    --task-timeout "${SPARK_RUN_STORAGE_AUDIT_TIMEOUT}" \
+    --quiet
+}
 
-log "atualizando o Job ${SPARK_RUN_STORAGE_AUDIT_JOB} com o digest ${IMAGE_DIGEST}"
-gcloud run jobs deploy "${SPARK_RUN_STORAGE_AUDIT_JOB}" \
-  --project "${SPARK_GCP_PROJECT}" \
-  --region "${SPARK_GCP_REGION}" \
-  --image "${IMAGE_DIGEST}" \
-  --command node \
-  --args dist/cli/storage-audit.js \
-  --service-account "${RUNTIME_SA_EMAIL}" \
-  --set-secrets "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:${DATABASE_URL_VERSION}" \
-  --set-env-vars "NODE_ENV=production,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},DATABASE_MIGRATION_MODE=verify,BACKGROUND_JOBS_MODE=disabled,LOG_LEVEL=info" \
-  --max-retries 0 \
-  --task-timeout "${SPARK_RUN_STORAGE_AUDIT_TIMEOUT}" \
-  --quiet
+if resource_exists run jobs describe "${SPARK_RUN_BACKUP_JOB}" --region "${SPARK_GCP_REGION}"; then
+  log "${SPARK_RUN_BACKUP_JOB} já existe — mantém a imagem validada até a troca de tráfego (§T18.3.2)"
+else
+  log "${SPARK_RUN_BACKUP_JOB} ainda não existe — criando com o digest desta release (não há imagem anterior a preservar)"
+  deploy_backup_job
+fi
 
 # ---------------------------------------------------------------- 7. gate de DR (T18.3 §10)
 #
@@ -273,7 +306,7 @@ deploy_api_revision() {
     --timeout "${SPARK_RUN_API_TIMEOUT}" \
     "${access_flag}" \
     --set-secrets "${API_SECRETS}" \
-    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX}" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
     --quiet \
     "$@"
 }
@@ -359,7 +392,16 @@ else
   log "primeiro deploy de ${SPARK_RUN_API_SERVICE} concluído — 100% do tráfego no digest ${IMAGE_DIGEST} (já validado antes de criar o serviço)"
 fi
 
-# ---------------------------------------------------------------- 10. spark-maintenance (mesmo digest, privado)
+# ---------------------------------------------------------------- 10. Jobs recebem o digest JÁ validado (T18.3.2)
+#
+# Aqui, e não antes: a imagem passou pela migration e pelo smoke, e 100% do tráfego já está nela.
+# `jobs deploy` cria ou atualiza — de um jeito ou de outro, o backup diário e a auditoria passam a
+# rodar exatamente o que está servindo.
+
+deploy_backup_job
+deploy_storage_audit_job
+
+# ---------------------------------------------------------------- 11. spark-maintenance (mesmo digest, privado)
 
 if [ "${SKIP_MAINTENANCE}" -eq 1 ]; then
   log "--skip-maintenance: pulando o deploy de ${SPARK_RUN_MAINTENANCE_SERVICE} e os jobs do Scheduler"
@@ -380,7 +422,7 @@ else
     --max-instances "${SPARK_RUN_MAINTENANCE_MAX_INSTANCES}" \
     --concurrency "${SPARK_RUN_MAINTENANCE_CONCURRENCY}" \
     --set-secrets "${API_SECRETS}" \
-    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX}" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
     --quiet
 
   log "garantindo run.invoker de ${SPARK_SA_SCHEDULER} sobre ${SPARK_RUN_MAINTENANCE_SERVICE} (§35)"
@@ -417,7 +459,7 @@ else
       --oidc-token-audience "${MAINTENANCE_URL}"
   fi
 
-  # ---------------------------------------------------------------- 11. Scheduler do backup de DR (T18.3 §9)
+  # ---------------------------------------------------------------- 12. Scheduler do backup de DR (T18.3 §9)
   #
   # Um Cloud Run Job é disparado pela API de administração (`jobs.run`), não por HTTP no container:
   # o Scheduler chama `run.googleapis.com` com um token OAuth da Service Account do Scheduler, que

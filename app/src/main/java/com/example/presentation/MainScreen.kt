@@ -21,16 +21,19 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -60,55 +63,69 @@ import androidx.compose.animation.AnimatedVisibility
 fun MainScreen() {
     val context = LocalContext.current
     val app = context.applicationContext as MainApplication
-    val factory = MainViewModelFactory(
-        database = app.database,
-        repository = app.repository,
-        settingsManager = app.settingsManager,
-        workoutEngine = app.workoutEngine,
-        notificationManager = app.notificationManager,
-        bodyMeasurementRepository = app.bodyMeasurementRepository,
-        getEvolutionSummaryUseCase = app.getEvolutionSummaryUseCase,
-        evolutionRepository = app.evolutionRepository,
-        performanceRepository = app.performanceRepository,
-        consistencyRepository = app.consistencyRepository,
-        xpTransactionRepository = app.xpTransactionRepository,
-        achievementRepository = app.achievementRepository,
-        missionRepository = app.missionRepository,
-        analyzeWorkoutUseCase = app.analyzeWorkoutUseCase,
-        exerciseNameResolver = { exerciseId -> app.resolveExerciseDisplayName(exerciseId) },
-        generateWorkoutUseCase = app.generateWorkoutUseCase,
-        saveGeneratedWorkoutUseCase = app.saveGeneratedWorkoutUseCase,
-        workoutCandidateProvider = { preferences ->
-            app.workoutGenerationContextBuilder.candidates(preferences)
-        },
-        adaptWorkoutUseCase = app.adaptWorkoutUseCase,
-        applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase,
-        explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
-        authGateway = app.authGateway,
-        sparkBackendClient = app.sparkBackendClient,
-        backupRepository = app.backupRepository,
-        restoreRepository = app.restoreRepository,
-        syncRepository = app.syncRepository,
-        syncCoordinator = app.syncCoordinator,
-        socialGateway = app.socialGateway,
-        friendGateway = app.friendGateway,
-        socialProfileGateway = app.socialProfileGateway,
-        challengeGateway = app.challengeGateway,
-        socialActivityGateway = app.socialActivityGateway,
-        socialNotificationGateway = app.socialNotificationGateway,
-        pushRegistrationCoordinator = app.pushRegistrationCoordinator,
-        pushAccountScope = app.pushAccountScope,
-        blockGateway = app.blockGateway,
-        reportGateway = app.reportGateway,
-        accountDeletionGateway = app.accountDeletionGateway,
-        workoutShareGateway = app.workoutShareGateway,
-        workoutShareImporter = app.workoutShareImporter,
-        workoutCheckInGateway = app.workoutCheckInGateway,
-        workoutCheckInPublisher = app.workoutCheckInPublisher,
-        socialMediaCache = app.socialMediaCache,
-        checkInPhotoSource = app.checkInPhotoSource,
-        socialGroupGateway = app.socialGroupGateway
-    )
+    // A fábrica carrega ~50 dependências e `MainScreen` recompõe a cada mudança de back stack:
+    // reconstruí-la a cada recomposição criava um objeto novo várias vezes por navegação, sem ganho
+    // nenhum. Ela depende só do Application, então é lembrada por ele.
+    val factory = remember(app) {
+        MainViewModelFactory(
+            database = app.database,
+            applicationContext = app,
+            repository = app.repository,
+            settingsManager = app.settingsManager,
+            workoutEngine = app.workoutEngine,
+            exerciseMediaEngine = app.exerciseMediaEngine,
+            notificationManager = app.notificationManager,
+            bodyMeasurementRepository = app.bodyMeasurementRepository,
+            getEvolutionSummaryUseCase = app.getEvolutionSummaryUseCase,
+            evolutionRepository = app.evolutionRepository,
+            performanceRepository = app.performanceRepository,
+            consistencyRepository = app.consistencyRepository,
+            xpTransactionRepository = app.xpTransactionRepository,
+            achievementRepository = app.achievementRepository,
+            missionRepository = app.missionRepository,
+            analyzeWorkoutUseCase = app.analyzeWorkoutUseCase,
+            exerciseNameResolver = { exerciseId -> app.resolveExerciseDisplayName(exerciseId) },
+            generateWorkoutUseCase = app.generateWorkoutUseCase,
+            saveGeneratedWorkoutUseCase = app.saveGeneratedWorkoutUseCase,
+            workoutCandidateProvider = { preferences ->
+                app.workoutGenerationContextBuilder.candidates(preferences)
+            },
+            adaptWorkoutUseCase = app.adaptWorkoutUseCase,
+            applyWorkoutAdaptationUseCase = app.applyWorkoutAdaptationUseCase,
+            explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
+            authGateway = app.authGateway,
+            sparkBackendClient = app.sparkBackendClient,
+            backupRepository = app.backupRepository,
+            restoreRepository = app.restoreRepository,
+            syncRepository = app.syncRepository,
+            syncCoordinator = app.syncCoordinator,
+            socialGateway = app.socialGateway,
+            friendGateway = app.friendGateway,
+            socialProfileGateway = app.socialProfileGateway,
+            challengeGateway = app.challengeGateway,
+            socialActivityGateway = app.socialActivityGateway,
+            socialNotificationGateway = app.socialNotificationGateway,
+            pushRegistrationCoordinator = app.pushRegistrationCoordinator,
+            pushAccountScope = app.pushAccountScope,
+            blockGateway = app.blockGateway,
+            reportGateway = app.reportGateway,
+            accountDeletionGateway = app.accountDeletionGateway,
+            workoutShareGateway = app.workoutShareGateway,
+            workoutShareImporter = app.workoutShareImporter,
+            workoutCheckInGateway = app.workoutCheckInGateway,
+            workoutCheckInPublisher = app.workoutCheckInPublisher,
+            socialMediaCache = app.socialMediaCache,
+            checkInPhotoSource = app.checkInPhotoSource,
+            socialGroupGateway = app.socialGroupGateway
+        )
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // As ViewModels que ficam aqui são **só** as compartilhadas por mais de uma rota. Todas as
+    // outras nasceram dentro do `composable {}` da própria rota, com escopo do back stack entry:
+    // criá-las aqui fazia cada abertura fria do app disparar dezenas de consultas ao Room por
+    // telas que o usuário talvez nunca abrisse, e mantê-las vivas depois.
+    // ------------------------------------------------------------------------------------------
 
     // Um `FriendsViewModel` para as três telas do grafo (Perfil, Amigos, Solicitações). Criar um
     // por rota faria a lista ser lida três vezes e o contador do Perfil ficar velho logo depois de
@@ -119,106 +136,113 @@ fun MainScreen() {
     // quando o usuário chega nela.
     val friendsViewModel: com.example.presentation.account.FriendsViewModel = viewModel(factory = factory)
 
-    // Um `SocialProfileViewModel` para as três telas do perfil enriquecido (perfil de amigo,
-    // Compartilhar progresso e a prévia). Compartilhado pelo mesmo motivo do `FriendsViewModel`:
-    // alterar uma configuração precisa refletir na prévia sem uma segunda leitura, e a troca de
-    // conta precisa invalidar as três de uma vez.
-    //
-    // Criá-lo aqui **não** faz requisição nenhuma: o `init` só observa a sessão para invalidar.
     // Um `ChallengeViewModel` para as três telas de desafio (lista, criação, detalhe). Compartilhado
-    // pelo mesmo motivo dos anteriores: a lista, os convites e o detalhe são o mesmo estado de
+    // pelo mesmo motivo do anterior: a lista, os convites e o detalhe são o mesmo estado de
     // conta, e um por rota faria a lista ser lida de novo a cada navegação — e o contador de
     // convites do Perfil ficar velho logo depois de responder a um.
     val challengeViewModel: com.example.presentation.account.ChallengeViewModel =
         viewModel(factory = factory)
 
+    // Um `SocialProfileViewModel` para as telas do perfil enriquecido (perfil de amigo,
+    // Compartilhar progresso e a prévia). Compartilhado pelo mesmo motivo dos anteriores:
+    // alterar uma configuração precisa refletir na prévia sem uma segunda leitura, e a troca de
+    // conta precisa invalidar todas de uma vez.
+    //
+    // Criá-lo aqui **não** faz requisição nenhuma: o `init` só observa a sessão para invalidar.
     val socialProfileViewModel: com.example.presentation.account.SocialProfileViewModel =
         viewModel(factory = factory)
-    val socialActivityViewModel: com.example.presentation.friends.SocialActivityViewModel =
-        viewModel(factory = factory)
-    val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel = viewModel(factory = factory)
-    val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel = viewModel(factory = factory)
-    val todayViewModel: com.example.presentation.today.TodayViewModel = viewModel(factory = factory)
-    val executionViewModel: ExecutionViewModel = viewModel(factory = factory)
-    val summaryViewModel: com.example.presentation.execution.SummaryViewModel = viewModel(factory = factory)
-    val exerciseDetailsViewModel: com.example.presentation.exercises.ExerciseDetailsViewModel = viewModel(factory = factory)
-    val historyViewModel: com.example.presentation.history.HistoryViewModel = viewModel(factory = factory)
+
+    // Medidas corporais: as duas rotas são **a mesma edição**. `BodyEvolutionScreen` chama
+    // `initNewMeasurement()`/`loadForEdit()` e só então navega para `AddBodyMeasurement`, que lê o
+    // `formState` já preenchido. Uma instância por rota entregaria um formulário vazio.
     val bodyEvolutionViewModel: BodyEvolutionViewModel = viewModel(factory = factory)
-    val featureBodyEvolutionViewModel: com.example.feature.evolution.body.BodyEvolutionViewModel = viewModel(factory = factory)
-    val performanceViewModel: com.example.feature.evolution.performance.PerformanceViewModel = viewModel(factory = factory)
-    val consistencyViewModel: com.example.feature.evolution.consistency.ConsistencyViewModel = viewModel(factory = factory)
-    val achievementsViewModel: com.example.feature.evolution.achievements.AchievementsViewModel = viewModel(factory = factory)
-    val timelineViewModel: com.example.feature.evolution.timeline.TimelineViewModel = viewModel(factory = factory)
-    val evolutionViewModel: com.example.feature.evolution.EvolutionViewModel = viewModel(factory = factory)
+
+    // Execução: o estado do treino em andamento (cronômetro, descanso, notificação) precisa
+    // sobreviver a sair da tela — voltar para "Hoje" no meio de um descanso não pode zerar nada.
+    // Mudar o escopo desta ViewModel é decisão de quem mantém a tela de execução.
+    val executionViewModel: ExecutionViewModel = viewModel(factory = factory)
 
     val navController = rememberNavController()
-    val items = listOf(
-        Screen.Today,
-        Screen.Workouts,
-        Screen.Exercises,
-        Screen.History,
-        Screen.MyEvolution
-    )
+    val items = remember {
+        listOf(
+            Screen.Today,
+            Screen.Workouts,
+            Screen.Exercises,
+            Screen.History,
+            Screen.MyEvolution
+        )
+    }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = currentRoute != Screen.Execution.route && currentRoute != Screen.Summary.route
 
-    val topLevelDestinationMap = mapOf(
-        Screen.Today.route to Screen.Today.route,
-        Screen.Summary.route to Screen.Today.route,
-        Screen.Profile.route to Screen.Today.route,
-        Screen.Activity.route to Screen.Today.route,
-        Screen.NotificationPreferences.route to Screen.Today.route,
-        Screen.BlockedUsers.route to Screen.Today.route,
-        Screen.SharedWorkouts.route to Screen.Today.route,
-        Screen.SocialFeed.route to Screen.Today.route,
-        Screen.CheckInDetail.route to Screen.Today.route,
-        Screen.Squads.route to Screen.Today.route,
-        Screen.SquadDetail.route to Screen.Today.route,
-        Screen.Missions.route to Screen.Today.route,
-        Screen.AiCoach.route to Screen.Today.route,
-        Screen.GenerateWorkout.route to Screen.Today.route,
-        Screen.AdaptWorkout.route to Screen.Workouts.route,
-        Screen.Settings.route to Screen.Today.route,
-        Screen.Workouts.route to Screen.Workouts.route,
-        Screen.ProgramDetails.route to Screen.Workouts.route,
-        Screen.TemplateDetails.route to Screen.Workouts.route,
-        Screen.Exercises.route to Screen.Exercises.route,
-        Screen.ExerciseDetails.route to Screen.Exercises.route,
-        Screen.History.route to Screen.History.route,
-        Screen.MyEvolution.route to Screen.MyEvolution.route,
-        Screen.BodyEvolution.route to Screen.MyEvolution.route,
-        Screen.AddBodyMeasurement.route to Screen.MyEvolution.route
-    )
+    val topLevelDestinationMap = remember {
+        mapOf(
+            Screen.Today.route to Screen.Today.route,
+            Screen.Summary.route to Screen.Today.route,
+            Screen.Profile.route to Screen.Today.route,
+            Screen.Activity.route to Screen.Today.route,
+            Screen.NotificationPreferences.route to Screen.Today.route,
+            Screen.BlockedUsers.route to Screen.Today.route,
+            Screen.SharedWorkouts.route to Screen.Today.route,
+            Screen.SocialFeed.route to Screen.Today.route,
+            Screen.CheckInDetail.route to Screen.Today.route,
+            Screen.Squads.route to Screen.Today.route,
+            Screen.SquadDetail.route to Screen.Today.route,
+            // O resto do grafo social. Sem estas entradas a barra inferior aparecia sem nenhuma
+            // aba marcada — todas elas são folhas do Perfil, igual às de cima.
+            Screen.Friends.route to Screen.Today.route,
+            Screen.FriendRequests.route to Screen.Today.route,
+            Screen.FriendProfile.route to Screen.Today.route,
+            Screen.ProgressSharing.route to Screen.Today.route,
+            Screen.Challenges.route to Screen.Today.route,
+            Screen.CreateChallenge.route to Screen.Today.route,
+            Screen.ChallengeDetail.route to Screen.Today.route,
+            Screen.Missions.route to Screen.Today.route,
+            Screen.AiCoach.route to Screen.Today.route,
+            Screen.GenerateWorkout.route to Screen.Today.route,
+            Screen.AdaptWorkout.route to Screen.Workouts.route,
+            Screen.Settings.route to Screen.Today.route,
+            Screen.Workouts.route to Screen.Workouts.route,
+            Screen.ProgramDetails.route to Screen.Workouts.route,
+            Screen.TemplateDetails.route to Screen.Workouts.route,
+            Screen.Exercises.route to Screen.Exercises.route,
+            Screen.ExerciseDetails.route to Screen.Exercises.route,
+            Screen.History.route to Screen.History.route,
+            Screen.MyEvolution.route to Screen.MyEvolution.route,
+            Screen.BodyEvolution.route to Screen.MyEvolution.route,
+            Screen.AddBodyMeasurement.route to Screen.MyEvolution.route
+        )
+    }
 
-    val navTarget by com.example.MainActivity.notificationNavTarget.collectAsState()
+    val navTarget by com.example.MainActivity.notificationNavTarget.collectAsStateWithLifecycle()
     LaunchedEffect(navTarget) {
         val target = navTarget ?: return@LaunchedEffect
         when (target.destination) {
             com.example.service.SocialNotificationChannels.DESTINATION_FRIEND_REQUESTS -> {
-                navController.navigate(Screen.FriendRequests.route)
+                navController.pushOnce(Screen.FriendRequests.route)
             }
             com.example.service.SocialNotificationChannels.DESTINATION_FRIENDS -> {
-                navController.navigate(Screen.Friends.route)
+                navController.pushOnce(Screen.Friends.route)
             }
             com.example.service.SocialNotificationChannels.DESTINATION_CHALLENGES -> {
-                navController.navigate(Screen.Challenges.route)
+                navController.pushOnce(Screen.Challenges.route)
             }
             com.example.service.SocialNotificationChannels.DESTINATION_CHALLENGE_DETAIL -> {
                 if (!target.entityId.isNullOrBlank()) {
-                    navController.navigate(Screen.ChallengeDetail.createRoute(target.entityId))
+                    navController.pushOnce(Screen.ChallengeDetail.createRoute(target.entityId))
                 } else {
-                    navController.navigate(Screen.Challenges.route)
+                    navController.pushOnce(Screen.Challenges.route)
                 }
             }
             com.example.service.SocialNotificationChannels.DESTINATION_SHARED_WORKOUTS -> {
-                navController.navigate(Screen.SharedWorkouts.route)
+                navController.pushOnce(Screen.SharedWorkouts.route)
             }
             // T17.11 §93 — o convite abre a lista de Squads, onde os convites ficam no topo. Nunca
             // o detalhe do grupo: quem ainda não aceitou não é membro dele.
             com.example.service.SocialNotificationChannels.DESTINATION_SQUADS -> {
-                navController.navigate(Screen.Squads.route)
+                navController.pushOnce(Screen.Squads.route)
             }
         }
         com.example.MainActivity.clearNotificationNavTarget()
@@ -227,10 +251,10 @@ fun MainScreen() {
     val isRouteSelected = { tabRoute: String ->
         currentRoute != null && topLevelDestinationMap[currentRoute] == tabRoute
     }
-    
+
     val liveUnlocksFlow = app.achievementRepository.liveUnlocks
     val unlockQueue = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateListOf<com.example.domain.evolution.model.achievement.AchievementUnlock>() }
-    
+
     LaunchedEffect(Unit) {
         liveUnlocksFlow.collect { unlock ->
             unlockQueue.add(unlock)
@@ -264,12 +288,12 @@ fun MainScreen() {
                         items.forEach { screen ->
                             NavigationBarItem(
                                 icon = { Icon(screen.icon, contentDescription = stringResource(screen.titleRes)) },
-                                label = { 
+                                label = {
                                     Text(
-                                        stringResource(screen.titleRes), 
-                                        fontSize = 10.sp, 
+                                        stringResource(screen.titleRes),
+                                        fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
-                                    ) 
+                                    )
                                 },
                                 selected = isRouteSelected(screen.route),
                                 colors = NavigationBarItemDefaults.colors(
@@ -300,26 +324,31 @@ fun MainScreen() {
                 navController = navController,
                 startDestination = Screen.Today.route
             ) {
-            composable(Screen.Today.route) { 
+            composable(Screen.Today.route) {
+                val todayViewModel: com.example.presentation.today.TodayViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 TodayScreen(
                     viewModel = todayViewModel,
                     onNavigateToExecution = {
-                        navController.navigate(Screen.Execution.route)
+                        navController.pushOnce(Screen.Execution.route)
                     },
                     onNavigateToProfile = {
-                        navController.navigate(Screen.Profile.route)
+                        navController.pushOnce(Screen.Profile.route)
                     },
                     onNavigateToEvolution = {
                         // Progress questions belong to Evolução, so Hoje hands them over
                         // instead of answering them inline.
-                        navController.navigate(Screen.MyEvolution.route) {
-                            launchSingleTop = true
-                        }
+                        navController.pushOnce(Screen.MyEvolution.route)
                     }
-                ) 
+                )
             }
-            composable(Screen.Workouts.route) { 
-                WorkoutsScreen(workoutsViewModel, onProgramClick = { id -> navController.navigate(Screen.ProgramDetails.createRoute(id)) }) 
+            composable(Screen.Workouts.route) {
+                val workoutsViewModel: com.example.presentation.workouts.WorkoutsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                WorkoutsScreen(
+                    workoutsViewModel,
+                    onProgramClick = { id -> navController.pushOnce(Screen.ProgramDetails.createRoute(id)) }
+                )
             }
             composable(Screen.ProgramDetails.route) { backStackEntry ->
                 val programId = backStackEntry.arguments?.getString("programId")?.toLongOrNull() ?: -1L
@@ -328,17 +357,23 @@ fun MainScreen() {
                 com.example.presentation.workouts.ProgramDetailsScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onTemplateClick = { id -> navController.navigate(Screen.TemplateDetails.createRoute(id)) }
+                    onTemplateClick = { id -> navController.pushOnce(Screen.TemplateDetails.createRoute(id)) }
                 )
             }
             composable(Screen.TemplateDetails.route) { backStackEntry ->
                 val templateId = backStackEntry.arguments?.getString("templateId")?.toLongOrNull() ?: -1L
                 val viewModel: com.example.presentation.workouts.TemplateDetailsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 androidx.compose.runtime.LaunchedEffect(templateId) { viewModel.load(templateId) }
+                // O diálogo de compartilhar tem estado próprio (lista de amigos, envio em voo). Ele
+                // vive com a rota, e não dentro do diálogo: fechar o diálogo não pode cancelar um
+                // envio que já saiu.
+                val shareViewModel: com.example.presentation.friends.ShareWorkoutViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.workouts.TemplateDetailsScreen(
                     viewModel = viewModel,
                     onBack = { navController.popBackStack() },
-                    onAdaptWithCoach = { navController.navigate(Screen.AdaptWorkout.createRoute(templateId)) }
+                    onAdaptWithCoach = { navController.pushOnce(Screen.AdaptWorkout.createRoute(templateId)) },
+                    shareViewModel = shareViewModel
                 )
             }
             composable(Screen.AdaptWorkout.route) { backStackEntry ->
@@ -350,7 +385,7 @@ fun MainScreen() {
                 // continua abrindo só por toque.
                 val accountViewModel: com.example.presentation.account.AccountViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
-                val accountState by accountViewModel.uiState.collectAsState()
+                val accountState by accountViewModel.uiState.collectAsStateWithLifecycle()
                 com.example.presentation.coach.AdaptWorkoutScreen(
                     viewModel = adaptViewModel,
                     templateId = templateId,
@@ -360,13 +395,15 @@ fun MainScreen() {
                     isSigningIn = accountState.isBusy
                 )
             }
-            composable(Screen.Exercises.route) { 
+            composable(Screen.Exercises.route) {
+                val exercisesViewModel: com.example.presentation.exercises.ExercisesViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ExercisesScreen(
                     viewModel = exercisesViewModel,
                     onExerciseClick = { exerciseId, name ->
-                        navController.navigate(Screen.ExerciseDetails.createRoute(exerciseId, name))
+                        navController.pushOnce(Screen.ExerciseDetails.createRoute(exerciseId, name))
                     }
-                ) 
+                )
             }
             composable(
                 route = Screen.ExerciseDetails.route,
@@ -377,17 +414,21 @@ fun MainScreen() {
             ) { backStackEntry ->
                 val exerciseId = backStackEntry.arguments?.getLong("exerciseId") ?: return@composable
                 val exerciseName = backStackEntry.arguments?.getString("exerciseName") ?: ""
+                val exerciseDetailsViewModel: com.example.presentation.exercises.ExerciseDetailsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.exercises.ExerciseDetailsScreen(
                     exerciseId = exerciseId,
                     exerciseName = exerciseName,
                     viewModel = exerciseDetailsViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToAlternative = { altId, altName ->
-                        navController.navigate(Screen.ExerciseDetails.createRoute(altId, altName))
+                        navController.pushOnce(Screen.ExerciseDetails.createRoute(altId, altName))
                     }
                 )
             }
             composable(Screen.History.route) {
+                val historyViewModel: com.example.presentation.history.HistoryViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 // A mesma ViewModel de check-in do Resumo, criada por rota. Ela não faz requisição
                 // nenhuma ao ser criada: o `init` só observa a sessão para invalidar o estado na
                 // troca de conta, e a primeira leitura sai de `startShareFor`, que só acontece no
@@ -433,40 +474,38 @@ fun MainScreen() {
                     syncViewModel = syncViewModel,
                     socialViewModel = socialViewModel,
                     friendsViewModel = friendsViewModel,
-                    onNavigateToFriends = { navController.navigate(Screen.Friends.route) },
+                    onNavigateToFriends = { navController.pushOnce(Screen.Friends.route) },
                     onNavigateToFriendRequests = {
-                        navController.navigate(Screen.FriendRequests.route)
+                        navController.pushOnce(Screen.FriendRequests.route)
                     },
                     onNavigateToProgressSharing = {
-                        navController.navigate(Screen.ProgressSharing.route)
+                        navController.pushOnce(Screen.ProgressSharing.route)
                     },
-                    onNavigateToChallenges = { navController.navigate(Screen.Challenges.route) },
-                    onNavigateToActivity = { navController.navigate(Screen.Activity.route) },
+                    onNavigateToChallenges = { navController.pushOnce(Screen.Challenges.route) },
+                    onNavigateToActivity = { navController.pushOnce(Screen.Activity.route) },
                     onNavigateToNotificationPreferences = {
-                        navController.navigate(Screen.NotificationPreferences.route)
+                        navController.pushOnce(Screen.NotificationPreferences.route)
                     },
                     onNavigateToBlockedUsers = {
-                        navController.navigate(Screen.BlockedUsers.route)
+                        navController.pushOnce(Screen.BlockedUsers.route)
                     },
                     onNavigateToSharedWorkouts = {
-                        navController.navigate(Screen.SharedWorkouts.route)
+                        navController.pushOnce(Screen.SharedWorkouts.route)
                     },
                     onNavigateToSquads = {
-                        navController.navigate(Screen.Squads.route)
+                        navController.pushOnce(Screen.Squads.route)
                     },
                     onNavigateToSocialFeed = {
-                        navController.navigate(Screen.SocialFeed.route)
+                        navController.pushOnce(Screen.SocialFeed.route)
                     },
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
-                    onNavigateToMissions = { navController.navigate(Screen.Missions.route) },
-                    onNavigateToAiCoach = { navController.navigate(Screen.AiCoach.route) },
-                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) },
+                    onNavigateToSettings = { navController.pushOnce(Screen.Settings.route) },
+                    onNavigateToMissions = { navController.pushOnce(Screen.Missions.route) },
+                    onNavigateToAiCoach = { navController.pushOnce(Screen.AiCoach.route) },
+                    onNavigateToBodyEvolution = { navController.pushOnce(Screen.BodyEvolution.route) },
                     // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
                     onNavigateToAchievements = {
-                        navController.navigate(Screen.MyEvolution.route) {
-                            launchSingleTop = true
-                        }
+                        navController.pushOnce(Screen.MyEvolution.route)
                     }
                 )
             }
@@ -474,11 +513,11 @@ fun MainScreen() {
                 com.example.presentation.friends.FriendsScreen(
                     viewModel = friendsViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToRequests = { navController.navigate(Screen.FriendRequests.route) },
+                    onNavigateToRequests = { navController.pushOnce(Screen.FriendRequests.route) },
                     // T17.2 — o perfil é lido no **toque**, e não ao abrir a lista: enriquecer
                     // cada linha custaria uma requisição por amigo.
                     onOpenProfile = { friend ->
-                        navController.navigate(
+                        navController.pushOnce(
                             Screen.FriendProfile.createRoute(friend.socialId, friend.displayName)
                         )
                     }
@@ -514,9 +553,9 @@ fun MainScreen() {
                     viewModel = challengeViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onOpenChallenge = { challengeId ->
-                        navController.navigate(Screen.ChallengeDetail.createRoute(challengeId))
+                        navController.pushOnce(Screen.ChallengeDetail.createRoute(challengeId))
                     },
-                    onCreateChallenge = { navController.navigate(Screen.CreateChallenge.route) }
+                    onCreateChallenge = { navController.pushOnce(Screen.CreateChallenge.route) }
                 )
             }
             composable(Screen.CreateChallenge.route) {
@@ -528,6 +567,7 @@ fun MainScreen() {
                     onCreated = { challengeId ->
                         navController.navigate(Screen.ChallengeDetail.createRoute(challengeId)) {
                             popUpTo(Screen.CreateChallenge.route) { inclusive = true }
+                            launchSingleTop = true
                         }
                     }
                 )
@@ -558,6 +598,8 @@ fun MainScreen() {
                 )
             }
             composable(Screen.Activity.route) {
+                val socialActivityViewModel: com.example.presentation.friends.SocialActivityViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.friends.ActivityScreen(
                     viewModel = socialActivityViewModel,
                     onBack = { navController.popBackStack() }
@@ -596,11 +638,11 @@ fun MainScreen() {
                     // Bloquear e denunciar o autor já existem no perfil do amigo (T17.2/T17.6). O
                     // Feed leva para lá em vez de repetir os diálogos (§88).
                     onOpenFriendProfile = { socialId, displayName ->
-                        navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
+                        navController.pushOnce(Screen.FriendProfile.createRoute(socialId, displayName))
                     },
                     // T17.9 §118 — a conversa acontece no detalhe, e não no card.
                     onOpenCheckIn = { checkInId ->
-                        navController.navigate(Screen.CheckInDetail.createRoute(checkInId))
+                        navController.pushOnce(Screen.CheckInDetail.createRoute(checkInId))
                     }
                 )
             }
@@ -658,7 +700,7 @@ fun MainScreen() {
                     squadName = squadName,
                     onNavigateBack = { navController.popBackStack() },
                     onOpenFriendProfile = { socialId, displayName ->
-                        navController.navigate(Screen.FriendProfile.createRoute(socialId, displayName))
+                        navController.pushOnce(Screen.FriendProfile.createRoute(socialId, displayName))
                     },
                     shareToSquadViewModel = shareToSquadViewModel
                 )
@@ -670,7 +712,7 @@ fun MainScreen() {
                     viewModel = squadsViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onOpenSquad = { groupId ->
-                        navController.navigate(Screen.SquadDetail.createRoute(groupId))
+                        navController.pushOnce(Screen.SquadDetail.createRoute(groupId))
                     }
                 )
             }
@@ -690,7 +732,7 @@ fun MainScreen() {
                     // a origem, os dois caminhos até a publicação seriam a mesma rota, e o que a
                     // pessoa escrevesse dentro do squad nasceria no Feed de amigos.
                     onOpenCheckIn = { checkInId, groupName ->
-                        navController.navigate(
+                        navController.pushOnce(
                             Screen.CheckInDetail.createGroupRoute(checkInId, groupId, groupName)
                         )
                     }
@@ -709,11 +751,11 @@ fun MainScreen() {
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 val accountViewModel: com.example.presentation.account.AccountViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
-                val accountState by accountViewModel.uiState.collectAsState()
+                val accountState by accountViewModel.uiState.collectAsStateWithLifecycle()
                 com.example.presentation.coach.AiCoachScreen(
                     viewModel = aiCoachViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToGenerateWorkout = { navController.navigate(Screen.GenerateWorkout.route) },
+                    onNavigateToGenerateWorkout = { navController.pushOnce(Screen.GenerateWorkout.route) },
                     onSignIn = accountViewModel::signIn,
                     isSignInAvailable = accountState.isSignInAvailable,
                     isSigningIn = accountState.isBusy
@@ -724,13 +766,13 @@ fun MainScreen() {
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 val accountViewModel: com.example.presentation.account.AccountViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
-                val accountState by accountViewModel.uiState.collectAsState()
+                val accountState by accountViewModel.uiState.collectAsStateWithLifecycle()
                 com.example.presentation.coach.GenerateWorkoutScreen(
                     viewModel = generateWorkoutViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     // Editar um treino gerado é editar um treino: o editor canônico assume a partir daqui.
                     onOpenTemplate = { templateId ->
-                        navController.navigate(Screen.TemplateDetails.createRoute(templateId))
+                        navController.pushOnce(Screen.TemplateDetails.createRoute(templateId))
                     },
                     onSignIn = accountViewModel::signIn,
                     isSignInAvailable = accountState.isSignInAvailable,
@@ -738,17 +780,35 @@ fun MainScreen() {
                 )
             }
             composable(Screen.Settings.route) {
+                val settingsViewModel: com.example.presentation.settings.SettingsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 SettingsScreen(
+                    viewModel = settingsViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToMyEvolution = {
-                        navController.navigate(Screen.MyEvolution.route)
+                        navController.pushOnce(Screen.MyEvolution.route)
                     },
                     onNavigateToBodyEvolution = {
-                        navController.navigate(Screen.BodyEvolution.route)
+                        navController.pushOnce(Screen.BodyEvolution.route)
                     }
                 )
             }
             composable(Screen.MyEvolution.route) {
+                // As seis ViewModels de Evolução vivem com a rota: criá-las na raiz fazia toda
+                // abertura do app carregar resumo, medidas, performance, consistência, conquistas e
+                // linha do tempo mesmo para quem nunca abre a aba.
+                val evolutionViewModel: com.example.feature.evolution.EvolutionViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val featureBodyEvolutionViewModel: com.example.feature.evolution.body.BodyEvolutionViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val performanceViewModel: com.example.feature.evolution.performance.PerformanceViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val consistencyViewModel: com.example.feature.evolution.consistency.ConsistencyViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val achievementsViewModel: com.example.feature.evolution.achievements.AchievementsViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                val timelineViewModel: com.example.feature.evolution.timeline.TimelineViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.feature.evolution.EvolutionScreen(
                     viewModel = evolutionViewModel,
                     bodyViewModel = featureBodyEvolutionViewModel,
@@ -757,14 +817,14 @@ fun MainScreen() {
                     achievementsViewModel = achievementsViewModel,
                     timelineViewModel = timelineViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToBodyEvolution = { navController.navigate(Screen.BodyEvolution.route) }
+                    onNavigateToBodyEvolution = { navController.pushOnce(Screen.BodyEvolution.route) }
                 )
             }
             composable(Screen.BodyEvolution.route) {
                 BodyEvolutionScreen(
                     viewModel = bodyEvolutionViewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToAddMeasurement = { navController.navigate(Screen.AddBodyMeasurement.route) }
+                    onNavigateToAddMeasurement = { navController.pushOnce(Screen.AddBodyMeasurement.route) }
                 )
             }
             composable(Screen.AddBodyMeasurement.route) {
@@ -780,10 +840,11 @@ fun MainScreen() {
                     onFinish = { sessionId ->
                         navController.navigate(Screen.Summary.createRoute(sessionId)) {
                             popUpTo(Screen.Today.route) { inclusive = false }
+                            launchSingleTop = true
                         }
                     },
                     onNavigateToExerciseDetails = { exerciseId, name ->
-                        navController.navigate(Screen.ExerciseDetails.createRoute(exerciseId, name))
+                        navController.pushOnce(Screen.ExerciseDetails.createRoute(exerciseId, name))
                     }
                 )
             }
@@ -792,7 +853,14 @@ fun MainScreen() {
                 arguments = listOf(androidx.navigation.navArgument("sessionId") { type = androidx.navigation.NavType.LongType })
             ) { backStackEntry ->
                 val sessionId = backStackEntry.arguments?.getLong("sessionId") ?: return@composable
-                val summary by summaryViewModel.getSummary(sessionId).collectAsState(initial = null)
+                val summaryViewModel: com.example.presentation.execution.SummaryViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                // `getSummary` devolve um Flow **novo** a cada chamada: sem o `remember`, toda
+                // recomposição cancelava a coleta e recarregava o histórico inteiro.
+                val summaryFlow = remember(summaryViewModel, sessionId) {
+                    summaryViewModel.getSummary(sessionId)
+                }
+                val summary by summaryFlow.collectAsStateWithLifecycle(initialValue = null)
                 val currentSummary = summary
                 if (currentSummary != null) {
                     // O CTA social é montado **depois** de a sessão já estar concluída e salva: o
@@ -803,7 +871,12 @@ fun MainScreen() {
                         androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                     com.example.presentation.execution.SummaryScreen(
                         summary = currentSummary,
-                        onClose = { navController.navigate(Screen.Today.route) { popUpTo(0) } },
+                        onClose = {
+                            navController.navigate(Screen.Today.route) {
+                                popUpTo(0)
+                                launchSingleTop = true
+                            }
+                        },
                         shareCheckIn = {
                             com.example.presentation.friends.ShareCheckInSection(
                                 viewModel = checkInViewModel,
@@ -814,22 +887,29 @@ fun MainScreen() {
                 }
             }
             }
-            
+
             // Queue feedback visualizer
+            //
+            // O `key` é o que impede a fila de travar: o componente vive num slot fixo, e sem uma
+            // chave o segundo desbloqueio reaproveitava o estado do primeiro — nascia invisível,
+            // nunca chamava `onAnimationEnd` e a fila (e as missões, que esperam ela esvaziar)
+            // parava para sempre.
             if (unlockQueue.isNotEmpty()) {
                 val currentUnlock = unlockQueue.first()
                 val def = com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(currentUnlock.achievementId)
                 if (def != null) {
-                    com.example.presentation.gamification.components.AchievementUnlockFeedback(
-                        title = def.title,
-                        description = def.description,
-                        icon = def.icon,
-                        onAnimationEnd = { unlockQueue.removeAt(0) },
-                        modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
-                    )
+                    key(currentUnlock.achievementId, currentUnlock.unlockedAt) {
+                        com.example.presentation.gamification.components.AchievementUnlockFeedback(
+                            title = def.title,
+                            description = def.description,
+                            icon = def.icon,
+                            onAnimationEnd = { unlockQueue.remove(currentUnlock) },
+                            modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
+                        )
+                    }
                 } else {
                     LaunchedEffect(currentUnlock) {
-                        unlockQueue.removeAt(0)
+                        unlockQueue.remove(currentUnlock)
                     }
                 }
             }
@@ -839,18 +919,31 @@ fun MainScreen() {
                 val definition = com.example.domain.gamification.model.mission.MissionCatalog
                     .getDefinition(currentCompletion.missionId)
                 if (definition != null) {
-                    com.example.presentation.gamification.components.MissionCompletionFeedback(
-                        title = definition.title,
-                        rewardXp = currentCompletion.rewardXp,
-                        onAnimationEnd = { missionQueue.removeAt(0) },
-                        modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
-                    )
+                    key(currentCompletion.missionId, currentCompletion.periodKey, currentCompletion.completedAt) {
+                        com.example.presentation.gamification.components.MissionCompletionFeedback(
+                            title = definition.title,
+                            rewardXp = currentCompletion.rewardXp,
+                            onAnimationEnd = { missionQueue.remove(currentCompletion) },
+                            modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 16.dp)
+                        )
+                    }
                 } else {
                     LaunchedEffect(currentCompletion) {
-                        missionQueue.removeAt(0)
+                        missionQueue.remove(currentCompletion)
                     }
                 }
             }
         }
     }
+}
+
+/**
+ * Empilha [route] sem duplicar a entrada que já está no topo.
+ *
+ * Toque duplo num ícone empilhava a mesma rota duas vezes, e cada cópia constrói a árvore de
+ * ViewModels daquela tela de novo — no Perfil, seis delas. `launchSingleTop` faz o segundo toque
+ * cair sobre a entrada que já existe.
+ */
+private fun NavHostController.pushOnce(route: String) {
+    navigate(route) { launchSingleTop = true }
 }

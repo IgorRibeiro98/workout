@@ -9,7 +9,21 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
-class WorkoutsViewModel(private val repository: WorkoutRepository) : ViewModel() {
+class WorkoutsViewModel(
+    private val repository: WorkoutRepository,
+    settingsManager: com.example.data.datastore.SettingsManager
+) : ViewModel() {
+
+    /**
+     * Preferência de vibração para os gestos da lista.
+     *
+     * Ela vem por aqui porque a tela não pode ler o `SettingsManager` do `MainApplication` direto
+     * (§3): a UI consome ViewModel, e não a camada de dados.
+     */
+    val hapticEnabled: StateFlow<Boolean> = settingsManager.hapticEnabledFlow
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
     
     val programs: StateFlow<List<WorkoutProgramEntity>> = repository.allPrograms
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

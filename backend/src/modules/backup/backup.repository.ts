@@ -193,17 +193,25 @@ export class BackupRepository {
 
       const snapshotId = Number(res.rows[0].id);
 
-      for (const item of snapshot.items) {
+      // Um `INSERT` só para os até `maxItems` agregados do snapshot, em vez de um por item.
+      //
+      // O laço anterior gastava um round-trip por agregado — até 5.000 numa transação aberta, o
+      // que contra um PostgreSQL gerenciado (rede entre a aplicação e o banco) dominava o tempo
+      // do backup inteiro. `UNNEST` manda as colunas como arrays e deixa o banco montar as linhas:
+      // mesma transação, mesmas linhas, um round-trip.
+      if (snapshot.items.length > 0) {
         await client.query(
           `INSERT INTO backup_items
              (snapshot_id, entity_type, entity_sync_id, entity_schema_version, content_hash)
-           VALUES ($1, $2, $3, $4, $5)`,
+           SELECT $1, entity_type, entity_sync_id, entity_schema_version, content_hash
+             FROM UNNEST($2::text[], $3::text[], $4::int[], $5::text[])
+               AS t(entity_type, entity_sync_id, entity_schema_version, content_hash)`,
           [
             snapshotId,
-            item.entityType,
-            item.entitySyncId,
-            item.entitySchemaVersion,
-            item.contentHash,
+            snapshot.items.map((item) => item.entityType),
+            snapshot.items.map((item) => item.entitySyncId),
+            snapshot.items.map((item) => item.entitySchemaVersion),
+            snapshot.items.map((item) => item.contentHash),
           ],
         );
       }

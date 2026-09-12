@@ -11,9 +11,13 @@ class SummaryViewModel(
     private val workoutEngine: WorkoutEngine
 ) : ViewModel() {
 
-    fun getSummary(sessionId: Long): Flow<SessionCalendarSummary?> {
-        return workoutEngine.getCalendarHistoryFlow().map { list ->
-            list.find { it.session.id == sessionId }
-        }
-    }
+    /**
+     * O resumo da sessão pedida, por consulta direta.
+     *
+     * Devolvia `getCalendarHistoryFlow().map { find { id } }`: o histórico completo, com o grafo de
+     * cada treino, recarregado a cada alteração em qualquer sessão — para desenhar uma (auditoria
+     * 2026-09-12). Continua sendo um `Flow` novo por chamada, então a tela o mantém em `remember`.
+     */
+    fun getSummary(sessionId: Long): Flow<SessionCalendarSummary?> =
+        workoutEngine.getCompletedSessionSummaryFlow(sessionId)
 }

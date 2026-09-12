@@ -60,4 +60,8 @@ interface BodyMeasurementDao {
     /** Todas as medidas pela identidade global — a enumeração do snapshot de backup (T16.4). */
     @Query("SELECT syncId FROM body_measurements ORDER BY id ASC")
     suspend fun getAllMeasurementSyncIds(): List<String>
+
+    /** Quantas medidas existem — para o resumo de adoção, que só precisa do número. */
+    @Query("SELECT COUNT(*) FROM body_measurements")
+    suspend fun countMeasurements(): Int
 }

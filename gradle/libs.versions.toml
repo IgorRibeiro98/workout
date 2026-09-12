@@ -1,7 +1,14 @@
 [versions]
+# Desugaring da biblioteca padrão (auditoria 2026-09-12 §1.1).
+#
+# `java.time` é API 26+, e o `minSdk` do Spark é 24. O app usava `LocalDate`/`Instant` em 14
+# arquivos sem nenhuma guarda de `SDK_INT` — inclusive em `ConsistencyRepositoryImpl`, chamado no
+# `onCreate`. Em um aparelho Android 7.0/7.1 isso é `NoClassDefFoundError` na primeira abertura.
+# O desugaring resolve sem tocar em uma linha de domínio e sem abandonar o `minSdk 24`.
+desugarJdkLibs = "2.1.5"
 androidxFragment = "1.5.7"
 agp = "9.1.1"
-coreKtx = "1.13.1"
+coreKtx = "1.15.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
@@ -10,12 +17,16 @@ lifecycleViewmodelCompose = "2.8.7"
 lifecycleRuntimeCompose = "2.8.7"
 activityCompose = "1.9.3"
 kotlin = "2.2.10"
-composeBom = "2024.09.00"
+# Última BOM da linha Compose 1.7 / Material3 1.3 (auditoria 2026-09-12). A biblioteca estava
+# parada em 2024.09.00; esta traz os patches da mesma geração sem mudar API. O salto para a
+# geração seguinte (lifecycle 2.9+, navigation 2.9+, Compose 1.8+) é uma tarefa própria, porque
+# muda comportamento de LazyColumn/Pager que só se valida em aparelho.
+composeBom = "2024.12.01"
 googleDevtoolsKsp = "2.3.5"
 navigationCompose = "2.8.9"
-roomRuntime = "2.7.0"
-roomKtx = "2.7.0"
-roomCompiler = "2.7.0"
+roomRuntime = "2.7.2"
+roomKtx = "2.7.2"
+roomCompiler = "2.7.2"
 kotlinxCoroutinesTest = "1.10.2"
 core = "1.6.1"
 runner = "1.6.2"
@@ -30,19 +41,21 @@ cameraCamera2 = "1.5.0"
 cameraLifecycle = "1.5.0"
 cameraView = "1.5.0"
 cameraCore = "1.5.0"
-loggingInterceptor = "4.10.0"
-okhttp = "4.10.0"
+loggingInterceptor = "4.12.0"
+# 4.12.0: o User-Agent em `ExerciseRemoteDataSource` já dizia "okhttp/4.12.0" com a 4.10.0 de
+# 2022 no classpath (auditoria 2026-09-12).
+okhttp = "4.12.0"
 moshiKotlin = "1.15.2"
 moshiKotlinCodegen = "1.15.2"
 datastorePreferences = "1.1.7"
 # WorkManager (T16.6): o agendamento do sync incremental em background.
-workRuntime = "2.9.1"
+workRuntime = "2.10.1"
 robolectric = "4.16.1"
 roborazzi = "1.59.0"
 credentials = "1.5.0"
 googleid = "1.1.1"
 kotlinxSerializationJson = "1.9.0"
-firebaseBom = "34.18.0"
+firebaseBom = "34.19.0"
 # QR Code (T17.1).
 #
 # `zxing:core` é Java puro, sem nada de Android e sem `java.awt` (isso é o módulo `javase`, que
@@ -71,6 +84,7 @@ googleServices = "4.4.2"
 #
 # Declarar a versão que já era a resolvida faz o lint ver a verdade. Não é baseline (que esconderia
 # problemas reais) e não muda um byte do que é empacotado.
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "androidxFragment" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

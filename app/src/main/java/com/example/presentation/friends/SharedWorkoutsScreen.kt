@@ -47,7 +47,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -70,6 +69,7 @@ import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,7 +77,7 @@ fun SharedWorkoutsScreen(
     viewModel: SharedWorkoutsViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -205,17 +205,20 @@ fun SharedWorkoutsScreen(
     }
 
     // Modal de Prévia / Adicionar
-    if (state.previewDetail != null) {
+    // O detalhe é lido uma vez: `state` é um delegate, e cada `state.previewDetail` era uma
+    // leitura nova que podia voltar nula entre a checagem e o uso.
+    val previewDetail = state.previewDetail
+    if (previewDetail != null) {
         WorkoutSharePreviewDialog(
-            detail = state.previewDetail!!,
+            detail = previewDetail,
             isReceived = state.selectedTab == SharedWorkoutsTab.RECEIVED,
-            isImporting = state.importingShareId == state.previewDetail!!.shareId,
+            isImporting = state.importingShareId == previewDetail.shareId,
             onDismiss = { viewModel.closeDetail() },
             onImport = { snapshot ->
-                viewModel.importWorkout(state.previewDetail!!.shareId, snapshot)
+                viewModel.importWorkout(previewDetail.shareId, snapshot)
             },
             onDecline = {
-                viewModel.declineShare(state.previewDetail!!.shareId)
+                viewModel.declineShare(previewDetail.shareId)
             }
         )
     }

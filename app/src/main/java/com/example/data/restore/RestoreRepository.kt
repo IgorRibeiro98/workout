@@ -13,6 +13,7 @@ import com.example.data.sync.SyncOutboxDao
 import com.example.data.sync.TransactionRunner
 import java.io.File
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 
 /**
  * O caso de uso do restore no Android (T16.5).
@@ -288,14 +289,24 @@ class RestoreRepository(
                     deviceId = deviceIdProvider.deviceId(),
                     backupId = attempt.backupId,
                     backupCreatedAt = attempt.backupCreatedAt
-                )
+                ),
+                // A fase entra no **mesmo commit** que substitui o dataset. Gravá-la depois deixava
+                // uma janela em que o Room já era o backup e a tentativa ainda dizia
+                // `SAFETY_SNAPSHOT_CREATED`: um processo morto ali fazia `runRecovery()` tratar um
+                // dataset inteiramente restaurado como "nada aplicado", encerrar a tentativa e
+                // apagar o snapshot de segurança — que a essa altura era a única cópia do estado
+                // anterior, e já não correspondia ao que estava no banco.
+                onApplied = {
+                    attemptDao.updateStatus(attempt.id, RestorePhase.ROOM_APPLIED.name, clock())
+                }
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // A transação do Room desfez tudo: o dataset anterior continua inteiro. A tentativa é
             // encerrada e os arquivos saem — inclusive o de segurança, que já não protege nada.
             return abandonOutcome(attempt, RestoreError.RESTORE_APPLY_FAILED, e.javaClass.simpleName)
         }
-        attemptDao.updateStatus(attempt.id, RestorePhase.ROOM_APPLIED.name, clock())
 
         // A partir daqui o dataset **já foi substituído**. Uma falha nas preferências não pode ser
         // tratada como falha do restore inteiro: ela é uma fase pendente, com recuperação própria.
@@ -431,6 +442,10 @@ class RestoreRepository(
             applyPreferences(snapshot.preferences)
             abandon(attempt.id, attempt.restoreAttemptId, RestoreError.RESTORE_APPLY_FAILED)
             RestoreRecoveryResult.RolledBack
+        } catch (e: CancellationException) {
+            // Cancelamento não é falha de rollback: tratá-lo como uma marcaria a tentativa e
+            // esconderia do chamador que a corrotina foi encerrada.
+            throw e
         } catch (e: Exception) {
             abandon(attempt.id, attempt.restoreAttemptId, RestoreError.RESTORE_RECOVERY_REQUIRED)
             RestoreRecoveryResult.RolledBackWithoutPreferences

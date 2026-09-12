@@ -10,6 +10,10 @@ import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
 import com.example.domain.evolution.model.consistency.ConsistencyProgress
 import com.example.domain.evolution.repository.ConsistencyRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -54,8 +58,51 @@ data class TodayState(
     val streakWeeks: Int = 0,
     val highlight: TodayHighlight? = null,
     val userProgress: com.example.domain.gamification.model.UserProgress? = null,
-    val consistencyProgress: ConsistencyProgress? = null
+    val consistencyProgress: ConsistencyProgress? = null,
+    /**
+     * Duração estimada do próximo treino, em minutos.
+     *
+     * A regra é da ViewModel e não da Composable: quanto tempo um treino leva é conhecimento de
+     * domínio, e escrito dentro do `Text` ele já havia virado um número mágico invisível.
+     */
+    val estimatedMinutes: Int = DEFAULT_ESTIMATED_MINUTES
 )
+
+/**
+ * Um acontecimento pontual da Home — o que a tela precisa **fazer** uma vez, e não o que ela
+ * mostra. Estado não serve aqui: "treino finalizado" mostrado de novo numa recomposição seria um
+ * aviso repetido, e navegar a partir de estado abriria a execução duas vezes.
+ */
+sealed interface TodayEvent {
+    /** A sessão existe e está ativa: a tela pode abrir a execução. */
+    object WorkoutStarted : TodayEvent
+    data class WorkoutStartFailed(val message: String) : TodayEvent
+    object WorkoutFinished : TodayEvent
+    data class WorkoutFinishFailed(val message: String) : TodayEvent
+}
+
+/** Duração estimada quando ainda não se sabe quantos exercícios o treino tem. */
+private const val DEFAULT_ESTIMATED_MINUTES = 45
+
+/** Minutos por exercício e o aquecimento/deslocamento somados uma vez por treino. */
+private const val MINUTES_PER_EXERCISE = 8
+private const val FIXED_OVERHEAD_MINUTES = 10
+
+private const val WEEK_MILLIS = 7L * 24 * 60 * 60 * 1000
+
+/**
+ * Teto de espera até reavaliar a semana corrente.
+ *
+ * A espera normal vai até a virada da semana, mas mudança de fuso, horário de verão e ajuste manual
+ * do relógio movem o alvo. Acordar de hora em hora custa nada — `distinctUntilChanged` garante que
+ * nada a jusante recarregue enquanto o valor não muda.
+ */
+private const val WEEK_RECHECK_CAP_MILLIS = 60L * 60 * 1000
+
+/** Estimativa de duração do treino a partir da contagem de exercícios. */
+internal fun estimateWorkoutMinutes(exerciseCount: Int): Int =
+    if (exerciseCount > 0) exerciseCount * MINUTES_PER_EXERCISE + FIXED_OVERHEAD_MINUTES
+    else DEFAULT_ESTIMATED_MINUTES
 
 class TodayViewModel(
     private val repository: WorkoutRepository,
@@ -68,13 +115,46 @@ class TodayViewModel(
 
     private val _state = MutableStateFlow(TodayState())
     val state: StateFlow<TodayState> = _state.asStateFlow()
-    
+
+    private val _isStartingWorkout = MutableStateFlow(false)
+
+    /** Verdadeiro enquanto a sessão está sendo criada. O segundo toque no botão não faz nada. */
+    val isStartingWorkout: StateFlow<Boolean> = _isStartingWorkout.asStateFlow()
+
+    private val _isFinishingWorkout = MutableStateFlow(false)
+
+    /** Verdadeiro enquanto o treino está sendo finalizado. */
+    val isFinishingWorkout: StateFlow<Boolean> = _isFinishingWorkout.asStateFlow()
+
+    private val _events = MutableSharedFlow<TodayEvent>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val events: SharedFlow<TodayEvent> = _events.asSharedFlow()
+
     val xpGainFlow = xpTransactionRepository?.newTransactions
+
+    /**
+     * O início da semana corrente, reavaliado sozinho.
+     *
+     * Esta ViewModel vive enquanto a rota "Hoje" vive, o que na prática é o processo inteiro. Com o
+     * valor calculado uma vez no `init`, o app aberto na virada de domingo para segunda continuava
+     * contando treinos e volume da semana passada até alguém matar o processo.
+     */
+    private val weekStartFlow: Flow<Long> = flow {
+        while (true) {
+            val start = getStartOfWeekTimestamp()
+            emit(start)
+            val untilNextWeek = (start + WEEK_MILLIS) - System.currentTimeMillis()
+            delay(untilNextWeek.coerceIn(1_000L, WEEK_RECHECK_CAP_MILLIS))
+        }
+    }.distinctUntilChanged()
 
     init {
         loadTodayData()
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private fun loadTodayData() {
         viewModelScope.launch {
             xpTransactionRepository?.getUserProgress()?.collect { progress ->
@@ -83,13 +163,15 @@ class TodayViewModel(
         }
 
         viewModelScope.launch {
-            val startOfWeek = getStartOfWeekTimestamp()
-            val endOfWeek = startOfWeek + 7 * 24 * 60 * 60 * 1000L - 1
             val statsEngine = com.example.domain.engine.StatsEngine(repository.dao)
 
             val bodyMeasurementsFlow = bodyMeasurementRepository?.allMeasurements ?: flowOf(emptyList())
             val consistencyProgressFlow = consistencyRepository?.getConsistencyProgressFlow() ?: flowOf(null)
 
+            // `flatMapLatest`: quando a semana vira, a coleta anterior é cancelada e o pipeline é
+            // remontado com a nova janela. Durante a semana isto não acontece nenhuma vez.
+            weekStartFlow.flatMapLatest { startOfWeek ->
+            val endOfWeek = startOfWeek + WEEK_MILLIS - 1
             combine(
                 repository.currentProgram,
                 repository.getWeeklyCompletedSessionsCount(startOfWeek),
@@ -209,7 +291,8 @@ class TodayViewModel(
                         streakWeeks = streakWeeks,
                         highlight = highlight,
                         userProgress = _state.value.userProgress,
-                        consistencyProgress = consistencyProgress
+                        consistencyProgress = consistencyProgress,
+                        estimatedMinutes = estimateWorkoutMinutes(exerciseCount)
                     )
                 } else {
                     _state.value = TodayState(
@@ -230,13 +313,36 @@ class TodayViewModel(
                         consistencyProgress = consistencyProgress
                     )
                 }
+            }
             }.collect()
         }
     }
 
+    /**
+     * Cria a sessão e só então avisa a tela para abrir a execução.
+     *
+     * Antes disto a Composable navegava na mesma linha da chamada, sem esperar nada: um toque duplo
+     * empilhava duas rotas de execução, e um erro ao criar a sessão levava o usuário para uma tela
+     * de treino que não existia.
+     */
     fun startWorkout(templateId: Long) {
+        if (_isStartingWorkout.value) return
+        _isStartingWorkout.value = true
         viewModelScope.launch {
-            workoutEngine.startSession(templateId)
+            try {
+                workoutEngine.startSession(templateId)
+                _events.tryEmit(TodayEvent.WorkoutStarted)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.tryEmit(
+                    TodayEvent.WorkoutStartFailed(
+                        e.message ?: "Não foi possível iniciar o treino."
+                    )
+                )
+            } finally {
+                _isStartingWorkout.value = false
+            }
         }
     }
 
@@ -252,10 +358,32 @@ class TodayViewModel(
         }
     }
 
+    /**
+     * Finaliza a sessão ativa.
+     *
+     * O aviso de "Treino finalizado." sai daqui, depois de o motor confirmar: na tela, ele era
+     * mostrado na mesma linha do pedido, antes de qualquer coisa ter acontecido — e aparecia igual
+     * se a finalização falhasse.
+     */
     fun finishActiveWorkout(sessionId: Long) {
+        if (_isFinishingWorkout.value) return
+        _isFinishingWorkout.value = true
         viewModelScope.launch {
-            workoutEngine.finishSession(sessionId)
-            settingsManager.setOverrideTemplateId(null)
+            try {
+                workoutEngine.finishSession(sessionId)
+                settingsManager.setOverrideTemplateId(null)
+                _events.tryEmit(TodayEvent.WorkoutFinished)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.tryEmit(
+                    TodayEvent.WorkoutFinishFailed(
+                        e.message ?: "Não foi possível finalizar o treino."
+                    )
+                )
+            } finally {
+                _isFinishingWorkout.value = false
+            }
         }
     }
 

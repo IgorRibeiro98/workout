@@ -140,4 +140,6 @@
     <string name="notification_group_invitation_received_body">Você recebeu um convite para participar de um Squad.</string>
     <string name="notification_permission_denied_message">Permissão de notificações não concedida nas configurações do aparelho.</string>
     <string name="notification_preferences_signed_out">Entre na Conta Spark para ajustar as notificações sociais.</string>
+    <!-- Nome exibido na notificação de descanso quando o exercício não pôde ser resolvido. -->
+    <string name="rest_timer_generic_exercise">Exercício</string>
 </resources>

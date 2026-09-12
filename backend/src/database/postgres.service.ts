@@ -19,7 +19,7 @@ import {
   runMigrations,
   type Migration,
 } from './postgres-migration-runner';
-import { normalizeSslMode } from './postgres-url';
+import { migrationEndpointViolation, normalizeSslMode } from './postgres-url';
 
 /**
  * O banco não está disponível para esta chamada: pool inexistente, encerrado ou encerrando.
@@ -37,6 +37,40 @@ export class PostgresUnavailableError extends Error {
 /** `pg` marca o pool como `ending` assim que `end()` começa; o campo não é público na tipagem. */
 function isEnding(pool: Pool): boolean {
   return Boolean((pool as unknown as { ending?: boolean }).ending);
+}
+
+/**
+ * Falhas de **conexão** que somem sozinhas numa segunda tentativa (T18.3.2).
+ *
+ * O caso real: Cloud Run com `min-instances=0` e Neon com autosuspend. A primeira requisição depois
+ * de um período sem tráfego acorda os dois ao mesmo tempo, e o Neon leva alguns segundos para
+ * aceitar conexão — tempo em que ele responde `57P03 cannot_connect_now`, derruba o socket
+ * (`ECONNRESET`) ou simplesmente não responde até o pool desistir. Nada disso é o banco estar fora
+ * do ar; é o banco acordando.
+ *
+ * `57P01` (`admin_shutdown`) entra pelo outro lado da mesma moeda: o Neon encerra conexões ociosas
+ * ao suspender, e o pool pode descobrir isso só na hora de reusar uma.
+ */
+const TRANSIENT_CONNECT_CODES: ReadonlySet<string> = new Set([
+  '57P01',
+  '57P03',
+  'ECONNRESET',
+  'ETIMEDOUT',
+]);
+
+/** O intervalo antes da única retentativa. Curto: é espera de cold start, não de recuperação. */
+const CONNECT_RETRY_DELAY_MS = 1_000;
+
+function isTransientConnectError(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string' && TRANSIENT_CONNECT_CODES.has(code)) {
+    return true;
+  }
+  // O estouro de `connectionTimeoutMillis` do próprio `pg` não tem `code` — só a mensagem. É o
+  // sintoma mais provável de um cold start do Neon, e é justamente o que precisa de segunda chance.
+  return (
+    error instanceof Error && error.message.includes('timeout exceeded when trying to connect')
+  );
 }
 
 // Configura o parser do driver pg para retornar BIGINT (INT8) como número JavaScript.
@@ -97,6 +131,9 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       max: this.config.databasePoolMax,
       connectionTimeoutMillis: this.config.databaseConnectionTimeoutMs,
       idleTimeoutMillis: this.config.databaseIdleTimeoutMs,
+      // Parâmetro de **startup** do `pg`: é assim que o teto vale numa conexão direta (VPS, CI,
+      // desenvolvimento). Atrás do pooler do Neon ele não chega à conexão de servidor — quem
+      // garante o teto ali é o `SET LOCAL` de `beginStatement()`, em toda transação (T18.3.2).
       statement_timeout: this.config.databaseStatementTimeoutMs,
     });
 
@@ -131,6 +168,20 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       return;
     }
 
+    // T18.3.2 — migration nunca sai pelo endpoint pooled.
+    //
+    // Sem `DATABASE_URL_DIRECT`, `databaseUrlDirect` cai em `DATABASE_URL` — que em produção é o
+    // pooler do Neon. O runner usa lock consultivo de SESSÃO e `set_config(..., false)`, e atrás de
+    // um PgBouncer em modo transação nenhum dos dois tem dono estável: é a mesma classe do lock
+    // preso da T18.3. Recusa aqui, antes de qualquer DDL, e a mensagem nomeia o conserto.
+    const migrationViolation = migrationEndpointViolation(
+      this.config.databaseUrlDirect,
+      this.config.databaseUrlDirectExplicit !== undefined,
+    );
+    if (migrationViolation !== undefined) {
+      throw new Error(`DATABASE_MIGRATION_MODE=apply recusado: ${migrationViolation}.`);
+    }
+
     // Se DATABASE_URL_DIRECT foi configurada diferente da pooled, cria pool dedicado para migrations
     let migrationPool = pool;
     if (this.config.databaseUrlDirect !== this.config.databaseUrl) {
@@ -141,6 +192,12 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       });
       migrationPool = this.directPoolInstance;
     }
+
+    // Uma conexão antes de migrar, com a segunda chance de `connectWithRetry`: é aqui que o cold
+    // start do Neon aparece (Cloud Run acordando um banco suspenso), e absorvê-lo neste ponto evita
+    // que a primeira recusa derrube o processo antes de qualquer migration. A conexão é devolvida
+    // imediatamente — `runMigrations` pega a sua própria, com os timeouts que só ele altera.
+    (await this.connectWithRetry(migrationPool)).release();
 
     // Executa as migrations
     const applied = await runMigrations(migrationPool, this.migrations);
@@ -220,9 +277,9 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
    * Faz ROLLBACK automático em caso de erro e libera o client de volta ao pool.
    */
   async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.requireOpenPool().connect();
+    const client = await this.connectWithRetry();
     try {
-      await client.query('BEGIN');
+      await client.query(this.beginStatement());
       const result = await work(client);
       await client.query('COMMIT');
       return result;
@@ -231,6 +288,53 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * `BEGIN` com o teto de tempo aplicado de um jeito que sobrevive ao pooler (T18.3.2).
+   *
+   * `statement_timeout` também é passado como parâmetro de **startup** do `pg` (ver `initialize`),
+   * e é assim que ele vale numa conexão direta — VPS, CI, desenvolvimento. Atrás do PgBouncer em
+   * modo transação, porém, o parâmetro de startup é do cliente que fala com o *pooler*: ele não
+   * chega à conexão de servidor que realmente executa a consulta, e produção acabava rodando **sem
+   * teto nenhum** enquanto o teste local o respeitava.
+   *
+   * `SET LOCAL` é de transação: vale exatamente para a mesma conexão de servidor que vai rodar o
+   * trabalho, seja ela qual for, e some no COMMIT/ROLLBACK sem deixar resíduo para o próximo
+   * cliente do pool — o oposto do `SET` de sessão, que é o mecanismo do incidente do lock preso.
+   *
+   * As duas instruções vão num `query` só (protocolo simples, várias instruções): o teto não custa
+   * um round-trip a mais por transação. O valor vem de `DATABASE_STATEMENT_TIMEOUT_MS`, um inteiro
+   * já validado pelo schema — não há entrada externa nesta string.
+   */
+  private beginStatement(): string {
+    return `BEGIN; SET LOCAL statement_timeout = ${this.config.databaseStatementTimeoutMs}`;
+  }
+
+  /**
+   * Adquire uma conexão do pool, com **uma** segunda tentativa para falha transitória de conexão.
+   *
+   * Uma só, e só na aquisição: aqui nada foi executado ainda, então repetir não pode duplicar
+   * escrita. É o que cobre o cold start do Neon com Cloud Run em `min-instances=0` — o caso em que
+   * a primeira conexão depois de um período ocioso falha porque o banco ainda está acordando.
+   * `query()` deliberadamente **não** tem retry: um `INSERT` que falhou depois de sair pode ter
+   * sido aplicado, e repeti-lo seria escrever duas vezes.
+   */
+  private async connectWithRetry(target?: Pool): Promise<PoolClient> {
+    const acquire = (): Promise<PoolClient> => (target ?? this.requireOpenPool()).connect();
+    try {
+      return await acquire();
+    } catch (error) {
+      if (!isTransientConnectError(error)) {
+        throw error;
+      }
+      this.logger.warn('database.connect.retry', {
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        delayMs: CONNECT_RETRY_DELAY_MS,
+      });
+      await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_DELAY_MS));
+      return acquire();
     }
   }
 

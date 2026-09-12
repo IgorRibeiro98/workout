@@ -36,7 +36,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +62,8 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.rememberRelativeNow
 
 const val CHECKIN_DETAIL_SCREEN_DESCRIPTION = "Detalhe do check-in"
 const val CHECKIN_DETAIL_COMMENT_FIELD_DESCRIPTION = "Escrever comentário"
@@ -128,7 +129,7 @@ fun CheckInDetailScreen(
     squadName: String? = null,
     onNavigateBack: () -> Unit,
     onOpenFriendProfile: (socialId: String, displayName: String) -> Unit,
-    now: Long = System.currentTimeMillis(),
+    now: Long = rememberRelativeNow(),
     /**
      * O seletor de Squad (T17.11 §140).
      *
@@ -137,7 +138,7 @@ fun CheckInDetailScreen(
      */
     shareToSquadViewModel: ShareToSquadViewModel? = null
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var sharingToSquad by remember { mutableStateOf(false) }
 
     // A chave inclui a audiência: abrir o **mesmo** check-in vindo de outro Squad é outra

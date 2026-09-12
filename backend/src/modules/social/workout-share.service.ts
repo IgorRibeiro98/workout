@@ -77,12 +77,13 @@ export class WorkoutShareService {
       });
     }
 
+    // Destinatário inexistente responde **igual** a destinatário que não é amigo: compartilhar
+    // exige amizade, e distinguir os dois faria desta rota um oráculo de existência sobre
+    // `socialId` — a mesma regra que a T16.7.1 aplica ao sync ("identidade de outra conta é 404,
+    // indistinguível de inexistente") e que a denúncia de usuário passou a seguir.
     const recipientProfile = await this.repository.findProfileBySocialId(request.recipientSocialId);
     if (!recipientProfile) {
-      throw new NotFoundException({
-        code: WorkoutShareErrorCodes.RECIPIENT_NOT_FOUND,
-        message: 'Destinatário não encontrado ou com perfil inativo.',
-      });
+      throw friendshipRequired();
     }
 
     const recipientUid = recipientProfile.ownerUid;
@@ -105,10 +106,7 @@ export class WorkoutShareService {
 
     // 6. Amizade ativa obrigatória (T17.1)
     if (!(await this.repository.isFriendshipActive(senderUid, recipientUid))) {
-      throw new ForbiddenException({
-        code: WorkoutShareErrorCodes.FRIENDSHIP_REQUIRED,
-        message: 'Compartilhamento permitido apenas entre amigos.',
-      });
+      throw friendshipRequired();
     }
 
     // 7. Validação estrita do Snapshot (V1)
@@ -610,4 +608,15 @@ export class WorkoutShareService {
       snapshot,
     };
   }
+}
+
+/**
+ * A recusa de um compartilhamento sem amizade — e também a de um `socialId` que não existe. Uma
+ * função só porque as duas precisam ser **a mesma** resposta, palavra por palavra.
+ */
+function friendshipRequired(): ForbiddenException {
+  return new ForbiddenException({
+    code: WorkoutShareErrorCodes.FRIENDSHIP_REQUIRED,
+    message: 'Compartilhamento permitido apenas entre amigos.',
+  });
 }

@@ -30,11 +30,12 @@ import com.example.domain.engine.MuscleNormalizer
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.theme.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, String) -> Unit = { _, _ -> }) {
-    val exercises by viewModel.exercises.collectAsState()
+    val exercises by viewModel.exercises.collectAsStateWithLifecycle()
     var showAddSheet by remember { mutableStateOf(false) }
     var showFilterSheet by remember { mutableStateOf(false) }
     
@@ -67,27 +68,39 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
             (if (selectedEquipment != "Todos") 1 else 0) +
             (if (selectedMode != "Todos") 1 else 0)
 
-    val filteredExercises = exercises.filter {
-        val matchesSearch = ExerciseSearchEngine.matches(
-            query = searchQuery,
-            name = "${it.displayName} ${it.nameEn ?: ""}",
-            primaryMuscle = it.primaryMuscle,
-            secondaryMuscles = it.secondaryMuscles.joinToString(" "),
-            equipment = it.equipment,
-            notes = "${it.notes ?: ""} ${it.rawExercise.aliases ?: ""}"
-        )
-        
-        val matchesRegion = selectedRegion == "Todas" || getMuscleRegion(it.primaryMuscle) == selectedRegion
-        val matchesMuscle = selectedMuscle == "Todos" || MuscleNormalizer.normalize(it.primaryMuscle).contains(selectedMuscle, ignoreCase = true)
-        val matchesEquipment = selectedEquipment == "Todos" || it.equipment?.contains(selectedEquipment, ignoreCase = true) == true
-        val isDuration = it.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
-        val matchesMode = when (selectedMode) {
-            "Repetições" -> !isDuration
-            "Tempo / Isometria" -> isDuration
-            else -> true
+    // O catálogo inteiro era filtrado a cada recomposição — inclusive nas que nada têm a ver com
+    // busca ou filtro (abrir um sheet, rolar a lista). `remember` pelas chaves reais refaz o
+    // trabalho só quando uma delas muda.
+    val filteredExercises = remember(
+        exercises,
+        searchQuery,
+        selectedRegion,
+        selectedMuscle,
+        selectedEquipment,
+        selectedMode
+    ) {
+        exercises.filter {
+            val matchesSearch = ExerciseSearchEngine.matches(
+                query = searchQuery,
+                name = "${it.displayName} ${it.nameEn ?: ""}",
+                primaryMuscle = it.primaryMuscle,
+                secondaryMuscles = it.secondaryMuscles.joinToString(" "),
+                equipment = it.equipment,
+                notes = "${it.notes ?: ""} ${it.rawExercise.aliases ?: ""}"
+            )
+
+            val matchesRegion = selectedRegion == "Todas" || getMuscleRegion(it.primaryMuscle) == selectedRegion
+            val matchesMuscle = selectedMuscle == "Todos" || MuscleNormalizer.normalize(it.primaryMuscle).contains(selectedMuscle, ignoreCase = true)
+            val matchesEquipment = selectedEquipment == "Todos" || it.equipment?.contains(selectedEquipment, ignoreCase = true) == true
+            val isDuration = it.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
+            val matchesMode = when (selectedMode) {
+                "Repetições" -> !isDuration
+                "Tempo / Isometria" -> isDuration
+                else -> true
+            }
+
+            matchesSearch && matchesRegion && matchesMuscle && matchesEquipment && matchesMode
         }
-        
-        matchesSearch && matchesRegion && matchesMuscle && matchesEquipment && matchesMode
     }
 
     if (showFilterSheet || showAddSheet) {

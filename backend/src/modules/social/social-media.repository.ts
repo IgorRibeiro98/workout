@@ -108,9 +108,29 @@ export class SocialMediaRepository {
    * `BearerAuthGuard` e este `INSERT`), e a escrita do objeto já aconteceu antes disto — o
    * chamador (`SocialMediaService.upload`) apaga o objeto quando esta função recusa.
    */
-  async create(item: StoredCheckInMedia, uidHash: string): Promise<void> {
+  /**
+   * Grava a mídia — e, quando `quota` é informada, confere o teto de bytes da conta **aqui
+   * dentro** (T18.3.2).
+   *
+   * A conferência anterior acontecia no serviço, antes de escrever no Object Storage: duas
+   * requisições simultâneas da mesma conta liam o mesmo `usedBytes` e as duas passavam. A releitura
+   * aqui é atômica sem lock novo: `fenceAccountMutation` já toma um `pg_advisory_xact_lock` **por
+   * conta**, e é ele que serializa os dois uploads. O serviço mantém a conferência dele como
+   * caminho rápido — ela é o que evita subir a imagem para recusá-la depois.
+   */
+  async create(
+    item: StoredCheckInMedia,
+    uidHash: string,
+    quota?: { readonly maxUserBytes: number },
+  ): Promise<void> {
     await this.db.transaction(async (client) => {
       await fenceAccountMutation(client, item.ownerUid, uidHash);
+      if (quota) {
+        const used = await this.usedBytes(item.ownerUid, client);
+        if (used + item.byteSize > quota.maxUserBytes) {
+          throw new MediaQuotaExceededError();
+        }
+      }
       await client.query(
         `INSERT INTO social_checkin_media (
            id, owner_uid, source_session_sync_id, client_upload_id, storage_key, mime_type,
@@ -201,8 +221,9 @@ export class SocialMediaRepository {
   /**
    * Quantos bytes esta conta ocupa hoje (§29/§30).
    */
-  async usedBytes(ownerUid: string): Promise<number> {
-    const res = await this.db.query<{ total: string | number }>(
+  async usedBytes(ownerUid: string, client?: PoolClient): Promise<number> {
+    const runner: DbClient = (client ?? this.db) as DbClient;
+    const res = await runner.query<{ total: string | number }>(
       `SELECT COALESCE(SUM(byte_size), 0) AS total
          FROM social_checkin_media
         WHERE owner_uid = $1 AND status IN ('PENDING', 'ATTACHED')`,
@@ -392,5 +413,18 @@ export class SocialMediaRepository {
       contentHash: row.content_hash,
       byteSize: Number(row.byte_size),
     }));
+  }
+}
+
+/**
+ * A conta chegou ao teto de bytes de mídia entre a conferência do serviço e o `INSERT`.
+ *
+ * Classe própria, e não a exceção HTTP: quem traduz desfecho de domínio em resposta é o serviço —
+ * a mesma separação de `ChallengeFullError`.
+ */
+export class MediaQuotaExceededError extends Error {
+  constructor() {
+    super('media quota exceeded');
+    this.name = 'MediaQuotaExceededError';
   }
 }

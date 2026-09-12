@@ -24,7 +24,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +47,7 @@ import com.example.ui.theme.TextTertiary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun AchievementSection(
@@ -55,7 +55,7 @@ fun AchievementSection(
     modifier: Modifier = Modifier,
     testTag: String = "achievement_section"
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     AchievementSection(
         uiState = uiState,
         onCategorySelect = { viewModel.selectCategory(it) },

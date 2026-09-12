@@ -12,6 +12,7 @@ import com.example.service.WorkoutNotificationManager
 import com.example.domain.workout.execution.ExerciseExecutionStatus
 import com.example.domain.workout.execution.WorkoutExerciseExecution
 import com.example.domain.workout.execution.WorkoutExecutionOrderManager
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -37,6 +38,13 @@ data class SetCompletionFeedback(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+/**
+ * Só valem enquanto o motor não respondeu: são os mesmos padrões de `SettingsManager`, e existem
+ * para que o estado inicial não precise mentir um número.
+ */
+private const val DEFAULT_REST_BETWEEN_SETS_SECONDS = 90
+private const val DEFAULT_REST_AFTER_EXERCISE_SECONDS = 120
+
 data class ExecutionState(
     val sessionWithDetails: SessionWithDetails? = null,
     val currentExerciseIndex: Int = 0,
@@ -46,7 +54,17 @@ data class ExecutionState(
     val exerciseExecutionContext: com.example.domain.workout.execution.ExerciseExecutionContext? = null,
     val isResting: Boolean = false,
     val pendingMoveConfirmation: WorkoutExerciseExecution? = null,
-    val lastSetFeedback: SetCompletionFeedback? = null
+    val lastSetFeedback: SetCompletionFeedback? = null,
+    /**
+     * Os dois descansos recomendados para o exercício em foco, resolvidos pelo motor.
+     *
+     * Estão no estado — e não calculados na tela — porque a regra é uma só e vive em
+     * `WorkoutEngine.resolveRestRecommendation`. A tela de transição entre exercícios calculava a
+     * sua própria versão, com um `90` escrito à mão, e recomendava um valor diferente do que o
+     * temporizador automático usava no mesmo instante.
+     */
+    val restSecondsBetweenSets: Int = DEFAULT_REST_BETWEEN_SETS_SECONDS,
+    val restSecondsAfterExercise: Int = DEFAULT_REST_AFTER_EXERCISE_SECONDS
 ) {
     val currentExercise: ExerciseSessionWithSets?
         get() = sessionWithDetails?.exercises?.getOrNull(currentExerciseIndex)
@@ -141,6 +159,22 @@ class ExecutionViewModel(
     val settingsManager: SettingsManager
 ) : ViewModel() {
 
+    /**
+     * Fronteira de exceção do ViewModel (auditoria 2026-09-12).
+     *
+     * Todo `viewModelScope.launch` daqui escreve no Room ou no DataStore. Sem handler, uma
+     * `SQLiteException` em `finishSession` ou em `updateSet` derruba o processo no meio do treino,
+     * e o que o usuário perde não é a tela — é a confiança de que a série que ele acabou de fazer
+     * foi registrada. O estado canônico está no banco: registrar e seguir é o comportamento
+     * correto, porque a próxima interação relê a verdade de lá.
+     */
+    private val executionExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        android.util.Log.e(TAG, "falha não tratada na execução do treino", throwable)
+    }
+
+    private fun launchGuarded(block: suspend kotlinx.coroutines.CoroutineScope.() -> Unit) =
+        viewModelScope.launch(executionExceptionHandler, block = block)
+
     val keepScreenOn = settingsManager.keepScreenOnFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
@@ -162,84 +196,159 @@ class ExecutionViewModel(
     val showCoachTip = settingsManager.showCoachTipFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    private val _currentExerciseIndex = MutableStateFlow(0)
+    /**
+     * Exposta aqui para que a tela pare de abrir o DataStore no meio da composição.
+     *
+     * `ExecutionScreen` chamava `settingsManager.soundEnabledFlow.collectAsState(initial = true)`
+     * a cada entrada em RESTING e em ACTIVE_SET: uma coleta nova por entrada e, até a primeira
+     * emissão, o valor `true` — ou seja, o alerta podia tocar com o som desligado.
+     */
+    val timerNotificationEnabled = settingsManager.timerNotificationEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    /**
+     * O exercício em foco, identificado por `exerciseSession.id` — nunca por posição.
+     *
+     * Antes da auditoria de 2026-09-12 havia **duas** fontes concorrentes (um índice e um id), e a
+     * reconciliação entre elas era feita por efeito colateral dentro do `combine` que produz o
+     * estado: o transform escrevia em um dos seus próprios `upstream`. Isso convergia só pela
+     * guarda de igualdade, gerava uma emissão extra a cada correção e dependia da ordem do
+     * dispatcher — era a origem do "índice pisca para o exercício anterior". Agora o id é a única
+     * fonte e o índice é derivado dele.
+     */
     private val _currentExerciseSessionId = MutableStateFlow<Long?>(null)
-    
-    private val _previousExecutionSets = MutableStateFlow<List<SetLogEntity>>(emptyList())
-    private val _exerciseExecutionContext = MutableStateFlow<com.example.domain.workout.execution.ExerciseExecutionContext?>(null)
+
     private val _setFeedback = MutableStateFlow<SetCompletionFeedback?>(null)
 
     val restTimerTarget = workoutEngine.restTimerTarget
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    private var hasAutoRestoredIndex = false
-    private var lastSessionId: Long? = null
-
     private val _pendingMoveConfirmation = MutableStateFlow<WorkoutExerciseExecution?>(null)
 
-    private val baseSessionState = combine(
+    /** A sessão ativa já ordenada, com o índice do exercício em foco resolvido. */
+    private data class SessionSnapshot(
+        val session: SessionWithDetails? = null,
+        val currentIndex: Int = 0
+    ) {
+        val currentExercise: ExerciseSessionWithSets?
+            get() = session?.exercises?.getOrNull(currentIndex)
+    }
+
+    /** O que depende do exercício em foco e precisa ir ao banco para ser respondido. */
+    private data class ExerciseContextSnapshot(
+        val context: com.example.domain.workout.execution.ExerciseExecutionContext? = null,
+        val previousSets: List<SetLogEntity> = emptyList(),
+        val rest: com.example.domain.engine.RestRecommendation = com.example.domain.engine.RestRecommendation(
+            betweenSets = DEFAULT_REST_BETWEEN_SETS_SECONDS,
+            afterExercise = DEFAULT_REST_AFTER_EXERCISE_SECONDS
+        )
+    )
+
+    private data class ExerciseKey(
+        val exerciseId: Long?,
+        val templateId: Long?,
+        val restSnapshotSeconds: Int?
+    )
+
+    /**
+     * Fonte única da sessão ativa, compartilhada por todo o pipeline.
+     *
+     * `shareIn` aqui não é detalhe de performance: sem ele, os três consumidores abaixo (estado,
+     * chave do exercício e exercício resolvido) abririam **três** consultas idênticas ao Room, e
+     * cada série concluída dispararia as três.
+     */
+    private val sessionSnapshot: Flow<SessionSnapshot> = combine(
         workoutEngine.activeSessionWithDetailsFlow,
-        _currentExerciseIndex,
-        _previousExecutionSets,
-        _exerciseExecutionContext,
-        workoutEngine.activeResolvedExercises
-    ) { rawSessionWithDetails, index, previousSets, exerciseContext, resolvedExercises ->
-        val sessionWithDetails = rawSessionWithDetails?.let { session ->
-            session.copy(
-                exercises = session.exercises.sortedBy { it.exerciseSession.executionOrder }
+        _currentExerciseSessionId
+    ) { raw, trackedId ->
+        // Normaliza a sessão **uma vez**, aqui: exercícios em ordem de execução e séries em ordem
+        // de domínio. `@Relation` não ordena (ver `ExerciseSessionWithSets.sortedSets`), e daqui
+        // para baixo tudo — `activeSetIndex`, "Série N de M", a folha de todas as séries, o card
+        // da próxima série — assume ordem por `setNumber`. Ordenar em cada consumidor seria a
+        // mesma regra escrita oito vezes, e a ordem física por `rowid` só coincide até o primeiro
+        // restore ou a primeira sessão recebida pelo sync.
+        val session = raw?.let { s ->
+            s.copy(
+                exercises = s.exercises
+                    .sortedBy { it.exerciseSession.executionOrder }
+                    .map { it.copy(sets = it.sortedSets) }
             )
         }
-        // Auto restore index to first incomplete exercise on session initial load
-        val activeSessionId = sessionWithDetails?.session?.id
-        if (sessionWithDetails != null && sessionWithDetails.exercises.isNotEmpty()) {
-            if (activeSessionId != lastSessionId) {
-                lastSessionId = activeSessionId
-                hasAutoRestoredIndex = false
+        val exercises = session?.exercises.orEmpty()
+        val index = when {
+            exercises.isEmpty() -> 0
+            else -> {
+                val tracked = trackedId
+                    ?.let { id -> exercises.indexOfFirst { it.exerciseSession.id == id } }
+                    ?: -1
+                // Sem exercício fixado — abertura do app, ou uma sessão nova — o foco nasce no
+                // primeiro exercício com série pendente, que é onde o usuário parou.
+                if (tracked >= 0) tracked
+                else exercises.indexOfFirst { ex -> ex.sets.any { !it.completed } }.takeIf { it >= 0 } ?: 0
             }
+        }
+        SessionSnapshot(session, index)
+    }.onEach { snapshot ->
+        // Fixa o exercício derivado. É o que impede o foco de "andar sozinho": sem isto, concluir
+        // a última série do exercício 1 faria o índice derivado pular para o 2 e a fase de
+        // transição entre exercícios nunca apareceria. Escreve o mesmo valor que já está lá na
+        // maioria das emissões, e `ExecutionState` é `data class` — emissão idêntica não desce.
+        val current = snapshot.currentExercise?.exerciseSession?.id
+        if (current != null && _currentExerciseSessionId.value != current) {
+            _currentExerciseSessionId.value = current
+        }
+    }.shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
-            if (!hasAutoRestoredIndex) {
-                val firstIncomplete = sessionWithDetails.exercises.indexOfFirst { ex ->
-                    ex.sets.any { !it.completed }
-                }
-                if (firstIncomplete >= 0) {
-                    _currentExerciseIndex.value = firstIncomplete
-                    _currentExerciseSessionId.value = sessionWithDetails.exercises[firstIncomplete].exerciseSession.id
-                }
-                hasAutoRestoredIndex = true
-            }
+    private val currentExerciseKey: Flow<ExerciseKey> = sessionSnapshot
+        .map {
+            ExerciseKey(
+                exerciseId = it.currentExercise?.exerciseSession?.actualExerciseId,
+                templateId = it.session?.session?.templateId,
+                restSnapshotSeconds = it.currentExercise?.exerciseSession?.restDurationSecondsSnapshot
+            )
         }
+        .distinctUntilChanged()
 
-        val trackedId = _currentExerciseSessionId.value
-        val safeIndex = if (sessionWithDetails != null && sessionWithDetails.exercises.isNotEmpty()) {
-            if (trackedId != null) {
-                val foundIdx = sessionWithDetails.exercises.indexOfFirst { it.exerciseSession.id == trackedId }
-                if (foundIdx >= 0) {
-                    if (_currentExerciseIndex.value != foundIdx) {
-                        _currentExerciseIndex.value = foundIdx
-                    }
-                    foundIdx
-                } else {
-                    _currentExerciseIndex.value.coerceIn(0, sessionWithDetails.exercises.size - 1)
-                }
-            } else {
-                _currentExerciseIndex.value.coerceIn(0, sessionWithDetails.exercises.size - 1)
-            }
-        } else {
-            0
+    /**
+     * Contexto e execução anterior do exercício em foco.
+     *
+     * Isto era um `collect` no `init` gravando em dois `MutableStateFlow`. O efeito colateral disso
+     * era o pipeline inteiro ficar **quente para sempre**: o `WhileSubscribed(5000)` do estado não
+     * valia nada, porque o próprio ViewModel era um assinante permanente — e o ViewModel vive no
+     * escopo da Activity. Resultado: consulta de sessão ativa e resolução de exercício rodando
+     * durante toda a vida do app, mesmo sem treino em andamento.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val exerciseContext: Flow<ExerciseContextSnapshot> = currentExerciseKey
+        .mapLatest { key ->
+            val exerciseId = key.exerciseId ?: return@mapLatest ExerciseContextSnapshot()
+            ExerciseContextSnapshot(
+                context = workoutEngine.getExerciseExecutionContext(exerciseId, key.templateId),
+                previousSets = workoutEngine.getLastExecutionSetsForExercise(exerciseId),
+                rest = workoutEngine.resolveRestRecommendation(exerciseId, key.restSnapshotSeconds)
+            )
         }
-        
-        val currentExSession = sessionWithDetails?.exercises?.getOrNull(safeIndex)
-        val currentResolvedEx = currentExSession?.exerciseSession?.actualExerciseId?.let { id ->
-            resolvedExercises.find { it.id == id }
-        }
-        
+        // `combine` só emite depois que **todas** as fontes emitiram uma vez. Sem este valor
+        // inicial, a tela ficaria em "carregando" até as duas consultas voltarem.
+        .onStart { emit(ExerciseContextSnapshot()) }
+
+    private val resolvedCurrentExercise: Flow<com.example.domain.model.ResolvedExercise?> =
+        workoutEngine.resolvedExerciseFlow(currentExerciseKey.map { it.exerciseId })
+
+    private val baseSessionState: Flow<ExecutionState> = combine(
+        sessionSnapshot,
+        exerciseContext,
+        resolvedCurrentExercise
+    ) { snapshot, context, resolved ->
         ExecutionState(
-            sessionWithDetails = sessionWithDetails,
-            currentExerciseIndex = safeIndex,
-            isLoading = sessionWithDetails == null,
-            previousExecutionSets = previousSets,
-            currentResolvedExercise = currentResolvedEx,
-            exerciseExecutionContext = exerciseContext
+            sessionWithDetails = snapshot.session,
+            currentExerciseIndex = snapshot.currentIndex,
+            isLoading = snapshot.session == null,
+            previousExecutionSets = context.previousSets,
+            currentResolvedExercise = resolved,
+            exerciseExecutionContext = context.context,
+            restSecondsBetweenSets = context.rest.betweenSets,
+            restSecondsAfterExercise = context.rest.afterExercise
         )
     }
 
@@ -257,42 +366,20 @@ class ExecutionViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ExecutionState())
 
-    init {
-        viewModelScope.launch {
-            combine(
-                state.map { it.currentExercise?.exerciseSession?.actualExerciseId }.distinctUntilChanged(),
-                state.map { it.sessionWithDetails?.session?.templateId }.distinctUntilChanged()
-            ) { exerciseId, templateId ->
-                Pair(exerciseId, templateId)
-            }.collect { (exerciseId, templateId) ->
-                if (exerciseId != null) {
-                    val context = workoutEngine.getExerciseExecutionContext(exerciseId, templateId)
-                    _exerciseExecutionContext.value = context
-                    val prevSets = workoutEngine.getLastExecutionSetsForExercise(exerciseId)
-                    _previousExecutionSets.value = prevSets
-                } else {
-                    _exerciseExecutionContext.value = null
-                    _previousExecutionSets.value = emptyList()
-                }
-            }
-        }
-        
-        viewModelScope.launch {
-            restTimerTarget.collect { target ->
-                if (target != null) {
-                    val exName = state.value.currentExercise?.exerciseSession?.exerciseNameSnapshot ?: "Exercício"
-                    notificationManager.showTimerNotification(exName, target)
-                } else {
-                    notificationManager.cancelNotification()
-                }
-            }
-        }
-    }
+    // Quem **mostra** a notificação de descanso não é mais este ViewModel.
+    //
+    // Havia três autoridades para a mesma notificação: este ViewModel mostrava e cancelava, o
+    // `MainApplication` cancelava de novo e o `RestNotificationReceiver` remostrava no "+30s". Pior:
+    // o nome do exercício vinha de `state.value`, que logo após a restauração do processo ainda é
+    // `ExecutionState()` — e a notificação saía como "Descanso: Exercício". Quem observa o alvo do
+    // descanso agora é só o `MainApplication`, que sobrevive à tela e lê o nome canônico por
+    // `getActiveExerciseNameForTimer()`. O que sobrou aqui é o cancelamento explícito ao encerrar
+    // a sessão — redundante com o alvo indo a nulo, mas imediato, e é o que o usuário espera ao
+    // tocar em "finalizar".
 
     fun selectExercise(index: Int) {
         val exercises = state.value.sessionWithDetails?.exercises ?: return
         if (index in exercises.indices) {
-            _currentExerciseIndex.value = index
             _currentExerciseSessionId.value = exercises[index].exerciseSession.id
         }
     }
@@ -321,7 +408,7 @@ class ExecutionViewModel(
             )
         }
 
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.reorderExercises(currentSession.session.id, updatedEntities)
         }
     }
@@ -342,7 +429,7 @@ class ExecutionViewModel(
             )
         }
 
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.reorderExercises(currentSession.session.id, updatedEntities)
         }
     }
@@ -351,7 +438,7 @@ class ExecutionViewModel(
         val exercises = state.value.sessionWithDetails?.exercises ?: return
         if (exercises.isEmpty()) return
 
-        val cur = _currentExerciseIndex.value
+        val cur = state.value.currentExerciseIndex
         // 1. Search forward from cur + 1 for next pending/incomplete exercise
         val nextPendingIndex = (cur + 1 until exercises.size).firstOrNull { idx ->
             val ex = exercises[idx]
@@ -363,22 +450,20 @@ class ExecutionViewModel(
         } ?: (cur + 1).takeIf { it in exercises.indices } // 3. Fallback to immediate next
 
         if (nextPendingIndex != null) {
-            _currentExerciseIndex.value = nextPendingIndex
             _currentExerciseSessionId.value = exercises[nextPendingIndex].exerciseSession.id
         }
     }
 
     fun previousExercise() {
         val exercises = state.value.sessionWithDetails?.exercises ?: return
-        if (_currentExerciseIndex.value > 0) {
-            val newIdx = _currentExerciseIndex.value - 1
-            _currentExerciseIndex.value = newIdx
-            _currentExerciseSessionId.value = exercises[newIdx].exerciseSession.id
+        val cur = state.value.currentExerciseIndex
+        if (cur > 0) {
+            _currentExerciseSessionId.value = exercises[cur - 1].exerciseSession.id
         }
     }
 
     fun updateSet(setLog: SetLogEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.updateSet(setLog)
         }
     }
@@ -449,19 +534,20 @@ class ExecutionViewModel(
 
         _setFeedback.value = feedback
 
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.updateSet(setLog.copy(completed = true, finishedAt = System.currentTimeMillis()))
-            
-            // Record new PR if max weight exceeded (regra única no motor: grava e informa o fato)
-            val exerciseId = state.value.currentExercise?.exerciseSession?.actualExerciseId
-            if (exerciseId != null && setLog.weight > 0f) {
-                workoutEngine.registerPersonalRecordIfImproved(
-                    exerciseId = exerciseId,
-                    prType = com.example.data.local.PRType.MAX_WEIGHT,
-                    value = setLog.weight,
-                    exerciseName = state.value.currentExercise?.exerciseSession?.exerciseNameSnapshot
-                )
-            }
+
+            // O recorde pessoal **não** é gravado aqui (auditoria 2026-09-12).
+            //
+            // Este ponto gravava `MAX_WEIGHT` para qualquer série com carga — inclusive aquecimento
+            // e série por tempo — e `uncompleteSet` não desfazia nada. Uma roda que parasse em
+            // 120 kg por acidente deixava um recorde e o XP dele para sempre, e "novo recorde"
+            // nunca mais aparecia naquele exercício. Pior: era uma **segunda** regra, diferente da
+            // que o motor aplica em `finishSession` (que exclui aquecimento e duração).
+            //
+            // O texto comemorativo acima continua: ele compara com o recorde histórico e é só
+            // feedback da série. Quem grava é `WorkoutEngine.evaluatePersonalRecords`, no fim do
+            // treino, com a única regra que existe.
 
             // Auto dismiss feedback after delay
             kotlinx.coroutines.delay(3500)
@@ -476,7 +562,7 @@ class ExecutionViewModel(
     }
     
     fun uncompleteSet(setLog: SetLogEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.updateSet(setLog.copy(completed = false, finishedAt = null))
         }
     }
@@ -484,7 +570,7 @@ class ExecutionViewModel(
     fun replicateCurrentSet(onResult: (SyncResult) -> Unit) {
         val currentEx = state.value.currentExercise ?: return
         val currentSet = state.value.activeSet ?: currentEx.sets.firstOrNull { !it.completed } ?: currentEx.sets.lastOrNull() ?: return
-        viewModelScope.launch {
+        launchGuarded {
             val result = workoutEngine.replicateCurrentSet(currentEx.exerciseSession.id, currentSet)
             onResult(result)
         }
@@ -493,7 +579,7 @@ class ExecutionViewModel(
     fun restoreLastExecutionValues(onResult: (SyncResult) -> Unit) {
         val currentEx = state.value.currentExercise ?: return
         val actualExId = currentEx.exerciseSession.actualExerciseId ?: currentEx.exerciseSession.plannedExerciseId
-        viewModelScope.launch {
+        launchGuarded {
             val result = workoutEngine.restoreLastExecutionSets(currentEx.exerciseSession.id, actualExId)
             onResult(result)
         }
@@ -508,25 +594,25 @@ class ExecutionViewModel(
         val reps = lastSet?.repetitions ?: 10
         val weight = lastSet?.weight ?: 0f
 
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.addSet(currentEx.exerciseSession.id, newSetNumber, reps, weight)
         }
     }
 
     fun removeSet(setLog: SetLogEntity) {
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.removeSet(setLog)
         }
     }
 
     fun adjustRestTimer(seconds: Int) {
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.adjustRestTimer(seconds)
         }
     }
 
     fun startRestTimer(durationSeconds: Int) {
-        viewModelScope.launch {
+        launchGuarded {
             val currentEx = state.value.currentExercise
             workoutEngine.startRestTimer(
                 durationSeconds = durationSeconds,
@@ -538,14 +624,14 @@ class ExecutionViewModel(
     }
 
     fun skipRestTimer() {
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.skipRestTimer()
         }
     }
 
     fun finishSession() {
         val sessionId = state.value.sessionWithDetails?.session?.id ?: return
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.finishSession(sessionId)
             notificationManager.cancelNotification()
         }
@@ -553,7 +639,7 @@ class ExecutionViewModel(
 
     fun cancelSession() {
         val sessionId = state.value.sessionWithDetails?.session?.id ?: return
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.cancelSession(sessionId)
             notificationManager.cancelNotification()
         }
@@ -565,7 +651,7 @@ class ExecutionViewModel(
 
     fun loadAlternatives() {
         val exerciseId = state.value.currentExercise?.exerciseSession?.actualExerciseId ?: return
-        viewModelScope.launch {
+        launchGuarded {
             val exList = workoutEngine.getAlternativesForExercise(exerciseId)
             val showGifsValue = showGifs.value
             val resolved = exList.map { ex ->
@@ -580,7 +666,7 @@ class ExecutionViewModel(
         val session = state.value.sessionWithDetails ?: return
         val currentEx = state.value.currentExercise ?: return
         
-        viewModelScope.launch {
+        launchGuarded {
             workoutEngine.swapExercise(
                 exerciseSessionId = currentEx.exerciseSession.id,
                 oldExerciseId = currentEx.exerciseSession.actualExerciseId ?: 0,
@@ -625,5 +711,10 @@ class ExecutionViewModel(
             )
         }
     }
+
+    private companion object {
+        const val TAG = "ExecutionViewModel"
+    }
+
 }
 

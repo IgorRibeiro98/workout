@@ -30,7 +30,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -53,6 +52,7 @@ import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 const val FRIENDS_TITLE = "Amigos"
 const val FRIENDS_EMPTY_MESSAGE =
@@ -92,7 +92,7 @@ fun FriendsScreen(
      */
     onOpenProfile: (Friend) -> Unit = {}
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // O leitor é construído aqui porque é aqui que existe `Context` — e é instalado no ViewModel,

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -95,6 +96,7 @@ fun ExecutionScreen(
     val rirRpeEnabled by viewModel.rirRpeEnabled.collectAsState()
     val showGifs by viewModel.showGifs.collectAsState()
     val showCoachTip by viewModel.showCoachTip.collectAsState()
+    val timerNotificationEnabled by viewModel.timerNotificationEnabled.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? androidx.activity.ComponentActivity
@@ -162,15 +164,27 @@ fun ExecutionScreen(
         pageCount = { session.exercises.size }
     )
 
+    // Sincronização entre o pager e o exercício em foco (auditoria 2026-09-12).
+    //
+    // A versão anterior era bidirecional sobre `pagerState.currentPage`, que muda **durante** a
+    // rolagem: um salto do 1º para o 6º exercício pela lista disparava `animateScrollToPage(5)`,
+    // a animação passava pela página 1, o segundo efeito chamava `selectExercise(1)`, o índice do
+    // ViewModel mudava, o primeiro efeito reiniciava e cancelava a animação — e o pager parava no
+    // 2º exercício, com o ViewModel concordando com o lugar errado.
+    //
+    // `settledPage` só muda quando a rolagem termina, então o sentido pager -> ViewModel não
+    // interrompe mais o sentido ViewModel -> pager.
     LaunchedEffect(state.currentExerciseIndex) {
         if (pagerState.currentPage != state.currentExerciseIndex && state.currentExerciseIndex in 0 until session.exercises.size) {
             pagerState.animateScrollToPage(state.currentExerciseIndex)
         }
     }
 
-    LaunchedEffect(pagerState.currentPage) {
-        if (pagerState.currentPage != state.currentExerciseIndex && pagerState.currentPage in 0 until session.exercises.size) {
-            viewModel.selectExercise(pagerState.currentPage)
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { settled ->
+            if (settled != state.currentExerciseIndex && settled in 0 until session.exercises.size) {
+                viewModel.selectExercise(settled)
+            }
         }
     }
 
@@ -321,7 +335,7 @@ fun ExecutionScreen(
                             null
                         }
                         FocusedRestView(
-                            targetTime = timerTarget ?: System.currentTimeMillis(),
+                            targetTime = timerTarget,
                             onAdd15s = { viewModel.adjustRestTimer(15) },
                             onAdd30s = { viewModel.adjustRestTimer(30) },
                             onSkip = {
@@ -352,7 +366,9 @@ fun ExecutionScreen(
                                 state.activeSet?.isDurationMode == true
                             },
                             totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
-                            hapticEnabled = hapticEnabled
+                            hapticEnabled = hapticEnabled,
+                            soundEnabled = soundEnabled,
+                            timerNotificationEnabled = timerNotificationEnabled
                         )
                     }
                     ExecutionPhase.ACTIVE_SET -> {
@@ -388,6 +404,8 @@ fun ExecutionScreen(
                                             isLastExercise = state.isLastPendingExercise,
                                             rirRpeEnabled = rirRpeEnabled,
                                             hapticEnabled = hapticEnabled,
+                                            soundEnabled = soundEnabled,
+                                            timerNotificationEnabled = timerNotificationEnabled,
                                             showGifs = showGifs,
                                             showCoachTip = showCoachTip,
                                             isOrderAdapted = state.isOrderAdapted,
@@ -433,9 +451,11 @@ fun ExecutionScreen(
                     }
                     ExecutionPhase.EXERCISE_TRANSITION -> {
                         val nextExSession = state.nextPendingExercise
-                        val recRest = nextExSession?.exerciseSession?.restDurationSecondsSnapshot
-                            ?: currentEx.exerciseSession.restDurationSecondsSnapshot
-                            ?: 90
+                        // O descanso recomendado vem do motor (`resolveRestRecommendation`), que é
+                        // quem o temporizador automático também consulta. Esta tela calculava a
+                        // sua própria versão — o snapshot do próximo exercício, com um `90` escrito
+                        // à mão — e por isso recomendava 60 s onde o automático usava 120 s.
+                        val recRest = state.restSecondsAfterExercise
                         FocusedExerciseTransitionView(
                             completedExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
                             completedSetsCount = currentEx.sets.count { it.completed },
@@ -487,8 +507,13 @@ fun ExecutionScreen(
                             title = stringResource(id = R.string.sheet_action_swap),
                             icon = Icons.Default.SwapHoriz,
                             onClick = {
-                                activeSheet = null
+                                // `activeSheet = null` era o defeito (auditoria 2026-09-12): nada,
+                                // em lugar nenhum, atribuía `WorkoutSheet.Alternatives`, então o
+                                // item "Trocar exercício / Máquina ocupada" carregava a lista e não
+                                // abria nada. Pior: com `alternatives` não-vazio, o `BackHandler`
+                                // passava a engolir o primeiro "Voltar" do usuário.
                                 viewModel.loadAlternatives()
+                                activeSheet = WorkoutSheet.Alternatives
                             }
                         ),
                         ActionItemData(
@@ -527,6 +552,8 @@ fun ExecutionScreen(
                 AllSetsBottomSheet(
                     exerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
                     sets = currentEx.sets,
+                    isDurationMode = state.currentResolvedExercise?.executionMode ==
+                        com.example.domain.model.ExerciseExecutionMode.DURATION,
                     rirRpeEnabled = rirRpeEnabled,
                     onDismiss = { activeSheet = null },
                     onUpdateSet = { viewModel.updateSet(it) },
@@ -836,6 +863,11 @@ fun FocusedActiveSetView(
     isLastExercise: Boolean = false,
     rirRpeEnabled: Boolean,
     hapticEnabled: Boolean,
+    // Vêm do ViewModel (auditoria 2026-09-12). Esta tela abria o DataStore dentro da composição,
+    // uma coleta nova a cada entrada na fase, e até a primeira emissão assumia `true` — o alerta
+    // de fim de série por tempo podia tocar com o som desligado.
+    soundEnabled: Boolean,
+    timerNotificationEnabled: Boolean,
     showGifs: Boolean,
     showCoachTip: Boolean,
     isOrderAdapted: Boolean = false,
@@ -863,7 +895,14 @@ fun FocusedActiveSetView(
     var currentRir by remember(activeSet.id) { mutableStateOf(activeSet.rir) }
     var showReplicateConfirmDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(activeSet.id, activeSet.weight, activeSet.repetitions, activeSet.rir) {
+    // Sincroniza **só** quando a série em foco muda (auditoria 2026-09-12).
+    //
+    // Com `activeSet.weight`/`repetitions`/`rir` entre as chaves, cada emissão do Room reescrevia
+    // o valor local: ajustar a roda de 50 para 52,5 rapidamente produzia 50 -> 52,5 -> 50 -> 52,5
+    // na tela, e se o segundo `onValueSettled` ainda não tivesse disparado, o valor do usuário era
+    // simplesmente perdido. O `remember(activeSet.id)` logo acima já garante o valor inicial
+    // correto ao trocar de série; este efeito cobre a troca sem recriação do composable.
+    LaunchedEffect(activeSet.id) {
         currentWeight = activeSet.weight
         currentReps = activeSet.repetitions
         currentRir = activeSet.rir
@@ -871,27 +910,24 @@ fun FocusedActiveSetView(
 
     val scrollState = rememberScrollState()
 
-    val isBodyweight = resolvedExercise?.rawExercise?.isBodyweight == true ||
-        resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("body") == true ||
-        resolvedExercise?.rawExercise?.equipment?.lowercase()?.contains("corporal") == true ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("flexão") ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("barra fixa") ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("paralelas") ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("abdominal") ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("prancha") ||
-        currentEx.exerciseSession.exerciseNameSnapshot.lowercase().contains("peso corporal")
+    // A regra vive em `ResolvedExercise` (auditoria 2026-09-12): era uma regra de domínio escrita
+    // dentro da composição, e o `AllSetsBottomSheet` desta mesma tela usava outra.
+    val isBodyweight = resolvedExercise?.isBodyweight
+        ?: com.example.domain.model.ResolvedExercise.isBodyweightName(currentEx.exerciseSession.exerciseNameSnapshot)
 
     val isDurationMode = resolvedExercise?.executionMode == com.example.domain.model.ExerciseExecutionMode.DURATION
 
     // Em exercícios por tempo a roda define a META e o cronômetro conta do zero até ela.
-    var isLiveTimerRunning by remember(activeSet.id) { mutableStateOf(false) }
-    var elapsedSeconds by remember(activeSet.id) { mutableIntStateOf(0) }
-    var timerFinished by remember(activeSet.id) { mutableStateOf(false) }
+    //
+    // `rememberSaveable` e não `remember` (auditoria 2026-09-12): o estado era puramente de
+    // composição, então uma prancha em 00:45/01:00 voltava a 00:00 ao girar o aparelho. O descanso
+    // sobrevive porque o alvo está persistido no motor; aqui a âncora é local, e o mínimo é não
+    // perdê-la numa mudança de configuração.
+    var isLiveTimerRunning by rememberSaveable(activeSet.id) { mutableStateOf(false) }
+    var elapsedSeconds by rememberSaveable(activeSet.id) { mutableIntStateOf(0) }
+    var timerFinished by rememberSaveable(activeSet.id) { mutableStateOf(false) }
 
     val timerContext = androidx.compose.ui.platform.LocalContext.current
-    val timerSettingsManager = remember { (timerContext.applicationContext as com.example.MainApplication).settingsManager }
-    val soundEnabled by timerSettingsManager.soundEnabledFlow.collectAsState(initial = true)
-    val timerNotificationEnabled by timerSettingsManager.timerNotificationEnabledFlow.collectAsState(initial = true)
     val timerHaptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(isLiveTimerRunning, activeSet.id) {
@@ -1126,8 +1162,17 @@ fun FocusedActiveSetView(
 
                 // 5. Coach Tip (se habilitado)
                 if (showCoachTip) {
-                    val coachTip = parseJsonListFirst(premiumInfo?.education?.tips) ?: parseJsonListFirst(premiumInfo?.education?.coachNotes)
-                    val warningText = parseJsonListFirst(premiumInfo?.education?.commonMistakes) ?: parseJsonListFirst(premiumInfo?.safety?.attentionPoints)
+                    // `remember` porque isto é parse de JSON (`org.json`) — rodava a cada
+                    // recomposição desta subárvore, que recompõe a cada escrita do Room durante o
+                    // treino (auditoria 2026-09-12).
+                    val coachTip = remember(premiumInfo) {
+                        parseJsonListFirst(premiumInfo?.education?.tips)
+                            ?: parseJsonListFirst(premiumInfo?.education?.coachNotes)
+                    }
+                    val warningText = remember(premiumInfo) {
+                        parseJsonListFirst(premiumInfo?.education?.commonMistakes)
+                            ?: parseJsonListFirst(premiumInfo?.safety?.attentionPoints)
+                    }
 
                     QuickCoachTip(
                         coachTip = coachTip,
@@ -1261,13 +1306,13 @@ fun FocusedActiveSetView(
                                     )
                                     Row(verticalAlignment = Alignment.Bottom) {
                                         Text(
-                                            text = String.format("%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60),
+                                            text = String.format(java.util.Locale.ROOT, "%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60),
                                             color = TextPrimary,
                                             fontSize = 20.sp,
                                             fontWeight = FontWeight.Black
                                         )
                                         Text(
-                                            text = String.format(" / %02d:%02d", goalSeconds / 60, goalSeconds % 60),
+                                            text = String.format(java.util.Locale.ROOT, " / %02d:%02d", goalSeconds / 60, goalSeconds % 60),
                                             color = TextSecondary,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold,
@@ -1436,7 +1481,17 @@ private fun parseRawStringOrJson(raw: String): String {
 
 @Composable
 fun FocusedRestView(
-    targetTime: Long,
+    /**
+     * O instante em que o descanso termina, ou `null` quando não há descanso em andamento.
+     *
+     * Anulável de propósito (auditoria 2026-09-12). A chamada passava `timerTarget ?: agora`, e o
+     * `?: agora` era um defeito com sintoma alto: ao tocar em PULAR, `timerTarget` vira `null`
+     * enquanto este conteúdo ainda está composto no fade-out do `Crossfade`. A tela recebia
+     * "termina agora", o efeito via `remaining <= 0` e disparava o **alarme de descanso
+     * finalizado** — som, vibração e notificação — mais um segundo `onSkip()`. O debounce de 3,5 s
+     * do `RestTimerAlertAuthority` só protege o término natural, não este caminho.
+     */
+    targetTime: Long?,
     onAdd15s: () -> Unit,
     onAdd30s: () -> Unit,
     onSkip: () -> Unit,
@@ -1448,21 +1503,25 @@ fun FocusedRestView(
     nextMachineLabel: String? = null,
     totalSets: Int = 1,
     hapticEnabled: Boolean = true,
+    soundEnabled: Boolean = true,
+    timerNotificationEnabled: Boolean = true,
     isDurationMode: Boolean = false
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
     var isFinishedAlertState by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
-    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
-    val soundEnabled by settingsManager.soundEnabledFlow.collectAsState(initial = true)
-    val notifSettingEnabled by settingsManager.timerNotificationEnabledFlow.collectAsState(initial = true)
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(targetTime) {
+        if (targetTime == null) return@LaunchedEffect
+        // O alerta só vale para um descanso que **cruzou** o zero enquanto esta tela o observava.
+        // Um alvo que já nasce no passado não é um descanso terminando agora: é um resto de estado.
+        var hasCountedDown = false
         while (true) {
             val remaining = (targetTime - System.currentTimeMillis()) / 1000
             if (remaining <= 0) {
                 timeLeft = 0
+                if (!hasCountedDown) break
                 isFinishedAlertState = true
                 if (hapticEnabled) {
                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -1471,13 +1530,14 @@ fun FocusedRestView(
                     exerciseName = nextExerciseName,
                     soundEnabled = soundEnabled,
                     hapticEnabled = hapticEnabled,
-                    notificationEnabled = notifSettingEnabled,
+                    notificationEnabled = timerNotificationEnabled,
                     source = "FocusedRestView"
                 )
                 kotlinx.coroutines.delay(650)
                 onSkip()
                 break
             }
+            hasCountedDown = true
             timeLeft = remaining
             kotlinx.coroutines.delay(1000)
         }
@@ -1539,7 +1599,7 @@ fun FocusedRestView(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = String.format("%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60),
+                text = String.format(java.util.Locale.ROOT, "%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60),
                 color = TextPrimary,
                 fontSize = 72.sp,
                 fontWeight = FontWeight.Black
@@ -1643,7 +1703,10 @@ fun FocusedExerciseTransitionView(
     nextExerciseName: String?,
     nextMachineLabel: String?,
     nextPrimaryMuscle: String?,
-    recommendedRestSeconds: Int = 90,
+    // Sem valor padrão (auditoria 2026-09-12): um `90` aqui era mais uma cópia da regra de
+    // descanso. Quem chama passa `state.restSecondsAfterExercise`, resolvido por
+    // `WorkoutEngine.resolveRestRecommendation`.
+    recommendedRestSeconds: Int,
     onStartRest: (Int) -> Unit = {},
     onStartNext: () -> Unit
 ) {
@@ -1663,7 +1726,7 @@ fun FocusedExerciseTransitionView(
     )
 
     val formattedRest = remember(recommendedRestSeconds) {
-        String.format("%02d:%02d", (recommendedRestSeconds.coerceAtLeast(0)) / 60, (recommendedRestSeconds.coerceAtLeast(0)) % 60)
+        String.format(java.util.Locale.ROOT, "%02d:%02d", (recommendedRestSeconds.coerceAtLeast(0)) / 60, (recommendedRestSeconds.coerceAtLeast(0)) % 60)
     }
 
     Column(
@@ -1888,6 +1951,15 @@ fun FocusedWorkoutCompleteView(
 fun AllSetsBottomSheet(
     exerciseName: String,
     sets: List<SetLogEntity>,
+    /**
+     * O exercício é medido em tempo, não em repetições.
+     *
+     * Vem de fora porque a autoridade é `ResolvedExercise.executionMode` (auditoria 2026-09-12).
+     * Esta folha tinha a **sua própria** lista de substrings — sem "esteira", sem "cardio", sem
+     * "suspens" — então um exercício por tempo cujo nome não estivesse nas seis palavras daqui
+     * aparecia com "reps" nesta folha e com "s" na tela principal, ao mesmo tempo.
+     */
+    isDurationMode: Boolean,
     rirRpeEnabled: Boolean,
     onDismiss: () -> Unit,
     onUpdateSet: (SetLogEntity) -> Unit,
@@ -1921,7 +1993,7 @@ fun AllSetsBottomSheet(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                itemsIndexed(sets) { index, setLog ->
+                itemsIndexed(sets, key = { _, setLog -> setLog.id }) { index, setLog ->
                     Surface(
                         color = SurfaceDark,
                         shape = RoundedCornerShape(14.dp),
@@ -1984,10 +2056,7 @@ fun AllSetsBottomSheet(
                                     }
 
                                     val weightStr = if (setLog.weight % 1f == 0f) "${setLog.weight.toInt()}" else "${setLog.weight}"
-                                    val isDurationMode = exerciseName.lowercase().let {
-                                        it.contains("prancha") || it.contains("plank") || it.contains("isometria") || it.contains("isométrico") || it.contains("wall sit") || it.contains("hang")
-                                    }
-                                    val repUnit = if (isDurationMode) "s" else "reps"
+                                    val repUnit = if (isDurationMode || setLog.isDurationMode) "s" else "reps"
                                     Text(
                                         text = "${weightStr}kg  ×  ${setLog.repetitions} $repUnit",
                                         color = TextPrimary,
@@ -2243,7 +2312,11 @@ fun WorkoutExercisesBottomSheet(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                itemsIndexed(exercises) { idx, ex ->
+                // Chave estável (auditoria 2026-09-12): sem ela o `remember { menuExpanded }` de cada
+                // linha pertence à **posição**, não ao exercício — depois de "Mover para depois" o
+                // menu aberto ficava na posição antiga, e remover uma série reciclava estado entre
+                // linhas.
+                itemsIndexed(exercises, key = { _, ex -> ex.exerciseSession.id }) { idx, ex ->
                     val isCurrent = idx == currentIndex
                     val completedCount = ex.sets.count { it.completed }
                     val totalSets = ex.sets.size

@@ -161,6 +161,106 @@ class SparkAuthInterceptorTest {
         )
     }
 
+    // ------------------------------------------------------ token travado (auditoria 2026-09-12)
+
+    @Test
+    fun `um provedor de token que nunca responde nao prende a chamada para sempre`() {
+        val sent = mutableListOf<Request>()
+        val client = clientWith(NeverAnsweringTokenProvider(), sent, tokenTimeoutMillis = 50L)
+
+        // `runBlocking` aqui bloqueia uma thread de I/O do OkHttp **dentro** de `execute()`, e quem
+        // chamou está segurando o `Mutex` do sync ou a `CloudOperationLock`. Sem teto, as duas
+        // travas ficavam presas até o processo morrer.
+        val error = runCatching {
+            client.newCall(Request.Builder().url(URL).build()).execute()
+        }.exceptionOrNull()
+
+        assertTrue(
+            "a espera pelo token precisa terminar: $error",
+            generateSequence(error) { it.cause }.any { it is AuthTokenTimeoutException }
+        )
+        assertTrue("sem token, nada pode ir para a rede", sent.isEmpty())
+    }
+
+    @Test
+    fun `token travado vira indisponibilidade, nao pedido de login`() {
+        val backend = SparkBackendClient(
+            baseUrl = BASE_URL,
+            tokens = TokenProvider(AuthTokenResult.Token("t")),
+            httpClient = clientWith(NeverAnsweringTokenProvider(), mutableListOf(), tokenTimeoutMillis = 50L)
+        )
+
+        // "Não deu para perguntar agora" é indisponibilidade recuperável. Tratar como sessão
+        // ausente faria a tela pedir login a quem está logado.
+        assertEquals(
+            SparkBackendResult.Unavailable,
+            kotlinx.coroutines.runBlocking { backend.me() }
+        )
+    }
+
+    // --------------------------------------------------------- 401 com renovação do token
+
+    @Test
+    fun `um 401 e repetido uma vez com o token renovado`() {
+        val provider = RefreshingTokenProvider()
+        val sent = mutableListOf<Request>()
+        val client = clientAnsweringByToken(provider, sent, accepted = "fresh")
+
+        val response = client.newCall(Request.Builder().url(URL).build()).execute()
+        val code = response.code
+        response.close()
+
+        assertEquals("a renovação precisa salvar a requisição", 200, code)
+        assertEquals(listOf(false, true), provider.forceRefreshCalls)
+        assertEquals(
+            listOf("Bearer stale", "Bearer fresh"),
+            sent.map { it.header("Authorization") }
+        )
+    }
+
+    @Test
+    fun `um 401 que persiste depois da renovacao nao vira laco`() {
+        val provider = RefreshingTokenProvider()
+        val sent = mutableListOf<Request>()
+        // Nenhum token é aceito: nem o do cache, nem o renovado.
+        val client = clientAnsweringByToken(provider, sent, accepted = "nenhum")
+
+        val response = client.newCall(Request.Builder().url(URL).build()).execute()
+        val code = response.code
+        response.close()
+
+        // Duas tentativas, e a segunda resposta é a resposta. Um retry disparado pelo código da
+        // resposta sem limite seria um laço contra um servidor que já disse não.
+        assertEquals(401, code)
+        assertEquals(2, sent.size)
+        assertEquals(listOf(false, true), provider.forceRefreshCalls)
+    }
+
+    @Test
+    fun `sem 401 o token nao e renovado`() {
+        val provider = RefreshingTokenProvider()
+        val sent = mutableListOf<Request>()
+        val client = clientAnsweringByToken(provider, sent, accepted = "stale")
+
+        client.newCall(Request.Builder().url(URL).build()).execute().close()
+
+        // O caminho normal continua sendo **uma** chamada ao Firebase por requisição.
+        assertEquals(listOf(false), provider.forceRefreshCalls)
+        assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun `sem sessao o 401 nao dispara renovacao`() {
+        val sent = mutableListOf<Request>()
+        val client = clientWith(TokenProvider(AuthTokenResult.SignedOut), sent, status = 401)
+
+        runCatching { client.newCall(Request.Builder().url(URL).build()).execute() }
+
+        // A primeira tentativa nem sai: sem token não há requisição autenticada a fazer, e não há
+        // o que renovar.
+        assertTrue(sent.isEmpty())
+    }
+
     @Test
     fun `o cliente do Spark Backend nao instala logging de requisicao`() {
         val source = java.io.File("src/main/java/com/example/data/remote/spark")
@@ -180,9 +280,10 @@ class SparkAuthInterceptorTest {
         tokens: AuthTokenProvider,
         sent: MutableList<Request>,
         status: Int = 200,
-        body: String = "{}"
+        body: String = "{}",
+        tokenTimeoutMillis: Long = SparkAuthInterceptor.TOKEN_TIMEOUT_MILLIS
     ): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(SparkAuthInterceptor(tokens))
+        .addInterceptor(SparkAuthInterceptor(tokens, tokenTimeoutMillis))
         .addInterceptor(
             Interceptor { chain ->
                 sent += chain.request()
@@ -197,8 +298,57 @@ class SparkAuthInterceptorTest {
         )
         .build()
 
+    /**
+     * Um servidor de teste que responde conforme o token recebido.
+     *
+     * É o que permite provar a renovação: o token velho leva 401, o renovado leva 200, e a
+     * diferença entre "o app tentou de novo" e "o app tentou de novo **com outro token**" fica
+     * visível.
+     */
+    private fun clientAnsweringByToken(
+        tokens: AuthTokenProvider,
+        sent: MutableList<Request>,
+        accepted: String
+    ): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(SparkAuthInterceptor(tokens))
+        .addInterceptor(
+            Interceptor { chain ->
+                sent += chain.request()
+                val authorized = chain.request().header("Authorization") == "Bearer $accepted"
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(if (authorized) 200 else 401)
+                    .message("stub")
+                    .body("{}".toResponseBody(null))
+                    .build()
+            }
+        )
+        .build()
+
     private class TokenProvider(private val result: AuthTokenResult) : AuthTokenProvider {
         override suspend fun currentToken(forceRefresh: Boolean): AuthTokenResult = result
+    }
+
+    /** Um provedor que nunca responde — o Firebase pendurado em DNS, sem timeout próprio. */
+    private class NeverAnsweringTokenProvider : AuthTokenProvider {
+        override suspend fun currentToken(forceRefresh: Boolean): AuthTokenResult =
+            kotlinx.coroutines.awaitCancellation()
+    }
+
+    /**
+     * Um token em cache que o servidor recusa, e um renovado que ele aceita.
+     *
+     * É o cenário real: o token guardado foi revogado (ou o relógio do aparelho andou), e só uma
+     * renovação forçada produz um que vale.
+     */
+    private class RefreshingTokenProvider : AuthTokenProvider {
+        val forceRefreshCalls = mutableListOf<Boolean>()
+
+        override suspend fun currentToken(forceRefresh: Boolean): AuthTokenResult {
+            forceRefreshCalls += forceRefresh
+            return AuthTokenResult.Token(if (forceRefresh) "fresh" else "stale")
+        }
     }
 
     private class CountingTokenProvider : AuthTokenProvider {

@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -19,6 +18,7 @@ import com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint
 import com.example.feature.evolution.consistency.ConsistencyViewModel
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun ConsistencySection(
@@ -26,7 +26,7 @@ fun ConsistencySection(
     modifier: Modifier = Modifier,
     testTag: String = "consistency_section"
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     ConsistencySection(
         summary = uiState.summary,
         progress = uiState.consistencyProgress,

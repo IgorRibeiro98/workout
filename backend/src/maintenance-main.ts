@@ -110,7 +110,15 @@ async function bootstrap(): Promise<void> {
     }, config.shutdownTimeoutMs);
     timer.unref();
 
-    void Promise.all([httpApp.close(), domainApp.close()])
+    // HTTP primeiro, contexto de domínio depois — nunca em paralelo (T18.3.2).
+    //
+    // `domainApp.close()` dispara os shutdown hooks do Nest, e um deles fecha o pool do PostgreSQL.
+    // Em paralelo com o dreno do HTTP, um `/internal/maintenance/run` em voo perde o banco no meio
+    // do ciclo: o ciclo falha por indisponibilidade que o próprio shutdown criou. `main.ts` já
+    // fecha na ordem certa porque lá existe um contexto só.
+    void httpApp
+      .close()
+      .then(() => domainApp.close())
       .then(() => {
         clearTimeout(timer);
         process.exit(0);

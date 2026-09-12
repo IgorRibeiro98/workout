@@ -54,6 +54,7 @@ import com.example.domain.engine.ExerciseVideoRegistry
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.theme.*
 import com.example.presentation.exercises.components.premium.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -70,16 +71,25 @@ fun ExerciseDetailsScreen(
     onNavigateToAlternative: ((Long, String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val resolvedExercise by viewModel.getResolvedExercise(exerciseId).collectAsState(initial = null)
+    // Cada `viewModel.getX(id)` devolve um Flow **novo**. Sem o `remember`, toda recomposição
+    // criava outro Flow, o `produceState` do `collectAsState` cancelava a coleta anterior e
+    // recomeçava — e `getPremiumInfo` são oito consultas ao DAO por coleta.
+    val resolvedExerciseFlow = remember(viewModel, exerciseId) { viewModel.getResolvedExercise(exerciseId) }
+    val premiumInfoFlow = remember(viewModel, exerciseId) { viewModel.getPremiumInfo(exerciseId) }
+    val alternativesFlow = remember(viewModel, exerciseId) { viewModel.getAlternatives(exerciseId) }
+    val personalRecordsFlow = remember(viewModel, exerciseId) { viewModel.getPersonalRecords(exerciseId) }
+    val historyFlow = remember(viewModel, exerciseId) { viewModel.getExerciseHistory(exerciseId) }
+
+    val resolvedExercise by resolvedExerciseFlow.collectAsStateWithLifecycle(initialValue = null)
     val exerciseInfo = resolvedExercise?.rawExercise
     val overrideInfo = resolvedExercise?.override
-    
-    val showGifs by viewModel.showGifs.collectAsState()
-    val premiumInfo by viewModel.getPremiumInfo(exerciseId).collectAsState(initial = null)
-    val alternatives by viewModel.getAlternatives(exerciseId).collectAsState(initial = emptyList())
-    val personalRecords by viewModel.getPersonalRecords(exerciseId).collectAsState(initial = emptyList())
-    val history by viewModel.getExerciseHistory(exerciseId).collectAsState(initial = emptyList())
-    val dateFormat = java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault())
+
+    val showGifs by viewModel.showGifs.collectAsStateWithLifecycle()
+    val premiumInfo by premiumInfoFlow.collectAsStateWithLifecycle(initialValue = null)
+    val alternatives by alternativesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val personalRecords by personalRecordsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val history by historyFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val dateFormat = remember { java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale.getDefault()) }
     val photoPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
     ) { uri: android.net.Uri? ->
@@ -175,8 +185,8 @@ fun ExerciseDetailsScreen(
             }
             
             // PREMIUM CONTENT & SECONDARY DETAILS (Progressive Disclosure)
-            if (premiumInfo != null) {
-                val premium = premiumInfo!!
+            val premium = premiumInfo
+            if (premium != null) {
                 
                 // Primary: Execution guide is immediately visible
                 if (premium.execution != null) {
@@ -477,7 +487,7 @@ fun ExerciseDetailsScreen(
                     }
                 }
 
-                items(alternatives) { alt ->
+                items(alternatives, key = { it.id }) { alt ->
                     val altMuscle = MuscleVisualResolver.resolveGroup(alt.primaryMuscle)
                     Surface(
                         color = SurfaceDark,
@@ -547,7 +557,7 @@ fun ExerciseDetailsScreen(
                     }
                 }
             } else {
-                items(history) { item ->
+                items(history, key = { "${it.date}_${it.sets.exerciseSession.id}" }) { item ->
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()

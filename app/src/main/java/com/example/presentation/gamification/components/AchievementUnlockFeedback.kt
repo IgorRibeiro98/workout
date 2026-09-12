@@ -32,9 +32,15 @@ fun AchievementUnlockFeedback(
     onAnimationEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isVisible by remember { mutableStateOf(true) }
+    // O estado e o efeito são presos ao conteúdo anunciado porque este componente vive num slot
+    // fixo de composição alimentado por uma fila: quando o primeiro item sai, o segundo reaproveita
+    // o mesmo slot. Sem chave, ele herdaria `isVisible = false` e um `LaunchedEffect` já
+    // consumido — nunca apareceria, `onAnimationEnd` nunca seria chamado e a fila travaria para
+    // sempre. Quem chama também envolve a chamada em `key(id)`: dois desbloqueios diferentes podem
+    // ter textos iguais, e só o id os distingue.
+    var isVisible by remember(title, description, icon) { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(title, description, icon) {
         delay(4000)
         isVisible = false
         delay(500)

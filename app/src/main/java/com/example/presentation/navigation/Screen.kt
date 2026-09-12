@@ -16,6 +16,16 @@ import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.R
 
+/**
+ * Escapa um valor para o query string de uma rota.
+ *
+ * O `+` que o `URLEncoder` produz para espaço é trocado por `%20` porque quem desfaz o escape do
+ * outro lado é o `Uri.decode` da navegação, que **não** trata `+` como espaço — sem esta troca,
+ * "João Silva" chega à tela como "João+Silva".
+ */
+private fun encodeRouteArg(value: String): String =
+    java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
 sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: ImageVector) {
     object Today : Screen("today", R.string.nav_today, Icons.Default.CalendarToday)
     object Workouts : Screen("workouts", R.string.nav_workouts, Icons.Default.FitnessCenter)
@@ -60,8 +70,8 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object FriendProfile :
         Screen("friend_profile/{socialId}?name={name}", R.string.nav_profile, Icons.Default.Person) {
         fun createRoute(socialId: String, displayName: String): String {
-            val id = java.net.URLEncoder.encode(socialId, "UTF-8")
-            val name = java.net.URLEncoder.encode(displayName, "UTF-8")
+            val id = encodeRouteArg(socialId)
+            val name = encodeRouteArg(displayName)
             return "friend_profile/$id?name=$name"
         }
     }
@@ -84,8 +94,8 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object ChallengeDetail :
         Screen("challenge/{challengeId}?name={name}", R.string.nav_profile, Icons.Default.Person) {
         fun createRoute(challengeId: String, name: String = ""): String {
-            val id = java.net.URLEncoder.encode(challengeId, "UTF-8")
-            val label = java.net.URLEncoder.encode(name, "UTF-8")
+            val id = encodeRouteArg(challengeId)
+            val label = encodeRouteArg(name)
             return "challenge/$id?name=$label"
         }
     }
@@ -144,7 +154,7 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
 
         /** Aberto pelo Feed de amigos: a audiência é a relação direta. */
         fun createRoute(checkInId: String): String =
-            "check_in/${encode(checkInId)}?context=$CONTEXT_FRIEND"
+            "check_in/${encodeRouteArg(checkInId)}?context=$CONTEXT_FRIEND"
 
         /**
          * Aberto de dentro de um Squad.
@@ -158,18 +168,8 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
             groupId: String,
             groupName: String
         ): String =
-            "check_in/${encode(checkInId)}?context=$CONTEXT_GROUP" +
-                "&groupId=${encode(groupId)}&groupName=${encode(groupName)}"
-
-        /**
-         * Escapa um valor para o query string da rota.
-         *
-         * O `+` que o `URLEncoder` produz para espaço é trocado por `%20` porque quem desfaz o
-         * escape do outro lado é o `Uri.decode` da navegação, que **não** trata `+` como espaço —
-         * sem esta troca, "Os Monstros" chegaria à tela como "Os+Monstros".
-         */
-        private fun encode(value: String): String =
-            java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+            "check_in/${encodeRouteArg(checkInId)}?context=$CONTEXT_GROUP" +
+                "&groupId=${encodeRouteArg(groupId)}&groupName=${encodeRouteArg(groupName)}"
     }
 
     /**

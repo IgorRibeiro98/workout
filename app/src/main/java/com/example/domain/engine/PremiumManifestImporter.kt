@@ -31,6 +31,16 @@ class PremiumManifestImporter(
         var auditReport: PremiumAuditReport? = null
 
         try {
+            // Atalho de versão antes de abrir 2,07 MB e materializar a árvore inteira em
+            // `org.json` (auditoria 2026-09-12). Ver [CatalogAssetVersion].
+            val assetVersion = CatalogAssetVersion.peek(context, assetPath)
+            if (!force && assetVersion != null) {
+                val currentVersion = settingsManager.installedPremiumContentVersionFlow.first()
+                if (currentVersion >= assetVersion) {
+                    return@withContext ImportResult(isSkippedSameVersion = true)
+                }
+            }
+
             val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
             val root = JSONObject(jsonString)
             

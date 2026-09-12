@@ -13,12 +13,24 @@ import com.example.domain.evolution.model.WeightEvolution
 import com.example.domain.evolution.repository.EvolutionRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
 class EvolutionRepositoryImpl(
     private val bodyMeasurementRepository: BodyMeasurementRepository,
     private val workoutDao: WorkoutDao
 ) : EvolutionRepository {
+
+    /**
+     * O histórico completo, sem reemitir o que não mudou.
+     *
+     * O `InvalidationTracker` do Room reemite esta consulta a cada escrita em `workout_sessions`,
+     * `exercise_sessions` **ou** `set_logs` — ou seja, a cada série concluída durante um treino,
+     * quando o resultado (só sessões `COMPLETED`) continua exatamente o mesmo. Comparar a lista
+     * custa muito menos do que recalcular evolução e performance inteiras para cada coletor.
+     */
+    private val completedHistory =
+        workoutDao.getAllCompletedSessionsWithDetailsFlow().distinctUntilChanged()
 
     override suspend fun getEvolutionSummary(): EvolutionSummary {
         val measurements = bodyMeasurementRepository.getAllMeasurementsSync().toDomain()
@@ -62,7 +74,7 @@ class EvolutionRepositoryImpl(
     override fun getEvolutionSummaryFlow(): Flow<EvolutionSummary> {
         return combine(
             bodyMeasurementRepository.allMeasurements,
-            workoutDao.getAllCompletedSessionsWithDetailsFlow()
+            completedHistory
         ) { measurementsEntities, sessions ->
             val measurements = measurementsEntities.toDomain()
             val weightEvolution = WeightEvolutionCalculator.calculateFromMeasurements(measurements)
@@ -89,15 +101,17 @@ class EvolutionRepositoryImpl(
     }
 
     override fun getPerformanceEvolutionFlow(): Flow<PerformanceEvolution> {
-        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map {
+        return completedHistory.map {
             PerformanceCalculator.calculateFromCalendarSummaries(it)
         }
     }
 
     override fun getConsistencyMetricsFlow(): Flow<ConsistencyMetrics> {
-        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
-            ConsistencyCalculator.calculate(sessions.map { it.session.startedAt })
-        }
+        // Só os horários de início entram no cálculo: a projeção evita montar o grafo inteiro e,
+        // por depender apenas de `workout_sessions`, deixa de ser reemitida a cada série gravada.
+        return workoutDao.getCompletedSessionStartTimestampsFlow()
+            .distinctUntilChanged()
+            .map { ConsistencyCalculator.calculate(it) }
     }
 
     override fun getBodyMeasurementsFlow(): Flow<List<BodyMeasurement>> {

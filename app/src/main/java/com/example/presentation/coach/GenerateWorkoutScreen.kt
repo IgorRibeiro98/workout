@@ -35,7 +35,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +61,7 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** As ações da tela, agrupadas para a assinatura do conteúdo continuar legível. */
 internal data class GenerateWorkoutActions(
@@ -102,8 +102,8 @@ fun GenerateWorkoutScreen(
     isSignInAvailable: Boolean = true,
     isSigningIn: Boolean = false
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val explanationState by viewModel.explanationState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
 
     // Só carrega o recorte local do catálogo (Room). Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(Unit) { viewModel.refreshCandidates() }
@@ -579,8 +579,16 @@ private fun SavedCard(status: GenerateWorkoutStatus.Saved, actions: GenerateWork
 private fun repsLabel(minReps: Int, maxReps: Int): String =
     if (minReps == maxReps) "$minReps" else "$minReps–$maxReps"
 
+/**
+ * Carga formatada com Locale explícito (lint `DefaultLocale`).
+ *
+ * `Locale.ROOT`, e não `pt-BR`, de propósito: em todo o resto do app a carga sai por interpolação
+ * de string (`"${weight}kg"`), que usa ponto como separador decimal. Uma vírgula só nesta tela
+ * mostraria "62,5 kg" no Coach e "62.5kg" na execução, para o mesmo número.
+ */
 private fun formatWeight(weightKg: Float): String =
-    if (weightKg % 1f == 0f) weightKg.toInt().toString() else String.format("%.1f", weightKg)
+    if (weightKg % 1f == 0f) weightKg.toInt().toString()
+    else String.format(java.util.Locale.ROOT, "%.1f", weightKg)
 
 @Composable
 private fun LoadingBlock(message: String) {

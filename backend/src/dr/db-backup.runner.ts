@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { Client } from 'pg';
 import type { Clock } from '../common/clock';
 import type { SparkLogger } from '../common/logger';
@@ -139,15 +140,17 @@ export async function runDrBackup(deps: DrBackupDependencies): Promise<DrBackupR
     };
     await step('upload do dump', uploadDump);
 
-    const readBack = await step('releitura do dump', () => deps.store.readDump(backupId));
-    if (readBack === null) {
+    // A releitura é **em stream** (T18.3.2): ela prova exatamente o mesmo — tamanho e SHA-256 do
+    // objeto que ficou no destino — sem uma terceira cópia do dump na memória do Job.
+    const readBackStream = await step('releitura do dump', () => deps.store.openDump(backupId));
+    if (readBackStream === null) {
       throw new DrBackupError('releitura do dump', 'o objeto recém-gravado não foi encontrado');
     }
-    if (readBack.length !== dumpStat.size) {
+    const readBack = await step('releitura do dump', () => digestOfStream(readBackStream));
+    if (readBack.size !== dumpStat.size) {
       throw new DrBackupError('releitura do dump', 'tamanho lido difere do tamanho gravado');
     }
-    const readBackSha = createHash('sha256').update(readBack).digest('hex');
-    if (readBackSha !== sha256) {
+    if (readBack.sha256 !== sha256) {
       throw new DrBackupError('releitura do dump', 'SHA-256 lido difere do calculado');
     }
 
@@ -273,6 +276,21 @@ function sha256OfFile(file: string): Promise<string> {
       .on('data', (chunk) => hash.update(chunk))
       .on('error', reject)
       .on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+/** Tamanho e SHA-256 de um stream, sem acumular os bytes em memória. */
+function digestOfStream(stream: Readable): Promise<{ size: number; sha256: string }> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    let size = 0;
+    stream
+      .on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        hash.update(chunk);
+      })
+      .on('error', reject)
+      .on('end', () => resolve({ size, sha256: hash.digest('hex') }));
   });
 }
 

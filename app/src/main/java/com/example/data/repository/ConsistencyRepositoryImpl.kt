@@ -13,6 +13,7 @@ import com.example.domain.evolution.model.consistency.WorkoutFrequencyPoint
 import com.example.domain.evolution.repository.ConsistencyRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.time.DayOfWeek
@@ -25,6 +26,19 @@ class ConsistencyRepositoryImpl(
     private val settingsManager: SettingsManager? = null,
     private val zoneId: ZoneId = ZoneId.systemDefault()
 ) : ConsistencyRepository {
+
+    /**
+     * O início de cada treino concluído — a **única** coisa que consistência lê do histórico.
+     *
+     * As quatro consultas observáveis deste repositório carregavam o grafo inteiro
+     * (`getAllCompletedSessionsWithDetailsFlow`) para em seguida reduzi-lo a esta lista. Além do
+     * custo de montar sessões, exercícios e séries quatro vezes, o grafo é invalidado por qualquer
+     * escrita em `set_logs`: **cada série concluída** recarregava todo o histórico quatro vezes
+     * aqui, durante o treino. A projeção toca só `workout_sessions`, e a ordem é idêntica à de
+     * antes, então nada a jusante muda.
+     */
+    private val completedStarts: Flow<List<Long>> =
+        workoutDao.getCompletedSessionStartTimestampsFlow().distinctUntilChanged()
 
     override suspend fun initialize() {
         val today = LocalDate.now(zoneId)
@@ -152,12 +166,11 @@ class ConsistencyRepositoryImpl(
         val trackingStartedAtFlow = settingsManager?.trackingStartedAtFlow ?: kotlinx.coroutines.flow.flowOf(null)
 
         return combine(
-            workoutDao.getAllCompletedSessionsWithDetailsFlow(),
+            completedStarts,
             goalFlow,
             defaultGoalFlow,
             trackingStartedAtFlow
-        ) { sessions, snapshots, defaultGoal, trackingStartedAt ->
-            val timestamps = sessions.map { it.session.startedAt }
+        ) { timestamps, snapshots, defaultGoal, trackingStartedAt ->
             ConsistencyCalculator.calculateConsistencySummary(
                 timestamps = timestamps,
                 goalSnapshots = snapshots,
@@ -169,16 +182,12 @@ class ConsistencyRepositoryImpl(
     }
 
     override fun getFrequencyHistoryFlow(): Flow<List<WorkoutFrequencyPoint>> {
-        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
-            ConsistencyCalculator.calculateFrequencyHistory(sessions.map { it.session.startedAt }, zoneId)
+        return completedStarts.map { timestamps ->
+            ConsistencyCalculator.calculateFrequencyHistory(timestamps, zoneId)
         }
     }
 
-    override fun getWorkoutTimestampsFlow(): Flow<List<Long>> {
-        return workoutDao.getAllCompletedSessionsWithDetailsFlow().map { sessions ->
-            sessions.map { it.session.startedAt }
-        }
-    }
+    override fun getWorkoutTimestampsFlow(): Flow<List<Long>> = completedStarts
 
     override fun getConsistencyProgressFlow(): Flow<ConsistencyProgress> {
         return getWeeklyConsistenciesFlow().map { consistencies ->
@@ -195,12 +204,11 @@ class ConsistencyRepositoryImpl(
         val trackingStartedAtFlow = settingsManager?.trackingStartedAtFlow ?: kotlinx.coroutines.flow.flowOf(null)
 
         return combine(
-            workoutDao.getAllCompletedSessionsWithDetailsFlow(),
+            completedStarts,
             goalFlow,
             defaultGoalFlow,
             trackingStartedAtFlow
-        ) { sessions, snapshots, defaultGoal, trackingStartedAt ->
-            val timestamps = sessions.map { it.session.startedAt }
+        ) { timestamps, snapshots, defaultGoal, trackingStartedAt ->
             ConsistencyCalculator.calculateWeeklyConsistencies(
                 timestamps = timestamps,
                 goalSnapshots = snapshots,

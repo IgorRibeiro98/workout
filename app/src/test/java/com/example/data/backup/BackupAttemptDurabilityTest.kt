@@ -302,6 +302,82 @@ class BackupAttemptDurabilityTest {
         database.close()
     }
 
+    // ----------------------------------------------------------------- recusa definitiva
+
+    @Test
+    fun `recusa definitiva encerra a tentativa e libera a proxima`() = runBlocking {
+        context.deleteDatabase(dbName)
+        val database = open()
+        val programId = database.workoutDao().insertProgram(WorkoutProgramEntity(name = "Programa"))
+        val workouts = workoutRepositoryFor(database)
+
+        // 413: o snapshot é grande demais para o servidor. Reenviar os **mesmos bytes** produziria
+        // a mesma resposta para sempre — e, como o repositório sempre retoma a pendente mais
+        // antiga, a pessoa ficava sem conseguir fazer backup nenhum.
+        val api = FakeBackupApi().apply { nextResult = BackupUploadResult.Rejected("PAYLOAD_TOO_LARGE") }
+        val repository = repositoryFor(database, api)
+
+        val refused = repository.backupNow(uid, confirmedAdoption = true)
+        assertTrue("$refused", refused is BackupOperation.Rejected)
+
+        val abandoned = database.backupAttemptDao().all().single()
+        assertEquals(BackupAttemptStatus.ABANDONED.name, abandoned.status)
+        assertEquals("PAYLOAD_TOO_LARGE", abandoned.failureReason)
+        assertNull("uma tentativa encerrada sai da fila de retomada", database.backupAttemptDao().oldestPendingFor(uid))
+        assertTrue("nada local pode ser perdido por uma recusa", abandoned.payload.isNotBlank())
+
+        // O usuário apaga um treino para caber e tenta de novo: a operação seguinte captura o
+        // estado **atual**, com bytes diferentes, em vez de reenviar o que já foi recusado.
+        workouts.addTemplate(programId, "Treino A", "A", 0)
+        api.nextResult = FakeBackupApi.success()
+        val second = repository.backupNow(uid, confirmedAdoption = false)
+
+        assertTrue("$second", second is BackupOperation.Success)
+        assertEquals("uma tentativa nova, não a recusada", 2, database.backupAttemptDao().count())
+        assertEquals(2, api.callCount)
+        assertTrue("os bytes precisam ser outros", api.uploads[0] != api.uploads[1])
+        database.close()
+    }
+
+    @Test
+    fun `falha recuperavel continua pendente e reenvia os mesmos bytes`() = runBlocking {
+        context.deleteDatabase(dbName)
+        val database = open()
+
+        // O contraponto da recusa definitiva, e a razão de as duas serem caminhos distintos: sem
+        // rede não há resposta do servidor, então a tentativa **precisa** sobreviver inteira.
+        val api = FakeBackupApi().apply { nextResult = BackupUploadResult.Network }
+        val repository = repositoryFor(database, api)
+
+        repository.backupNow(uid, confirmedAdoption = true)
+        val pending = database.backupAttemptDao().oldestPendingFor(uid)
+        assertNotNull(pending)
+        assertEquals(BackupAttemptStatus.PENDING.name, pending!!.status)
+
+        api.nextResult = FakeBackupApi.success()
+        repository.backupNow(uid, confirmedAdoption = false)
+
+        assertEquals("uma tentativa lógica só", 1, database.backupAttemptDao().count())
+        assertEquals("o retry manda os mesmos bytes", api.uploads[0], api.uploads[1])
+        database.close()
+    }
+
+    @Test
+    fun `conflito de identidade tambem encerra a tentativa`() = runBlocking {
+        context.deleteDatabase(dbName)
+        val database = open()
+
+        // 409: mesmo `clientBackupId`, conteúdo diferente. A tentativa é imutável, então isto só
+        // acontece com defeito — e insistir com os mesmos bytes não conserta defeito nenhum.
+        val api = FakeBackupApi().apply { nextResult = BackupUploadResult.Conflict("BACKUP_ID_CONFLICT") }
+        repositoryFor(database, api).backupNow(uid, confirmedAdoption = true)
+
+        val attempt = database.backupAttemptDao().all().single()
+        assertEquals(BackupAttemptStatus.ABANDONED.name, attempt.status)
+        assertEquals("BACKUP_ID_CONFLICT", attempt.failureReason)
+        database.close()
+    }
+
     // --------------------------------------------------------------------------- helpers
 
     private fun workoutRepositoryFor(database: AppDatabase) = WorkoutRepository(

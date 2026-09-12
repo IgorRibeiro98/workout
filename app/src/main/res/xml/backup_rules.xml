@@ -1,29 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Regras de Auto Backup (Android 11 e anteriores) — T17.10 §106.
+  Regras de Auto Backup (Android 11 e anteriores).
 
-  O padrão do Android é "faz backup de tudo", e o padrão do template do Android Studio era não
-  dizer nada — o que **é** o padrão. Isso levava o escopo de push para o Google Drive da pessoa e
-  para a transferência de aparelho: o token FCM e o `socialId` da conta que registrou este
-  aparelho. Nenhum dos dois é dado do usuário; os dois são **estado técnico desta instalação**.
+  ## Por que isto virou uma lista de inclusão (auditoria 2026-09-12)
 
-  O que um token FCM restaurado em outro aparelho produz é concreto: duas instalações declarando o
-  mesmo token, o backend entregando a notificação de uma conta ao aparelho de outra pessoa, e o
-  `socialId` de quem fez o backup viajando junto. Estado de instalação não se restaura — ele se
-  reconquista no primeiro registro (`PushRegistrationCoordinator`), que é barato e sempre correto.
+  A versão anterior (T17.10 §106) era uma lista de **exclusões** e descrevia corretamente o que
+  queria evitar: token FCM, `socialId` de instalação, FID e sessão do Firebase Auth restaurados em
+  outro aparelho. Só que duas dessas exclusões nunca casaram com arquivo nenhum. O SDK monta os
+  nomes por concatenação — `"com.google.firebase.auth.api.Store." + persistenceKey` e
+  `"PersistedInstallation." + key + ".json"` — e o `persistenceKey` deriva do `applicationId` do
+  `google-services.json`, que não é versionado. Regras de backup não aceitam curinga, então a
+  sessão do Firebase Auth e o FID **viajavam** no backup e na transferência de aparelho, que é
+  exatamente o que o comentário dizia impedir.
 
-  O que **continua** no backup, de propósito: o banco Room (o treino é do usuário) e as
-  preferências de app. O Spark tem backup próprio de nuvem para o treino, mas o Auto Backup do
-  Android não conflita com ele — os dois são cópias do mesmo dado do dono.
+  Uma lista de inclusão não tem esse problema: o que não está aqui não é copiado, hoje e quando
+  qualquer SDK inventar um arquivo novo. O critério é simples e não muda: **dado do usuário entra;
+  estado técnico desta instalação, não.**
+
+  ## O que entra, e por quê
+
+  - `workout_database`: treino, histórico, templates, medidas, gamificação. É o dado do dono.
+  - `datastore/settings.preferences_pb`: preferências do app (descanso, som, modo festa, metas).
+
+  ## O que fica de fora por construção
+
+  Token/InstanceID do Firebase Messaging, `PersistedInstallation`, sessão do Firebase Auth, escopo
+  de push (`social_push_scope`) e a identidade de sync deste aparelho (`sync_device`). Estado de
+  instalação não se restaura — ele se reconquista no primeiro registro, que é barato e sempre
+  correto. Dois aparelhos anunciando o mesmo token FCM ou o mesmo `deviceId` de sync é entrega de
+  notificação para o lugar errado e supressão de eco no aparelho errado.
+
+  O Spark tem backup próprio de nuvem para o treino; o Auto Backup do Android não conflita com ele,
+  porque os dois são cópias do mesmo dado do dono.
 -->
 <full-backup-content>
-    <!-- Escopo de push: token FCM + socialId registrado (T17.5). Estado de instalação. -->
-    <exclude domain="file" path="datastore/social_push_scope.preferences_pb" />
-
-    <!-- Token/InstanceID do Firebase Messaging. Mesma razão: identifica **este** aparelho. -->
-    <exclude domain="sharedpref" path="com.google.android.gms.appid.xml" />
-    <exclude domain="file" path="PersistedInstallation" />
-
-    <!-- Sessão do Firebase Auth. Credencial não se restaura: quem troca de aparelho faz login. -->
-    <exclude domain="sharedpref" path="com.google.firebase.auth.api.Store.xml" />
+    <include domain="database" path="workout_database" />
+    <!--
+        O Room abre o banco em WAL: transações recentes vivem em `-wal` até o checkpoint. Uma
+        lista de inclusão copia **apenas** o que está listada, então sem esta linha o backup
+        seria um banco sem os últimos treinos. `-shm` fica de fora de propósito: é memória
+        compartilhada descartável, reconstruída pelo SQLite na abertura. `-journal` cobre o
+        caso de o WAL estar desligado em algum aparelho.
+    -->
+    <include domain="database" path="workout_database-wal" />
+    <include domain="database" path="workout_database-journal" />
+    <include domain="file" path="datastore/settings.preferences_pb" />
 </full-backup-content>

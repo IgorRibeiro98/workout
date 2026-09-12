@@ -112,17 +112,35 @@ data class BackupAttemptEntity(
 /**
  * O estado de uma tentativa.
  *
- * Dois valores, de propósito. `UPLOADING` seria um estado que não sobrevive a process death — o
- * app morre no meio do upload e a linha ficaria mentindo — e `FAILED` não existe porque uma falha
- * não encerra a tentativa: ela continua [PENDING], recuperável, com [BackupAttemptEntity.attemptCount]
- * e [BackupAttemptEntity.failureReason] contando o que houve.
+ * `UPLOADING` não existe de propósito: seria um estado que não sobrevive a process death — o app
+ * morre no meio do upload e a linha ficaria mentindo. E `FAILED` não existe porque a maioria das
+ * falhas **não** encerra a tentativa: sem rede, com o servidor fora do ar ou com a sessão expirada,
+ * ela continua [PENDING], recuperável, com [BackupAttemptEntity.attemptCount] e
+ * [BackupAttemptEntity.failureReason] contando o que houve.
+ *
+ * O terceiro valor cobre o caso que faltava (auditoria 2026-09-12): a recusa **definitiva**.
  */
 enum class BackupAttemptStatus {
     /** Criada e ainda não confirmada pelo servidor. Pode (e deve) ser reenviada. */
     PENDING,
 
     /** O servidor confirmou. A Outbox coberta já pôde ser baseline. */
-    SUCCEEDED
+    SUCCEEDED,
+
+    /**
+     * O servidor recusou estes bytes de um jeito que reenviá-los **não** resolve.
+     *
+     * Snapshot grande demais (413), contrato violado (4xx), colisão de `clientBackupId` com
+     * conteúdo diferente (409) ou destino inexistente (404). A tentativa é imutável por desenho, e
+     * um retry manda exatamente os mesmos bytes: insistir produziria a mesma recusa para sempre —
+     * e, como `oldestPendingFor` sempre reaproveita a pendente mais antiga, o usuário ficava
+     * **impedido de fazer qualquer backup novo**, que é um preço muito maior do que o da falha.
+     *
+     * Encerrar não apaga nada: o payload, o corte da Outbox e o motivo continuam na linha, para
+     * diagnóstico. O que muda é que a próxima operação captura um estado novo em vez de reenviar
+     * um que já foi recusado.
+     */
+    ABANDONED
 }
 
 @Dao
@@ -200,6 +218,25 @@ interface BackupAttemptDao {
         """
     )
     suspend fun markFailed(id: Long, reason: String, now: Long)
+
+    /**
+     * Encerra a tentativa: estes bytes foram recusados e não voltam (ver [BackupAttemptStatus.ABANDONED]).
+     *
+     * O `UPDATE` não toca em [BackupAttemptEntity.payload], [BackupAttemptEntity.payloadHash] nem
+     * em [BackupAttemptEntity.coveredOutboxSequence] — a tentativa continua imutável e auditável.
+     * A Outbox também não é tocada: nada subiu, então nada foi coberto.
+     */
+    @Query(
+        """
+        UPDATE backup_attempts
+        SET status = 'ABANDONED',
+            attemptCount = attemptCount + 1,
+            lastAttemptAt = :now,
+            failureReason = :reason
+        WHERE id = :id
+        """
+    )
+    suspend fun markAbandoned(id: Long, reason: String, now: Long)
 
     @Query("SELECT * FROM backup_attempts ORDER BY id ASC")
     suspend fun all(): List<BackupAttemptEntity>

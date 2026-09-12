@@ -18,7 +18,3 @@ class DefaultFcmTokenProvider : FcmTokenProvider {
         FirebaseMessaging.getInstance().token.await()
     }.getOrNull()
 }
-
-class FakeFcmTokenProvider(var token: String? = null) : FcmTokenProvider {
-    override suspend fun getToken(): String? = token
-}

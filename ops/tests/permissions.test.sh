@@ -47,6 +47,10 @@ set -euo pipefail
 # A chave HMAC dos tombstones de exclusão de conta (T17.13.1 §4).
 #
 # A imagem declara `ENV NODE_ENV=production`, e produção exige uma chave própria (T17.10 §136).
+#
+# `SOCIAL_MEDIA_ROOT` entra explicitamente desde a T18.3.2: a imagem deixou de embuti-la de
+# propósito (ela satisfazia sozinha o portão de produção que exige um volume declarado), então quem
+# sobe um container passou a declarar onde a mídia mora — aqui, o volume compartilhado do ensaio.
 # Sem ela, os **quatro** containers deste teste morreriam no startup por esse motivo — e os dois
 # controles negativos (§3 "sem group_add" e §4 "credencial ilegível") passariam sem provar nada:
 # eles verificam que o container **não** está rodando, e um container que não sobe por falta de
@@ -147,6 +151,7 @@ docker run -d --name "${PREFIX}-backend" \
   -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
   -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
+  -e SOCIAL_MEDIA_ROOT=/srv/media \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   -e REQUIRE_FIREBASE_ADMIN=true \
@@ -211,6 +216,7 @@ docker run -d --name "${PREFIX}-sem-grupo" \
   -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
   -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
+  -e SOCIAL_MEDIA_ROOT=/srv/media \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   -e REQUIRE_FIREBASE_ADMIN=true \
@@ -237,6 +243,7 @@ docker run -d --name "${PREFIX}-segredo-600" \
   -e "DATABASE_URL=${SPARK_TEST_DATABASE_URL}" \
   -e DELETION_TOMBSTONES_FILE_PATH=/srv/data/deletion_tombstones.tsv \
   -e NODE_ENV=production \
+  -e SOCIAL_MEDIA_ROOT=/srv/media \
   -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_ACCOUNT_DELETION_HMAC_KEY" \
   -e LOG_LEVEL=warn \
   -e REQUIRE_FIREBASE_ADMIN=true \

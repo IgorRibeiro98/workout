@@ -15,9 +15,11 @@
 
 services:
   caddy:
-    # Versão fixada: um proxy que se atualiza sozinho é um proxy que muda de comportamento sem
-    # deploy. Subir a versão é uma alteração neste arquivo, revisada como qualquer outra.
-    image: caddy:2.10-alpine
+    # Versão fixada até o **patch** (T18.3.2): um proxy que se atualiza sozinho é um proxy que muda
+    # de comportamento sem deploy — e `caddy:2.10-alpine` andava a cada correção da série 2.10,
+    # apesar do comentário que dizia o contrário. Subir a versão é uma alteração neste arquivo,
+    # revisada como qualquer outra.
+    image: caddy:2.10.2-alpine
     container_name: spark-caddy
     restart: unless-stopped
     ports:

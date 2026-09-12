@@ -16,7 +16,11 @@ import {
 import { SocialContentRateLimiter } from './social-content.rate-limit';
 import { MEDIA_PENDING_TTL_MS } from './social-media.limits';
 import { ImageProcessingError, SocialMediaProcessor } from './social-media.processor';
-import { SocialMediaRepository, type StoredCheckInMedia } from './social-media.repository';
+import {
+  MediaQuotaExceededError,
+  SocialMediaRepository,
+  type StoredCheckInMedia,
+} from './social-media.repository';
 import { ObjectStorageUnavailableError } from '../../object-storage/object-storage.client';
 import { SOCIAL_MEDIA_STORE, contentHashOf, type SocialMediaStore } from './social-media.store';
 import { SocialRepository } from './social.repository';
@@ -142,6 +146,9 @@ export class SocialMediaService {
       throw error;
     });
 
+    // Caminho rápido: recusar **antes** de subir os bytes é o que evita gastar Object Storage com
+    // uma imagem que não vai caber. A decisão final é do `INSERT` (ver abaixo): esta leitura está
+    // fora de transação e, sozinha, duas requisições simultâneas da mesma conta passavam por ela.
     const used = await this.repository.usedBytes(ownerUid);
     if (used + processed.bytes.length > this.config.socialMediaMaxUserBytes) {
       throw WorkoutCheckInErrors.mediaQuotaExceeded();
@@ -186,9 +193,19 @@ export class SocialMediaService {
     };
 
     try {
-      await this.repository.create(media, hashAccountUid(this.config, ownerUid));
+      // O teto é reconferido dentro da transação do `INSERT`, sob o lock por conta do Account
+      // Mutation Fence: é ali que ele deixa de ser check-then-write.
+      await this.repository.create(media, hashAccountUid(this.config, ownerUid), {
+        maxUserBytes: this.config.socialMediaMaxUserBytes,
+      });
     } catch (error) {
       await this.store.remove(storageKey).catch(() => undefined);
+
+      // Perdeu a corrida pelo teto: o objeto que acabou de subir já foi removido acima, e a
+      // resposta é a mesma do caminho rápido.
+      if (error instanceof MediaQuotaExceededError) {
+        throw WorkoutCheckInErrors.mediaQuotaExceeded();
+      }
 
       // A conta foi excluída durante o processamento da imagem, entre o `BearerAuthGuard` e este
       // `INSERT` (T18.1.1 §2): o Account Mutation Fence recusou a escrita, e o objeto que acabou de

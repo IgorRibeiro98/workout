@@ -156,7 +156,20 @@ if [ "$INSTALL" -eq 0 ]; then
 fi
 
 # --- instalação em produção ----------------------------------------------------------------
-compose_running && fail "o backend está de pé; pare-o antes de instalar (docker compose down)"
+# A trava do `--install`: o backend precisa estar **provadamente** parado (T18.3.2).
+#
+# `unknown` é recusa, não permissão. Restaurar com o backend de pé significa um processo escrevendo
+# no banco enquanto o `pg_restore --clean` o recria — e "não consegui perguntar se ele está de pé"
+# nunca é motivo para arriscar isso. O operador que sabe o que está fazendo aponta
+# `SPARK_COMPOSE_DIR`/`SPARK_COMPOSE_FILE` para a pilha certa, ou para o backend à mão.
+case "$( compose_state )" in
+  running)
+    fail "o backend está de pé; pare-o antes de instalar (docker compose down)"
+    ;;
+  unknown)
+    fail "não foi possível confirmar que o backend está parado (Compose em ${SPARK_COMPOSE_DIR} inacessível: diretório, .env ou permissão do Docker). A restauração NÃO começou — confirme com 'docker compose -f ${SPARK_COMPOSE_FILE} ps' e repita."
+    ;;
+esac
 require_database_url
 PRODUCTION_URL="$(spark_database_url)"
 # A URL precisa dizer qual banco está sendo restaurado (T18.3 §4): uma connection string sem path

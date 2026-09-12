@@ -53,12 +53,12 @@ import {
  * `deviceId` — metadado de diagnóstico — e **não** tem campo de dono. Conhecer o `deviceId` de
  * outro aparelho não dá acesso a nada.
  *
- * ## Resultado por item, transação por item
+ * ## Resultado por item, isolamento por item
  *
- * Cada mutação é julgada e aplicada sozinha, na própria transação. Um lote não é atômico de
- * propósito: as mutações da Outbox são independentes entre si (agregados diferentes), e recusar
- * as quatro válidas porque a quinta ficou stale faria o aparelho reenviar tudo para sempre. O que
- * **é** atômico é cada aplicação — entidade, mudança e ledger, ou nada.
+ * Cada mutação é julgada e aplicada sozinha, no próprio `SAVEPOINT` dentro da transação do push.
+ * Um lote não é atômico de propósito: as mutações da Outbox são independentes entre si (agregados
+ * diferentes), e recusar as quatro válidas porque a quinta ficou stale faria o aparelho reenviar
+ * tudo para sempre. O que **é** atômico é cada aplicação — entidade, mudança e ledger, ou nada.
  */
 @Injectable()
 export class SyncService {
@@ -86,14 +86,12 @@ export class SyncService {
 
     const startedAt = Date.now();
     const request = parsePushRequest(rawBody);
-    const results: SyncMutationResult[] = [];
 
     // Em ordem: a Outbox despacha por `id` crescente, e duas mutações do mesmo agregado precisam
     // chegar na ordem em que a intenção nasceu. Aplicar a segunda antes da primeira produziria
-    // uma revision que descreve um estado intermediário abandonado.
-    for (const mutation of request.mutations) {
-      results.push(await this.applyOne(principal.uid, request.deviceId, mutation));
-    }
+    // uma revision que descreve um estado intermediário abandonado. Quem aplica é o repositório,
+    // numa transação com um savepoint por mutação — o lote continua não sendo atômico.
+    const results = await this.applyAll(principal.uid, request.deviceId, request.mutations);
 
     this.logger.info('sync.push', {
       requestId,
@@ -123,7 +121,9 @@ export class SyncService {
     this.assertWithinRateLimit(principal.uid);
 
     const startedAt = Date.now();
-    const maxSeq = await this.repository.maxSequence();
+    // O teto do cursor é o da **conta**, e não o do servidor: o global vazava quantas mudanças
+    // todas as contas somadas já produziram, descobrível por busca binária sobre "aceito/recusado".
+    const maxSeq = await this.repository.maxSequenceForOwner(principal.uid);
     const oldestSeq = await this.repository.oldestSequence(principal.uid);
     const cursor = parseCursor(rawCursor, maxSeq, oldestSeq);
     const limit = parseLimit(rawLimit);
@@ -221,16 +221,16 @@ export class SyncService {
     }
   }
 
-  private async applyOne(
+  private async applyAll(
     ownerUid: string,
     deviceId: string,
-    mutation: ParsedMutation,
-  ): Promise<SyncMutationResult> {
+    mutations: readonly ParsedMutation[],
+  ): Promise<SyncMutationResult[]> {
     try {
-      return await this.repository.executeAtomicMutation(
+      return await this.repository.executeAtomicMutations(
         ownerUid,
         deviceId,
-        mutation,
+        mutations,
         Date.now(),
         hashAccountUid(this.config, ownerUid),
       );

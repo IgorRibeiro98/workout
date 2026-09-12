@@ -242,15 +242,19 @@ class BackupRepository(
 
             BackupUploadResult.NotConfigured -> BackupOperation.NotConfigured
 
-            BackupUploadResult.NotFound -> fail(attempt, "NOT_FOUND") {
+            // As três abaixo são recusas **destes bytes**, não indisponibilidade. A tentativa é
+            // imutável, então reenviá-la produziria a mesma resposta indefinidamente — e, como
+            // `runBackup` sempre reaproveita a pendente mais antiga, o usuário ficava sem poder
+            // fazer backup nenhum. Encerrar a tentativa é o que devolve a ele a próxima.
+            BackupUploadResult.NotFound -> abandon(attempt, "NOT_FOUND") {
                 BackupOperation.Rejected("NOT_FOUND")
             }
 
-            is BackupUploadResult.Conflict -> fail(attempt, result.code ?: "CONFLICT") {
+            is BackupUploadResult.Conflict -> abandon(attempt, result.code ?: "CONFLICT") {
                 BackupOperation.Rejected(result.code)
             }
 
-            is BackupUploadResult.Rejected -> fail(attempt, result.code ?: "REJECTED") {
+            is BackupUploadResult.Rejected -> abandon(attempt, result.code ?: "REJECTED") {
                 BackupOperation.Rejected(result.code)
             }
         }
@@ -300,6 +304,26 @@ class BackupRepository(
         result: () -> BackupOperation
     ): BackupOperation {
         attemptDao.markFailed(attempt.id, reason, clock())
+        return result()
+    }
+
+    /**
+     * A tentativa é encerrada: o servidor recusou **estes** bytes.
+     *
+     * A diferença para [fail] é o que acontece depois. Uma falha recuperável quer o mesmo snapshot
+     * de novo — é o que torna uma resposta perdida inofensiva. Uma recusa definitiva quer o
+     * contrário: o mesmo snapshot seria recusado de novo, e o que o usuário precisa é de uma
+     * tentativa nova, capturada do estado atual.
+     *
+     * Continua não havendo retry automático: a próxima tentativa nasce quando **ele** pedir outro
+     * backup. E nada local é perdido — a Outbox não foi liberada, porque nada subiu.
+     */
+    private suspend fun abandon(
+        attempt: BackupAttemptEntity,
+        reason: String,
+        result: () -> BackupOperation
+    ): BackupOperation {
+        attemptDao.markAbandoned(attempt.id, reason, clock())
         return result()
     }
 }

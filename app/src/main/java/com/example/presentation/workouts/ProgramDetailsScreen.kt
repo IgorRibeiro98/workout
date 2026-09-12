@@ -32,6 +32,7 @@ import androidx.compose.ui.res.stringResource
 import com.example.R
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,11 +41,11 @@ fun ProgramDetailsScreen(
     onNavigateBack: () -> Unit,
     onTemplateClick: (Long) -> Unit
 ) {
-    val program by viewModel.program.collectAsState()
-    val templates by viewModel.templates.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
-    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
+    val program by viewModel.program.collectAsStateWithLifecycle()
+    val templates by viewModel.templates.collectAsStateWithLifecycle()
+    // A preferência de vibração vem da ViewModel: a tela não lê o `SettingsManager` do
+    // `MainApplication` (§3).
+    val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
     
     var showAddTemplateDialog by remember { mutableStateOf(false) }
     var templateToDelete by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
@@ -73,7 +74,8 @@ fun ProgramDetailsScreen(
             }
         }
     ) { innerPadding ->
-        if (program != null) {
+        val currentProgram = program
+        if (currentProgram != null) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -82,7 +84,7 @@ fun ProgramDetailsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    val p = program!!
+                    val p = currentProgram
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -167,9 +169,10 @@ fun ProgramDetailsScreen(
                                 Spacer(modifier = Modifier.width(16.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = template.name, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                                    if (!template.dayOfWeek.isNullOrBlank()) {
+                                    val dayOfWeek = template.dayOfWeek
+                                    if (!dayOfWeek.isNullOrBlank()) {
                                         Spacer(modifier = Modifier.height(2.dp))
-                                        Text(text = template.dayOfWeek!!, color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                        Text(text = dayOfWeek, color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,8 +191,9 @@ fun ProgramDetailsScreen(
         }
     }
 
-    if (activeTemplateForSheet != null) {
-        val template = activeTemplateForSheet!!
+    val sheetTemplate = activeTemplateForSheet
+    if (sheetTemplate != null) {
+        val template = sheetTemplate
         ActionBottomSheet(
             onDismissRequest = { activeTemplateForSheet = null },
             title = stringResource(id = R.string.sheet_template_options),
@@ -265,7 +269,7 @@ fun ProgramDetailsScreen(
                     )
                     Text("Dia da semana sugerido:", color = TextSecondary, fontSize = 12.sp)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(days) { day ->
+                        items(days, key = { it }) { day ->
                             val isSelected = day == selectedDay
                             Box(
                                 modifier = Modifier

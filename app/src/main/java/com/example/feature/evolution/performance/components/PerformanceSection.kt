@@ -48,9 +48,9 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import com.example.feature.evolution.performance.PerformanceViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun PerformanceSection(
@@ -58,7 +58,7 @@ fun PerformanceSection(
     modifier: Modifier = Modifier,
     testTag: String = "performance_section"
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     PerformanceSection(
         uiState = uiState,
         onRetry = { viewModel.loadPerformance() },

@@ -18,8 +18,9 @@
 # O dump é restaurado em `SPARK_DRILL_DATABASE_URL` — um banco **separado**, que o operador cria
 # para isto (`CREATE DATABASE spark_drill`, ou um branch no Neon) e pode apagar depois. O script
 # recusa rodar se ele for o mesmo banco de produção: um ensaio que sobrescrevesse produção seria o
-# desastre que ele existe para prevenir. O conteúdo anterior do banco descartável é substituído
-# (`--clean --if-exists`): ele é do ensaio, e só do ensaio.
+# desastre que ele existe para prevenir. O conteúdo anterior do banco descartável é **apagado**
+# (`DROP SCHEMA public CASCADE`) antes da restauração: ele é do ensaio, e só do ensaio — e restaurar
+# num destino limpo é o mesmo critério do runner de DR (T18.3.2).
 #
 # Sobe o backend real sobre o banco restaurado, em uma porta separada, e exige `/health/ready` —
 # é o mesmo processo de produção lendo o mesmo conteúdo que uma recuperação de verdade produziria.
@@ -120,14 +121,33 @@ MEDIA_ROOT_MARKER="$(find "${DRILL_DIR}/restored" -type d -name checkins 2> /dev
 
 # --- 2. restaurar o conteúdo no banco descartável ------------------------------------------
 #
-# As mesmas opções de `restore.sh --install`: é a restauração de verdade, só que no banco do
-# ensaio. Uma opção que só existisse aqui faria o ensaio provar um caminho que a produção não usa.
+# ## Destino limpo, o mesmo critério do runner de DR (T18.3.2)
+#
+# Havia duas definições diferentes de "restaurado" no repositório: este ensaio restaurava com
+# `--clean --if-exists` sobre o que já estivesse no banco, enquanto o runner de DR
+# (`backend/src/dr/pg-tools.ts`) exige um destino **vazio** justamente porque `--clean` só recria o
+# que está *no dump* — um objeto que o banco ganhou depois do snapshot sobrevive, e a
+# `schema_migrations` restaurada deixa de descrevê-lo (`ops/tests/restore-old-snapshot-risk.test.sh`).
+# Um ensaio que aprova por um critério mais frouxo que o da recuperação real não prova a recuperação
+# real. Aqui o schema é recriado do zero antes do `pg_restore`, e o `pg_restore` roda com exatamente
+# as mesmas opções do runner.
+#
+# O banco já foi provado descartável acima (`same_postgres_database` recusa produção), e é isso que
+# torna seguro apagá-lo: sem aquela verificação, esta linha seria o desastre que o ensaio existe
+# para prevenir.
 RESTORED_DIR="$(cd "$(dirname "$RESTORED")" && pwd)"
 RESTORED_NAME="$(basename "$RESTORED")"
-log "restaurando o dump no banco descartável (transação única)"
+log "preparando o destino: recriando o schema público do banco descartável"
 pg_run "$DRILL_URL" "
   set -e
-  pg_restore -d \"\$SPARK_PG_CONN\" --clean --if-exists --no-owner --no-privileges \\
+  psql -d \"\$SPARK_PG_CONN\" -X -q -v ON_ERROR_STOP=1 \\
+    -c 'DROP SCHEMA IF EXISTS public CASCADE' -c 'CREATE SCHEMA public'
+" || fail "não foi possível limpar o banco descartável; o ensaio NÃO começou"
+
+log "restaurando o dump no banco descartável (transação única, destino limpo)"
+pg_run "$DRILL_URL" "
+  set -e
+  pg_restore -d \"\$SPARK_PG_CONN\" --no-owner --no-privileges \\
     --single-transaction --exit-on-error '/restore/${RESTORED_NAME}'
 " -v "${RESTORED_DIR}:/restore:ro" \
   || fail "pg_restore falhou no banco descartável: o dump não restaura"

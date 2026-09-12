@@ -147,11 +147,16 @@ Room
 
 ### Important architectural constraint
 
-Older concepts such as `ExecutionStateMachine`, `ExecutionFlowEngine`, `ExecutionTransitionEngine` or similar may still exist in the repository.
+> **Status (verificado em 2026-09-12):** `ExecutionStateMachine`, `ExecutionFlowEngine` e
+> `ExecutionTransitionEngine` têm **zero ocorrências** em `app/src`. Eles já não existem; o
+> parágrafo abaixo descrevia um cuidado que não tem mais objeto.
 
-Do not assume they remain authoritative.
-
-Before using or extending them, verify whether they are legacy or whether the persisted route/navigation flow already superseded them. Do not let two engines advance the workout independently.
+A regra que **continua** valendo é a generalização dela: não deixe dois motores avançarem o treino
+de forma independente. Hoje a autoridade de execução é `WorkoutEngine` + `ExecutionViewModel` sobre
+as entidades de sessão em Room, e a auditoria de 2026-09-12 encontrou duas violações reais desse
+princípio — uma regra de descanso duplicada entre motor e tela, e três autoridades para a mesma
+notificação de descanso. Ambas foram unificadas. Antes de escrever uma regra de progressão, de
+tempo ou de descanso, procure a implementação existente no motor.
 
 ## 5. Navigation event processing
 

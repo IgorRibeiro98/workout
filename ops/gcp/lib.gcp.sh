@@ -104,9 +104,12 @@ SPARK_DR_MAX_BACKUP_AGE_HOURS="${SPARK_DR_MAX_BACKUP_AGE_HOURS:-24}"
 # O que o deploy faz sem um backup válido dentro da janela: `run-backup` (executa o Job de backup
 # e espera SUCCESS antes da migration — o default) ou `fail` (aborta o deploy). Nunca "segue".
 SPARK_DR_PREDEPLOY_POLICY="${SPARK_DR_PREDEPLOY_POLICY:-run-backup}"
-# Recursos do Job de backup: o dump nasce em tmpfs (conta como memória) e é carregado para o
-# upload — 1 GiB cobre com folga um banco no limiar ACTION_REQUIRED (450 MB) com custom format
-# comprimido. Timeout em segundos.
+# Recursos do Job de backup: o dump nasce em tmpfs (conta como memória) e é carregado inteiro para
+# o upload — ou seja, um dump de N bytes ocupa 2 × N ao mesmo tempo. É esta memória que define o
+# teto `SPARK_DR_MAX_DUMP_BYTES` (256 MiB por default, em `backend/src/config/dr-job-config.ts`):
+# 2 × 256 MiB mais o runtime do Node cabem em 1 GiB. **Subir um exige subir o outro** — e o teto
+# continua ordens de grandeza acima do dump real, já que o limiar mais grave de tamanho do banco é
+# 450 MB e o formato custom é comprimido. Timeout em segundos.
 SPARK_RUN_BACKUP_CPU="${SPARK_RUN_BACKUP_CPU:-1}"
 SPARK_RUN_BACKUP_MEMORY="${SPARK_RUN_BACKUP_MEMORY:-1Gi}"
 SPARK_RUN_BACKUP_TIMEOUT="${SPARK_RUN_BACKUP_TIMEOUT:-1800}"
@@ -137,6 +140,17 @@ SPARK_RUN_MAINTENANCE_CONCURRENCY="${SPARK_RUN_MAINTENANCE_CONCURRENCY:-1}"
 # simultaneamente, então "só um processo" nunca é a suposição certa.
 SPARK_DATABASE_POOL_MIN="${SPARK_DATABASE_POOL_MIN:-0}"
 SPARK_DATABASE_POOL_MAX="${SPARK_DATABASE_POOL_MAX:-5}"
+
+# Os dois tetos de tempo que o Cloud Run torna visíveis, declarados na revision em vez de herdados
+# do default do processo (T18.3.2). Iguais aos defaults de `env.schema.ts` de propósito: o valor é
+# um só, e declará-lo aqui é o que permite ler de uma revision, sem entrar no container, com que
+# janela ela sobe.
+#
+# `DATABASE_CONNECTION_TIMEOUT_MS`: 15 s absorve o cold start do Neon com `min-instances=0`.
+# `SHUTDOWN_TIMEOUT_MS`: 8 s, ABAIXO dos 10 s entre SIGTERM e SIGKILL do Cloud Run — com os dois
+# iguais, o log de shutdown forçado disputava o instante do SIGKILL e nunca era escrito.
+SPARK_DATABASE_CONNECTION_TIMEOUT_MS="${SPARK_DATABASE_CONNECTION_TIMEOUT_MS:-15000}"
+SPARK_SHUTDOWN_TIMEOUT_MS="${SPARK_SHUTDOWN_TIMEOUT_MS:-8000}"
 
 # ---------------------------------------------------------------- helpers
 

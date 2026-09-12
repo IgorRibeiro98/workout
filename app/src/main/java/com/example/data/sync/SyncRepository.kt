@@ -73,6 +73,13 @@ class SyncRepository(
     private val accounts: SyncAccountProvider,
     private val transactions: TransactionRunner,
     /**
+     * Quem gera o `clientMutationId` de uma entrada reenfileirada (ver [requeueIfChangedInFlight]).
+     *
+     * O mesmo ponto de injeção do [SyncMutationCoordinator], para que um teste possa tornar a
+     * identidade determinística sem tornar a produção previsível.
+     */
+    private val idGenerator: IdGenerator = RandomUuidIdGenerator,
+    /**
      * A trava compartilhada com backup e restore (T16.4/T16.5).
      *
      * Os três disputam o mesmo banco. Um ciclo de sync aplicando mudanças remotas no meio de uma
@@ -445,12 +452,18 @@ class SyncRepository(
      * Uma entrada só sai de `PENDING` com resultado confiável. Um resultado ausente, ou um status
      * que este app não conhece, deixa a entrada exatamente como estava: reenviar é barato e
      * seguro; apagar uma alteração que talvez não tenha subido não tem conserto.
+     *
+     * **Uma transação para o lote inteiro.** A semântica por item não muda — cada mutação continua
+     * decidindo sozinha o que acontece com as entradas dela —, e o que sai é a dezena de
+     * transações que um lote de 50 abria e fechava contra o mesmo banco. Uma falha no meio desfaz
+     * o lote inteiro em vez de metade dele, e isso é seguro pelo motivo de sempre: reenviar é
+     * idempotente pelo `clientMutationId`, enquanto confirmar pela metade não teria conserto.
      */
     private suspend fun processResults(
         ownerUid: String,
         batch: List<PreparedMutation>,
         response: SyncPushResponseDto
-    ): ProcessedResults {
+    ): ProcessedResults = transactions.runInTransaction {
         val byId = response.results.associateBy { it.clientMutationId }
         var acknowledged = 0
         var conflicts = 0
@@ -461,30 +474,29 @@ class SyncRepository(
             when (SyncMutationStatus.from(result.status)) {
                 SyncMutationStatus.APPLIED, SyncMutationStatus.ALREADY_APPLIED -> {
                     val revision = result.serverRevision ?: continue
-                    transactions.runInTransaction {
-                        // A revision conhecida e a saída da fila são gravadas juntas: uma sem a
-                        // outra faria o próximo push nascer com `baseRevision` errada.
-                        //
-                        // Uma exclusão confirmada também guarda a revision do **tombstone**: é ela
-                        // que faz o eco daquela mudança, quando ela voltar no pull, ser
-                        // reconhecido em vez de reprocessado.
-                        metadataDao.upsert(
-                            EntitySyncMetadataEntity(
-                                ownerUid = ownerUid,
-                                entityType = mutation.entityType.name,
-                                entitySyncId = mutation.entitySyncId,
-                                lastKnownServerRevision = revision,
-                                lastSyncedPayloadHash = mutation.payloadHash.ifEmpty { null },
-                                lastSyncedAt = now
-                            )
+                    // A revision conhecida e a saída da fila são gravadas juntas: uma sem a
+                    // outra faria o próximo push nascer com `baseRevision` errada.
+                    //
+                    // Uma exclusão confirmada também guarda a revision do **tombstone**: é ela
+                    // que faz o eco daquela mudança, quando ela voltar no pull, ser
+                    // reconhecido em vez de reprocessado.
+                    metadataDao.upsert(
+                        EntitySyncMetadataEntity(
+                            ownerUid = ownerUid,
+                            entityType = mutation.entityType.name,
+                            entitySyncId = mutation.entitySyncId,
+                            lastKnownServerRevision = revision,
+                            lastSyncedPayloadHash = mutation.payloadHash.ifEmpty { null },
+                            lastSyncedAt = now
                         )
-                        outboxDao.acknowledge(ownerUid, mutation.entryIds)
-                        conflictDao.clear(
-                            ownerUid,
-                            mutation.entityType.name,
-                            mutation.entitySyncId
-                        )
-                    }
+                    )
+                    outboxDao.acknowledge(ownerUid, mutation.entryIds)
+                    conflictDao.clear(
+                        ownerUid,
+                        mutation.entityType.name,
+                        mutation.entitySyncId
+                    )
+                    requeueIfChangedInFlight(ownerUid, mutation, now)
                     acknowledged++
                 }
 
@@ -570,7 +582,64 @@ class SyncRepository(
             }
         }
 
-        return ProcessedResults(acknowledged, conflicts)
+        ProcessedResults(acknowledged, conflicts)
+    }
+
+    /**
+     * A alteração feita **enquanto este push estava no ar** volta para a fila (auditoria 2026-09-12).
+     *
+     * ```text
+     * prepare()  monta o payload do treino X   →  hash H1
+     * HTTP sai
+     *            usuário edita X               →  a coalescência reaproveita a entrada PENDING
+     * servidor responde APPLIED
+     * acknowledge()  apaga exatamente aquela entrada
+     * ```
+     *
+     * Sem este passo a edição fica só no Room e nunca mais sobe — até a próxima edição de X, que
+     * pode não existir. Não há estado "em voo" durável para consultar, e isso é decisão
+     * (`SyncContract`): uma linha `IN_FLIGHT` que ninguém sabe destravar depois de um crash seria
+     * pior. O que existe é melhor do que um estado: o **conteúdo**. Se o agregado no Room já não
+     * produz o hash que subiu, há alteração posterior ao envio, e ela precisa de uma entrada nova.
+     *
+     * Só `UPSERT`. Uma exclusão não afirma conteúdo, e recriar o agregado durante o voo já produz
+     * entrada própria — a coalescência nunca atravessa operações diferentes.
+     *
+     * Roda **dentro** da transação que confirma o push: a entrada nova e o `acknowledge` que a
+     * tornou necessária têm um commit só.
+     */
+    private suspend fun requeueIfChangedInFlight(
+        ownerUid: String,
+        mutation: PreparedMutation,
+        now: Long
+    ) {
+        if (mutation.operation != SyncOperation.UPSERT) return
+
+        // `null` = o agregado não existe mais localmente. Quem o apagou registrou o `DELETE`
+        // correspondente; inventar um `UPSERT` de algo que não existe é que seria erro.
+        val current = pushBuilder.currentPayloadHash(mutation.entityType, mutation.entitySyncId)
+            ?: return
+        if (current == mutation.payloadHash) return
+
+        // O usuário pode ter feito algo que já produziu entrada própria (apagar e recriar, por
+        // exemplo). Duas pendentes do mesmo agregado descreveriam a mesma coisa duas vezes.
+        val latest = outboxDao.latestFor(ownerUid, mutation.entityType.name, mutation.entitySyncId)
+        if (latest != null && latest.status == SyncOutboxStatus.PENDING.name) return
+
+        outboxDao.insert(
+            SyncOutboxEntryEntity(
+                // Identidade nova: o `clientMutationId` confirmado descreve o conteúdo que subiu,
+                // e reaproveitá-lo faria o servidor devolver aquele resultado do ledger em vez de
+                // aplicar esta alteração.
+                clientMutationId = idGenerator.newId(),
+                ownerUid = ownerUid,
+                entityType = mutation.entityType.name,
+                entitySyncId = mutation.entitySyncId,
+                operation = SyncOperation.UPSERT.name,
+                status = SyncOutboxStatus.PENDING.name,
+                createdAt = now
+            )
+        )
     }
 
     private suspend fun block(

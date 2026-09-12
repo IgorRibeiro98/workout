@@ -26,6 +26,7 @@ import com.example.feature.evolution.achievements.components.getTierName
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.theme.*
 import java.util.Locale
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private val PtBr = Locale("pt", "BR")
 
@@ -78,20 +79,20 @@ fun ProfileScreen(
     /** T17.11 §131 — Squads, dentro da área Social do Perfil. */
     onNavigateToSquads: () -> Unit = {}
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val explanationState by viewModel.explanationState.collectAsState()
-    val accountState = accountViewModel?.uiState?.collectAsState()?.value
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
+    val accountState = accountViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // Observar o estado é leitura: ele diz o que mostrar, e nenhum backup começa por isso.
-    val backupState = backupViewModel?.uiState?.collectAsState()?.value
+    val backupState = backupViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // Idem para o restore: observar o estado lista nada, baixa nada e restaura nada.
-    val restoreState = restoreViewModel?.uiState?.collectAsState()?.value
+    val restoreState = restoreViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // E para o sync: observar o estado não dispara ciclo nenhum.
-    val syncState = syncViewModel?.uiState?.collectAsState()?.value
+    val syncState = syncViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // E para o social: observar o estado é leitura. Ele não ativa recursos sociais, não cria
     // identidade e não envia nada — a ativação exige dois toques explícitos.
-    val socialState = socialViewModel?.uiState?.collectAsState()?.value
+    val socialState = socialViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // E para o grafo: observar o estado não carrega nada.
-    val friendsState = friendsViewModel?.uiState?.collectAsState()?.value
+    val friendsState = friendsViewModel?.uiState?.collectAsStateWithLifecycle()?.value
 
     // A leitura do grafo acontece quando o Perfil abre **com o perfil social ativo** — é o que
     // permite mostrar "3 amigos · 1 solicitação pendente" sem entrar na lista. Ela é uma leitura:

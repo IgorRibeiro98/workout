@@ -42,6 +42,12 @@ class SparkBackendClient(
         httpClient ?: OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            // Teto de **ponta a ponta**, que os dois acima não dão: `connectTimeout` e
+            // `readTimeout` medem operações de socket e não cobrem o tempo gasto dentro de um
+            // interceptor. O `SparkAuthInterceptor` pede o ID Token ali dentro, e uma chamada
+            // presa lá seguraria a thread — e, com ela, o `Mutex` do sync e a `CloudOperationLock`
+            // — sem que nenhum timeout de socket jamais disparasse.
+            .callTimeout(callTimeoutSecondsFor(READ_TIMEOUT_SECONDS), TimeUnit.SECONDS)
             // Nenhum `HttpLoggingInterceptor` neste cliente: ele imprimiria o header
             // `Authorization` no Logcat, inclusive em debug.
             .addInterceptor(SparkAuthInterceptor(tokens))
@@ -287,7 +293,14 @@ class SparkBackendClient(
         if (readTimeoutSeconds == null) {
             client
         } else {
-            client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build()
+            client.newBuilder()
+                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+                // O teto de ponta a ponta acompanha o de leitura. Sem isto, o `callTimeout` do
+                // cliente base (calculado para 20 s de leitura) cortaria a chamada do Coach antes
+                // dos 75 s que ela tem direito de esperar — e a cadeia da T18.3.1 deixaria de
+                // valer justamente na camada que ela existe para proteger.
+                .callTimeout(callTimeoutSecondsFor(readTimeoutSeconds), TimeUnit.SECONDS)
+                .build()
         }
 
     /**
@@ -433,5 +446,27 @@ class SparkBackendClient(
         const val CONNECT_TIMEOUT_SECONDS = 10L
         const val READ_TIMEOUT_SECONDS = 20L
         const val DOWNLOAD_BUFFER_BYTES = 16 * 1024
+
+        /**
+         * Folga do teto de ponta a ponta sobre a soma das etapas que ele cobre.
+         *
+         * O `callTimeout` é a **última** linha, e precisa ser maior que qualquer etapa interna:
+         * se ele disparar primeiro, o erro que chega ao app é genérico em vez do erro específico
+         * (token indisponível, leitura estourada) que a etapa teria produzido.
+         */
+        const val CALL_TIMEOUT_MARGIN_SECONDS = 10L
+
+        /**
+         * O teto de ponta a ponta para um dado teto de leitura.
+         *
+         * `conexão + leitura + obtenção do token + folga`. A parcela do token existe porque ela é
+         * gasta **dentro** do interceptor, antes de qualquer byte sair — é justamente o tempo que
+         * `connectTimeout` e `readTimeout` não enxergam.
+         */
+        fun callTimeoutSecondsFor(readTimeoutSeconds: Long): Long =
+            CONNECT_TIMEOUT_SECONDS +
+                readTimeoutSeconds +
+                (SparkAuthInterceptor.TOKEN_TIMEOUT_MILLIS / 1_000L) +
+                CALL_TIMEOUT_MARGIN_SECONDS
     }
 }

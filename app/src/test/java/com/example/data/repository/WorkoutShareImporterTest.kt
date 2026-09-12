@@ -8,6 +8,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.local.AppDatabase
 import com.example.data.local.ExerciseEntity
 import com.example.data.local.WorkoutProgramEntity
+import com.example.data.local.WorkoutShareImportReceiptEntity
+import com.example.data.local.WorkoutShareReceiptDao
+import com.example.data.sync.RoomTransactionRunner
+import com.example.data.sync.SyncMutationCoordinator
 import com.example.domain.social.SharedExerciseSnapshot
 import com.example.domain.social.SharedWorkoutSnapshot
 import com.example.domain.social.WorkoutShareDetail
@@ -237,6 +241,118 @@ class WorkoutShareImporterTest {
 
         // Nenhum recibo ou template criado
         assertNull(database.workoutShareReceiptDao().findReceipt("share-uuid-missing"))
+    }
+
+    // ------------------------------------------------------------------- atomicidade (T17.7)
+
+    @Test
+    fun `interrupcao entre o treino e o recibo nao deixa treino orfao`() = runTest {
+        seedCatalogExercise("Supino Reto", "cat-bench")
+        val programId = seedProgram()
+
+        // O recibo é a idempotência desta importação. Sem transação, um treino gravado **sem** ele
+        // fazia reabrir a oferta criar um segundo treino ao lado do primeiro — e assim por diante.
+        val receipts = FailingReceiptDao(database.workoutShareReceiptDao())
+        val transactional = WorkoutShareImporter(
+            workoutRepository = transactionalRepository(),
+            receiptDao = receipts,
+            gateway = fakeGateway,
+            clock = { 1700000000000L }
+        )
+
+        val snapshot = SharedWorkoutSnapshot(
+            snapshotVersion = 1,
+            name = "Treino A Compartilhado",
+            shortIdentifier = "A",
+            exercises = listOf(
+                SharedExerciseSnapshot(
+                    canonicalExerciseId = "cat-bench",
+                    sortOrder = 0,
+                    targetSets = 4,
+                    minReps = 8,
+                    maxReps = 10,
+                    restDurationSeconds = 90
+                )
+            )
+        )
+
+        val failed = runCatching { transactional.importShare("share-atomico", snapshot, programId) }
+
+        // A asserção é sobre o **estado do banco**, não sobre qual exceção subiu: é o estado que a
+        // próxima abertura do app vai encontrar.
+        assertTrue("a falha do recibo precisa desfazer a importação", failed.isFailure)
+        assertEquals(1, receipts.attempts)
+        assertEquals(
+            "nenhum treino pela metade pode sobreviver",
+            emptyList<String>(),
+            database.workoutDao().getTemplatesForProgramSync(programId).map { it.name }
+        )
+        assertNull(database.workoutShareReceiptDao().findReceipt("share-atomico"))
+
+        // Reabrir a oferta depois disso importa **uma** vez, e não duas.
+        receipts.failing = false
+        val retry = transactional.importShare("share-atomico", snapshot, programId)
+        assertTrue(retry is WorkoutShareImportResult.Success)
+        assertEquals(1, database.workoutDao().getTemplatesForProgramSync(programId).size)
+    }
+
+    @Test
+    fun `o treino, os exercicios e o recibo entram juntos`() = runTest {
+        seedCatalogExercise("Supino Reto", "cat-bench")
+        seedCatalogExercise("Tríceps Corda", "cat-triceps")
+        val programId = seedProgram()
+
+        val transactional = WorkoutShareImporter(
+            workoutRepository = transactionalRepository(),
+            receiptDao = database.workoutShareReceiptDao(),
+            gateway = fakeGateway,
+            clock = { 1700000000000L }
+        )
+
+        val snapshot = SharedWorkoutSnapshot(
+            snapshotVersion = 1,
+            name = "Treino completo",
+            shortIdentifier = "C",
+            exercises = listOf(
+                SharedExerciseSnapshot("cat-bench", 0, 4, 8, 10, 90),
+                SharedExerciseSnapshot("cat-triceps", 1, 3, 12, 15, 60)
+            )
+        )
+
+        val result = transactional.importShare("share-ok", snapshot, programId)
+        val templateId = (result as WorkoutShareImportResult.Success).localTemplateId
+
+        assertEquals(2, database.workoutDao().getTemplateExercisesWithDetails(templateId).size)
+        assertEquals(
+            templateId,
+            database.workoutShareReceiptDao().findReceipt("share-ok")?.importedTemplateLocalId
+        )
+    }
+
+    /** O mesmo repositório, com transação de verdade — como o app o monta. */
+    private fun transactionalRepository() = WorkoutRepository(
+        database.workoutDao(),
+        syncMutations = SyncMutationCoordinator(
+            transactions = RoomTransactionRunner(database),
+            outboxDao = database.syncOutboxDao(),
+            scopeProvider = com.example.data.sync.CloudSyncScopeProvider.Disabled
+        )
+    )
+
+    /** Um DAO de recibos que recusa a gravação, para provocar a falha exatamente no passo 7. */
+    private class FailingReceiptDao(
+        private val real: WorkoutShareReceiptDao,
+        var failing: Boolean = true
+    ) : WorkoutShareReceiptDao by real {
+
+        var attempts: Int = 0
+            private set
+
+        override suspend fun insertReceipt(receipt: WorkoutShareImportReceiptEntity) {
+            attempts++
+            if (failing) error("recibo indisponível")
+            real.insertReceipt(receipt)
+        }
     }
 
     @Test

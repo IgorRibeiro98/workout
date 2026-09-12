@@ -9,6 +9,7 @@ import com.example.data.backup.CloudDataBindingDao
 import com.example.data.backup.CloudDataBindingEntity
 import com.example.data.local.AchievementUnlockEntity
 import com.example.data.local.AppDatabase
+import com.example.data.local.ExerciseUserOverrideEntity
 import com.example.data.local.GamificationEventEntity
 import com.example.data.local.PRType
 import com.example.data.local.PersonalRecordEntity
@@ -25,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -382,6 +384,96 @@ class RestoreTransactionTest {
             "nenhuma tentativa de backup nasce durante um restore",
             0,
             database.backupAttemptDao().count()
+        )
+    }
+
+    // --------------------------------------------- foto local do usuário (auditoria 2026-09-12)
+
+    @Test
+    fun `a foto local do exercicio sobrevive ao restore`() = runTest {
+        RestoreDatasetFixture.seedPersonalData(database)
+        val dao = database.workoutDao()
+        val supino = dao.getExerciseByCanonicalId(RestoreDatasetFixture.CANONICAL_SUPINO)!!
+        val custom = dao.getExerciseBySyncId(RestoreDatasetFixture.CUSTOM_EXERCISE_SYNC_ID)!!
+
+        // Duas formas de customização, e as duas precisam manter a foto:
+        //  - uma com conteúdo portátil (apelido), que **entra** no snapshot;
+        //  - uma só com foto, que o backup descarta por não ter nada portátil dentro.
+        dao.insertOrUpdateOverride(
+            ExerciseUserOverrideEntity(
+                exerciseId = supino.id,
+                displayName = "Supino do canto",
+                customPhotoUri = "content://media/external/images/1",
+                updatedAt = 1_700_000_000_000L
+            )
+        )
+        dao.insertOrUpdateOverride(
+            ExerciseUserOverrideEntity(
+                exerciseId = custom.id,
+                customPhotoUri = "content://media/external/images/2",
+                updatedAt = 1_700_000_000_000L
+            )
+        )
+
+        val backup = harness.api.publish(harness.canonicalSnapshotOfCurrentState())
+        restore(backup)
+
+        // `content://` é um endereço **deste** aparelho: ele nunca viajou no snapshot, e por isso o
+        // restore precisa preservá-lo por fora dele em vez de gravar `null` por cima.
+        val restoredSupino = dao.getExerciseByCanonicalId(RestoreDatasetFixture.CANONICAL_SUPINO)!!
+        assertEquals(
+            "content://media/external/images/1",
+            dao.getOverrideForExercise(restoredSupino.id)?.customPhotoUri
+        )
+        assertEquals(
+            "a customização restaurada não perde o apelido",
+            "Supino do canto",
+            dao.getOverrideForExercise(restoredSupino.id)?.displayName
+        )
+
+        // O exercício personalizado tem `localId` novo: a foto é reencontrada pela identidade
+        // portátil (`syncId`), nunca pelo número da linha do aparelho de origem.
+        val restoredCustom = dao.getExerciseBySyncId(RestoreDatasetFixture.CUSTOM_EXERCISE_SYNC_ID)!!
+        assertEquals(
+            "uma customização só com foto não entra no backup, e é justamente a mais comum",
+            "content://media/external/images/2",
+            dao.getOverrideForExercise(restoredCustom.id)?.customPhotoUri
+        )
+    }
+
+    @Test
+    fun `foto de exercicio que o backup nao contem nao vira customizacao orfa`() = runTest {
+        RestoreDatasetFixture.seedPersonalData(database)
+        val dao = database.workoutDao()
+        val custom = dao.getExerciseBySyncId(RestoreDatasetFixture.CUSTOM_EXERCISE_SYNC_ID)!!
+        dao.insertOrUpdateOverride(
+            ExerciseUserOverrideEntity(
+                exerciseId = custom.id,
+                customPhotoUri = "content://media/external/images/9",
+                updatedAt = 1_700_000_000_000L
+            )
+        )
+
+        // Um backup vazio: o exercício personalizado deixa de existir aqui. Sem linha a que
+        // anexá-la, a foto é descartada — e não pode virar customização apontando para nada.
+        restore(harness.api.publish(minimalSnapshotBody()))
+
+        assertNull(
+            "o exercício pessoal não está no backup vazio",
+            dao.getExerciseBySyncId(RestoreDatasetFixture.CUSTOM_EXERCISE_SYNC_ID)
+        )
+
+        // O que sobra é só a foto do exercício de **catálogo** — que continua existindo, porque o
+        // restore não apaga catálogo. Nenhuma customização órfã foi criada.
+        val supinoId = dao.getExerciseByCanonicalId(RestoreDatasetFixture.CANONICAL_SUPINO)!!.id
+        assertEquals(listOf(supinoId), dao.getAllOverrides().map { it.exerciseId })
+        assertEquals(
+            "content://media/external/images/42",
+            dao.getAllOverrides().single().customPhotoUri
+        )
+        assertNull(
+            "um backup vazio não traz apelido nenhum: sobra só a foto local",
+            dao.getAllOverrides().single().displayName
         )
     }
 

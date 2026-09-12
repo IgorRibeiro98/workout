@@ -5,9 +5,26 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+
+/**
+ * O arquivo da **identidade da instalação**, separado de `settings` (auditoria 2026-09-12).
+ *
+ * Existe por um motivo só: `settings` entra no Auto Backup do Android, e o `deviceId` não pode. Um
+ * aparelho novo restaurado do backup de um antigo nascia com o **mesmo** `deviceId` — e, com ele, o
+ * mesmo cursor de sync e o mesmo vínculo de nuvem. Dois aparelhos se passando por um só é
+ * exatamente o que a T16.6 assume que não acontece.
+ *
+ * O nome do arquivo é contrato com `res/xml/backup_rules.xml` e `res/xml/data_extraction_rules.xml`,
+ * que são uma **lista de inclusão**: só `datastore/settings.preferences_pb` viaja, e este arquivo
+ * fica de fora por não estar lá. Renomeá-lo é seguro; movê-lo de volta para `settings` não é.
+ */
+private val Context.syncDeviceDataStore: DataStore<Preferences>
+        by preferencesDataStore(name = "sync_device")
 
 class SettingsManager(private val context: Context) {
     companion object {
@@ -50,6 +67,9 @@ class SettingsManager(private val context: Context) {
         //
         // Estado da **instalação**, não do domínio. Por isso mora no DataStore e não no Room: não
         // é dado do usuário, não entra em backup e não sincroniza.
+        //
+        // A chave é a mesma; o **arquivo** mudou (ver [syncDeviceDataStore]). Ela continua
+        // declarada aqui porque a adoção do valor legado precisa lê-la de `settings`.
         val DEVICE_ID = stringPreferencesKey("device_id")
     }
 
@@ -58,15 +78,42 @@ class SettingsManager(private val context: Context) {
      *
      * Nulo até alguém pedir — quem cria é o `DeviceIdProvider`, na primeira necessidade real, e
      * não a abertura do app.
+     *
+     * Lê **só** o arquivo `sync_device`. Uma instalação que ainda tem a identidade no arquivo
+     * antigo vê `null` aqui e cai em [putDeviceIdIfAbsent], que é onde a adoção acontece — e é
+     * assim, e não com um fallback de leitura, porque um fallback permanente manteria de pé
+     * justamente o caminho que faz um `deviceId` restaurado de backup voltar a valer.
      */
-    val deviceIdFlow: Flow<String?> = context.dataStore.data.map { it[DEVICE_ID] }
+    val deviceIdFlow: Flow<String?> =
+        context.syncDeviceDataStore.data.map { it[DEVICE_ID] }.distinctUntilChanged()
 
-    /** Grava o `deviceId` apenas se ainda não existir. A identidade da instalação não é rotativa. */
+    /**
+     * Grava o `deviceId` apenas se ainda não existir. A identidade da instalação não é rotativa.
+     *
+     * Quando o arquivo novo está vazio mas o antigo tem um valor, o valor **antigo** vence: quem já
+     * usava o Spark continua sendo o mesmo aparelho para o servidor, com o mesmo cursor e o mesmo
+     * vínculo. Trocar a identidade numa atualização de app faria todo mundo parecer um aparelho
+     * novo de uma vez.
+     *
+     * E a chave sai de `settings` no mesmo caminho. Não é limpeza estética: enquanto ela estiver
+     * lá, ela viaja no Auto Backup, e a próxima restauração em outro aparelho adotaria o mesmo
+     * `deviceId` de novo — o defeito continuaria existindo, só que uma restauração mais tarde.
+     */
     suspend fun putDeviceIdIfAbsent(deviceId: String): String {
-        var stored = deviceId
-        context.dataStore.edit { prefs ->
+        // Fora do `edit`: a transformação de um `edit` pode ser reexecutada, e ler outro arquivo
+        // dentro dela tornaria o número de leituras imprevisível.
+        val legacy = context.dataStore.data.first()[DEVICE_ID]?.takeIf { it.isNotBlank() }
+
+        var stored = legacy ?: deviceId
+        context.syncDeviceDataStore.edit { prefs ->
             val existing = prefs[DEVICE_ID]
-            if (existing.isNullOrBlank()) prefs[DEVICE_ID] = deviceId else stored = existing
+            if (existing.isNullOrBlank()) prefs[DEVICE_ID] = stored else stored = existing
+        }
+
+        // Depois de a identidade estar a salvo no arquivo novo — nunca antes: apagar primeiro e
+        // morrer no meio perderia a identidade da instalação.
+        if (legacy != null) {
+            context.dataStore.edit { it.remove(DEVICE_ID) }
         }
         return stored
     }
@@ -76,7 +123,8 @@ class SettingsManager(private val context: Context) {
     // snapshot, o corte da Outbox e a tentativa de backup caibam na mesma transação.
     // Ver `com.example.data.backup.CloudDataBindingEntity`.
 
-    val trackingStartedAtFlow: Flow<Long?> = context.dataStore.data.map { it[CONSISTENCY_TRACKING_STARTED_AT] }
+    val trackingStartedAtFlow: Flow<Long?> =
+        context.dataStore.data.map { it[CONSISTENCY_TRACKING_STARTED_AT] }.distinctUntilChanged()
 
     suspend fun setTrackingStartedAt(epochDay: Long) {
         context.dataStore.edit { prefs ->
@@ -84,7 +132,8 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val xpPolicyVersionFlow: Flow<Int> = context.dataStore.data.map { it[XP_POLICY_VERSION] ?: 0 }
+    val xpPolicyVersionFlow: Flow<Int> =
+        context.dataStore.data.map { it[XP_POLICY_VERSION] ?: 0 }.distinctUntilChanged()
 
     suspend fun setXpPolicyVersion(version: Int) {
         context.dataStore.edit { prefs ->
@@ -111,7 +160,7 @@ class SettingsManager(private val context: Context) {
             lastSyncTimestamp = lastSyncAt,
             lastSyncStatus = status
         )
-    }
+    }.distinctUntilChanged()
 
     val integrationSettingsFlow: Flow<IntegrationSettings> = mediaProviderSettingsFlow
 
@@ -144,31 +193,47 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val weeklyGoalFlow: Flow<Int> = context.dataStore.data.map { it[WEEKLY_GOAL] ?: 5 }
-    val useKgFlow: Flow<Boolean> = context.dataStore.data.map { it[USE_KG] ?: true }
-    val hapticEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[HAPTIC_ENABLED] ?: true }
-    val soundEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[SOUND_ENABLED] ?: true }
-    val preAlertEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[PRE_ALERT_ENABLED] ?: true }
-    val keepScreenOnFlow: Flow<Boolean> = context.dataStore.data.map { it[KEEP_SCREEN_ON] ?: true }
-    val autoCheckInFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_IN] ?: true }
-    val autoCheckOutFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CHECK_OUT] ?: true }
-    val showGifsFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_GIFS] ?: true }
-    val showCoachTipFlow: Flow<Boolean> = context.dataStore.data.map { it[SHOW_COACH_TIP] ?: true }
-    val defaultRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_REST_SECONDS] ?: 90 }
-    val defaultExerciseRestSecondsFlow: Flow<Int> = context.dataStore.data.map { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
-    val installedCatalogContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
-    val installedPremiumContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[INSTALLED_PREMIUM_CONTENT_VERSION] ?: 0 }
-    val lastMediaSyncAtFlow: Flow<Long?> = context.dataStore.data.map { it[LAST_MEDIA_SYNC_AT] }
-    val mediaSyncContentVersionFlow: Flow<Int> = context.dataStore.data.map { it[MEDIA_SYNC_CONTENT_VERSION] ?: 0 }
-    val restTimerDeadlineFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_DEADLINE] }
-    val restTimerSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_WORKOUT_SESSION_ID] }
-    val restTimerExerciseSessionIdFlow: Flow<Long?> = context.dataStore.data.map { it[REST_TIMER_EXERCISE_SESSION_ID] }
-    val restTimerTypeFlow: Flow<String?> = context.dataStore.data.map { it[REST_TIMER_TYPE] }
-    val rirRpeEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[RIR_RPE_ENABLED] ?: true }
-    val autoRestTimerOnSetFlow: Flow<Boolean> = context.dataStore.data.map { it[AUTO_REST_TIMER_ON_SET] ?: true }
-    val overrideTemplateIdFlow: Flow<Long?> = context.dataStore.data.map { it[OVERRIDE_TEMPLATE_ID] }
-    val timerNotificationEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[TIMER_NOTIFICATION_ENABLED] ?: true }
-    val exerciseDbV2ApiKeyFlow: Flow<String> = context.dataStore.data.map { it[EXERCISE_DB_V2_API_KEY] ?: "" }
+    /**
+     * Uma preferência derivada do arquivo inteiro, **sem reemitir o que não mudou**.
+     *
+     * `dataStore.data` emite o `Preferences` completo a cada gravação, de qualquer chave: salvar o
+     * estado do cronômetro de descanso fazia `showGifsFlow` emitir, e cada emissão dele
+     * reconstruía o catálogo de exercícios inteiro (`ExerciseResolver.resolveAll`). Como o valor
+     * lido é o mesmo, `distinctUntilChanged` corta a cascata na origem — e cada leitor volta a
+     * reagir só à **sua** preferência.
+     *
+     * Vale para todas: uma que esquecesse o operador seria um caminho de reemissão sobrevivente,
+     * e é por isso que o acesso a preferência derivada passa por aqui e não por `data.map { }`
+     * solto.
+     */
+    private fun <T> preference(read: (Preferences) -> T): Flow<T> =
+        context.dataStore.data.map { read(it) }.distinctUntilChanged()
+
+    val weeklyGoalFlow: Flow<Int> = preference { it[WEEKLY_GOAL] ?: 5 }
+    val useKgFlow: Flow<Boolean> = preference { it[USE_KG] ?: true }
+    val hapticEnabledFlow: Flow<Boolean> = preference { it[HAPTIC_ENABLED] ?: true }
+    val soundEnabledFlow: Flow<Boolean> = preference { it[SOUND_ENABLED] ?: true }
+    val preAlertEnabledFlow: Flow<Boolean> = preference { it[PRE_ALERT_ENABLED] ?: true }
+    val keepScreenOnFlow: Flow<Boolean> = preference { it[KEEP_SCREEN_ON] ?: true }
+    val autoCheckInFlow: Flow<Boolean> = preference { it[AUTO_CHECK_IN] ?: true }
+    val autoCheckOutFlow: Flow<Boolean> = preference { it[AUTO_CHECK_OUT] ?: true }
+    val showGifsFlow: Flow<Boolean> = preference { it[SHOW_GIFS] ?: true }
+    val showCoachTipFlow: Flow<Boolean> = preference { it[SHOW_COACH_TIP] ?: true }
+    val defaultRestSecondsFlow: Flow<Int> = preference { it[DEFAULT_REST_SECONDS] ?: 90 }
+    val defaultExerciseRestSecondsFlow: Flow<Int> = preference { it[DEFAULT_EXERCISE_REST_SECONDS] ?: 120 }
+    val installedCatalogContentVersionFlow: Flow<Int> = preference { it[INSTALLED_CATALOG_CONTENT_VERSION] ?: 0 }
+    val installedPremiumContentVersionFlow: Flow<Int> = preference { it[INSTALLED_PREMIUM_CONTENT_VERSION] ?: 0 }
+    val lastMediaSyncAtFlow: Flow<Long?> = preference { it[LAST_MEDIA_SYNC_AT] }
+    val mediaSyncContentVersionFlow: Flow<Int> = preference { it[MEDIA_SYNC_CONTENT_VERSION] ?: 0 }
+    val restTimerDeadlineFlow: Flow<Long?> = preference { it[REST_TIMER_DEADLINE] }
+    val restTimerSessionIdFlow: Flow<Long?> = preference { it[REST_TIMER_WORKOUT_SESSION_ID] }
+    val restTimerExerciseSessionIdFlow: Flow<Long?> = preference { it[REST_TIMER_EXERCISE_SESSION_ID] }
+    val restTimerTypeFlow: Flow<String?> = preference { it[REST_TIMER_TYPE] }
+    val rirRpeEnabledFlow: Flow<Boolean> = preference { it[RIR_RPE_ENABLED] ?: true }
+    val autoRestTimerOnSetFlow: Flow<Boolean> = preference { it[AUTO_REST_TIMER_ON_SET] ?: true }
+    val overrideTemplateIdFlow: Flow<Long?> = preference { it[OVERRIDE_TEMPLATE_ID] }
+    val timerNotificationEnabledFlow: Flow<Boolean> = preference { it[TIMER_NOTIFICATION_ENABLED] ?: true }
+    val exerciseDbV2ApiKeyFlow: Flow<String> = preference { it[EXERCISE_DB_V2_API_KEY] ?: "" }
 
     suspend fun setTimerNotificationEnabled(enabled: Boolean) {
         context.dataStore.edit { it[TIMER_NOTIFICATION_ENABLED] = enabled }

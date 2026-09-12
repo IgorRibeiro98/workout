@@ -30,9 +30,14 @@ fun XpGainAnimation(
     onAnimationEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isVisible by remember { mutableStateOf(true) }
+    // Mesma razão do `AchievementUnlockFeedback`: a lista de ganhos ativos é percorrida num
+    // `forEach`, e remover o item 0 faz o seguinte cair no slot do anterior. Sem chave ele herdaria
+    // `isVisible = false` e o efeito consumido — ficaria invisível e nunca seria removido, deixando
+    // resíduo permanente na sobreposição. Quem chama envolve a chamada em `key(eventId)`, porque
+    // dois ganhos podem ter exatamente o mesmo valor e motivo.
+    var isVisible by remember(amount, reason) { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(amount, reason) {
         delay(1500)
         isVisible = false
         delay(500) // Wait for exit animation

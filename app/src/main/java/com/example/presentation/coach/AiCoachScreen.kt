@@ -30,7 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +48,7 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * Prova de integração do Coach IA: um botão explícito, um resumo e as sugestões.
@@ -67,8 +67,8 @@ fun AiCoachScreen(
     isSignInAvailable: Boolean = true,
     isSigningIn: Boolean = false
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val explanationState by viewModel.explanationState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
 
     AiCoachScreenContent(
         uiState = uiState,

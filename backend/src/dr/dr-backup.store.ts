@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import type { ObjectStorageClient } from '../object-storage/object-storage.client';
 import { OBJECT_STORAGE_LIST_PAGE_SIZE } from '../object-storage/object-storage.limits';
 import {
@@ -184,6 +185,19 @@ export class DrBackupStore {
 
   async readDump(backupId: string): Promise<Buffer | null> {
     return this.client.read(drDumpObjectName(backupId));
+  }
+
+  /**
+   * O dump recém-gravado como **stream**, para a releitura de verificação (T18.3.2).
+   *
+   * O Job de backup roda com 1 GiB, o dump nasce em tmpfs (que conta como memória) e o upload já
+   * carrega uma cópia: verificar a releitura com `readDump` somava uma terceira. O provider `local`
+   * entrega um `createReadStream` de verdade e economiza essa cópia inteira; o `gcs` ainda baixa o
+   * objeto antes de envolvê-lo num stream, e é por isso que o teto de `SPARK_DR_MAX_DUMP_BYTES`
+   * continua sendo a proteção que precisa caber na memória do Job.
+   */
+  async openDump(backupId: string): Promise<Readable | null> {
+    return this.client.openRead(drDumpObjectName(backupId));
   }
 
   async dumpExists(backupId: string): Promise<boolean> {

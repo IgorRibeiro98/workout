@@ -55,6 +55,11 @@ enum class SyncOperation {
  * recuperável — o reenvio carrega o mesmo `clientMutationId` e volta como `ALREADY_APPLIED`. Um
  * estado "em voo" durável só criaria uma linha que ninguém sabe destravar depois de um crash.
  *
+ * O preço dessa escolha é uma janela real: uma edição feita **durante** o envio é absorvida pela
+ * entrada que está sendo confirmada, e o `acknowledge` a apagaria junto. Quem fecha a janela é o
+ * `SyncRepository`, comparando o hash do agregado no Room com o que subiu e reenfileirando quando
+ * eles divergem — conteúdo, e não estado, que é o que sobrevive a um processo morto no meio.
+ *
  * E continua não existindo `SYNCED`: uma entrada confirmada é **removida**, porque a intenção foi
  * cumprida e guardá-la com um carimbo criaria uma fila que nada mais consome.
  */

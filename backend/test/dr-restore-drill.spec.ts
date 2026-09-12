@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import { SparkLogger } from '../src/common/logger';
+import { loadMigrations } from '../src/database/postgres-migration-runner';
 import { PostgresUrlIdentityError } from '../src/database/postgres-url';
 import { runDrBackup } from '../src/dr/db-backup.runner';
 import {
@@ -29,6 +30,15 @@ import {
   postgresFor,
   type TempDb,
 } from './support/temp-db';
+
+/**
+ * As versões de migration que existem **hoje** no repositório.
+ *
+ * Derivadas, e nunca escritas à mão: o ensaio de restauração afirma "o schema final é o atual", e
+ * um número fixo aqui transformaria toda migration nova numa falha de teste sem defeito nenhum.
+ */
+const SCHEMA_VERSIONS = loadMigrations(MIGRATIONS_DIR).map((migration) => migration.version);
+const CURRENT_SCHEMA_VERSION = SCHEMA_VERSIONS[SCHEMA_VERSIONS.length - 1];
 
 /** A conexão administrativa do ensaio: o banco de manutenção do servidor de teste, nunca `spark_dev`. */
 const ADMIN_URL = withDatabase(
@@ -211,9 +221,9 @@ describe('T18.3 — ensaio de restauração em destino limpo', () => {
 
     expect(result.verdict).toBe('RESTORE_DRILL_PASS');
     expect(result.backupId).toBe(backupId);
-    expect(result.restoredSchemaVersion).toBe(2);
+    expect(result.restoredSchemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(result.migrationsAppliedDuringDrill).toBe(0);
-    expect(result.finalSchemaVersion).toBe(2);
+    expect(result.finalSchemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     expect(result.tables).toBeGreaterThan(30);
     expect(Object.keys(result.essentialCounts).sort()).toEqual([
       'account_deletion_tombstones',
@@ -266,9 +276,9 @@ describe('T18.3 — ensaio de restauração em destino limpo', () => {
     );
     expect(result.verdict).toBe('RESTORE_DRILL_PASS');
     expect(result.restoredSchemaVersion).toBe(1);
-    // A aplicação subiu sobre o snapshot antigo aplicando a migration que faltava (0002).
-    expect(result.migrationsAppliedDuringDrill).toBe(1);
-    expect(result.finalSchemaVersion).toBe(2);
+    // A aplicação subiu sobre o snapshot antigo aplicando as migrations que faltavam.
+    expect(result.migrationsAppliedDuringDrill).toBe(SCHEMA_VERSIONS.length - 1);
+    expect(result.finalSchemaVersion).toBe(CURRENT_SCHEMA_VERSION);
 
     const restored = new Client({ connectionString: withDatabase(ADMIN_URL, drill) });
     await restored.connect();
@@ -280,7 +290,7 @@ describe('T18.3 — ensaio de restauração em destino limpo', () => {
       const versions = await restored.query<{ version: number }>(
         'SELECT version FROM schema_migrations ORDER BY version',
       );
-      expect(versions.rows.map((r) => Number(r.version))).toEqual([1, 2]);
+      expect(versions.rows.map((r) => Number(r.version))).toEqual(SCHEMA_VERSIONS);
     } finally {
       await restored.end();
     }

@@ -4,6 +4,8 @@ import { SparkLogger } from '../../common/logger';
 import { CLOCK, type Clock } from '../../common/clock';
 import { BlockRepository } from './block.repository';
 import { FriendshipRepository } from './friendship.repository';
+import { SocialErrors } from './social.errors';
+import { SocialRepository } from './social.repository';
 import type {
   BlockUserResponseDto,
   ListBlockedUsersResponseDto,
@@ -15,12 +17,30 @@ export class BlockService {
   constructor(
     private readonly blockRepo: BlockRepository,
     private readonly friendshipRepo: FriendshipRepository,
+    private readonly socialRepo: SocialRepository,
     private readonly logger: SparkLogger,
     @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
+  /**
+   * Exige perfil social ativo de quem bloqueia.
+   *
+   * `social_blocks.blocker_uid` referencia `social_profiles(owner_uid)`: sem perfil, o `INSERT`
+   * morria numa violação de chave estrangeira — `500` para uma requisição que o servidor sabia
+   * recusar. A resposta certa é a mesma que toda rota social dá a uma conta sem perfil
+   * (`SOCIAL_NOT_ENABLED`), e ela precisa vir **antes** de qualquer escrita.
+   */
+  private async requireActiveProfile(callerUid: string): Promise<void> {
+    const account = await this.socialRepo.find(callerUid);
+    if (!account || account.profile.status !== 'ACTIVE') {
+      throw SocialErrors.notEnabled();
+    }
+  }
+
   /** Bloqueia um usuário pelo seu socialId público. Operação idempotente. */
   async blockUser(blockerUid: string, blockedSocialId: string): Promise<BlockUserResponseDto> {
+    await this.requireActiveProfile(blockerUid);
+
     const target = await this.friendshipRepo.findProfileBySocialId(blockedSocialId);
     if (!target) {
       throw new NotFoundException('Perfil social não encontrado.');

@@ -139,6 +139,18 @@ export class BearerAuthGuard implements CanActivate {
       });
     }
 
+    // O teto por conta vem **antes** da consulta de tombstone: o `uid` já está disponível (saiu do
+    // token verificado), e a consulta é uma ida ao banco. Um cliente em laço fazia o servidor
+    // consultar `account_deletion_tombstones` a cada requisição só para depois recusá-la por
+    // limite — exatamente o trabalho que o limite existe para não fazer.
+    if (!this.limiter.tryAcquire(principal.uid)) {
+      this.logger.warn('auth.rate_limited', { requestId, uidPrefix: uidPrefix(principal.uid) });
+      throw new HttpException(
+        { code: API_RATE_LIMITED_CODE, message: 'too many requests for this account' },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     // Se a conta já foi excluída, rejeita qualquer operação exceto rotas sob /v1/account.
     if (!isAccountRoutePath(request)) {
       let deleted: boolean;
@@ -163,14 +175,6 @@ export class BearerAuthGuard implements CanActivate {
         });
         throw accountDeletedException();
       }
-    }
-
-    if (!this.limiter.tryAcquire(principal.uid)) {
-      this.logger.warn('auth.rate_limited', { requestId, uidPrefix: uidPrefix(principal.uid) });
-      throw new HttpException(
-        { code: API_RATE_LIMITED_CODE, message: 'too many requests for this account' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
     }
 
     request.principal = principal;

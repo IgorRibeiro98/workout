@@ -26,6 +26,17 @@ export interface StoredGroupMembership {
 }
 
 /**
+ * O alcance de uma varredura de expiração de convites — ver `expirePendingInvitations`.
+ *
+ * Sempre explícito: quem varre precisa dizer **o que** está prestes a ler ou escrever, e não
+ * carimbar a tabela inteira de passagem.
+ */
+export type InvitationExpiryScope =
+  | { readonly recipientUid: string }
+  | { readonly groupId: string }
+  | { readonly invitationId: string };
+
+/**
  * Um convite, como ele mora no banco (§19).
  */
 export interface StoredGroupInvitation {
@@ -578,14 +589,34 @@ export class SocialGroupRepository {
   }
 
   /**
-   * Marca como `EXPIRED` todo convite pendente cujo prazo já passou (T17.13.1 §27).
+   * Marca como `EXPIRED` os convites pendentes vencidos **do escopo pedido** (T17.13.1 §27).
+   *
+   * A materialização continua obrigatória: `idx_social_group_invitations_pending` é um índice
+   * único parcial sobre `status = 'PENDING'`, e ele não sabe que horas são — um convite vencido
+   * que continue `PENDING` ocupa a vaga daquele par (Squad, destinatário) para sempre e ainda
+   * conta na quota. É o beco sem saída que a T17.13.1 corrigiu.
+   *
+   * O que mudou é o **alcance**: a varredura era a tabela inteira a cada operação sensível a
+   * `PENDING`, inclusive nas leituras. Agora cada chamada varre só o que ela mesma vai olhar —
+   * os convites de um destinatário, de um Squad ou um convite específico. O estado materializado
+   * é o mesmo; o custo deixa de crescer com o tamanho da tabela.
    */
-  async expirePendingInvitations(now: number, client?: PoolClient): Promise<number> {
+  async expirePendingInvitations(
+    now: number,
+    scope: InvitationExpiryScope,
+    client?: PoolClient,
+  ): Promise<number> {
     const runner = this.getRunner(client);
+    const [column, value] =
+      'recipientUid' in scope
+        ? ['recipient_uid', scope.recipientUid]
+        : 'groupId' in scope
+          ? ['group_id', scope.groupId]
+          : ['id', scope.invitationId];
     const res = await runner.query(
       `UPDATE social_group_invitations SET status = 'EXPIRED'
-        WHERE status = 'PENDING' AND expires_at <= $1`,
-      [now],
+        WHERE status = 'PENDING' AND expires_at <= $1 AND ${column} = $2`,
+      [now, value],
     );
     return res.rowCount ?? 0;
   }
@@ -662,6 +693,7 @@ export class SocialGroupRepository {
   async listInvitationsForRecipient(
     recipientUid: string,
     limit: number,
+    now: number,
     client?: PoolClient,
   ): Promise<GroupInvitationRow[]> {
     const runner = this.getRunner(client);
@@ -699,9 +731,10 @@ export class SocialGroupRepository {
          JOIN social_profiles sp ON sp.owner_uid = i.sender_uid AND sp.status = 'ACTIVE'
         WHERE i.recipient_uid = $1
           AND i.status = 'PENDING'
+          AND i.expires_at > $3
         ORDER BY i.created_at DESC, i.id DESC
         LIMIT $2`,
-      [recipientUid, limit],
+      [recipientUid, limit, now],
     );
 
     return res.rows.map((row) => ({
@@ -892,4 +925,37 @@ export class SocialGroupRepository {
     );
     return res.rows.map((row) => row.groupId);
   }
+}
+
+/**
+ * Serializa as decisões de **teto** de um Squad (T18.3.2).
+ *
+ * `pg_advisory_xact_lock`, a mesma convenção de `lockRelationshipPair` (par social) e do Account
+ * Mutation Fence: dois argumentos hasheados, adquirido dentro da transação, liberado sozinho no
+ * COMMIT/ROLLBACK.
+ *
+ * Existe porque "contar e inserir" só é um limite se as duas coisas forem uma. Sem o lock, vinte
+ * aceites simultâneos liam `memberCount` antes de qualquer inserção e **todos** passavam: o Squad
+ * terminava acima de `SOCIAL_GROUP_MAX_MEMBERS` sem que nenhuma requisição tivesse feito nada
+ * errado. A contagem precisa ser relida **depois** do lock, dentro da mesma transação da escrita.
+ */
+export async function lockSocialGroup(client: PoolClient, groupId: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    'social_group',
+    groupId,
+  ]);
+}
+
+/**
+ * Serializa os tetos que são **por conta** — Squads criados e participações ativas.
+ *
+ * Ordem de aquisição: este lock vem **antes** de [lockSocialGroup] em qualquer caminho que precise
+ * dos dois (aceitar um convite confere os dois tetos). Uma ordem fixa é o que impede que dois
+ * caminhos que tomam os mesmos dois locks em sentidos opostos se travem mutuamente.
+ */
+export async function lockSocialGroupMember(client: PoolClient, memberUid: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    'social_group_member',
+    memberUid,
+  ]);
 }

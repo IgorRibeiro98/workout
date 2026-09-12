@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { CLOCK, type Clock } from '../../common/clock';
 import { SparkLogger } from '../../common/logger';
+import { isPgUniqueViolation } from '../../database/database.errors';
 import { uidPrefix } from '../auth/bearer-auth.guard';
 import { BlockRepository } from './block.repository';
 import { CheckInInteractionRepository } from './checkin-interaction.repository';
@@ -38,7 +39,10 @@ import {
 import { SocialGroupRateLimiter } from './social-group.rate-limit';
 import {
   SocialGroupRepository,
+  lockSocialGroup,
+  lockSocialGroupMember,
   type GroupFeedRow,
+  type InvitationExpiryScope,
   type StoredGroupInvitation,
   type StoredSocialGroup,
 } from './social-group.repository';
@@ -90,13 +94,6 @@ export class SocialGroupService {
       throw SocialGroupErrors.rateLimited();
     }
 
-    if ((await this.repository.countOwnedActiveGroups(callerUid)) >= SOCIAL_GROUP_MAX_OWNED) {
-      throw SocialGroupErrors.ownedLimitReached(SOCIAL_GROUP_MAX_OWNED);
-    }
-    if ((await this.repository.countActiveMemberships(callerUid)) >= SOCIAL_GROUP_MAX_MEMBERSHIPS) {
-      throw SocialGroupErrors.membershipLimitReached(SOCIAL_GROUP_MAX_MEMBERSHIPS);
-    }
-
     const now = this.clock.now();
     const group: StoredSocialGroup = {
       id: randomUUID(),
@@ -110,6 +107,23 @@ export class SocialGroupService {
     };
 
     await this.repository.transaction(async (client) => {
+      // Os dois tetos são **por conta**, e por isso são relidos aqui dentro, depois do lock: duas
+      // criações simultâneas da mesma conta liam a contagem antes de qualquer inserção e as duas
+      // passavam. Recusar aqui desfaz a transação inteira — nenhum Squad meio criado fica para
+      // trás.
+      await lockSocialGroupMember(client, callerUid);
+      if (
+        (await this.repository.countOwnedActiveGroups(callerUid, client)) >= SOCIAL_GROUP_MAX_OWNED
+      ) {
+        throw SocialGroupErrors.ownedLimitReached(SOCIAL_GROUP_MAX_OWNED);
+      }
+      if (
+        (await this.repository.countActiveMemberships(callerUid, client)) >=
+        SOCIAL_GROUP_MAX_MEMBERSHIPS
+      ) {
+        throw SocialGroupErrors.membershipLimitReached(SOCIAL_GROUP_MAX_MEMBERSHIPS);
+      }
+
       await this.repository.createGroup(group, client);
       await this.repository.createMembership(
         {
@@ -209,7 +223,7 @@ export class SocialGroupService {
       throw SocialGroupErrors.forbidden('apenas o dono do squad pode convidar');
     }
 
-    await this.sweepExpiredInvitations();
+    await this.sweepExpiredInvitations({ groupId });
 
     const target = await this.friendships.findProfileBySocialId(request.socialId);
     if (
@@ -239,24 +253,6 @@ export class SocialGroupService {
       throw SocialGroupErrors.rateLimited();
     }
 
-    if (await this.repository.findActiveMembership(groupId, target.ownerUid)) {
-      throw SocialGroupErrors.alreadyMember();
-    }
-    if ((await this.repository.countMembers(groupId)) >= SOCIAL_GROUP_MAX_MEMBERS) {
-      throw SocialGroupErrors.full(SOCIAL_GROUP_MAX_MEMBERS);
-    }
-
-    const pending = await this.repository.findPendingInvitation(groupId, target.ownerUid);
-    if (pending) {
-      return await this.invitationDtoOf(pending, group, callerUid);
-    }
-    if (
-      (await this.repository.countPendingInvitations(groupId)) >=
-      SOCIAL_GROUP_MAX_PENDING_INVITATIONS
-    ) {
-      throw SocialGroupErrors.inviteLimitReached(SOCIAL_GROUP_MAX_PENDING_INVITATIONS);
-    }
-
     const now = this.clock.now();
     const invitation: StoredGroupInvitation = {
       id: randomUUID(),
@@ -270,14 +266,44 @@ export class SocialGroupService {
       clientRequestId: request.clientRequestId,
     };
 
-    await this.repository.transaction(async (client) => {
+    // Os tetos do Squad — participantes e convites pendentes — são conferidos **dentro** da
+    // transação e depois do lock do grupo. Fora dele, vinte convites simultâneos liam a mesma
+    // contagem e todos passavam.
+    const existing = await this.repository.transaction(async (client) => {
+      await lockSocialGroup(client, groupId);
+
+      if (await this.repository.findActiveMembership(groupId, target.ownerUid, client)) {
+        throw SocialGroupErrors.alreadyMember();
+      }
+      if ((await this.repository.countMembers(groupId, client)) >= SOCIAL_GROUP_MAX_MEMBERS) {
+        throw SocialGroupErrors.full(SOCIAL_GROUP_MAX_MEMBERS);
+      }
+
+      const pending = await this.repository.findPendingInvitation(groupId, target.ownerUid, client);
+      if (pending) {
+        return pending;
+      }
+      if (
+        (await this.repository.countPendingInvitations(groupId, client)) >=
+        SOCIAL_GROUP_MAX_PENDING_INVITATIONS
+      ) {
+        throw SocialGroupErrors.inviteLimitReached(SOCIAL_GROUP_MAX_PENDING_INVITATIONS);
+      }
+
       await this.repository.createInvitation(invitation, client);
-      await this.notifications?.enqueueGroupInvitationReceived({
+      // O `client` é o que torna convite e evento atômicos (T17.13.1 §45–§47): o evento é o
+      // outbox do convite, e um convite sem aviso é um convite que ninguém vê chegar.
+      await this.notifications?.enqueueGroupInvitationReceived(client, {
         invitationId: invitation.id,
         recipientUid: invitation.recipientUid,
         expiresAt: invitation.expiresAt,
       });
+      return null;
     });
+
+    if (existing) {
+      return await this.invitationDtoOf(existing, group, callerUid);
+    }
 
     this.logger.info('social.group.invitation.created', {
       requestId,
@@ -288,10 +314,15 @@ export class SocialGroupService {
   }
 
   /**
-   * Marca no banco todo convite pendente que já venceu (T17.13.1 §27/§28).
+   * Marca no banco os convites pendentes que já venceram (T17.13.1 §27/§28).
+   *
+   * O escopo é obrigatório e é sempre o que esta operação vai olhar — o Squad que recebe o
+   * convite, o destinatário que lista, o convite que está sendo respondido. A materialização
+   * continua sendo a decisão da T17.13.1 (o índice único parcial de `PENDING` não sabe que horas
+   * são); o que ela não precisa ser é uma varredura da tabela inteira a cada requisição.
    */
-  private async sweepExpiredInvitations(): Promise<void> {
-    const changed = await this.repository.expirePendingInvitations(this.clock.now());
+  private async sweepExpiredInvitations(scope: InvitationExpiryScope): Promise<void> {
+    const changed = await this.repository.expirePendingInvitations(this.clock.now(), scope);
     if (changed > 0) {
       this.logger.info('social.group.invitation.expired', { count: changed });
     }
@@ -300,11 +331,15 @@ export class SocialGroupService {
   /** `GET /v1/social/groups/invitations` (§138/§139). Só os pendentes, e só os do próprio viewer. */
   async listInvitations(callerUid: string): Promise<SocialGroupInvitationListDto> {
     await this.requireActiveProfile(callerUid);
-    await this.sweepExpiredInvitations();
+    await this.sweepExpiredInvitations({ recipientUid: callerUid });
     const now = this.clock.now();
+    // O prazo entra na consulta: a lista é o estado de agora, e não depende da varredura acima
+    // ter alcançado cada linha. O filtro em memória continua, por ser barato e por deixar as duas
+    // afirmações no mesmo lugar.
     const rows = await this.repository.listInvitationsForRecipient(
       callerUid,
       SOCIAL_GROUP_LIST_PAGE.maxLimit,
+      now,
     );
 
     return {
@@ -337,7 +372,7 @@ export class SocialGroupService {
     }
     await this.requireActiveProfile(callerUid);
 
-    await this.sweepExpiredInvitations();
+    await this.sweepExpiredInvitations({ invitationId });
 
     const invitation = await this.repository.findInvitation(invitationId);
     const now = this.clock.now();
@@ -368,31 +403,55 @@ export class SocialGroupService {
       return await this.summaryOf(group, already.role);
     }
 
-    if ((await this.repository.countMembers(group.id)) >= SOCIAL_GROUP_MAX_MEMBERS) {
-      throw SocialGroupErrors.full(SOCIAL_GROUP_MAX_MEMBERS);
-    }
-    if ((await this.repository.countActiveMemberships(callerUid)) >= SOCIAL_GROUP_MAX_MEMBERSHIPS) {
-      throw SocialGroupErrors.membershipLimitReached(SOCIAL_GROUP_MAX_MEMBERSHIPS);
-    }
+    const outcome = await this.repository.transaction(async (client) => {
+      // A ordem dos locks é fixa — conta antes de grupo — porque este é o único caminho que
+      // precisa dos dois, e uma ordem fixa é o que impede dois caminhos de se travarem.
+      await lockSocialGroupMember(client, callerUid);
+      await lockSocialGroup(client, group.id);
 
-    const created = await this.repository.transaction(async (client) => {
       if (!(await this.repository.resolveInvitation(invitationId, 'ACCEPTED', now, client))) {
-        return false;
+        return 'NOT_AVAILABLE' as const;
       }
-      await this.repository.createMembership(
-        {
-          id: randomUUID(),
-          groupId: group.id,
-          memberUid: callerUid,
-          role: 'MEMBER',
-          joinedAt: now,
-        },
-        client,
-      );
-      return true;
+
+      // Os tetos são relidos aqui, sob os locks e na mesma transação da inserção: fora dela, N
+      // aceites simultâneos liam a mesma contagem e o Squad passava do máximo. Recusar desfaz
+      // também o `ACCEPTED` acima — o convite volta a `PENDING`, e não fica aceito num Squad de
+      // que a pessoa não participa.
+      if ((await this.repository.countMembers(group.id, client)) >= SOCIAL_GROUP_MAX_MEMBERS) {
+        throw SocialGroupErrors.full(SOCIAL_GROUP_MAX_MEMBERS);
+      }
+      if (
+        (await this.repository.countActiveMemberships(callerUid, client)) >=
+        SOCIAL_GROUP_MAX_MEMBERSHIPS
+      ) {
+        throw SocialGroupErrors.membershipLimitReached(SOCIAL_GROUP_MAX_MEMBERSHIPS);
+      }
+
+      try {
+        await this.repository.createMembership(
+          {
+            id: randomUUID(),
+            groupId: group.id,
+            memberUid: callerUid,
+            role: 'MEMBER',
+            joinedAt: now,
+          },
+          client,
+        );
+      } catch (error) {
+        // `UNIQUE (group_id, member_uid)`: a participação já existe — outra transação a criou. A
+        // transação é desfeita (o `ACCEPTED` acima junto), e o desfecho que o usuário pediu
+        // continua verdadeiro: ele **é** membro. Devolver o 23505 cru como `500` descreveria um
+        // defeito onde houve convergência, que é o mesmo caminho do aceite repetido logo acima.
+        if (!isPgUniqueViolation(error)) {
+          throw error;
+        }
+        return 'ALREADY_MEMBER' as const;
+      }
+      return 'CREATED' as const;
     });
 
-    if (!created) {
+    if (outcome === 'NOT_AVAILABLE') {
       throw SocialGroupErrors.invitationNotAvailable();
     }
 
@@ -829,7 +888,7 @@ export class SocialGroupService {
       throw SocialGroupErrors.rateLimited();
     }
     await this.requireActiveProfile(callerUid);
-    await this.sweepExpiredInvitations();
+    await this.sweepExpiredInvitations({ invitationId });
 
     const invitation = await this.repository.findInvitation(invitationId);
     const authorized =

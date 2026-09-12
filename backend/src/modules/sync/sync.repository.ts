@@ -9,6 +9,7 @@ import {
   type SyncMutationResult,
   type SyncOperation,
 } from './sync.contract';
+import { SYNC_LIMITS } from './sync.limits';
 import { SyncEntityPolicyRegistry } from './sync.policy';
 import { validateMutation, type ParsedMutation } from './sync.validator';
 
@@ -176,158 +177,191 @@ export class SyncRepository {
   }
 
   /**
-   * Executa a decisão de revisão e mutação de forma estritamente atômica e serializada.
+   * Executa o lote de um push: **uma** transação, um `SAVEPOINT` por mutação.
    *
-   * Adquire o **Account Mutation Fence** (T18.1.1 §2) antes de qualquer outro lock: um push que já
-   * passou pelo `BearerAuthGuard` antes de uma exclusão de conta commitar seu tombstone não pode
-   * gravar `sync_entities`/`sync_changes`/`sync_mutations` depois desse commit.
+   * ## Por que uma transação só
+   *
+   * Cada mutação abria a própria transação — `BEGIN`, fence, dois locks, leitura, escritas,
+   * `COMMIT`: cerca de oito idas ao banco. Multiplicado pelas até 50 mutações de um lote, o push
+   * gastava centenas de round-trips contra um PostgreSQL que está do outro lado da rede. O
+   * trabalho é o mesmo; o que mudou é quantas vezes ele atravessa a rede.
+   *
+   * ## Por que um SAVEPOINT por mutação
+   *
+   * Porque o lote **não** é atômico, e isso é decisão (ver o cabeçalho de `sync.service.ts`): as
+   * mutações da Outbox são independentes, e recusar as quatro válidas porque a quinta ficou stale
+   * faria o aparelho reenviar tudo para sempre. Desfechos como `STALE` e `INVALID` já não escrevem
+   * nada; o que o savepoint cobre é a falha **inesperada** — um erro de banco no meio do lote
+   * envenena a transação inteira, e sem ele o `COMMIT` seguinte viraria `ROLLBACK` silencioso das
+   * mutações que já tinham dado certo.
+   *
+   * Diante de uma falha dessas, o comportamento é o mesmo de antes: volta-se ao savepoint (o que
+   * desfaz só a mutação que falhou), o lote **para** ali, o que já foi aplicado é commitado, e o
+   * erro sobe para o serviço — que continua traduzindo o fence em `ACCOUNT_DELETED` e qualquer
+   * outra coisa em `5xx`. Nenhuma mutação seguinte é tentada, exatamente como quando cada uma
+   * tinha a própria transação.
+   *
+   * ## Fence
+   *
+   * O **Account Mutation Fence** (T18.1.1 §2) continua sendo a primeira instrução da transação, e
+   * agora protege o push inteiro: enquanto ele está aberto, a exclusão de conta — que disputa o
+   * mesmo lock por conta — não consegue commitar no meio do lote.
    */
-  async executeAtomicMutation(
+  async executeAtomicMutations(
+    ownerUid: string,
+    deviceId: string,
+    mutations: readonly ParsedMutation[],
+    now: number,
+    uidHash: string,
+  ): Promise<SyncMutationResult[]> {
+    const outcome = await this.db.transaction(async (client) => {
+      const results: SyncMutationResult[] = [];
+      await fenceAccountMutation(client, ownerUid, uidHash);
+
+      for (let index = 0; index < mutations.length; index += 1) {
+        // O nome vem do índice, e não de nada que o cliente envie: `SAVEPOINT` não aceita
+        // parâmetro, e um identificador construído a partir do corpo seria injeção de SQL.
+        const savepoint = `spark_sync_mutation_${index}`;
+        await client.query(`SAVEPOINT ${savepoint}`);
+        try {
+          results.push(
+            await this.decideMutation(client, ownerUid, deviceId, mutations[index], now),
+          );
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+        } catch (error) {
+          await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          return { results, failure: { error } };
+        }
+      }
+
+      return { results, failure: null };
+    });
+
+    if (outcome.failure) {
+      throw outcome.failure.error;
+    }
+    return outcome.results;
+  }
+
+  /**
+   * A decisão de uma mutação, dentro da transação e do savepoint de quem chamou.
+   *
+   * Ela é estritamente serializada pelos dois locks abaixo, e o estado que decide o desfecho é
+   * sempre relido **depois** deles.
+   */
+  private async decideMutation(
+    client: PoolClient,
     ownerUid: string,
     deviceId: string,
     mutation: ParsedMutation,
     now: number,
-    uidHash: string,
   ): Promise<SyncMutationResult> {
-    return this.db.transaction(async (client) => {
-      await fenceAccountMutation(client, ownerUid, uidHash);
+    // 1. Serializa chamadas concorrentes com o mesmo clientMutationId
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+      ownerUid,
+      `mut:${mutation.clientMutationId}`,
+    ]);
 
-      // 1. Serializa chamadas concorrentes com o mesmo clientMutationId
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-        ownerUid,
-        `mut:${mutation.clientMutationId}`,
-      ]);
-
-      // Verifica idempotência dentro do lock de mutação
-      const ledgerRes = await client.query<MutationRow>(
-        `SELECT client_mutation_id, entity_type, entity_sync_id, operation, payload_hash,
+    // Verifica idempotência dentro do lock de mutação
+    const ledgerRes = await client.query<MutationRow>(
+      `SELECT client_mutation_id, entity_type, entity_sync_id, operation, payload_hash,
                 result_revision, result_sequence
          FROM sync_mutations
          WHERE owner_uid = $1 AND client_mutation_id = $2`,
-        [ownerUid, mutation.clientMutationId],
-      );
-      const ledger = ledgerRes.rows[0];
-      if (ledger) {
-        const hash =
-          mutation.operation === 'DELETE'
-            ? ''
-            : mutation.canonicalPayload
-              ? sha256Hex(mutation.canonicalPayload)
-              : '';
-        const sameIntent =
-          ledger.entity_type === mutation.entityType &&
-          ledger.entity_sync_id === mutation.entitySyncId &&
-          ledger.operation === mutation.operation &&
-          ledger.payload_hash === hash;
+      [ownerUid, mutation.clientMutationId],
+    );
+    const ledger = ledgerRes.rows[0];
+    if (ledger) {
+      const hash =
+        mutation.operation === 'DELETE'
+          ? ''
+          : mutation.canonicalPayload
+            ? sha256Hex(mutation.canonicalPayload)
+            : '';
+      const sameIntent =
+        ledger.entity_type === mutation.entityType &&
+        ledger.entity_sync_id === mutation.entitySyncId &&
+        ledger.operation === mutation.operation &&
+        ledger.payload_hash === hash;
 
-        if (!sameIntent) {
-          return {
-            clientMutationId: mutation.clientMutationId,
-            status: 'IDEMPOTENCY_CONFLICT',
-          };
-        }
+      if (!sameIntent) {
         return {
           clientMutationId: mutation.clientMutationId,
-          status: 'ALREADY_APPLIED',
-          serverRevision: ledger.result_revision,
-          serverSequence: Number(ledger.result_sequence),
+          status: 'IDEMPOTENCY_CONFLICT',
         };
       }
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'ALREADY_APPLIED',
+        serverRevision: ledger.result_revision,
+        serverSequence: Number(ledger.result_sequence),
+      };
+    }
 
-      // 2. Validação estrutural e de contrato
-      const verdict = validateMutation(mutation);
-      if (!verdict.ok) {
-        return {
-          clientMutationId: mutation.clientMutationId,
-          status: verdict.rejected.unsupported ? 'UNSUPPORTED' : 'INVALID',
-          reason: verdict.rejected.reason,
-        };
-      }
-      const accepted = verdict.accepted;
+    // 2. Validação estrutural e de contrato
+    const verdict = validateMutation(mutation);
+    if (!verdict.ok) {
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: verdict.rejected.unsupported ? 'UNSUPPORTED' : 'INVALID',
+        reason: verdict.rejected.reason,
+      };
+    }
+    const accepted = verdict.accepted;
 
-      // 3. Serializa operações concorrentes no mesmo agregado da mesma conta
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
-        ownerUid,
-        `ent:${accepted.entityType}:${mutation.entitySyncId}`,
-      ]);
+    // 3. Serializa operações concorrentes no mesmo agregado da mesma conta
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+      ownerUid,
+      `ent:${accepted.entityType}:${mutation.entitySyncId}`,
+    ]);
 
-      // 4. Lê o estado atual da entidade dentro da transação e do lock
-      const entityRes = await client.query<EntityRow>(
-        `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
+    // 4. Lê o estado atual da entidade dentro da transação e do lock
+    const entityRes = await client.query<EntityRow>(
+      `SELECT entity_type, entity_sync_id, entity_schema_version, server_revision,
                 last_server_sequence, payload_hash, deleted
          FROM sync_entities
          WHERE owner_uid = $1 AND entity_type = $2 AND entity_sync_id = $3`,
-        [ownerUid, accepted.entityType, mutation.entitySyncId],
-      );
-      const entityRow = entityRes.rows[0];
-      const entity = entityRow
-        ? {
-            entityType: entityRow.entity_type as SyncEntityType,
-            entitySyncId: entityRow.entity_sync_id,
-            entitySchemaVersion: entityRow.entity_schema_version,
-            serverRevision: entityRow.server_revision,
-            lastServerSequence: Number(entityRow.last_server_sequence),
-            payloadHash: entityRow.payload_hash,
-            deleted: Boolean(entityRow.deleted),
-          }
-        : null;
-
-      // 5. Decisão de exclusão (DELETE)
-      if (accepted.operation === 'DELETE') {
-        if (entity?.deleted) {
-          await this.recordConvergedWithClient(client, {
-            ownerUid,
-            deviceId,
-            clientMutationId: mutation.clientMutationId,
-            entityType: mutation.entityType,
-            entitySyncId: mutation.entitySyncId,
-            operation: mutation.operation,
-            baseRevision: mutation.baseRevision,
-            payloadHash: '',
-            resultRevision: entity.serverRevision,
-            resultSequence: entity.lastServerSequence,
-            now,
-          });
-          return {
-            clientMutationId: mutation.clientMutationId,
-            status: 'ALREADY_APPLIED',
-            serverRevision: entity.serverRevision,
-            serverSequence: entity.lastServerSequence,
-          };
+      [ownerUid, accepted.entityType, mutation.entitySyncId],
+    );
+    const entityRow = entityRes.rows[0];
+    const entity = entityRow
+      ? {
+          entityType: entityRow.entity_type as SyncEntityType,
+          entitySyncId: entityRow.entity_sync_id,
+          entitySchemaVersion: entityRow.entity_schema_version,
+          serverRevision: entityRow.server_revision,
+          lastServerSequence: Number(entityRow.last_server_sequence),
+          payloadHash: entityRow.payload_hash,
+          deleted: Boolean(entityRow.deleted),
         }
+      : null;
 
-        const base = mutation.baseRevision ?? 0;
-        if (!entity) {
-          return this.applyDeleteWithClient(client, {
-            ownerUid,
-            deviceId,
-            clientMutationId: mutation.clientMutationId,
-            entityType: accepted.entityType,
-            entitySyncId: mutation.entitySyncId,
-            entitySchemaVersion: mutation.entitySchemaVersion,
-            baseRevision: mutation.baseRevision,
-            nextRevision: 1,
-            now,
-          });
-        }
+    // 5. Decisão de exclusão (DELETE)
+    if (accepted.operation === 'DELETE') {
+      if (entity?.deleted) {
+        await this.recordConvergedWithClient(client, {
+          ownerUid,
+          deviceId,
+          clientMutationId: mutation.clientMutationId,
+          entityType: mutation.entityType,
+          entitySyncId: mutation.entitySyncId,
+          operation: mutation.operation,
+          baseRevision: mutation.baseRevision,
+          payloadHash: '',
+          resultRevision: entity.serverRevision,
+          resultSequence: entity.lastServerSequence,
+          now,
+        });
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'ALREADY_APPLIED',
+          serverRevision: entity.serverRevision,
+          serverSequence: entity.lastServerSequence,
+        };
+      }
 
-        if (base > entity.serverRevision) {
-          return {
-            clientMutationId: mutation.clientMutationId,
-            status: 'INVALID',
-            currentRevision: entity.serverRevision,
-            reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
-          };
-        }
-
-        if (base !== entity.serverRevision) {
-          return {
-            clientMutationId: mutation.clientMutationId,
-            status: 'STALE',
-            currentRevision: entity.serverRevision,
-          };
-        }
-
+      const base = mutation.baseRevision ?? 0;
+      if (!entity) {
         return this.applyDeleteWithClient(client, {
           ownerUid,
           deviceId,
@@ -336,90 +370,9 @@ export class SyncRepository {
           entitySyncId: mutation.entitySyncId,
           entitySchemaVersion: mutation.entitySchemaVersion,
           baseRevision: mutation.baseRevision,
-          nextRevision: entity.serverRevision + 1,
+          nextRevision: 1,
           now,
         });
-      }
-
-      // 6. Decisão de escrita (UPSERT)
-      if (entity?.deleted) {
-        return {
-          clientMutationId: mutation.clientMutationId,
-          status: 'REMOTE_DELETED',
-          currentRevision: entity.serverRevision,
-          reason: SYNC_MUTATION_REASONS.ENTITY_DELETED,
-        };
-      }
-
-      if (SyncEntityPolicyRegistry.isImmutableHistory(accepted.entityType)) {
-        if (!entity) {
-          return this.applyMutationWithClient(client, {
-            ownerUid,
-            deviceId,
-            clientMutationId: mutation.clientMutationId,
-            entityType: accepted.entityType,
-            entitySyncId: mutation.entitySyncId,
-            entitySchemaVersion: mutation.entitySchemaVersion,
-            operation: 'UPSERT',
-            baseRevision: mutation.baseRevision,
-            canonicalPayload: accepted.canonicalPayload,
-            payloadHash: accepted.payloadHash,
-            nextRevision: 1,
-            now,
-          });
-        }
-        if (entity.payloadHash === accepted.payloadHash) {
-          await this.recordConvergedWithClient(client, {
-            ownerUid,
-            deviceId,
-            clientMutationId: mutation.clientMutationId,
-            entityType: mutation.entityType,
-            entitySyncId: mutation.entitySyncId,
-            operation: mutation.operation,
-            baseRevision: mutation.baseRevision,
-            payloadHash: accepted.payloadHash,
-            resultRevision: entity.serverRevision,
-            resultSequence: entity.lastServerSequence,
-            now,
-          });
-          return {
-            clientMutationId: mutation.clientMutationId,
-            status: 'ALREADY_APPLIED',
-            serverRevision: entity.serverRevision,
-            serverSequence: entity.lastServerSequence,
-          };
-        }
-        return {
-          clientMutationId: mutation.clientMutationId,
-          status: 'IMMUTABLE_HISTORY_CONFLICT',
-          currentRevision: entity.serverRevision,
-          reason: SYNC_MUTATION_REASONS.IMMUTABLE_HISTORY,
-        };
-      }
-
-      const base = mutation.baseRevision ?? 0;
-      if (!entity) {
-        if (base === 0) {
-          return this.applyMutationWithClient(client, {
-            ownerUid,
-            deviceId,
-            clientMutationId: mutation.clientMutationId,
-            entityType: accepted.entityType,
-            entitySyncId: mutation.entitySyncId,
-            entitySchemaVersion: mutation.entitySchemaVersion,
-            operation: 'UPSERT',
-            baseRevision: mutation.baseRevision,
-            canonicalPayload: accepted.canonicalPayload,
-            payloadHash: accepted.payloadHash,
-            nextRevision: 1,
-            now,
-          });
-        }
-        return {
-          clientMutationId: mutation.clientMutationId,
-          status: 'STALE',
-          currentRevision: 0,
-        };
       }
 
       if (base > entity.serverRevision) {
@@ -431,7 +384,55 @@ export class SyncRepository {
         };
       }
 
-      if (accepted.payloadHash === entity.payloadHash) {
+      if (base !== entity.serverRevision) {
+        return {
+          clientMutationId: mutation.clientMutationId,
+          status: 'STALE',
+          currentRevision: entity.serverRevision,
+        };
+      }
+
+      return this.applyDeleteWithClient(client, {
+        ownerUid,
+        deviceId,
+        clientMutationId: mutation.clientMutationId,
+        entityType: accepted.entityType,
+        entitySyncId: mutation.entitySyncId,
+        entitySchemaVersion: mutation.entitySchemaVersion,
+        baseRevision: mutation.baseRevision,
+        nextRevision: entity.serverRevision + 1,
+        now,
+      });
+    }
+
+    // 6. Decisão de escrita (UPSERT)
+    if (entity?.deleted) {
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'REMOTE_DELETED',
+        currentRevision: entity.serverRevision,
+        reason: SYNC_MUTATION_REASONS.ENTITY_DELETED,
+      };
+    }
+
+    if (SyncEntityPolicyRegistry.isImmutableHistory(accepted.entityType)) {
+      if (!entity) {
+        return this.applyMutationWithClient(client, {
+          ownerUid,
+          deviceId,
+          clientMutationId: mutation.clientMutationId,
+          entityType: accepted.entityType,
+          entitySyncId: mutation.entitySyncId,
+          entitySchemaVersion: mutation.entitySchemaVersion,
+          operation: 'UPSERT',
+          baseRevision: mutation.baseRevision,
+          canonicalPayload: accepted.canonicalPayload,
+          payloadHash: accepted.payloadHash,
+          nextRevision: 1,
+          now,
+        });
+      }
+      if (entity.payloadHash === accepted.payloadHash) {
         await this.recordConvergedWithClient(client, {
           ownerUid,
           deviceId,
@@ -452,8 +453,17 @@ export class SyncRepository {
           serverSequence: entity.lastServerSequence,
         };
       }
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'IMMUTABLE_HISTORY_CONFLICT',
+        currentRevision: entity.serverRevision,
+        reason: SYNC_MUTATION_REASONS.IMMUTABLE_HISTORY,
+      };
+    }
 
-      if (base === entity.serverRevision && base > 0) {
+    const base = mutation.baseRevision ?? 0;
+    if (!entity) {
+      if (base === 0) {
         return this.applyMutationWithClient(client, {
           ownerUid,
           deviceId,
@@ -465,17 +475,70 @@ export class SyncRepository {
           baseRevision: mutation.baseRevision,
           canonicalPayload: accepted.canonicalPayload,
           payloadHash: accepted.payloadHash,
-          nextRevision: entity.serverRevision + 1,
+          nextRevision: 1,
           now,
         });
       }
-
       return {
         clientMutationId: mutation.clientMutationId,
         status: 'STALE',
-        currentRevision: entity.serverRevision,
+        currentRevision: 0,
       };
-    });
+    }
+
+    if (base > entity.serverRevision) {
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'INVALID',
+        currentRevision: entity.serverRevision,
+        reason: SYNC_MUTATION_REASONS.BASE_REVISION_AHEAD,
+      };
+    }
+
+    if (accepted.payloadHash === entity.payloadHash) {
+      await this.recordConvergedWithClient(client, {
+        ownerUid,
+        deviceId,
+        clientMutationId: mutation.clientMutationId,
+        entityType: mutation.entityType,
+        entitySyncId: mutation.entitySyncId,
+        operation: mutation.operation,
+        baseRevision: mutation.baseRevision,
+        payloadHash: accepted.payloadHash,
+        resultRevision: entity.serverRevision,
+        resultSequence: entity.lastServerSequence,
+        now,
+      });
+      return {
+        clientMutationId: mutation.clientMutationId,
+        status: 'ALREADY_APPLIED',
+        serverRevision: entity.serverRevision,
+        serverSequence: entity.lastServerSequence,
+      };
+    }
+
+    if (base === entity.serverRevision && base > 0) {
+      return this.applyMutationWithClient(client, {
+        ownerUid,
+        deviceId,
+        clientMutationId: mutation.clientMutationId,
+        entityType: accepted.entityType,
+        entitySyncId: mutation.entitySyncId,
+        entitySchemaVersion: mutation.entitySchemaVersion,
+        operation: 'UPSERT',
+        baseRevision: mutation.baseRevision,
+        canonicalPayload: accepted.canonicalPayload,
+        payloadHash: accepted.payloadHash,
+        nextRevision: entity.serverRevision + 1,
+        now,
+      });
+    }
+
+    return {
+      clientMutationId: mutation.clientMutationId,
+      status: 'STALE',
+      currentRevision: entity.serverRevision,
+    };
   }
 
   private async applyMutationWithClient(
@@ -785,7 +848,29 @@ export class SyncRepository {
   }
 
   /**
+   * A maior sequência já emitida **para esta conta**.
+   *
+   * É esta que o pull usa para recusar um cursor impossível. A global descreveria quantas mudanças
+   * o servidor inteiro já emitiu — um número que cresce com o uso de todo mundo, e que um cliente
+   * descobriria por busca binária sobre "cursor aceito / cursor recusado". O cursor que um aparelho
+   * legítimo guarda sempre saiu de uma página desta conta, então o teto por dono não recusa nada
+   * que antes passava.
+   */
+  async maxSequenceForOwner(ownerUid: string): Promise<number> {
+    const res = await this.db.query<{ max: string | number | null }>(
+      'SELECT COALESCE(MAX(server_sequence), 0) AS max FROM sync_changes WHERE owner_uid = $1',
+      [ownerUid],
+    );
+    return Number(res.rows[0]?.max ?? 0);
+  }
+
+  /**
    * A página de mudanças **daquela conta** depois do cursor.
+   *
+   * A página termina no primeiro dos dois tetos: `limit` itens ou `maxPullPageBytes` de payload. O
+   * corte por bytes nunca devolve página vazia — o primeiro item sai sempre, mesmo sozinho maior
+   * que o orçamento, porque uma página vazia com `hasMore = true` prenderia o aparelho na mesma
+   * posição do cursor para sempre.
    */
   async changesAfter(
     ownerUid: string,
@@ -802,8 +887,19 @@ export class SyncRepository {
       [ownerUid, cursor, limit + 1],
     );
     const rows = res.rows;
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    const page: ChangeRow[] = [];
+    let pageBytes = 0;
+    for (const row of rows.slice(0, limit)) {
+      const rowBytes = Buffer.byteLength(row.payload, 'utf8');
+      if (page.length > 0 && pageBytes + rowBytes > SYNC_LIMITS.maxPullPageBytes) {
+        break;
+      }
+      page.push(row);
+      pageBytes += rowBytes;
+    }
+    // Sobrou linha — por número ou por bytes — então há continuação a partir da última entregue.
+    const hasMore = rows.length > page.length;
 
     return {
       hasMore,

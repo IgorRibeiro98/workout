@@ -55,6 +55,14 @@ class ManifestImporter(
         force: Boolean = false
     ): ImportResult = withContext(Dispatchers.IO) {
         try {
+            // Atalho de versão antes de abrir 392 KB (auditoria 2026-09-12). Ver [CatalogAssetVersion]:
+            // ele só pode pular trabalho, nunca decidir importar.
+            val assetVersion = CatalogAssetVersion.peek(context, assetPath)
+            val installedVersion = settingsManager.installedCatalogContentVersionFlow.firstOrNull() ?: 0
+            if (!force && assetVersion != null && assetVersion > 0 && assetVersion <= installedVersion) {
+                return@withContext ImportResult(isSkippedSameVersion = true)
+            }
+
             val jsonString = context.assets.open(assetPath).bufferedReader().use { it.readText() }
             importFromJsonString(jsonString, force = force)
         } catch (e: Exception) {

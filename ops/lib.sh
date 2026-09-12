@@ -54,10 +54,13 @@ SPARK_IMAGE="${SPARK_IMAGE:-spark-backend:latest}"
 #
 # Os utilitários do PostgreSQL rodam por container, e não pelo pacote do host: a versão do
 # `pg_dump` precisa ser **igual ou mais nova** que a do servidor, e a que o `apt` da VPS instala não
-# tem essa garantia. Versão fixada pelo mesmo motivo do Caddy — uma ferramenta que se atualiza
-# sozinha muda de comportamento sem deploy. Suba a major aqui quando subir a do servidor — o Neon
-# de produção está na 18 (T18.3), e a 18 serve também ao PostgreSQL 17 do CI.
-SPARK_PG_TOOLS_IMAGE="${SPARK_PG_TOOLS_IMAGE:-postgres:18-alpine}"
+# tem essa garantia. Suba a major aqui quando subir a do servidor — o Neon de produção está na 18
+# (T18.3), e a 18 serve também ao PostgreSQL do CI.
+#
+# A tag traz o **patch** (T18.3.2). `postgres:18-alpine` dizia-se fixada e não era: ela anda a cada
+# release menor, e a ferramenta que faz o backup passava a ser outra sem ninguém ter mudado nada.
+# Subir o patch é uma alteração desta linha, revisada como qualquer outra.
+SPARK_PG_TOOLS_IMAGE="${SPARK_PG_TOOLS_IMAGE:-postgres:18.6-alpine}"
 # Arquivo de exclusão mútua do backup. Configuração, e não parâmetro de função: ele precisa ser o
 # mesmo para todas as execuções da máquina, e uma função que aceitasse outro por chamada tornaria
 # possível dois backups simultâneos com locks diferentes — que é exatamente o que ele impede.
@@ -154,13 +157,34 @@ compose_query() {
   )
 }
 
-compose_running() {
-  [ -d "$SPARK_COMPOSE_DIR" ] || return 1
+# O estado do backend, em **três** valores: `running`, `stopped` ou `unknown` (T18.3.2).
+#
+# ## Por que três, e não dois
+#
+# A versão anterior devolvia só um código de saída, e `return 1` significava ao mesmo tempo "não
+# está rodando" e "não consegui perguntar" — diretório errado, `.env` ausente, Docker sem permissão.
+# Para o manifesto do backup isso dá na mesma (a imagem vira uma string vazia). Para
+# `ops/restore.sh --install` é o oposto: ele usa a resposta como **trava**, e um `compose_running &&
+# fail` que devolve 1 porque a pergunta não pôde ser feita libera a restauração por cima de um
+# backend possivelmente de pé — falha aberta, na operação mais destrutiva que existe aqui.
+#
+# Quem precisa de garantia trata `unknown` como impedimento; quem precisa só de informação o trata
+# como "não sei". A decisão passa a ser de quem chama, que é onde ela pode ser tomada.
+compose_state() {
+  [ -d "$SPARK_COMPOSE_DIR" ] || { printf 'unknown'; return 0; }
   local running
-  # A falha vira `return 1` explicitamente: "não consegui perguntar" e "não está rodando" levam à
-  # mesma conclusão operacional, e nenhuma delas pode ser confundida com sucesso.
-  running="$( compose_query ps -q "$SPARK_SERVICE" 2> /dev/null )" || return 1
-  [ -n "$running" ]
+  if ! running="$( compose_query ps -q "$SPARK_SERVICE" 2> /dev/null )"; then
+    printf 'unknown'
+    return 0
+  fi
+  if [ -n "$running" ]; then printf 'running'; else printf 'stopped'; fi
+}
+
+# Açúcar para quem só quer saber se está de pé, e para quem `unknown` é equivalente a parado
+# (`ops/backup.sh`, que apenas anota a imagem no manifesto). Nunca use isto como trava: veja
+# `compose_state`.
+compose_running() {
+  [ "$( compose_state )" = "running" ]
 }
 
 # ---------------------------------------------------------------- health

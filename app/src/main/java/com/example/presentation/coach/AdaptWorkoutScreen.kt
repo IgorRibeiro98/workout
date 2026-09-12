@@ -33,7 +33,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +55,7 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /** As ações da tela, agrupadas para a assinatura do conteúdo continuar legível. */
 internal data class AdaptWorkoutActions(
@@ -89,8 +89,8 @@ fun AdaptWorkoutScreen(
     isSignInAvailable: Boolean = true,
     isSigningIn: Boolean = false
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val explanationState by viewModel.explanationState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
 
     // Só informa qual treino está aberto. Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(templateId) { viewModel.load(templateId) }
@@ -526,8 +526,16 @@ private fun WorkoutAdaptationValue.label(): String = when (this) {
     is WorkoutAdaptationValue.Exercise -> name
 }
 
+/**
+ * Carga formatada com Locale explícito (lint `DefaultLocale`).
+ *
+ * `Locale.ROOT`, e não `pt-BR`, de propósito: em todo o resto do app a carga sai por interpolação
+ * de string (`"${weight}kg"`), que usa ponto como separador decimal. Uma vírgula só nesta tela
+ * mostraria "62,5 kg" no Coach e "62.5kg" na execução, para o mesmo número.
+ */
 private fun formatWeight(weightKg: Float): String =
-    if (weightKg % 1f == 0f) weightKg.toInt().toString() else String.format("%.1f", weightKg)
+    if (weightKg % 1f == 0f) weightKg.toInt().toString()
+    else String.format(java.util.Locale.ROOT, "%.1f", weightKg)
 
 @Composable
 private fun LoadingBlock(message: String) {

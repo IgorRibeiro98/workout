@@ -30,9 +30,17 @@ RUN npm prune --omit=dev
 # ---------- runtime ----------
 FROM node:22.22.1-bookworm-slim AS runtime
 
+# `SOCIAL_MEDIA_ROOT` **não** entra aqui, e a ausência é deliberada (T18.3.2).
+#
+# Com ela embutida, a imagem chegava em produção já satisfazendo o portão que `app-config.ts`
+# (`missingRequirements`) existe para aplicar: rodar esta imagem com o provider `local` e **sem
+# volume montado** passava a subir normalmente e a gravar as fotos num volume anônimo — exatamente
+# a perda silenciosa que o portão descreve. Quem declara a raiz é quem sabe onde ela está montada:
+# `docker-compose.yml` e `docker-compose.prod.yml` (os dois já declaram `SOCIAL_MEDIA_ROOT: /media`
+# ao lado do volume correspondente). O deploy Cloud Run usa `OBJECT_STORAGE_PROVIDER=gcs` e não
+# precisa de raiz local nenhuma.
 ENV NODE_ENV=production \
-    PORT=8080 \
-    SOCIAL_MEDIA_ROOT=/media
+    PORT=8080
 
 WORKDIR /app
 
@@ -56,6 +64,13 @@ WORKDIR /app
 # `/usr/lib/postgresql/18/bin` e entram no `PATH` diretamente. As bibliotecas de que eles
 # dependem (`libpq5`, readline, zlib, lz4, zstd) são instaladas normalmente, e o `--version` no
 # fim prova que os três binários carregam.
+#
+# A versão é **pinada** (T18.3.2): sem o pin, o mesmo commit construía binários diferentes conforme
+# o dia — o repositório PGDG publica uma revisão nova e a imagem muda sem ninguém ter mudado nada.
+# Um `ARG` porque subir a versão é uma alteração revisada de uma linha (e um
+# `--build-arg PG_CLIENT_VERSION=` resolve na hora quando o PGDG rotaciona o pacote antigo para
+# fora do repositório, que é o único jeito de este passo falhar: alto, no build, antes do deploy).
+ARG PG_CLIENT_VERSION=18.6-1.pgdg12+2
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
@@ -65,7 +80,7 @@ RUN set -eux; \
       > /etc/apt/sources.list.d/pgdg.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends libpq5 libreadline8 zlib1g liblz4-1 libzstd1; \
-    cd /tmp && apt-get download postgresql-client-18; \
+    cd /tmp && apt-get download "postgresql-client-18=${PG_CLIENT_VERSION}"; \
     dpkg-deb -x /tmp/postgresql-client-18_*.deb /; \
     rm -f /tmp/postgresql-client-18_*.deb; \
     apt-get purge -y --auto-remove curl gnupg; \

@@ -97,6 +97,11 @@ class SyncRemoteApplier(
     ): SyncApplyResult {
         if (changes.isEmpty()) return SyncApplyResult()
 
+        // Uma leitura por página, e não uma por item: a sessão em execução não muda no meio do
+        // processamento de uma página — quem a inicia e a encerra é o motor de execução, e ele não
+        // roda enquanto o sync está segurando a `CloudOperationLock`.
+        val activeTemplateId = workoutDao.getActiveSessionTemplateId()
+
         val decoded = mutableListOf<DecodedChange>()
         var stop: SyncApplyStop? = null
         for (change in changes) {
@@ -105,7 +110,7 @@ class SyncRemoteApplier(
                 stop = SyncApplyStop.Unsupported(change.serverSequence, change.entityType)
                 break
             }
-            if (interferesWithActiveWorkout(result)) {
+            if (interferesWithActiveWorkout(result, activeTemplateId)) {
                 // O treino está sendo executado agora. A mudança fica no change log, o cursor para
                 // antes dela, e o ciclo seguinte — depois que o treino terminar — a aplica.
                 stop = SyncApplyStop.DeferredActiveWorkout(change.serverSequence)
@@ -155,6 +160,24 @@ class SyncRemoteApplier(
             // Referência que não resolve neste aparelho. Nada foi escrito, o cursor não andou, e
             // a próxima tentativa pede a mesma página.
             SyncApplyResult(stop = SyncApplyStop.Failed(e.serverSequence, e.reason))
+        } catch (e: android.database.sqlite.SQLiteException) {
+            // O banco recusou a escrita — colisão de índice único, chave estrangeira, `RESTRICT`.
+            // Sem isto a exceção sobe por `syncNow()`/`onAppForeground()` e **derruba o processo**:
+            // um aparelho nesse estado fecha a cada abertura, e o cursor nunca avança.
+            //
+            // O desfecho é o mesmo de uma referência que não resolve, e pelo mesmo motivo: a
+            // transação desfez tudo, o cursor ficou onde estava e a próxima tentativa pede a mesma
+            // página. Pausar com um motivo legível é o que permite diagnosticar; morrer não é.
+            SyncApplyResult(
+                stop = SyncApplyStop.Failed(
+                    // A primeira da página: nada foi escrito, então é dali que a próxima tentativa
+                    // recomeça. Apontar para a última sugeriria um progresso que não houve.
+                    decoded.first().change.serverSequence,
+                    // O nome da classe, nunca a mensagem do SQLite: ela carrega valores da linha
+                    // recusada, e este pacote não registra conteúdo em lugar nenhum.
+                    "${REASON_LOCAL_WRITE_REFUSED}:${e.javaClass.simpleName}"
+                )
+            )
         }
     }
 
@@ -235,8 +258,11 @@ class SyncRemoteApplier(
      * chegue no mesmo ciclo continua sendo aplicada normalmente, desde que venha antes na
      * sequência.
      */
-    private suspend fun interferesWithActiveWorkout(item: DecodedChange): Boolean {
-        val activeTemplateId = workoutDao.getActiveSessionTemplateId() ?: return false
+    private suspend fun interferesWithActiveWorkout(
+        item: DecodedChange,
+        activeTemplateId: Long?
+    ): Boolean {
+        if (activeTemplateId == null) return false
         return when (item.type) {
             SyncEntityType.WORKOUT_TEMPLATE ->
                 workoutDao.getTemplateBySyncId(item.change.entitySyncId)?.id == activeTemplateId
@@ -387,10 +413,23 @@ class SyncRemoteApplier(
                 false
             }
 
-            // `ON DELETE RESTRICT`: o exercício ainda é usado por um treino deste aparelho. Pausar
-            // com um motivo legível é melhor do que estourar a constraint no meio da transação — e
-            // a mudança que remove a referência normalmente vem logo atrás no change log.
-            SyncLocalDeleteGuard.StillReferenced -> fail(item, REASON_EXERCISE_STILL_REFERENCED)
+            // `ON DELETE RESTRICT`: o exercício ainda é usado por um treino deste aparelho.
+            //
+            // A ordenação "exclusões por último, do filho para o pai" resolve isto **dentro** de
+            // uma página — e só dentro dela. Quando a exclusão do exercício e a edição do treino
+            // que ainda o referencia caem em páginas diferentes, pausar aqui era um impasse
+            // permanente: a página falhava, o cursor não andava, e a edição que removeria a
+            // referência ficava do outro lado do cursor, inalcançável para sempre.
+            //
+            // Registrar conflito é o que quebra o impasse sem apagar nada: o exercício continua
+            // aqui, a exclusão remota fica guardada com a revision do tombstone, o cursor anda, e
+            // a página seguinte — que pode ser exatamente a que remove a referência — é aplicada.
+            // A partir daí "confirmar a exclusão" funciona, porque o `ON DELETE RESTRICT` já não
+            // tem o que restringir.
+            SyncLocalDeleteGuard.StillReferenced -> {
+                recordConflict(ownerUid, item, SyncConflictKind.REMOTE_DELETED_LOCAL_MODIFIED, null)
+                false
+            }
         }
     }
 
@@ -570,7 +609,30 @@ class SyncRemoteApplier(
         // tela sabe representar.
         if (dto.isCurrent) workoutDao.clearCurrentProgram()
 
+        // A identidade global vem primeiro; o `externalId` é a rede de segurança.
+        //
+        // Programa importado de manifesto tem identidade **de conteúdo** (`externalId`, com índice
+        // `UNIQUE`) e identidade global (`syncId`), e elas nascem separadas em cada aparelho: dois
+        // celulares que importaram o mesmo programa antes de adotar a nuvem têm o mesmo
+        // `externalId` e `syncId` diferentes. Inserir sem consultar o `externalId` estoura
+        // `index_workout_programs_externalId` dentro da transação — e, antes desta correção, o
+        // processo inteiro morria a cada abertura do app, com o cursor parado para sempre.
+        //
+        // Reconciliar é adotar a identidade global que veio da nuvem na linha que já existe aqui:
+        // o `localId` é preservado (e com ele os treinos que apontam para ele) e o aparelho passa a
+        // falar do mesmo programa que os outros. Duas linhas para o mesmo programa importado é que
+        // seriam o dado duplicado que o índice existe para impedir.
+        //
+        // É a **única** reescrita de `syncId` do app, e ela não contradiz a imutabilidade da §13.1:
+        // aquela regra diz que **editar** uma entidade nunca troca a identidade dela. Aqui não há
+        // edição — há duas identidades locais para a mesma coisa, criadas independentemente por um
+        // importador de conteúdo, e a da nuvem é a que todos os aparelhos já usam.
         val existing = workoutDao.getProgramBySyncId(dto.syncId)
+            ?: dto.externalId
+                ?.takeIf { it.isNotBlank() }
+                ?.let { workoutDao.getProgramByExternalId(it) }
+                ?.copy(syncId = dto.syncId)
+
         if (existing == null) {
             workoutDao.insertProgram(
                 WorkoutProgramEntity(
@@ -873,8 +935,8 @@ class SyncRemoteApplier(
         const val REASON_UNKNOWN_CANONICAL = "UNKNOWN_CANONICAL_EXERCISE"
         const val REASON_MISSING_CUSTOM = "MISSING_CUSTOM_EXERCISE"
 
-        /** O exercício ainda é usado por um treino deste aparelho — `ON DELETE RESTRICT`. */
-        const val REASON_EXERCISE_STILL_REFERENCED = "EXERCISE_STILL_REFERENCED"
+        /** O SQLite recusou a escrita local (índice único, FK, `RESTRICT`). Nada foi gravado. */
+        const val REASON_LOCAL_WRITE_REFUSED = "LOCAL_WRITE_REFUSED"
 
         /**
          * Onde a faixa das exclusões começa. Maior que qualquer `dependency`, e subtraindo para

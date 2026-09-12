@@ -233,6 +233,76 @@ class RestoreRecoveryTest {
         )
     }
 
+    // ------------------------------- a fase e o dataset entram juntos (auditoria 2026-09-12)
+
+    @Test
+    fun `a fase ROOM_APPLIED entra no mesmo commit que substitui o dataset`() = runTest {
+        val fingerprintBefore = harness.semanticFingerprint()
+        val backup = harness.api.publish(emptySnapshotBody())
+        val ready = harness.repository.prepare(backup, uid) as RestorePreparation.Ready
+        val attempt = database.restoreAttemptDao().byRestoreAttemptId(ready.restoreAttemptId)!!
+
+        var datasetSeenFromInsideTheCommit: String? = null
+        val failed = runCatching {
+            harness.transaction.apply(
+                plan = ready.plan,
+                binding = RestoreBindingOutcome.Bind(
+                    ownerUid = uid,
+                    deviceId = "device-de-teste",
+                    backupId = attempt.backupId,
+                    backupCreatedAt = attempt.backupCreatedAt
+                ),
+                onApplied = {
+                    // Dentro do commit, o dataset **já** é o do backup: é por isso que a fase pode
+                    // afirmar `ROOM_APPLIED` daqui.
+                    datasetSeenFromInsideTheCommit =
+                        database.workoutDao().getAllTemplateSyncIds().joinToString()
+                    database.restoreAttemptDao()
+                        .updateStatus(attempt.id, RestorePhase.ROOM_APPLIED.name, 1_800_000_000_000L)
+                    error("processo morreu entre a substituição e a fase")
+                }
+            )
+        }
+
+        assertTrue(failed.isFailure)
+        assertEquals("o backup vazio não tem treinos", "", datasetSeenFromInsideTheCommit)
+
+        // Um commit só: o dataset voltou ao que era **e** a fase não avançou. Antes desta correção
+        // a fase era gravada fora da transação, e um processo morto nessa janela deixava um Room
+        // já restaurado descrito como "nada aplicado".
+        assertEquals(
+            "o rollback devolve o dataset inteiro",
+            fingerprintBefore,
+            harness.semanticFingerprint()
+        )
+        assertEquals(
+            RestorePhase.VALIDATED.name,
+            database.restoreAttemptDao().byId(attempt.id)!!.status
+        )
+    }
+
+    @Test
+    fun `o Room substituido nunca e descrito como nada aplicado`() = runTest {
+        val backup = harness.api.publish(emptySnapshotBody())
+        val ready = harness.repository.prepare(backup, uid) as RestorePreparation.Ready
+
+        val outcome = harness.repository.confirm(
+            plan = ready.plan,
+            restoreAttemptId = ready.restoreAttemptId,
+            currentUid = uid,
+            confirmed = true
+        )
+        assertTrue("$outcome", outcome is RestoreOutcome.Success)
+
+        // O dataset foi substituído e a tentativa chegou ao fim. O que este teste protege é o
+        // estado intermediário: não existe ponto em que o Room já é o backup e a tentativa ainda
+        // está em `SAFETY_SNAPSHOT_CREATED` — a recuperação trata essa fase como "nada aplicado" e
+        // apagaria o snapshot de segurança sobre um dataset já restaurado.
+        assertEquals(emptyList<String>(), database.workoutDao().getAllTemplateSyncIds())
+        assertNull(database.restoreAttemptDao().oldestUnfinished())
+        assertEquals(RestoreRecoveryResult.NothingToRecover, harness.repository.recover())
+    }
+
     // ------------------------------------------------------------------------- helpers
 
     /** Uma tentativa parada em [phase], como um process death a deixaria. */

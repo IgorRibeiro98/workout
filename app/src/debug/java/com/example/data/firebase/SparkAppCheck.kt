@@ -38,7 +38,7 @@ internal object SparkAppCheck {
      */
     fun publishDebugToken(context: Context) {
         val token = customDebugToken(context) ?: return
-        for (prefName in DEBUG_STORE_PREFS) {
+        for (prefName in debugStorePrefNames()) {
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE)
                 .edit()
                 .putString(DEBUG_SECRET_KEY, token)
@@ -67,9 +67,43 @@ internal object SparkAppCheck {
     private const val CUSTOM_TOKEN_KEY = "custom_debug_token"
     private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 
-    /** Os lugares em que o SDK de depuração procura o segredo, conforme a versão. */
-    private val DEBUG_STORE_PREFS = listOf(
-        "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
-        "com.google.firebase.appcheck.debug.store"
+    /**
+     * Os lugares em que o SDK de depuração procura o segredo.
+     *
+     * Os dois primeiros nomes são os de versões antigas. O que o `firebase-appcheck-debug` atual
+     * realmente lê é `"com.google.firebase.appcheck.debug.store." + persistenceKey` — e era
+     * exatamente esse que faltava (auditoria 2026-09-12): o token colado na área de Conta nunca
+     * era lido, o provedor gerava outro a cada instalação, e quem estava desenvolvendo cadastrava
+     * token novo no console sem entender por quê.
+     *
+     * O `persistenceKey` é derivado do nome da `FirebaseApp` e do `applicationId`, pela fórmula do
+     * próprio SDK (`FirebaseApp.getPersistenceKey`): Base64 url-safe sem padding de cada um, unidos
+     * por `+`. Ele é reproduzido aqui em vez de lido do getter porque a formação não depende de
+     * nada além de dados públicos, e porque uma falha aqui não pode derrubar o app de depuração.
+     *
+     * Continuamos escrevendo nos nomes antigos: gravar um `SharedPreferences` a mais é inofensivo,
+     * e cobre um SDK mais velho sem nenhuma detecção de versão.
+     */
+    private fun debugStorePrefNames(): List<String> {
+        val legacy = listOf(
+            "com.google.firebase.appcheck.debug.DebugAppCheckProvider",
+            "com.google.firebase.appcheck.debug.store"
+        )
+        val persistenceKey = runCatching {
+            val app = com.google.firebase.FirebaseApp.getInstance()
+            val name = urlSafeBase64(app.name)
+            val applicationId = urlSafeBase64(app.options.applicationId)
+            "$name+$applicationId"
+        }.getOrNull()
+        return if (persistenceKey.isNullOrEmpty()) {
+            legacy
+        } else {
+            legacy + "com.google.firebase.appcheck.debug.store.$persistenceKey"
+        }
+    }
+
+    private fun urlSafeBase64(value: String): String = android.util.Base64.encodeToString(
+        value.toByteArray(Charsets.UTF_8),
+        android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
     )
 }

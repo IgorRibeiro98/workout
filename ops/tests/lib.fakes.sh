@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Dublês de `gcloud`, `docker`, `git` e `curl` para os testes offline de `ops/gcp/` (T18.2.1/T18.3).
+# Dublês de `gcloud`, `docker`, `git`, `gh` e `curl` para os testes offline de `ops/gcp/`
+# (T18.2.1/T18.3).
 #
-# Lido com `source` pelos testes. `install_fakes <dir>` grava os quatro executáveis em <dir>; o
+# Lido com `source` pelos testes. `install_fakes <dir>` grava os cinco executáveis em <dir>; o
 # teste prefixa o PATH com ele. Nenhum fake fala com rede, projeto ou daemon real.
 #
 # ## O que o gcloud fake sabe fazer
@@ -43,15 +44,40 @@ install_fakes() {
   local dir="$1"
   mkdir -p "${dir}"
 
+  # `git` fake. `-C <dir>` é aceito e ignorado (os testes não têm repositório de verdade).
+  #   GIT_FETCH_FAILS=1        → `git fetch` falha (sem rede/credencial)
+  #   GIT_NOT_ANCESTOR=1       → o commit NÃO está em origin/main
   cat > "${dir}/git" <<'FAKE_GIT'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "${1:-}" != "-C" ] || shift 2
 case "${1:-}" in
   status) exit 0 ;;
   rev-parse) printf 'abcdef123456\n' ;;
+  fetch) [ -z "${GIT_FETCH_FAILS:-}" ] || exit 1 ;;
+  merge-base) [ -z "${GIT_NOT_ANCESTOR:-}" ] || exit 1 ;;
+  diff) exit 0 ;;
 esac
 exit 0
 FAKE_GIT
+
+  # `gh`, para o portão de procedência do deploy (T18.3.2). `gh run list ... --jq` devolve a linha
+  # já reduzida pelo `--jq` do gh real: `status:conclusion` por execução, separadas por espaço.
+  #   GH_NO_RUN=1              → nenhuma execução para aquele commit
+  #   GH_RUN_RESULT=...        → o que a consulta devolve (default: completed:success)
+  #   GH_RUN_LIST_FAILS=1      → a consulta falha (gh não autenticado, sem rede)
+  cat > "${dir}/gh" <<'FAKE_GH'
+#!/usr/bin/env bash
+set -euo pipefail
+[ -z "${GH_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "${GH_CALL_LOG}"
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
+  [ -z "${GH_RUN_LIST_FAILS:-}" ] || exit 1
+  [ -z "${GH_NO_RUN:-}" ] || { printf '\n'; exit 0; }
+  printf '%s\n' "${GH_RUN_RESULT:-completed:success}"
+  exit 0
+fi
+exit 0
+FAKE_GH
 
   cat > "${dir}/docker" <<'FAKE_DOCKER'
 #!/usr/bin/env bash
@@ -237,7 +263,7 @@ fi
 exit 0
 FAKE_GCLOUD
 
-  chmod +x "${dir}/git" "${dir}/docker" "${dir}/curl" "${dir}/gcloud"
+  chmod +x "${dir}/git" "${dir}/gh" "${dir}/docker" "${dir}/curl" "${dir}/gcloud"
 }
 
 # Uma verificação com contagem de falhas — o mesmo `check` dos outros testes de ops/.

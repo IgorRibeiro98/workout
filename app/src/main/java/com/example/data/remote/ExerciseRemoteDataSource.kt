@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.BuildConfig
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.Moshi
@@ -166,10 +167,18 @@ class NetworkExerciseRemoteDataSource(
         if (apiService != null) {
             activeApiService = apiService
         } else {
+            // Só em debug. Em release este interceptor imprimiria no Logcat a URL de cada
+            // consulta ao ExerciseDB — o que a pessoa está procurando, quando, e com que
+            // frequência —, legível por qualquer app com acesso ao log do aparelho. `NONE`
+            // mantém a cadeia idêntica entre as variantes, sem um `if` em volta do cliente.
             val loggingInterceptor = HttpLoggingInterceptor { message ->
                 Log.d("ExerciseDB_HTTP", message)
             }.apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BASIC
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
             }
 
             val userAgentInterceptor = Interceptor { chain ->

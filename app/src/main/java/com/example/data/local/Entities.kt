@@ -143,7 +143,18 @@ enum class SessionStatus { PLANNED, IN_PROGRESS, PAUSED, COMPLETED, CANCELLED }
 
 @Entity(
     tableName = "workout_sessions",
-    indices = [androidx.room.Index(value = ["syncId"], unique = true)]
+    indices = [
+        androidx.room.Index(value = ["syncId"], unique = true),
+        // Índice da consulta mais quente do app (auditoria 2026-09-12): praticamente toda leitura
+        // de histórico filtra por `status` e ordena por `startedAt`/`finishedAt`, e a sessão ativa
+        // é procurada por `status = 'IN_PROGRESS'`. Sem ele, cada uma dessas consultas varre a
+        // tabela inteira — e ela cresce um registro por treino, para sempre.
+        androidx.room.Index(value = ["status", "finishedAt"]),
+        // As projeções de consistência e o calendário ordenam a partição `COMPLETED` por
+        // `startedAt`; sem este índice, o filtro por status é atendido mas a ordenação continua
+        // exigindo uma varredura da partição inteira.
+        androidx.room.Index(value = ["status", "startedAt"])
+    ]
 )
 data class WorkoutSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -172,7 +183,15 @@ data class WorkoutSessionEntity(
     foreignKeys = [
         ForeignKey(entity = WorkoutSessionEntity::class, parentColumns = ["id"], childColumns = ["sessionId"], onDelete = ForeignKey.CASCADE)
     ],
-    indices = [androidx.room.Index("sessionId")]
+    indices = [
+        androidx.room.Index("sessionId"),
+        // `getLastExecutionSetsForExercise` faz subconsulta correlacionada por exercício, e é
+        // chamada uma vez **por exercício do treino** no início de cada sessão (auditoria
+        // 2026-09-12). Sem estes dois índices é uma varredura completa de `exercise_sessions`
+        // multiplicada pelo número de exercícios.
+        androidx.room.Index("actualExerciseId"),
+        androidx.room.Index("plannedExerciseId")
+    ]
 )
 data class ExerciseSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -211,7 +230,9 @@ enum class AlternativeType {
     ],
     indices = [
         androidx.room.Index("sessionId"),
-        androidx.room.Index(value = ["syncId"], unique = true)
+        androidx.room.Index(value = ["syncId"], unique = true),
+        // As listagens de check-in ordenam por `checkInTime` (auditoria 2026-09-12).
+        androidx.room.Index("checkInTime")
     ]
 )
 data class CheckInEntity(

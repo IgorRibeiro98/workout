@@ -33,10 +33,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,20 +40,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.repository.SnapshotBuildResult
-import com.example.domain.social.Friend
-import com.example.domain.social.FriendGateway
-import com.example.domain.social.FriendOutcome
-import com.example.domain.social.WorkoutShareGateway
-import com.example.domain.social.WorkoutShareOutcome
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import kotlinx.coroutines.launch
-import java.util.UUID
 
 /**
  * O diálogo de compartilhar treino (T17.7).
@@ -71,12 +61,14 @@ import java.util.UUID
  * exercício CUSTOM é aplicada fail-closed.
  *
  * O que chega aqui é o que vai para o servidor, e nada mais.
+ *
+ * Listar amigos e enviar o treino correm no `viewModelScope` (T17.10): quando isso vivia num
+ * `LaunchedEffect`/`rememberCoroutineScope`, fechar o diálogo cancelava a requisição em voo.
  */
 @Composable
 fun ShareWorkoutDialog(
     buildResult: SnapshotBuildResult,
-    friendGateway: FriendGateway,
-    shareGateway: WorkoutShareGateway,
+    viewModel: ShareWorkoutViewModel,
     onDismiss: () -> Unit,
     onShareSuccess: () -> Unit
 ) {
@@ -99,8 +91,7 @@ fun ShareWorkoutDialog(
                 is SnapshotBuildResult.Success -> {
                     ShareWorkoutContent(
                         snapshot = buildResult.snapshot,
-                        friendGateway = friendGateway,
-                        shareGateway = shareGateway,
+                        viewModel = viewModel,
                         onDismiss = onDismiss,
                         onShareSuccess = onShareSuccess
                     )
@@ -161,29 +152,22 @@ private fun ShareBlockedContent(
 @Composable
 private fun ShareWorkoutContent(
     snapshot: com.example.domain.social.SharedWorkoutSnapshot,
-    friendGateway: FriendGateway,
-    shareGateway: WorkoutShareGateway,
+    viewModel: ShareWorkoutViewModel,
     onDismiss: () -> Unit,
     onShareSuccess: () -> Unit
 ) {
-    var friends by remember { mutableStateOf<List<Friend>>(emptyList()) }
-    var isLoadingFriends by remember { mutableStateOf(true) }
-    var selectedFriend by remember { mutableStateOf<Friend?>(null) }
-    var isSending by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val friends = state.friends
+    val isLoadingFriends = state.isLoadingFriends
+    val isSending = state.isSending
+    val errorMessage = state.errorMessage
 
-    val scope = rememberCoroutineScope()
+    LaunchedEffect(viewModel) { viewModel.loadFriends() }
 
-    LaunchedEffect(Unit) {
-        when (val outcome = friendGateway.friends()) {
-            is FriendOutcome.Success -> {
-                friends = outcome.value.items
-                isLoadingFriends = false
-            }
-            is FriendOutcome.Failure -> {
-                isLoadingFriends = false
-            }
-        }
+    // A confirmação vem do estado, e não da corrotina que enviou: assim ela chega mesmo que o
+    // envio termine depois de a tela recompor.
+    LaunchedEffect(state.isSent) {
+        if (state.isSent) onShareSuccess()
     }
 
     Column(modifier = Modifier.padding(20.dp)) {
@@ -247,14 +231,17 @@ private fun ShareWorkoutContent(
             ) {
                 CircularProgressIndicator(color = Lime400)
             }
-        } else if (friends.isEmpty()) {
+        } else if (friends.isEmpty() && errorMessage == null) {
+            // Só dizemos "você não tem amigos" quando a leitura **deu certo** e voltou vazia. Com
+            // falha, o texto de erro logo abaixo é o que aparece — afirmar o contrário seria mentir
+            // sobre a conta de quem está sem internet.
             Text(
                 text = "Você ainda não possui amigos adicionados.",
                 color = TextSecondary,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(vertical = 16.dp)
             )
-        } else {
+        } else if (friends.isNotEmpty()) {
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -262,11 +249,11 @@ private fun ShareWorkoutContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(friends, key = { it.socialId }) { friend ->
-                    val isSelected = selectedFriend?.socialId == friend.socialId
+                    val isSelected = state.selectedFriendId == friend.socialId
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { selectedFriend = friend },
+                            .clickable { viewModel.selectFriend(friend.socialId) },
                         shape = RoundedCornerShape(8.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = if (isSelected) Color(0xFF1E3A2B) else SurfaceDark
@@ -316,7 +303,7 @@ private fun ShareWorkoutContent(
         if (errorMessage != null) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = errorMessage!!,
+                text = errorMessage,
                 color = Red400,
                 fontSize = 13.sp
             )
@@ -340,28 +327,8 @@ private fun ShareWorkoutContent(
             Spacer(modifier = Modifier.width(8.dp))
 
             Button(
-                onClick = {
-                    val target = selectedFriend ?: return@Button
-                    isSending = true
-                    errorMessage = null
-                    scope.launch {
-                        val outcome = shareGateway.createShare(
-                            recipientSocialId = target.socialId,
-                            clientRequestId = UUID.randomUUID().toString(),
-                            snapshot = snapshot
-                        )
-                        isSending = false
-                        when (outcome) {
-                            is WorkoutShareOutcome.Success -> {
-                                onShareSuccess()
-                            }
-                            is WorkoutShareOutcome.Failure -> {
-                                errorMessage = "Falha ao enviar treino. Tente novamente."
-                            }
-                        }
-                    }
-                },
-                enabled = selectedFriend != null && !isSending,
+                onClick = { viewModel.share(snapshot) },
+                enabled = state.selectedFriendId != null && !isSending,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Lime400,
                     contentColor = Color.Black

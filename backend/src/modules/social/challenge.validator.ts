@@ -432,6 +432,12 @@ function parseChallengeCursor(raw: unknown): ListCursor | null {
   ) {
     throw ChallengeErrors.invalid('cursor inválido');
   }
+  // As duas listas de desafio ordenam por número (`startsAt`, `createdAt`), e o repositório faz
+  // `Number(cursor.primary)`. Um primário não numérico viraria `NaN` no `WHERE` e derrubaria a
+  // consulta: cursor malformado é `400` do cliente, nunca `500` do servidor.
+  if (!Number.isFinite(Number(decoded[0]))) {
+    throw ChallengeErrors.invalid('cursor inválido');
+  }
   return { primary: decoded[0], secondary: decoded[1] };
 }
 

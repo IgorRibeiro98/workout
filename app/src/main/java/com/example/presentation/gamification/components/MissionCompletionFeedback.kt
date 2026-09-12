@@ -43,9 +43,12 @@ fun MissionCompletionFeedback(
     onAnimationEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isVisible by remember { mutableStateOf(true) }
+    // Mesma razão do `AchievementUnlockFeedback`: o componente vive num slot fixo alimentado por
+    // uma fila, e sem chave o segundo item herdaria `isVisible = false` e o efeito já consumido —
+    // travando a fila. Quem chama também envolve a chamada em `key(id)`.
+    var isVisible by remember(title, rewardXp) { mutableStateOf(true) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(title, rewardXp) {
         delay(4000)
         isVisible = false
         delay(500)

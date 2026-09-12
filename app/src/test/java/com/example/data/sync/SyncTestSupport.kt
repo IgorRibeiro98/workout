@@ -397,6 +397,15 @@ class FakeSyncApi(
     /** Quando ligado, o servidor aplica e a **resposta se perde** — o cenário do §40. */
     var dropNextPushResponse: Boolean = false
 
+    /**
+     * A janela em que a requisição já saiu e a resposta ainda não chegou.
+     *
+     * Chamado depois de o servidor ter aplicado a mutação e **antes** de o cliente ver o resultado.
+     * É a única forma honesta de reproduzir "o usuário editou durante o envio": o payload já foi
+     * congelado por `prepare()`, o servidor já decidiu, e a alteração local acontece no meio.
+     */
+    var onPushInFlight: (suspend () -> Unit)? = null
+
     /** Força uma resposta 5xx no próximo push. */
     var unavailableOnNextPush: Boolean = false
 
@@ -420,6 +429,9 @@ class FakeSyncApi(
 
         val request = json.decodeFromString(SyncPushRequestDto.serializer(), canonicalBody)
         val response = server.push(ownerUid, request.deviceId, request.mutations)
+
+        // O corpo já foi montado e o servidor já decidiu; o cliente ainda não sabe de nada.
+        onPushInFlight?.invoke()
 
         if (dropNextPushResponse) {
             dropNextPushResponse = false

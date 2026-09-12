@@ -6,9 +6,23 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+        Alarme exato do fim de descanso (auditoria 2026-09-12).
+
+        `SCHEDULE_EXACT_ALARM` fica: é a permissão concedível pelo usuário para um alarme que ele
+        mesmo marcou, e é ela que o `WorkoutNotificationManager` checa antes de agendar exato. A
+        partir do Android 14 ela nasce negada para quem mira 33+; a tela de Configurações oferece o
+        atalho para o usuário concedê-la, e até lá o alarme é inexato.
+
+        Duas permissões saíram daqui, sem perda de função:
+
+        - `USE_EXACT_ALARM`: o Play a restringe a apps cuja função central é despertador,
+          temporizador ou calendário. Declará-la num app de treino é risco de recusa na revisão, e
+          ela só servia para pular a concessão pelo usuário.
+        - `FOREGROUND_SERVICE`: o app não tem **nenhum** serviço em primeiro plano (zero ocorrências
+          de `startForeground`). Só aparecia na ficha do Play como um poder que o Spark não usa.
+    -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
         android:name=".MainApplication"

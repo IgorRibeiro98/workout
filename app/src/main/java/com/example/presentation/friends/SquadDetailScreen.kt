@@ -36,7 +36,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,6 +64,8 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.rememberRelativeNow
 
 const val SQUAD_DETAIL_SCREEN_DESCRIPTION = "Detalhe do squad"
 
@@ -108,9 +109,9 @@ fun SquadDetailScreen(
      * (§63). Ele é texto, e não autorização: quem decide o que este usuário alcança é o servidor.
      */
     onOpenCheckIn: (checkInId: String, groupName: String) -> Unit = { _, _ -> },
-    now: Long = System.currentTimeMillis()
+    now: Long = rememberRelativeNow()
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var inviting by remember { mutableStateOf(false) }
     var confirmingLeave by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }

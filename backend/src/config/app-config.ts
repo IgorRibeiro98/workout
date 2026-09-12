@@ -1,5 +1,9 @@
 import { join } from 'node:path';
-import { productionSslViolation } from '../database/postgres-url';
+import {
+  parsePostgresUrl,
+  PostgresUrlIdentityError,
+  productionSslViolation,
+} from '../database/postgres-url';
 import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
 /** Onde os bytes de mídia e de backup vivem (T18.1). A escolha mora em `object-storage.factory.ts`. */
@@ -389,6 +393,31 @@ export class AppConfig {
     // declare, por escrito, não verificar a identidade do servidor (`sslmode=disable|no-verify`,
     // ou `uselibpqcompat=true` sem `verify-full`). `sslmode=require` é aceito e normalizado para
     // `verify-full` em `PostgresService` — ver `postgres-url.ts`.
+    // T18.3.2 — em produção, a URL precisa dizer **qual banco** ela manipula.
+    //
+    // `postgres://host` e `postgres://host/` são válidas para o driver: ele cai no banco default do
+    // papel. Em produção isso não é um default, é uma surpresa — o backend abriria o pool, migraria
+    // e serviria a partir de um banco que ninguém escolheu, e o backup de DR (que já recusa uma URL
+    // assim, `postgresUrlIdentity`) descreveria outro. A mesma verificação, agora também no runtime.
+    if (this.isProduction) {
+      for (const [name, value] of [
+        ['DATABASE_URL', this.env.DATABASE_URL],
+        ['DATABASE_URL_DIRECT', this.env.DATABASE_URL_DIRECT],
+      ] as const) {
+        if (value === undefined) {
+          continue;
+        }
+        try {
+          parsePostgresUrl(value);
+        } catch (error) {
+          if (error instanceof PostgresUrlIdentityError) {
+            missing.push(`${name}: ${error.message}`);
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
     if (this.isProduction) {
       const pooled = productionSslViolation(this.env.DATABASE_URL);
       if (pooled !== undefined) {

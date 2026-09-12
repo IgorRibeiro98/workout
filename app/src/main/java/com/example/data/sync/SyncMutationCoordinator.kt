@@ -82,26 +82,31 @@ class SyncMutationCoordinator(
     /**
      * Executa [block] e registra, na mesma transação, as mutações que ele declarar.
      *
-     * O estado da nuvem é lido **antes** de abrir a transação: consultar DataStore com uma
-     * transação Room aberta seria I/O de outra fonte dentro de um lock de banco.
+     * O estado da nuvem é lido **dentro** da transação. Ele mora no Room desde a T16.4
+     * (`cloud_data_binding`), e lê-lo antes abriria uma janela real: entre a leitura e a escrita,
+     * a adoção da nuvem pode confirmar. A edição feita nessa janela veria `Disabled`, não geraria
+     * entrada na Outbox — e também não entraria no snapshot inicial, que foi capturado antes dela.
+     * Ficaria de fora dos dois lados, que é perda sem conserto.
      */
     suspend fun <R> mutate(block: suspend SyncMutationScope.() -> R): R {
-        val scope = scopeProvider.current()
-        val ownerUid = scope.recordingOwnerUid
-        if (ownerUid != null && outboxDao == null) {
-            // Falha alta de propósito: nuvem ativa sem Outbox significaria alterações perdidas em
-            // silêncio, que é exatamente o defeito que o Transactional Outbox existe para evitar.
-            error("Cloud sync is active for a account but no outbox DAO was provided")
-        }
-        val recording = RecordingScope(ownerUid)
+        var recorded = false
         val result = transactions.runInTransaction {
+            val ownerUid = scopeProvider.current().recordingOwnerUid
+            if (ownerUid != null && outboxDao == null) {
+                // Falha alta de propósito: nuvem ativa sem Outbox significaria alterações perdidas
+                // em silêncio, que é exatamente o defeito que o Transactional Outbox existe para
+                // evitar.
+                error("Cloud sync is active for a account but no outbox DAO was provided")
+            }
+            val recording = RecordingScope(ownerUid)
             val value = recording.block()
             recording.flush()
+            recorded = recording.recorded
             value
         }
         // Fora da transação, e só se alguma entrada nasceu: uma operação que não mudou estado não
         // agenda nada.
-        if (recording.recorded) onMutationsRecorded()
+        if (recorded) onMutationsRecorded()
         return result
     }
 

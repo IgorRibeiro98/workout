@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Recursos que o encolhimento não pode remover (auditoria 2026-09-12).
+
+  `shrinkResources` remove todo recurso sem referência estática. `default_web_client_id` é
+  referenciado só por nome, em `GoogleServerClientId.resolve` via `getIdentifier` — e por um motivo
+  documentado: o recurso é gerado pelo plugin do Google Services apenas quando o provedor Google
+  está habilitado no console, então uma referência direta a `R.string` faria o app não compilar
+  enquanto essa etapa estivesse pendente.
+
+  Sem esta regra, o login com Google falharia **apenas no APK de release**: o recurso sairia do
+  pacote, `getIdentifier` devolveria 0 e a entrada de conta se apresentaria como indisponível.
+-->
+<resources
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@string/default_web_client_id" />

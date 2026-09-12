@@ -156,9 +156,10 @@ fun AchievementCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (isUnlocked) {
+                val unlockedAt = achievement.unlockedAt
+                if (isUnlocked && unlockedAt != null) {
                     val dateStr = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-                        .format(Date(achievement.unlockedAt!!))
+                        .format(Date(unlockedAt))
                     Text(
                         text = "Desbloqueada: $dateStr",
                         style = MaterialTheme.typography.labelSmall,

@@ -136,9 +136,10 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `DATABASE_URL_DIRECT` | não | `DATABASE_URL` | Connection string direta para migrations e operações administrativas (Neon direct connection). Vazia = ausente (é como o Compose representa "não definido"). |
 | `DATABASE_POOL_MIN` | não | `2` | Mínimo de conexões no pool pg |
 | `DATABASE_POOL_MAX` | não | `10` | Máximo de conexões no pool pg |
-| `DATABASE_STATEMENT_TIMEOUT_MS` | não | `30000` | Timeout por instrução SQL |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | não | `30000` | Timeout por instrução SQL. Aplicado como parâmetro de startup do `pg` **e** como `SET LOCAL` no início de cada transação — o segundo é o que sobrevive ao pooler, que não repassa parâmetro de startup (T18.3.2) |
+| `DATABASE_CONNECTION_TIMEOUT_MS` | não | `15000` | Aquisição de conexão do pool. 15 s absorve o cold start do Neon com Cloud Run em `min-instances=0`; há **uma** retentativa para falha transitória de conexão (T18.3.2) |
 | `LOG_LEVEL` | não | `info` | |
-| `SHUTDOWN_TIMEOUT_MS` | não | `10000` | Drenagem em SIGTERM/SIGINT |
+| `SHUTDOWN_TIMEOUT_MS` | não | `8000` | Drenagem em SIGTERM/SIGINT. Abaixo dos 10 s que o Cloud Run (e o `docker stop`) dão antes do SIGKILL, para que o log de shutdown forçado chegue a ser escrito |
 | `FIREBASE_ADMIN_CREDENTIAL_MODE` | não | `file` | `file` (`GOOGLE_APPLICATION_CREDENTIALS`, VPS/dev/teste) \| `adc` (Cloud Run, T18.2 — identidade da service account anexada, sem arquivo) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Só lido em modo `file`. Sem ele, rota autenticada responde `503` |
 | `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial (ou é declarado explicitamente em modo `adc`) |
@@ -164,7 +165,7 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `OBJECT_STORAGE_TIMEOUT_MS` | não | `30000` | Teto de uma requisição ao bucket; o retry do SDK é bounded por cima dele |
 | `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS` | não | `21600000` | Coleta de objetos de backup órfãos (carência de 24 h). Longo: cada varredura é uma listagem paga. Em `BACKGROUND_JOBS_MODE=disabled` é a cadência mínima entre duas varreduras do ciclo de manutenção (T18.2 §38), não o período de um `setInterval` |
 | `SOCIAL_MEDIA_ROOT` | produção com `local` | derivado fora de produção | Raiz do provider `local`: `checkins/…` (mídia, layout de sempre) e `backups/…`. Não participa de nada com `gcs` |
-| `DATABASE_MIGRATION_MODE` | não | `apply` | `apply` (o processo aplica migrations pendentes no boot, como sempre) \| `verify` (Cloud Run: nunca aplica — só confirma que o schema já está no nível esperado; schema pendente é `/health/ready` indisponível, nunca crash) |
+| `DATABASE_MIGRATION_MODE` | não | `apply` | `apply` (o processo aplica migrations pendentes no boot, como sempre) \| `verify` (Cloud Run: nunca aplica — só confirma que o schema já está no nível esperado; schema pendente é `/health/ready` indisponível, nunca crash). Em `apply`, o processo **recusa subir** se a URL efetiva de migration for um endpoint pooled (host com `-pooler`): lock consultivo de sessão atrás de um PgBouncer em modo transação é o incidente do lock preso da T18.3 (T18.3.2) |
 | `BACKGROUND_JOBS_MODE` | não | `interval` | `interval` (cada worker agenda o próprio `setInterval`, como sempre) \| `disabled` (Cloud Run: nenhum timer nasce; `spark-maintenance` chama os métodos de uma passagem) |
 
 Nenhuma credencial é versionada. `.env`, chaves, service accounts e Caddyfile real estão no

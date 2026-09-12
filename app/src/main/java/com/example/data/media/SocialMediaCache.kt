@@ -48,8 +48,15 @@ class SocialMediaCache(
             value.width * value.height * BYTES_PER_PIXEL
     }
 
-    private val inFlight = mutableMapOf<String, Mutex>()
-    private val guard = Mutex()
+    /**
+     * A trava de download de cada foto, viva enquanto o cache for daquela conta.
+     *
+     * `ConcurrentHashMap` e não um mapa com `Mutex` de guarda: `switchAccount` e [clear] não são
+     * suspensas — elas rodam no momento exato em que a conta muda —, e precisam poder esvaziar
+     * isto junto com os bitmaps. `computeIfAbsent` dá a atomicidade que a guarda dava, sem exigir
+     * corrotina para ler o mapa.
+     */
+    private val inFlight = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
     /** A conta dona do que está guardado. `null` = ninguém conectado, e o cache está vazio. */
     @Volatile
@@ -66,12 +73,14 @@ class SocialMediaCache(
         if (uid == ownerUid) return
         ownerUid = uid
         bitmaps.evictAll()
+        inFlight.clear()
     }
 
     /** Logout: nada de conta nenhuma sobrevive na memória (§145). */
     fun clear() {
         ownerUid = null
         bitmaps.evictAll()
+        inFlight.clear()
     }
 
     /** O que já está em memória, sem tocar na rede. Usado para desenhar sem piscar. */
@@ -92,7 +101,14 @@ class SocialMediaCache(
         if (expectedUid == null || expectedUid != ownerUid) return null
         bitmaps.get(mediaId)?.let { return it }
 
-        val lock = guard.withLock { inFlight.getOrPut(mediaId) { Mutex() } }
+        // A trava daquele `mediaId` **fica** no mapa.
+        //
+        // Ela era removida logo depois de liberada, e isso reabria exatamente a corrida que ela
+        // existe para fechar: uma corrotina que tivesse pegado a referência antes da remoção e
+        // outra que chegasse depois travariam em objetos diferentes, e a mesma foto seria baixada
+        // duas vezes. Guardar um `Mutex` por foto já vista custa dezenas de bytes — muito menos do
+        // que um download repetido — e o mapa é limpo junto com o cache quando a conta troca.
+        val lock = inFlight.computeIfAbsent(mediaId) { Mutex() }
 
         return lock.withLock {
             // Outra corrotina pode ter carregado enquanto esta esperava o `Mutex`.
@@ -111,8 +127,6 @@ class SocialMediaCache(
             val image = decoded.asImageBitmap()
             bitmaps.put(mediaId, image)
             image
-        }.also {
-            guard.withLock { inFlight.remove(mediaId) }
         }
     }
 

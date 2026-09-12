@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -278,6 +279,15 @@ class RestTimerAlertAuthority(private val context: Context) {
         private val VIBRATION_AMPLITUDES = intArrayOf(0, 255, 0, 255)
         private val lastAlertTimestampMs = AtomicLong(0L)
 
+        /**
+         * O `Context` guardado aqui é o da **aplicação**, obtido em [getInstance] por
+         * `context.applicationContext`: ele vive exatamente enquanto o processo vive, então não há
+         * o que vazar. O lint não consegue enxergar essa garantia através da fábrica e acusa
+         * `StaticFieldLeak` no campo; a supressão é sobre a limitação da análise, não sobre o
+         * defeito — trocar por um `WeakReference` só tornaria o alerta de fim de descanso
+         * perdível sem resolver problema nenhum.
+         */
+        @SuppressLint("StaticFieldLeak")
         @Volatile
         private var instance: RestTimerAlertAuthority? = null
 

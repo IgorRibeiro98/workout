@@ -76,9 +76,26 @@ class RestoreTransaction(
      * [binding] decide o que acontece com o vínculo do dataset. Um restore de verdade estabelece
      * (ou confirma) o vínculo com a conta dona do backup; um rollback restaura o vínculo que
      * existia antes — inclusive quando "antes" era *nenhum*.
+     *
+     * [onApplied] roda **dentro do mesmo commit**, depois de o dataset já estar substituído. É por
+     * onde a fase `ROOM_APPLIED` da tentativa entra (auditoria 2026-09-12): escrevê-la depois do
+     * commit deixava uma janela em que o Room já era o backup e a tentativa ainda dizia
+     * `SAFETY_SNAPSHOT_CREATED` — e um processo morto ali fazia a recuperação da próxima abertura
+     * concluir que nada tinha sido aplicado, encerrar a tentativa e apagar o snapshot de segurança
+     * sobre um dataset já restaurado. O rollback não passa nada aqui porque não há fase a marcar:
+     * ele desfaz, não avança.
      */
-    suspend fun apply(plan: RestorePlan, binding: RestoreBindingOutcome): RestoreApplied =
+    suspend fun apply(
+        plan: RestorePlan,
+        binding: RestoreBindingOutcome,
+        onApplied: suspend () -> Unit = {}
+    ): RestoreApplied =
         transactions.runInTransaction {
+            // Antes da limpeza, e dentro da mesma transação: a foto local de cada exercício é a
+            // única coisa do dataset pessoal que **não** vem do snapshot, porque ela não cabe nele
+            // (ver [insertOverrides]). Lida depois do `clearPersonalDataset()` ela já não existiria.
+            val photos = capturePersonalPhotos()
+
             clearPersonalDataset()
 
             val customExerciseIds = insertCustomExercises(plan)
@@ -87,7 +104,8 @@ class RestoreTransaction(
             val sessionIds = insertSessions(plan, templateIds, customExerciseIds)
             insertCheckIns(plan, sessionIds)
             insertMeasurements(plan)
-            insertOverrides(plan, customExerciseIds)
+            val withOverride = insertOverrides(plan, customExerciseIds, photos)
+            restoreRemainingPhotos(customExerciseIds, photos, withOverride)
             insertWeeklyGoals(plan)
 
             applyBinding(binding)
@@ -100,6 +118,10 @@ class RestoreTransaction(
             restoreDao.deleteAllSyncEntityMetadata()
             restoreDao.deleteAllSyncCursors()
             restoreDao.deleteAllSyncConflicts()
+
+            // Por último, ainda dentro do commit: a fase só pode afirmar "o Room é o backup"
+            // depois de o Room ser o backup, e precisa entrar junto com ele.
+            onApplied()
 
             RestoreApplied(
                 programs = programIds.size,
@@ -366,13 +388,49 @@ class RestoreTransaction(
     }
 
     /**
-     * As customizações de exercício.
+     * As fotos que o usuário tirou **neste** aparelho, por identidade portátil.
      *
-     * `customPhotoUri` não é restaurado: ele é um `content://` do aparelho que fez o backup, não
-     * viaja no snapshot e não resolveria aqui. A foto local **deste** aparelho, quando existe, é
-     * dado local — e o restore não a apaga silenciosamente por causa disso.
+     * `customPhotoUri` é um `content://` deste celular: ele não é serializado no backup
+     * (`BackupSnapshotBuilder`), não viaja e não resolveria em outro aparelho. Isso o torna a única
+     * parte do dataset pessoal que o snapshot não pode devolver — e é exatamente por isso que ela
+     * precisa atravessar o restore por fora dele, em vez de ser apagada junto com as customizações.
+     *
+     * A chave é a mesma identidade que o backup usa para referenciar um exercício: `canonicalId`
+     * para o catálogo, `syncId` para o que o usuário criou. O `localId` não serve — ele é
+     * reatribuído por este banco no meio desta transação.
      */
-    private suspend fun insertOverrides(plan: RestorePlan, customExerciseIds: Map<String, Long>) {
+    private suspend fun capturePersonalPhotos(): PreservedPhotos {
+        val byCanonicalId = mutableMapOf<String, String>()
+        val bySyncId = mutableMapOf<String, String>()
+
+        workoutDao.getAllOverrides().forEach { override ->
+            val uri = override.customPhotoUri?.takeIf { it.isNotBlank() } ?: return@forEach
+            val exercise = workoutDao.getExerciseById(override.exerciseId) ?: return@forEach
+
+            val canonicalId = exercise.canonicalId?.takeIf { it.isNotBlank() }
+            val syncId = exercise.syncId?.takeIf { it.isNotBlank() }
+            when {
+                canonicalId != null && !exercise.isUserCreated -> byCanonicalId[canonicalId] = uri
+                syncId != null -> bySyncId[syncId] = uri
+                canonicalId != null -> byCanonicalId[canonicalId] = uri
+            }
+        }
+        return PreservedPhotos(byCanonicalId, bySyncId)
+    }
+
+    /**
+     * As customizações de exercício. Devolve os `localId` que receberam linha.
+     *
+     * O conteúdo vem do snapshot; a foto vem de [capturePersonalPhotos]. Antes desta correção o
+     * campo era gravado como `null` — e, como a limpeza já tinha apagado a tabela, o efeito real
+     * era **apagar as fotos do usuário** num restore. O comentário antigo afirmava o contrário.
+     */
+    private suspend fun insertOverrides(
+        plan: RestorePlan,
+        customExerciseIds: Map<String, Long>,
+        photos: PreservedPhotos
+    ): Set<Long> {
+        val written = mutableSetOf<Long>()
         plan.snapshot.overrides.forEach { dto ->
             val exerciseId = resolveExercise(plan, customExerciseIds, dto.exercise)
                 ?: throw RestoreException(
@@ -384,11 +442,73 @@ class RestoreTransaction(
                     exerciseId = exerciseId,
                     displayName = dto.displayName,
                     notes = dto.notes,
-                    customPhotoUri = null,
+                    customPhotoUri = photos.of(dto.exercise),
                     defaultRestSeconds = dto.defaultRestSeconds,
                     updatedAt = dto.updatedAt
                 )
             )
+            written += exerciseId
+        }
+        return written
+    }
+
+    /**
+     * As fotos cujo exercício não recebeu customização do snapshot.
+     *
+     * É o caso **mais comum**, não uma borda: o backup descarta uma customização que só tem foto,
+     * porque não sobra nada portátil dentro dela (`BackupSnapshotBuilder.overrideItems`). Sem este
+     * passo, preservar a foto funcionaria só para quem também tivesse renomeado o exercício ou
+     * escrito uma nota nele.
+     *
+     * Uma foto cujo exercício não existe mais neste aparelho é descartada em silêncio, e está
+     * certo: não há linha a que anexá-la.
+     */
+    private suspend fun restoreRemainingPhotos(
+        customExerciseIds: Map<String, Long>,
+        photos: PreservedPhotos,
+        alreadyWritten: Set<Long>
+    ) {
+        photos.byCanonicalId.forEach { (canonicalId, uri) ->
+            // Pelo banco, e não por `plan.canonicalExerciseIds`: aquele mapa cobre só os canônicos
+            // que o snapshot **referencia**, e uma foto pode estar num exercício de catálogo que
+            // nenhum treino do backup usa. O catálogo não é apagado pelo restore, então a linha
+            // continua aqui com o mesmo `localId`.
+            writePhotoOnlyOverride(
+                workoutDao.getExerciseByCanonicalId(canonicalId)?.id,
+                uri,
+                alreadyWritten
+            )
+        }
+        photos.bySyncId.forEach { (syncId, uri) ->
+            // Exercício pessoal é diferente: ele foi apagado e reinserido, e o `localId` é novo. A
+            // identidade portátil é a única ponte entre a foto e a linha nova.
+            writePhotoOnlyOverride(customExerciseIds[syncId], uri, alreadyWritten)
+        }
+    }
+
+    private suspend fun writePhotoOnlyOverride(
+        exerciseId: Long?,
+        uri: String,
+        alreadyWritten: Set<Long>
+    ) {
+        if (exerciseId == null || exerciseId in alreadyWritten) return
+        workoutDao.insertOrUpdateOverride(
+            ExerciseUserOverrideEntity(
+                exerciseId = exerciseId,
+                customPhotoUri = uri,
+                updatedAt = clock()
+            )
+        )
+    }
+
+    /** As fotos locais preservadas, pelas duas identidades portáteis possíveis de um exercício. */
+    private data class PreservedPhotos(
+        val byCanonicalId: Map<String, String>,
+        val bySyncId: Map<String, String>
+    ) {
+        fun of(ref: ExerciseRefDto): String? = when (ref.kind) {
+            ExerciseRefDto.CANONICAL -> byCanonicalId[ref.id]
+            else -> bySyncId[ref.id]
         }
     }
 

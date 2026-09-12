@@ -74,8 +74,17 @@ export const envSchema = z.object({
   /** Tamanho máximo do pool de conexões PostgreSQL (adequado para Neon Free e Cloud Run). */
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
 
-  /** Timeout para aquisição de conexão do pool (ms). */
-  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(5_000),
+  /**
+   * Timeout para aquisição de conexão do pool (ms).
+   *
+   * 15 s, e não 5 s (T18.3.2): em produção o Cloud Run roda com `min-instances=0` e o Neon
+   * suspende sozinho. A primeira requisição depois de um período ocioso acorda os dois ao mesmo
+   * tempo, e o banco leva alguns segundos para aceitar conexão — com 5 s o pool desistia **antes**
+   * de o banco terminar de acordar, e o usuário via erro com o banco perfeitamente saudável. Quem
+   * dá a segunda chance é `PostgresService.connectWithRetry`; este valor é o quanto cada tentativa
+   * espera.
+   */
+  DATABASE_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(15_000),
 
   /** Tempo máximo que uma conexão pode ficar ociosa no pool (ms). */
   DATABASE_IDLE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
@@ -99,8 +108,16 @@ export const envSchema = z.object({
    */
   HTTP_KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(300_000).default(65_000),
 
-  /** Tempo máximo para drenar conexões em SIGTERM/SIGINT antes de encerrar à força. */
-  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(10_000),
+  /**
+   * Tempo máximo para drenar conexões em SIGTERM/SIGINT antes de encerrar à força.
+   *
+   * 8 s de propósito, e não 10 (T18.3.2): o Cloud Run dá **10 s** entre o SIGTERM e o SIGKILL, e o
+   * Docker faz o mesmo por default em `docker stop`. Com o teto igual à janela, o `setTimeout` que
+   * registra `server.shutdown.forced` disputava o instante do SIGKILL — o log que existe justamente
+   * para dizer "o dreno não terminou" era o primeiro a se perder. Oito segundos garantem que ele
+   * seja escrito enquanto o processo ainda existe.
+   */
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(8_000),
 
   /**
    * Credencial do Firebase Admin (T16.1), no mecanismo oficial para ambientes não-Google:

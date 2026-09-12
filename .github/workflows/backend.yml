@@ -65,13 +65,49 @@ on:
 env:
   SPARK_CI_ACCOUNT_DELETION_HMAC_KEY: ci-only-account-deletion-hmac-not-for-production
 
+# Um push novo cancela a execução anterior do MESMO ref (T18.3.2), como `android.yml` já fazia.
+# Sem isto, três pushes seguidos no mesmo PR mantinham três pipelines completos (com PostgreSQL,
+# builds de imagem e ensaios de backup) disputando runner para dizer, no fim, o que só a última
+# execução responde. Cancelar não afrouxa gate nenhum: o veredito que importa é o do último commit.
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # A imagem é construída UMA vez e viaja como artefato (T18.3.2).
+  #
+  # Antes, quatro jobs faziam o mesmo `docker build` do mesmo commit, sem cache compartilhado: o
+  # mesmo `npm ci`, o mesmo `nest build` e o mesmo download do PGDG, quatro vezes por push. Nenhum
+  # gate muda por causa disto — os quatro continuam recebendo exatamente os mesmos bytes, agora com
+  # a garantia extra de que são os mesmos bytes (um build por push, um digest por push).
+  image:
+    name: imagem do backend (build único)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t spark-backend:ci backend
+
+      # `gzip -1`: o tempo de upload/download domina, não a taxa de compressão.
+      - name: Exportar a imagem
+        run: docker save spark-backend:ci | gzip -1 > /tmp/spark-backend-ci.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spark-backend-image
+          path: /tmp/spark-backend-ci.tar.gz
+          retention-days: 1
+          compression-level: 0
+
   verify:
     name: lint + test + build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -131,11 +167,13 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
 
   docker:
-    name: docker build
+    name: smoke da imagem + portões de produção
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: image
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -154,8 +192,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t spark-backend:ci .
+      - uses: actions/download-artifact@v4
+        with:
+          name: spark-backend-image
+          path: /tmp
+
+      - name: Carregar a imagem construída no job `image`
+        run: docker load -i /tmp/spark-backend-ci.tar.gz
 
       # T18.3 §2 — a imagem traz as ferramentas nativas do PostgreSQL na major 18 (≥ a do servidor:
       # o Neon de produção roda PostgreSQL 18, e um `pg_dump` mais antigo que o servidor se recusa a
@@ -182,8 +225,11 @@ jobs:
         run: |
           set -euo pipefail
           docker volume create spark-ci-media
+          # `SOCIAL_MEDIA_ROOT` é declarado por quem sobe o container desde a T18.3.2 — a imagem
+          # deixou de embuti-la, justamente para que rodar em produção sem volume de mídia falhe.
           docker run -d --name spark-ci --network host \
             -v spark-ci-media:/media \
+            -e SOCIAL_MEDIA_ROOT=/media \
             -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:ci
@@ -224,12 +270,42 @@ jobs:
 
           # Graceful shutdown (T16.8 §71/§72): uma requisição em voo precisa terminar.
           # `docker stop` manda SIGTERM e espera.
-          ( curl -sS -o /tmp/inflight.body -w '%{http_code}' --max-time 20 \
-              http://127.0.0.1:8080/v1/auth/me > /tmp/inflight.code & )
+          #
+          # A requisição em voo é **determinística** desde a T18.3.2. A versão anterior disparava um
+          # `curl` rápido em background e mandava `docker stop` no instante seguinte, sem nenhuma
+          # sincronização: ou a requisição já tinha terminado (e o teste não provava nada), ou nem
+          # tinha conectado (e o `000` reprovava o CI sem defeito nenhum). Aqui:
+          #
+          #   1. o corpo é grande e sobe com `--limit-rate` — a requisição fica aberta por ~5 s, o
+          #      que é tempo de sobra para o SIGTERM chegar no meio dela (o body parser do Express
+          #      lê o corpo inteiro antes de o guard responder 401, então o servidor está mesmo
+          #      ocupado com ela);
+          #   2. o `docker stop` só acontece depois de o `curl` ter enviado a linha de requisição
+          #      (`> POST`, no trace) — prova de que o servidor já a recebeu;
+          #   3. e ~5 s cabem com folga em `SHUTDOWN_TIMEOUT_MS` (8 s), então um dreno que funciona
+          #      nunca vira `server.shutdown.forced` por causa do próprio teste.
+          head -c 100000 /dev/zero | tr '\0' 'a' > /tmp/inflight.filler
+          { printf '{"filler":"'; cat /tmp/inflight.filler; printf '"}'; } > /tmp/inflight.payload
+          : > /tmp/inflight.trace
+          curl -sS -v -o /dev/null -w '%{http_code}' --max-time 30 \
+            -H 'Content-Type: application/json' --limit-rate 20k \
+            --data-binary @/tmp/inflight.payload \
+            http://127.0.0.1:8080/v1/sync/push > /tmp/inflight.code 2> /tmp/inflight.trace &
+          inflight_pid=$!
+          emvoo=nao
+          for _ in $(seq 1 50); do
+            if grep -q '^> POST' /tmp/inflight.trace 2>/dev/null; then emvoo=sim; break; fi
+            sleep 0.2
+          done
+          if [ "$emvoo" != "sim" ]; then
+            echo "a requisição em voo nunca chegou ao servidor"; cat /tmp/inflight.trace; exit 1
+          fi
           docker stop -t 15 spark-ci > /dev/null
+          wait "$inflight_pid" || true
           inflight="$(cat /tmp/inflight.code 2>/dev/null || true)"
           if [ "$inflight" != "401" ]; then
-            echo "a requisição em voo não foi drenada (código: ${inflight:-nenhum})"; exit 1
+            echo "a requisição em voo não foi drenada (código: ${inflight:-nenhum})"
+            cat /tmp/inflight.trace; exit 1
           fi
           if [ "$(docker inspect spark-ci --format '{{.State.ExitCode}}')" != "0" ]; then
             echo "o processo não saiu limpo em SIGTERM"; docker logs spark-ci; exit 1
@@ -241,6 +317,7 @@ jobs:
           docker rm -f spark-ci
           docker run -d --name spark-ci-2 --network host \
             -v spark-ci-media:/media \
+            -e SOCIAL_MEDIA_ROOT=/media \
             -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             spark-backend:ci
@@ -276,10 +353,13 @@ jobs:
 
           # A raiz de mídia é obrigatória em produção (T17.9 §28): um container sem ela precisa
           # **falhar no startup**, e não subir escrevendo em disco efêmero.
+          # Sem `-e SOCIAL_MEDIA_ROOT` nenhum: desde a T18.3.2 a imagem não a embute, então este é
+          # exatamente o container que um deploy esquecido produziria. (O `-e SOCIAL_MEDIA_ROOT=`
+          # vazio, que antes era necessário para apagar o `ENV` da imagem, continua equivalente.)
           if docker run --rm --network host -e NODE_ENV=production \
                -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
                -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
-               -e SOCIAL_MEDIA_ROOT= spark-backend:ci > /tmp/nomedia.log 2>&1; then
+               spark-backend:ci > /tmp/nomedia.log 2>&1; then
             echo "o backend subiu sem SOCIAL_MEDIA_ROOT em produção"; cat /tmp/nomedia.log; exit 1
           fi
           grep -q 'SOCIAL_MEDIA_ROOT' /tmp/nomedia.log || {
@@ -315,14 +395,14 @@ jobs:
           # o bucket só é tocado por requisição. Um `bucket.exists()` no boot ou no readiness
           # quebraria este passo, que é o objetivo dele.
           #
-          # `-e SOCIAL_MEDIA_ROOT` sem valor, com a variável ausente no runner, **remove** o `ENV`
-          # da imagem: é o deploy que a T18.2 vai fazer — nenhum volume de mídia, só o bucket.
+          # Sem raiz de mídia local: é o deploy que a T18.2 faz — nenhum volume de mídia, só o
+          # bucket. Desde a T18.3.2 basta não declarar a variável (a imagem não a embute mais).
           docker run -d --name spark-ci-gcs --network host \
             -e NODE_ENV=production -e PORT=8090 \
             -e DATABASE_URL="postgresql://spark:spark@127.0.0.1:5432/spark_dev" \
             -e ACCOUNT_DELETION_HMAC_KEY="$SPARK_CI_ACCOUNT_DELETION_HMAC_KEY" \
             -e OBJECT_STORAGE_PROVIDER=gcs -e GCS_BUCKET_NAME=ci-only-bucket-that-does-not-exist \
-            -e SOCIAL_MEDIA_ROOT spark-backend:ci
+            spark-backend:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8090/health/ready 2>/dev/null | grep -q '"status":"ok"'; then break; fi
             if [ "$i" = "30" ]; then echo "o backend com provider gcs não ficou pronto"; docker logs spark-ci-gcs; exit 1; fi
@@ -413,6 +493,7 @@ jobs:
   ops-scripts:
     name: shellcheck dos scripts operacionais
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: .
@@ -553,7 +634,7 @@ jobs:
             -e SPARK_DOMAIN=api.exemplo.invalid \
             -e SPARK_ACME_EMAIL=ops@exemplo.invalid \
             -v "$PWD/backend/Caddyfile.prod:/etc/caddy/Caddyfile:ro" \
-            caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+            caddy:2.10.2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
       # A documentação operacional não pode contradizer a topologia (T16.8.1 §24).
       #
@@ -596,9 +677,11 @@ jobs:
   production-topology:
     name: topologia de produção (compose real)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: image
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -627,8 +710,16 @@ jobs:
       # (`docker-compose.ci-topology.yml`), porque 80/443 nem sempre estão livres. TLS real
       # continua `NOT VERIFIED`: não há domínio nem DNS aqui, e depender da Let's Encrypt no CI
       # seria uma dependência externa por commit.
-      - name: Build image
-        run: docker build -t spark-backend:topology backend
+      - uses: actions/download-artifact@v4
+        with:
+          name: spark-backend-image
+          path: /tmp
+
+      - name: Imagem do job `image`, etiquetada para a topologia
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/spark-backend-ci.tar.gz
+          docker tag spark-backend:ci spark-backend:topology
 
       - name: Configuração da VPS, reproduzida no runner
         run: |
@@ -898,12 +989,14 @@ jobs:
   backup-drill:
     name: ensaio de backup e restauração
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: image
     # O PostgreSQL do ensaio (T18.0.2). Publicado em 5432 no host: os containers deste job rodam
     # com `--network host`, e `127.0.0.1:5432` é este serviço. Dois bancos vivem nele — `spark_dev`,
     # o "de produção" do ensaio, e `spark_drill`, o descartável em que o dump é restaurado.
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -941,8 +1034,16 @@ jobs:
       - name: Risco de restaurar snapshot antigo sobre schema mais novo
         run: SPARK_TEST_DATABASE_URL=postgresql://spark:spark@127.0.0.1:5432/spark_dev ops/tests/restore-old-snapshot-risk.test.sh
 
-      - name: Build image
-        run: docker build -t spark-backend:local backend
+      - uses: actions/download-artifact@v4
+        with:
+          name: spark-backend-image
+          path: /tmp
+
+      - name: Imagem do job `image`, etiquetada para o ensaio
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/spark-backend-ci.tar.gz
+          docker tag spark-backend:ci spark-backend:local
 
       # O banco descartável do ensaio, criado **vazio**: `ops/verify-backup.sh` restaura o dump nele
       # e sobe o backend real por cima. Ele nunca é o mesmo banco de onde o dump saiu — o script
@@ -951,7 +1052,7 @@ jobs:
       - name: Banco descartável do ensaio
         run: |
           set -euo pipefail
-          docker run --rm --network host -e PGPASSWORD=spark postgres:17-alpine \
+          docker run --rm --network host -e PGPASSWORD=spark postgres:18.6-alpine \
             psql -h 127.0.0.1 -U spark -d spark_dev -v ON_ERROR_STOP=1 -c 'CREATE DATABASE spark_drill'
 
       # O modelo de permissão host ↔ container, com o desencontro de uid construído de propósito
@@ -1073,7 +1174,7 @@ jobs:
           # O que o ensaio genérico não sabe: **este** dado precisava estar lá. O snapshot foi
           # tirado com escrita em curso, e precisa ter o dado semeado, a metadata da mídia e pelo
           # menos uma linha da carga concorrente — restaurados no banco descartável.
-          docker run --rm --network host -e PGPASSWORD=spark postgres:17-alpine sh -c '
+          docker run --rm --network host -e PGPASSWORD=spark postgres:18.6-alpine sh -c '
             set -e
             q() { psql -h 127.0.0.1 -U spark -d spark_drill -X -q -t -A -v ON_ERROR_STOP=1 -c "$1"; }
             [ "$(q "SELECT value FROM server_metadata WHERE key = '"'"'drill'"'"'")" = "presente" ] \
@@ -1096,12 +1197,14 @@ jobs:
   dr-drill:
     name: ensaio de DR (backup real, destino limpo, anti-ressurreição)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: image
     # O PostgreSQL do ensaio (T18.3 §7/§23). `spark_dev` faz o papel de produção; o ensaio cria e
     # descarta o próprio banco de destino (`spark_drill_ci_<pid>`) a partir do banco de manutenção
     # `postgres` — nunca restaura por cima de `spark_dev`.
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18.6-alpine
         env:
           POSTGRES_USER: spark
           POSTGRES_PASSWORD: spark
@@ -1119,8 +1222,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build image
-        run: docker build -t spark-backend:local backend
+      - uses: actions/download-artifact@v4
+        with:
+          name: spark-backend-image
+          path: /tmp
+
+      - name: Imagem do job `image`, etiquetada para o ensaio
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/spark-backend-ci.tar.gz
+          docker tag spark-backend:ci spark-backend:local
 
       # O ensaio de ponta a ponta com `pg_dump`/`pg_restore` REAIS (os da imagem) e a imagem REAL:
       #

@@ -6,8 +6,11 @@ import {
   HttpStatus,
   Param,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import type { RequestWithRawBody } from '../../common/raw-body';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { BearerAuthGuard } from '../auth/bearer-auth.guard';
 import { Principal } from '../auth/principal.decorator';
@@ -17,6 +20,10 @@ import {
   WorkoutShareItemDto,
   WorkoutTemplateShareSnapshotV1,
 } from './workout-share.contract';
+import {
+  assertWorkoutShareBodyWithinLimit,
+  parseCreateWorkoutShareRequest,
+} from './workout-share.validator';
 import { WorkoutShareService } from './workout-share.service';
 
 @Controller('social/workout-shares')
@@ -29,8 +36,12 @@ export class WorkoutShareController {
   async create(
     @Principal() principal: AuthenticatedPrincipal,
     @Body() body: CreateWorkoutShareRequest,
+    @Req() req: Request,
   ): Promise<WorkoutShareDetailDto> {
-    return this.service.createShare(principal.uid, body);
+    // Tamanho antes de forma, e forma antes do serviço: um corpo malformado é `400` do cliente, e
+    // nunca uma exceção não tratada dentro do caso de uso.
+    assertWorkoutShareBodyWithinLimit((req as RequestWithRawBody).rawBody);
+    return this.service.createShare(principal.uid, parseCreateWorkoutShareRequest(body as unknown));
   }
 
   @Get('received')

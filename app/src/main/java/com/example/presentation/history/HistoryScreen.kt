@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.SessionCalendarSummary
-import com.example.data.local.CheckInEntity
 import com.example.data.local.WorkoutSessionEntity
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.SwipeAction
@@ -45,8 +44,19 @@ import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import com.example.ui.theme.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.text.SimpleDateFormat
 import java.util.*
+
+// Formatadores criados uma vez, e não a cada composição/linha da lista: construir um
+// `SimpleDateFormat` custa parsing de padrão e lookup de símbolos, e o Histórico os construía em
+// seis pontos, um deles por item da lista. Só a thread principal os usa (composição e os blocos
+// `remember` desta tela), então compartilhá-los é seguro.
+private val MONTH_YEAR_FORMAT = SimpleDateFormat("MMMM yyyy", Locale("pt", "BR"))
+private val CALENDAR_MONTH_FORMAT = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+private val DAY_FORMAT = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+private val DAY_TIME_FORMAT = SimpleDateFormat("dd/MM/yyyy • HH:mm", Locale.getDefault())
+private val TIME_FORMAT = SimpleDateFormat("HH:mm", Locale.getDefault())
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,11 +68,11 @@ fun HistoryScreen(
      */
     checkInViewModel: com.example.presentation.friends.WorkoutCheckInViewModel? = null
 ) {
-    val state by viewModel.state.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
-    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
-    
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    // A preferência de vibração vem do estado da ViewModel: a tela não conhece o `MainApplication`
+    // nem o `SettingsManager` (§3).
+    val hapticEnabled = state.hapticEnabled
+
     var selectedTab by remember { mutableStateOf(0) }
     var currentMonth by remember { mutableStateOf(Calendar.getInstance()) }
     var selectedSummaryForDetail by remember { mutableStateOf<SessionCalendarSummary?>(null) }
@@ -77,12 +87,11 @@ fun HistoryScreen(
     var historyGrouping by remember { mutableStateOf("Semana") }
 
     // The period comes from the ViewModel so the workout list and the analysis tab always
-    // describe the same slice of time.
-    val filteredAllSessions = remember(state.sessionsInPeriod, historyTypeFilter) {
+    // describe the same slice of time. O "parcial" também: a regra mora na ViewModel, e esta tela
+    // só lê o resultado.
+    val filteredAllSessions = remember(state.sessionsInPeriod, state.sessionMetrics, historyTypeFilter) {
         state.sessionsInPeriod.filter { summary ->
-            val totalSets = summary.exercises.sumOf { it.sets.size }
-            val completedSets = summary.exercises.sumOf { e -> e.sets.count { it.completed } }
-            val isPartial = totalSets > 0 && completedSets < totalSets
+            val isPartial = state.sessionMetrics[summary.session.id]?.isPartial ?: false
             when (historyTypeFilter) {
                 "Concluídos" -> !isPartial
                 "Parciais" -> isPartial
@@ -94,8 +103,10 @@ fun HistoryScreen(
     val groupedAllSessions = remember(filteredAllSessions, historyGrouping) {
         when (historyGrouping) {
             "Mês" -> {
-                val format = SimpleDateFormat("MMMM yyyy", Locale("pt", "BR"))
-                filteredAllSessions.groupBy { format.format(Date(it.session.startedAt)).replaceFirstChar { c -> c.uppercase() } }
+                filteredAllSessions.groupBy {
+                    MONTH_YEAR_FORMAT.format(Date(it.session.startedAt))
+                        .replaceFirstChar { c -> c.uppercase() }
+                }
             }
             "Semana" -> {
                 val cal = Calendar.getInstance()
@@ -107,10 +118,20 @@ fun HistoryScreen(
                 }
             }
             else -> {
-                val format = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-                filteredAllSessions.groupBy { format.format(Date(it.session.startedAt)) }
+                filteredAllSessions.groupBy { DAY_FORMAT.format(Date(it.session.startedAt)) }
             }
         }
+    }
+
+    // As ordenações do painel de Análise. Elas viviam dentro do conteúdo do `LazyColumn`, que é
+    // reavaliado a cada recomposição — reordenando os dois mapas inteiros toda vez.
+    val volumeEntries = remember(state.muscleVolumeDistribution) {
+        state.muscleVolumeDistribution.entries
+            .filter { it.value > 0.0 }
+            .sortedByDescending { it.value }
+    }
+    val setEntries = remember(state.muscleSetsDistribution) {
+        state.muscleSetsDistribution.entries.sortedByDescending { it.value }
     }
 
     Scaffold(
@@ -135,13 +156,14 @@ fun HistoryScreen(
                 
                 if (state.calendarSummaries.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    val totalWorkouts = state.calendarSummaries.size
-                    val totalDurationMs = state.calendarSummaries.sumOf { (it.session.finishedAt ?: it.session.startedAt) - it.session.startedAt }
-                    val totalSets = state.calendarSummaries.sumOf { s -> s.exercises.sumOf { e -> e.sets.count { it.completed } } }
-                    val durationMin = totalDurationMs / 60000
-                    val durationStr = if (durationMin > 60) "${durationMin/60}h${durationMin%60}m" else "${durationMin}m"
+                    // Os mesmos totais que o card do período usa — antes este cabeçalho somava
+                    // séries de aquecimento e o card não, e os dois números discordavam na mesma
+                    // tela.
+                    val allTime = state.allTimeTotals
                     Text(
-                        text = "$totalWorkouts treinos · $durationStr · $totalSets séries",
+                        text = "${allTime.sessions} treinos · " +
+                            "${formatDuration(allTime.durationMinutes)} · " +
+                            "${allTime.completedSets} séries",
                         color = TextSecondary,
                         fontSize = 14.sp
                     )
@@ -219,7 +241,7 @@ fun HistoryScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault()).format(state.selectedDate),
+                            text = DAY_FORMAT.format(state.selectedDate),
                             color = TextPrimary,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
@@ -267,6 +289,7 @@ fun HistoryScreen(
                             ) {
                                 SessionDetailsCard(
                                     summary = summary,
+                                    metrics = state.sessionMetrics[summary.session.id] ?: SessionMetrics(),
                                     onOptionsClick = { activeSessionForSheet = summary },
                                     onCardClick = { selectedSummaryForDetail = summary }
                                 )
@@ -404,6 +427,7 @@ fun HistoryScreen(
                                     ) {
                                         SessionDetailsCard(
                                             summary = summary,
+                                            metrics = state.sessionMetrics[summary.session.id] ?: SessionMetrics(),
                                             onOptionsClick = { activeSessionForSheet = summary },
                                             onCardClick = { selectedSummaryForDetail = summary }
                                         )
@@ -504,9 +528,8 @@ fun HistoryScreen(
                             item {
                                 AnalysisSectionTitle("Volume por grupo muscular")
                             }
-                            val volumeEntries = state.muscleVolumeDistribution.entries
-                                .filter { it.value > 0.0 }
-                                .sortedByDescending { it.value }
+                            // A ordenação sai calculada de fora: dentro do conteúdo do
+                            // `LazyColumn` ela reordenava o mapa inteiro a cada recomposição.
                             if (volumeEntries.isEmpty()) {
                                 item { AnalysisEmptyRow("Sem volume registrado no período.") }
                             } else {
@@ -526,7 +549,6 @@ fun HistoryScreen(
                             item {
                                 AnalysisSectionTitle("Séries por grupo muscular")
                             }
-                            val setEntries = state.muscleSetsDistribution.entries.sortedByDescending { it.value }
                             if (setEntries.isEmpty()) {
                                 item { AnalysisEmptyRow("Sem séries concluídas no período.") }
                             } else {
@@ -548,15 +570,16 @@ fun HistoryScreen(
     }
 
     // Modal Bottom Sheet: Session Details (T8B Standard AppModalBottomSheet)
-    if (selectedSummaryForDetail != null) {
-        val summary = selectedSummaryForDetail!!
+    val detailSummary = selectedSummaryForDetail
+    if (detailSummary != null) {
+        val summary = detailSummary
         AppModalBottomSheet(
             onDismissRequest = { selectedSummaryForDetail = null },
             title = summary.session.templateNameSnapshot ?: "Treino",
-            subtitle = SimpleDateFormat("dd/MM/yyyy • HH:mm", Locale.getDefault()).format(Date(summary.session.startedAt))
+            subtitle = DAY_TIME_FORMAT.format(Date(summary.session.startedAt))
         ) {
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
-                items(summary.sortedExercises) { exSummary ->
+                items(summary.sortedExercises, key = { it.exerciseSession.id }) { exSummary ->
                     Surface(
                         color = BackgroundDark,
                         shape = RoundedCornerShape(12.dp),
@@ -570,7 +593,9 @@ fun HistoryScreen(
                                 fontSize = 16.sp
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                            exSummary.sets.filter { it.completed }.forEachIndexed { i, set ->
+                            // `sortedSets`: a numeração "Série N" abaixo é posicional, e `@Relation`
+                            // não garante ordem (auditoria 2026-09-12).
+                            exSummary.sortedSets.filter { it.completed }.forEachIndexed { i, set ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween
@@ -598,8 +623,9 @@ fun HistoryScreen(
     }
 
     // ActionBottomSheet: Options for historical session (T8B)
-    if (activeSessionForSheet != null) {
-        val summary = activeSessionForSheet!!
+    val sheetSummary = activeSessionForSheet
+    if (sheetSummary != null) {
+        val summary = sheetSummary
         ActionBottomSheet(
             onDismissRequest = { activeSessionForSheet = null },
             title = stringResource(id = R.string.sheet_session_options),
@@ -644,8 +670,9 @@ fun HistoryScreen(
     }
 
     // Safety delete confirmation dialog (T9)
-    if (sessionToDelete != null) {
-        val session = sessionToDelete!!
+    val pendingDeletion = sessionToDelete
+    if (pendingDeletion != null) {
+        val session = pendingDeletion
         AlertDialog(
             onDismissRequest = { sessionToDelete = null },
             title = { Text("Excluir do Histórico", color = TextPrimary, fontWeight = FontWeight.Bold) },
@@ -679,8 +706,9 @@ fun HistoryScreen(
     }
 
     // Edit Check-in dialog
-    if (sessionToEditCheckIn != null) {
-        val summary = sessionToEditCheckIn!!
+    val checkInSummary = sessionToEditCheckIn
+    if (checkInSummary != null) {
+        val summary = checkInSummary
         var gymName by remember { mutableStateOf(summary.checkIn?.gymName ?: "") }
         AlertDialog(
             onDismissRequest = { sessionToEditCheckIn = null },
@@ -705,18 +733,9 @@ fun HistoryScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val ci = summary.checkIn ?: CheckInEntity(
-                        sessionId = summary.session.id,
-                        checkInTime = summary.session.startedAt,
-                        checkOutTime = summary.session.finishedAt,
-                        gymName = ""
-                    )
-                    viewModel.updateCheckInTime(
-                        checkIn = ci,
-                        newCheckInTime = ci.checkInTime,
-                        newCheckOutTime = ci.checkOutTime ?: summary.session.finishedAt,
-                        gym = gymName.takeIf { it.isNotBlank() }
-                    )
+                    // Montar a entidade é trabalho da ViewModel: a tela só diz qual sessão e qual
+                    // academia.
+                    viewModel.saveCheckInGym(summary, gymName)
                     sessionToEditCheckIn = null
                 }) {
                     Text("Salvar", color = Lime400, fontWeight = FontWeight.Bold)
@@ -742,7 +761,13 @@ fun CalendarView(
     isExpanded: Boolean,
     onExpandedChange: (Boolean) -> Unit
 ) {
-    val monthFormat = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+    // Um conjunto de "dias com treino", calculado uma vez por lista de sessões. Antes cada uma das
+    // 42 células varria todas as sessões chamando `isSameDay`, que aloca dois `Calendar` por
+    // comparação — 42 × N × 2 objetos a cada recomposição do calendário.
+    val daysWithWorkout = remember(summaries) {
+        summaries.mapTo(HashSet()) { dayKeyOf(it.session.startedAt) }
+    }
+
     
     Column(
         modifier = Modifier
@@ -765,7 +790,7 @@ fun CalendarView(
                 Icon(Icons.Default.ChevronLeft, contentDescription = "Anterior", tint = TextPrimary)
             }
             Text(
-                text = monthFormat.format(currentMonth.time).replaceFirstChar { it.uppercase() },
+                text = CALENDAR_MONTH_FORMAT.format(currentMonth.time).replaceFirstChar { it.uppercase() },
                 color = TextPrimary,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -838,7 +863,7 @@ fun CalendarView(
                         } else {
                             val dateForCell = (currentMonth.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, dayCounter) }.time
                             val isSelected = isSameDay(dateForCell, selectedDate)
-                            val hasWorkout = summaries.any { isSameDay(Date(it.session.startedAt), dateForCell) }
+                            val hasWorkout = dayKeyOf(dateForCell.time) in daysWithWorkout
                             
                             val bgColor = if (isSelected) Lime400 else Color.Transparent
                             val textColor = if (isSelected) BackgroundDark else TextPrimary
@@ -894,19 +919,23 @@ fun CalendarView(
 @Composable
 fun SessionDetailsCard(
     summary: SessionCalendarSummary,
+    /**
+     * Séries e volume já calculados pela ViewModel, com a mesma regra do card do período
+     * (aquecimento fora). Recalcular aqui é o que fazia a mesma tela mostrar dois números.
+     */
+    metrics: SessionMetrics,
     onOptionsClick: () -> Unit,
     onCardClick: () -> Unit
 ) {
-    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-    val started = timeFormat.format(Date(summary.session.startedAt))
-    val finished = summary.session.finishedAt?.let { timeFormat.format(Date(it)) } ?: "--:--"
-    
-    val durationMs = if (summary.session.finishedAt != null) summary.session.finishedAt - summary.session.startedAt else 0L
+    val started = TIME_FORMAT.format(Date(summary.session.startedAt))
+    val finished = summary.session.finishedAt?.let { TIME_FORMAT.format(Date(it)) } ?: "--:--"
+
+    val durationMs = summary.session.finishedAt?.minus(summary.session.startedAt) ?: 0L
     val durationMin = durationMs / 60000
     val durationStr = if (durationMin > 60) "${durationMin/60}h${durationMin%60}m" else "${durationMin}m"
-    
-    val totalSets = summary.exercises.sumOf { ex -> ex.sets.count { it.completed } }
-    val totalVolume = summary.exercises.sumOf { ex -> ex.sets.filter { it.completed && !it.isDurationMode }.sumOf { (it.weight * it.repetitions).toDouble() } }.toInt()
+
+    val totalSets = metrics.completedSets
+    val totalVolume = metrics.volumeKg.toInt()
     
     Column(
         modifier = Modifier
@@ -929,9 +958,10 @@ fun SessionDetailsCard(
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
-                if (!summary.checkIn?.gymName.isNullOrBlank()) {
+                val gymName = summary.checkIn?.gymName
+                if (!gymName.isNullOrBlank()) {
                     Text(
-                        text = "📍 ${summary.checkIn!!.gymName}",
+                        text = "📍 $gymName",
                         color = Lime400,
                         fontSize = 12.sp
                     )
@@ -945,8 +975,8 @@ fun SessionDetailsCard(
         Spacer(modifier = Modifier.height(16.dp))
         
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            DetailItem(label = "Entrada", value = summary.checkIn?.let { timeFormat.format(Date(it.checkInTime)) } ?: started)
-            DetailItem(label = "Saída", value = summary.checkIn?.checkOutTime?.let { timeFormat.format(Date(it)) } ?: finished)
+            DetailItem(label = "Entrada", value = summary.checkIn?.let { TIME_FORMAT.format(Date(it.checkInTime)) } ?: started)
+            DetailItem(label = "Saída", value = summary.checkIn?.checkOutTime?.let { TIME_FORMAT.format(Date(it)) } ?: finished)
             DetailItem(label = "Duração", value = durationStr)
         }
         
@@ -968,6 +998,17 @@ fun DetailItem(label: String, value: String) {
         Text(label, color = TextSecondary, fontSize = 12.sp)
         Text(value, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
     }
+}
+
+/**
+ * A identidade do dia de um instante: ano × dia-do-ano.
+ *
+ * Uma chave comparável por igualdade evita construir dois `Calendar` só para perguntar "é o mesmo
+ * dia?" — que é o que `isSameDay` faz, e era feito milhares de vezes por recomposição do calendário.
+ */
+private fun dayKeyOf(timestamp: Long): Int {
+    val cal = Calendar.getInstance().apply { timeInMillis = timestamp }
+    return cal.get(Calendar.YEAR) * 1000 + cal.get(Calendar.DAY_OF_YEAR)
 }
 
 private fun isSameDay(date1: Date, date2: Date): Boolean {

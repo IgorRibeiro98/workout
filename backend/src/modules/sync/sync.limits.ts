@@ -37,6 +37,20 @@ export const SYNC_LIMITS = {
 
   /** Teto da página de pull. Uma conta com histórico longo é paginada, não despejada. */
   maxPullPageSize: 200,
+
+  /**
+   * Teto da página de pull **em bytes de payload**.
+   *
+   * O teto por itens sozinho não limita nada: 200 mudanças × `maxMutationPayloadBytes` são 50 MiB
+   * numa resposta só — memória do servidor, banda do aparelho e um JSON que o cliente precisa
+   * segurar inteiro. O teto por bytes é o que transforma "200 itens" em "200 itens **ou** o que
+   * couber", o que já é o comportamento de todo o resto do protocolo.
+   *
+   * Ele nunca produz página vazia: se o primeiro item sozinho estoura o orçamento, ele vai
+   * assim mesmo — uma página vazia com `hasMore = true` faria o aparelho pedir para sempre a
+   * mesma posição do cursor, sem nunca andar.
+   */
+  maxPullPageBytes: 1024 * 1024,
 } as const;
 
 /**

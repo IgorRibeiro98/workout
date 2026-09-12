@@ -62,7 +62,23 @@ interface WorkoutDao {
     @Query("SELECT * FROM exercises WHERE active = 1 ORDER BY name ASC")
     suspend fun getAllExercisesList(): List<ExerciseEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    /**
+     * Insere um exercício novo.
+     *
+     * Sem `REPLACE`, pelo mesmo motivo de [insertProgram]: `exercises` tem índice `UNIQUE` em
+     * `syncId`, oito filhos em `CASCADE` (progressão, segurança, substituições, contexto de IA,
+     * biomecânica, execução, customização do usuário, mídia) e é apontada por
+     * `workout_template_exercises` com `ON DELETE RESTRICT`. Sob `REPLACE`, uma colisão de `syncId`
+     * apagaria a linha existente **e** toda essa descendência antes de inserir a nova — corrupção
+     * silenciosa exatamente onde a restrição deveria proteger.
+     *
+     * O catálogo canônico não corre esse risco por acidente: ele nasce com `syncId` nulo, e o
+     * `UNIQUE` do SQLite não compara nulos entre si. Quem tem `syncId` é dado pessoal, e duas
+     * linhas com a mesma identidade global é defeito que precisa aparecer.
+     *
+     * Todos os chamadores criam linha nova; atualização é [updateExercise].
+     */
+    @Insert
     suspend fun insertExercise(exercise: ExerciseEntity): Long
 
     @Update
@@ -97,6 +113,17 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM workout_programs WHERE isCurrent = 1 LIMIT 1")
     fun getCurrentProgram(): Flow<WorkoutProgramEntity?>
+
+    /**
+     * O programa atual **agora**, fora de qualquer Flow.
+     *
+     * Existe porque uma regra de domínio não pode ser decidida sobre um `Flow`: comparar
+     * [getCurrentProgram] com `null` é sempre falso (é o objeto do Flow, não o valor dele), e era
+     * por isso que o primeiro programa criado nunca virava o atual. Quem decide dentro de uma
+     * transação precisa de uma leitura, não de um observável.
+     */
+    @Query("SELECT * FROM workout_programs WHERE isCurrent = 1 LIMIT 1")
+    suspend fun getCurrentProgramSync(): WorkoutProgramEntity?
 
     /**
      * Insere um programa novo.
@@ -163,6 +190,35 @@ interface WorkoutDao {
         ORDER BY COALESCE(finishedAt, startedAt) ASC
     """)
     suspend fun getCompletedSessionTimestamps(): List<Long>
+
+    /**
+     * A mesma projeção de [getCompletedSessionTimestamps], observável.
+     *
+     * Existe para quem só precisa de **quando** os treinos aconteceram — conquistas, consistência,
+     * frequência. O grafo completo de [getAllCompletedSessionsWithDetailsFlow] carrega sessões,
+     * exercícios e séries inteiras, e o `InvalidationTracker` do Room o reemite a cada linha
+     * gravada em qualquer uma dessas três tabelas: uma série concluída recarregava o histórico
+     * inteiro em cada coletor. Esta consulta toca só `workout_sessions`, então só uma mudança de
+     * sessão a reemite.
+     */
+    @Query("""
+        SELECT COALESCE(finishedAt, startedAt) FROM workout_sessions
+        WHERE status = 'COMPLETED'
+        ORDER BY COALESCE(finishedAt, startedAt) ASC
+    """)
+    fun getCompletedSessionTimestampsFlow(): Flow<List<Long>>
+
+    /**
+     * O início de cada treino concluído, na **mesma ordem** de
+     * [getAllCompletedSessionsWithDetailsFlow].
+     *
+     * Projeção separada de [getCompletedSessionTimestampsFlow] porque o cálculo de consistência usa
+     * `startedAt` — o dia em que a pessoa treinou — e não o instante em que ela concluiu. Trocar um
+     * pelo outro mudaria o dia de um treino que virou a meia-noite, e a ordem idêntica é o que
+     * torna esta substituição inerte para quem consome a lista.
+     */
+    @Query("SELECT startedAt FROM workout_sessions WHERE status = 'COMPLETED' ORDER BY startedAt DESC")
+    fun getCompletedSessionStartTimestampsFlow(): Flow<List<Long>>
 
     /**
      * Primeira sessão realmente concluída: prova histórica de qual treino foi o primeiro.
@@ -251,6 +307,51 @@ interface WorkoutDao {
     @Query("SELECT * FROM set_logs WHERE exerciseSessionId = :exerciseSessionId ORDER BY setNumber ASC")
     suspend fun getSetLogsForExerciseSession(exerciseSessionId: Long): List<SetLogEntity>
 
+    /**
+     * Quantos exercícios da sessão ainda **não** estão concluídos, ignorando [excludingSetId].
+     *
+     * Existe para que concluir uma série responda "este treino acabou?" com uma contagem no banco
+     * em vez de carregar a sessão inteira — exercícios e séries — a cada toque. Zero significa
+     * "acabou".
+     *
+     * A definição de "concluído" é exatamente a que o motor sempre usou sobre o grafo em memória:
+     * um exercício conta como pendente se tem alguma série não concluída **ou se não tem série
+     * nenhuma**. A segunda metade importa: remover todas as séries de um exercício é uma ação
+     * disponível na tela, e um exercício vazio nunca foi tratado como feito — uma contagem simples
+     * de séries pendentes o trataria, e o treino "terminaria" com um exercício em branco.
+     *
+     * A série que está sendo gravada é excluída de propósito: quem pergunta está no meio da
+     * escrita dela e já sabe que ela ficou concluída. Passar um id que não existe (`0`, por
+     * exemplo) conta a sessão inteira, que é o comportamento natural para "nada a ignorar".
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM exercise_sessions es
+        WHERE es.sessionId = :sessionId
+          AND (
+            NOT EXISTS (SELECT 1 FROM set_logs sl WHERE sl.exerciseSessionId = es.id)
+            OR EXISTS (
+              SELECT 1 FROM set_logs sl
+              WHERE sl.exerciseSessionId = es.id AND sl.completed = 0 AND sl.id != :excludingSetId
+            )
+          )
+        """
+    )
+    suspend fun countPendingExerciseSessions(sessionId: Long, excludingSetId: Long): Int
+
+    /** O mesmo, no escopo de um exercício da sessão: "este exercício acabou?". */
+    @Query(
+        """
+        SELECT COUNT(*) FROM set_logs
+        WHERE exerciseSessionId = :exerciseSessionId
+          AND completed = 0 AND id != :excludingSetId
+        """
+    )
+    suspend fun countIncompleteSetsForExerciseSession(
+        exerciseSessionId: Long,
+        excludingSetId: Long
+    ): Int
+
     @Update
     suspend fun updateSetLog(setLog: SetLogEntity)
 
@@ -324,6 +425,22 @@ interface WorkoutDao {
     @Transaction
     @Query("SELECT * FROM workout_sessions WHERE status = 'COMPLETED' ORDER BY startedAt DESC")
     suspend fun getAllCompletedSessionsWithDetails(): List<SessionCalendarSummary>
+
+    /**
+     * **Uma** sessão concluída com seu grafo, pelo `localId`.
+     *
+     * Quem precisa do resumo de um treino recém-concluído carregava o histórico inteiro e depois
+     * procurava a própria sessão dentro dele: o custo crescia com o passado da pessoa, e crescia
+     * exatamente no momento em que ela acabou de treinar. Aqui o `WHERE` faz o trabalho.
+     */
+    @Transaction
+    @Query("SELECT * FROM workout_sessions WHERE id = :sessionId AND status = 'COMPLETED' LIMIT 1")
+    suspend fun getCompletedSessionSummaryById(sessionId: Long): SessionCalendarSummary?
+
+    /** A mesma sessão, observável — para a tela de resumo. */
+    @Transaction
+    @Query("SELECT * FROM workout_sessions WHERE id = :sessionId AND status = 'COMPLETED' LIMIT 1")
+    fun getCompletedSessionSummaryByIdFlow(sessionId: Long): Flow<SessionCalendarSummary?>
 
     @Delete
     suspend fun deleteWorkoutSession(session: WorkoutSessionEntity)
@@ -600,6 +717,31 @@ interface WorkoutDao {
 
     @Query("SELECT syncId FROM check_ins ORDER BY id ASC")
     suspend fun getAllCheckInSyncIds(): List<String>
+
+    // ---- Contagens do resumo de adoção (T16.4) ------------------------------------------------
+    //
+    // A tela de confirmação do backup mostra "12 treinos, 84 sessões" e nada além disso. Ela era
+    // montada carregando as **listas** de `syncId` de cada agregado só para ler `.size`: o
+    // histórico inteiro atravessava a fronteira do banco para produzir seis números. Aqui quem
+    // conta é o SQLite, sobre exatamente os mesmos filtros das consultas de enumeração acima.
+
+    @Query("SELECT COUNT(*) FROM workout_programs")
+    suspend fun countPrograms(): Int
+
+    @Query("SELECT COUNT(*) FROM workout_templates")
+    suspend fun countTemplates(): Int
+
+    @Query("SELECT COUNT(*) FROM workout_sessions WHERE status = 'COMPLETED'")
+    suspend fun countCompletedSessions(): Int
+
+    @Query("SELECT COUNT(*) FROM exercises WHERE isUserCreated = 1 AND syncId IS NOT NULL")
+    suspend fun countCustomExercises(): Int
+
+    @Query("SELECT COUNT(*) FROM check_ins")
+    suspend fun countCheckIns(): Int
+
+    @Query("SELECT COUNT(*) FROM exercise_user_overrides")
+    suspend fun countExerciseOverrides(): Int
 }
 
 data class TemplateExerciseWithDetails(
@@ -613,12 +755,33 @@ data class TemplateExerciseWithDetails(
 
 data class ExerciseSessionWithSets(
     @Embedded val exerciseSession: ExerciseSessionEntity,
+    /**
+     * As séries **na ordem em que o SQLite as devolveu**, que não é uma garantia.
+     *
+     * `@Relation` não aceita `ORDER BY` — a consulta que o Room gera para a relação é fixa —, e a
+     * ordem física por `rowid` só coincide com a ordem de domínio enquanto as linhas tiverem sido
+     * inseridas em ordem de `setNumber`. Um restore (T16.5) ou uma sessão recebida pelo sync
+     * (T16.6) reinserem tudo do zero, e ali essa coincidência não é contrato.
+     *
+     * Quem depende da ordem usa [sortedSets].
+     */
     @Relation(
         parentColumn = "id",
         entityColumn = "exerciseSessionId"
     )
     val sets: List<SetLogEntity>
-)
+) {
+    /**
+     * As séries na ordem de domínio: `setNumber`, com o `localId` como desempate.
+     *
+     * Mesmo papel de [SessionWithDetails.sortedExercises] e [SessionCalendarSummary.sortedExercises]
+     * — ordenar onde o `@Relation` não ordena. O desempate por `id` existe para que duas linhas com
+     * o mesmo `setNumber` (que não deveriam existir, mas que nenhuma restrição impede) tenham uma
+     * ordem estável em vez de uma ordem de banco.
+     */
+    val sortedSets: List<SetLogEntity>
+        get() = sets.sortedWith(compareBy({ it.setNumber }, { it.id }))
+}
 
 data class SessionWithDetails(
     @Embedded val session: WorkoutSessionEntity,

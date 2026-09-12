@@ -154,6 +154,19 @@ jobs:
       - name: Testes unitários (debug)
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
+      # `lint` completo, e não só o `lintVital` que o `assembleRelease` já dispara (auditoria
+      # 2026-09-12 §0).
+      #
+      # `lintVitalRelease` roda apenas as regras marcadas como fatais. Tudo o mais — inclusive
+      # `NewApi`, que é severidade **Error** — passava batido: a auditoria encontrou 217 erros de
+      # `java.time` em `minSdk 24`, o suficiente para o app não abrir em Android 7, e nenhum deles
+      # jamais apareceu no CI porque `lintDebug` nunca foi executado aqui.
+      #
+      # `abortOnError` já é o padrão; o passo existe para que a regressão volte a doer no CI e não
+      # no aparelho de alguém.
+      - name: Lint (debug)
+        run: ./gradlew :app:lintDebug --stacktrace
+
       - name: Build de debug
         run: ./gradlew :app:assembleDebug --stacktrace
 
@@ -206,4 +219,6 @@ jobs:
           path: |
             app/build/reports/tests/testDebugUnitTest
             app/build/test-results/testDebugUnitTest
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
           retention-days: 7

@@ -9,11 +9,31 @@ import com.example.domain.gamification.GamificationEvents
 import com.example.domain.gamification.model.GamificationEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+
+/**
+ * Os dois descansos que valem para o exercício em foco: entre séries e depois do exercício.
+ *
+ * Existe para que a regra viva num lugar só ([WorkoutEngine.resolveRestRecommendation]) e a tela
+ * não precise de uma chamada suspensa no meio da composição para saber o que recomendar.
+ */
+data class RestRecommendation(
+    val betweenSets: Int,
+    val afterExercise: Int
+)
 
 data class SyncResult(
     val updatedCount: Int,
@@ -25,7 +45,10 @@ data class SyncResult(
 class WorkoutEngine(
     val dao: WorkoutDao,
     private val settingsManager: SettingsManager,
-    private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO),
+    // `SupervisorJob` não é decoração (auditoria 2026-09-12): sem ele, uma exceção não capturada
+    // em qualquer `launch` futuro cancela o escopo inteiro, e os `launch` seguintes viram no-ops
+    // silenciosos — o motor continuaria de pé, aparentemente saudável, sem executar mais nada.
+    private val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     // O motor apenas informa fatos. Quem os interpreta (histórico, XP, conquistas) vive fora daqui.
     private val gamificationEvents: GamificationEventPublisher = GamificationEventPublisher.NoOp,
     // Fronteira transacional com a Outbox (T16.3). O padrão não registra nada: executar treino
@@ -49,6 +72,49 @@ class WorkoutEngine(
             com.example.domain.engine.ExerciseResolver.resolveAll(exercises, overrides.associateBy { it.exerciseId }, showGifs)
         }
 
+    /**
+     * O exercício em foco, resolvido — e **só** ele (auditoria 2026-09-12).
+     *
+     * [activeResolvedExercises] continua existindo para quem precisa da lista inteira, mas a tela
+     * de execução usava aquele fluxo para achar **um** exercício: cada emissão de `exercises`,
+     * `overrides` ou `showGifs` rodava `resolveAll` sobre o catálogo completo para descartar tudo
+     * menos uma linha. Aqui a resolução acontece uma vez, sobre o exercício certo.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun resolvedExerciseFlow(exerciseIdFlow: Flow<Long?>): Flow<com.example.domain.model.ResolvedExercise?> =
+        exerciseIdFlow.distinctUntilChanged().flatMapLatest { exerciseId ->
+            if (exerciseId == null) {
+                flowOf(null)
+            } else {
+                combine(
+                    dao.getActiveExercises(),
+                    dao.getAllOverridesFlow(),
+                    settingsManager.showGifsFlow
+                ) { exercises, overrides, showGifs ->
+                    val exercise = exercises.firstOrNull { it.id == exerciseId }
+                    if (exercise == null) {
+                        null
+                    } else {
+                        com.example.domain.engine.ExerciseResolver.resolve(
+                            exercise,
+                            overrides.firstOrNull { it.exerciseId == exerciseId },
+                            showGifs
+                        )
+                    }
+                }.distinctUntilChanged()
+            }
+        }
+
+    /**
+     * Serializa as transições de ciclo de vida da sessão.
+     *
+     * `startSession` checava "existe sessão ativa?" e só depois inseria. Dois toques rápidos em
+     * "iniciar treino" — ou um toque e uma retomada — passavam os dois pela checagem e criavam
+     * duas sessões `IN_PROGRESS`; o `LIMIT 1` das consultas escondia a segunda, que ficava órfã
+     * para sempre.
+     */
+    private val sessionLifecycleMutex = Mutex()
+
     init {
         // Process restoration check: restore timer if valid active session and deadline in future
         coroutineScope.launch {
@@ -57,8 +123,12 @@ class WorkoutEngine(
                 if (hasSavedDeadline) {
                     restoreTimerState()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Perder a restauração do temporizador não pode impedir o app de abrir; o que não
+                // pode é a falha sumir. `printStackTrace` não aparece em nenhum filtro de log.
+                android.util.Log.w(TAG, "restauração do temporizador de descanso falhou", e)
             }
         }
     }
@@ -139,8 +209,18 @@ class WorkoutEngine(
         )
     }
 
+    /**
+     * Estende o descanso em andamento.
+     *
+     * Sem descanso em andamento, não faz nada e devolve `-1` (auditoria 2026-09-12). A versão
+     * anterior usava `?: System.currentTimeMillis()` e **criava** um descanso de 30 s do nada em
+     * dois casos reais: um "+30s" tocado numa notificação obsoleta, e o instante entre a morte do
+     * processo e o fim do `restoreTimerState()` assíncrono do `init`. Pior, gravava o prazo sem
+     * `sessionId` nem tipo — um estado que o próximo `restoreTimerState` descarta, depois de a
+     * tela já ter mostrado um descanso que ninguém pediu.
+     */
     suspend fun adjustRestTimer(secondsToAdd: Int): Long {
-        val currentTarget = _restTimerTarget.value ?: System.currentTimeMillis()
+        val currentTarget = _restTimerTarget.value ?: return NO_ACTIVE_REST_TIMER
         val newTarget = (currentTarget + (secondsToAdd * 1000L)).coerceAtLeast(System.currentTimeMillis())
         _restTimerTarget.value = newTarget
         settingsManager.setRestTimerDeadline(newTarget)
@@ -322,6 +402,32 @@ class WorkoutEngine(
     }
 
     /**
+     * Quanto descanso vale para este exercício — a **única** implementação da regra.
+     *
+     * Antes da auditoria de 2026-09-12 existiam duas. O motor decidia o descanso entre exercícios
+     * por `defaultExerciseRestSeconds` (2 min por padrão); a tela de transição recomendava o
+     * `restDurationSecondsSnapshot` do **próximo** exercício, caindo num `90` escrito à mão. Efeito
+     * visível: com o temporizador automático ligado o usuário descansava 120 s, e com ele desligado
+     * a mesma transição oferecia 60 s do template. O `?: 90` do motor também era código morto —
+     * `defaultRestSecondsFlow` já tem 90 como padrão e nunca devolve nulo.
+     *
+     * Os dois valores são calculados juntos porque a tela precisa dos dois: ela não sabe, no
+     * momento em que compõe, se a próxima ação é entre séries ou entre exercícios.
+     */
+    suspend fun resolveRestRecommendation(
+        actualExerciseId: Long?,
+        restDurationSecondsSnapshot: Int?
+    ): RestRecommendation {
+        val override = actualExerciseId?.let { dao.getOverrideForExercise(it) }
+        return RestRecommendation(
+            betweenSets = restDurationSecondsSnapshot
+                ?: override?.defaultRestSeconds
+                ?: settingsManager.defaultRestSecondsFlow.first(),
+            afterExercise = settingsManager.defaultExerciseRestSecondsFlow.first()
+        )
+    }
+
+    /**
      * Updates set log and triggers auto rest timer when completed according to hierarchy:
      * 1. ExerciseSession.restDurationSecondsSnapshot
      * 2. ExerciseUserOverride.defaultRestSeconds
@@ -333,13 +439,23 @@ class WorkoutEngine(
         if (setLog.completed) {
             val exSession = dao.getExerciseSessionById(setLog.exerciseSessionId)
             val sessionId = exSession?.sessionId
-            val sessionWithDetails = sessionId?.let { dao.getSessionWithDetails(it) }
-            val allExercises = sessionWithDetails?.exercises ?: emptyList()
 
-            // Check if entire workout is completed
-            val isEntireWorkoutCompleted = allExercises.isNotEmpty() && allExercises.all { ex ->
-                ex.sets.isNotEmpty() && ex.sets.all { it.completed || it.id == setLog.id }
+            // Duas contagens no lugar do grafo inteiro da sessão (auditoria 2026-09-12).
+            //
+            // Cada série concluída carregava `getSessionWithDetails` — sessão, exercícios e todas
+            // as séries — para responder a dois booleanos. `id != :excludingSetId` reproduz o
+            // `it.completed || it.id == setLog.id` de antes: a série recém-escrita não conta como
+            // pendente nem que a escrita ainda não tenha sido enxergada pela leitura. E um
+            // exercício **sem séries** continua contando como pendente, como sempre contou — ver
+            // `countPendingExerciseSessions`.
+            //
+            // O `allExercises.isNotEmpty()` da versão antiga não precisa de equivalente: este
+            // caminho só roda porque uma série desta sessão acabou de ser concluída, então a sessão
+            // tem pelo menos um exercício.
+            val pendingExercises = sessionId?.let {
+                dao.countPendingExerciseSessions(it, setLog.id)
             }
+            val isEntireWorkoutCompleted = pendingExercises == 0
 
             if (isEntireWorkoutCompleted) {
                 // Entire workout completed! No rest timer should start. Cancel any active timer.
@@ -349,22 +465,19 @@ class WorkoutEngine(
 
             val autoTimer = settingsManager.autoRestTimerOnSetFlow.firstOrNull() ?: true
             if (autoTimer) {
-                val currentExerciseSets = allExercises.find { it.exerciseSession.id == setLog.exerciseSessionId }?.sets
-                val isCurrentExerciseCompleted = currentExerciseSets != null &&
-                        currentExerciseSets.isNotEmpty() &&
-                        currentExerciseSets.all { it.completed || it.id == setLog.id }
+                // O exercício em foco tem pelo menos uma série (a que acabou de ser concluída), então
+                // "nenhuma pendente" é o mesmo que "concluído" aqui — o caso vazio é impossível.
+                val isCurrentExerciseCompleted =
+                    dao.countIncompleteSetsForExerciseSession(setLog.exerciseSessionId, setLog.id) == 0
 
-                val override = exSession?.actualExerciseId?.let { dao.getOverrideForExercise(it) }
-                
+                val recommendation = resolveRestRecommendation(
+                    actualExerciseId = exSession?.actualExerciseId,
+                    restDurationSecondsSnapshot = exSession?.restDurationSecondsSnapshot
+                )
                 val restDuration = if (isCurrentExerciseCompleted) {
-                    settingsManager.defaultExerciseRestSecondsFlow.firstOrNull()
-                        ?: exSession?.restDurationSecondsSnapshot
-                        ?: 90
+                    recommendation.afterExercise
                 } else {
-                    exSession?.restDurationSecondsSnapshot
-                        ?: override?.defaultRestSeconds
-                        ?: settingsManager.defaultRestSecondsFlow.firstOrNull()
-                        ?: 90
+                    recommendation.betweenSets
                 }
 
                 startRestTimer(
@@ -453,14 +566,68 @@ class WorkoutEngine(
         }
     }
 
+    /**
+     * Começa um treino a partir de um template.
+     *
+     * Duas correções da auditoria de 2026-09-12 moram nesta assinatura:
+     *
+     * - **serializada** pelo [sessionLifecycleMutex]: a checagem "existe sessão ativa?" e a
+     *   inserção da sessão eram dois passos separados, e dois toques rápidos criavam duas sessões
+     *   `IN_PROGRESS` — a segunda invisível para o `LIMIT 1` e órfã para sempre;
+     * - **transacional**: eram 3 + N×2 escritas soltas. Uma morte de processo no meio deixava uma
+     *   sessão `IN_PROGRESS` sem exercícios, e `getActiveSession() != null` bloqueava qualquer
+     *   novo início: o usuário caía em "Treino Vazio" sem outra saída além de cancelar.
+     *
+     * A preferência de check-in automático é lida **antes** da transação (DataStore é outro
+     * armazenamento e não deve ser consultado com um lock de banco aberto), e o evento de
+     * gamificação é publicado **depois** do commit — antes dele, "treino iniciado" seria um fato
+     * sobre uma sessão que ainda pode não existir.
+     */
     suspend fun startSession(templateId: Long) {
-        // Prevent concurrent overlapping sessions
-        if (dao.getActiveSession() != null) return
-        
-        val template = dao.getTemplateById(templateId)
-        val templateName = template?.name ?: "Treino Customizado"
-        val startedAt = System.currentTimeMillis()
+        val started = sessionLifecycleMutex.withLock {
+            // Prevent concurrent overlapping sessions
+            if (dao.getActiveSession() != null) return@withLock null
 
+            val template = dao.getTemplateById(templateId)
+            val templateName = template?.name ?: "Treino Customizado"
+            val startedAt = System.currentTimeMillis()
+            val autoCheckIn = settingsManager.autoCheckInFlow.firstOrNull() ?: true
+
+            val sessionId = syncMutations.mutate {
+                startSessionWrites(templateId, templateName, startedAt, autoCheckIn)
+            }
+            StartedSession(sessionId, startedAt, templateName)
+        } ?: return
+
+        publishEvent(
+            GamificationEvents.workoutStarted(
+                sessionId = started.sessionId,
+                timestamp = started.startedAt,
+                templateId = templateId,
+                templateName = started.templateName
+            )
+        )
+    }
+
+    private data class StartedSession(
+        val sessionId: Long,
+        val startedAt: Long,
+        val templateName: String
+    )
+
+    /**
+     * As escritas de [startSession], todas dentro da mesma transação.
+     *
+     * Nenhuma mutação de sync é registrada aqui de propósito: `IN_PROGRESS` é estado de execução
+     * **deste** aparelho, e a política por status está em `docs/architecture/sync-protocol.md`. O
+     * que se usa da fronteira é só o commit único.
+     */
+    private suspend fun startSessionWrites(
+        templateId: Long,
+        templateName: String,
+        startedAt: Long,
+        autoCheckIn: Boolean
+    ): Long {
         // 1. Create WorkoutSession (Status: IN_PROGRESS)
         val sessionId = dao.insertSession(
             WorkoutSessionEntity(
@@ -471,17 +638,7 @@ class WorkoutEngine(
             )
         )
 
-        publishEvent(
-            GamificationEvents.workoutStarted(
-                sessionId = sessionId,
-                timestamp = startedAt,
-                templateId = templateId,
-                templateName = templateName
-            )
-        )
-
         // Auto Check-in Logic
-        val autoCheckIn = settingsManager.autoCheckInFlow.firstOrNull() ?: true
         if (autoCheckIn) {
             val activeCheckIn = dao.getActiveCheckIn()
             if (activeCheckIn != null) {
@@ -566,9 +723,15 @@ class WorkoutEngine(
             }
             dao.insertSetLogs(setsToCreate)
         }
+
+        return sessionId
     }
 
-    suspend fun finishSession(sessionId: Long) {
+    suspend fun finishSession(sessionId: Long) = sessionLifecycleMutex.withLock {
+        finishSessionLocked(sessionId)
+    }
+
+    private suspend fun finishSessionLocked(sessionId: Long) {
         val session = dao.getActiveSession() ?: return
         if (session.id == sessionId) {
             val finishedTime = System.currentTimeMillis()
@@ -602,14 +765,20 @@ class WorkoutEngine(
         }
         skipRestTimer()
 
-        val summaries = dao.getAllCompletedSessionsWithDetails()
-        val currentSummary = summaries.find { it.session.id == sessionId } ?: return
+        // Consulta por id (auditoria 2026-09-12). Isto carregava **todo** o histórico concluído —
+        // com o grafo de exercícios e séries de cada treino — só para achar a sessão que acabou de
+        // terminar. O custo crescia linearmente com os anos de uso do app, a cada treino.
+        val currentSummary = dao.getCompletedSessionSummaryById(sessionId) ?: return
 
         evaluatePersonalRecords(currentSummary)
         publishWorkoutEvents(currentSummary)
     }
 
-    suspend fun cancelSession(sessionId: Long) {
+    suspend fun cancelSession(sessionId: Long) = sessionLifecycleMutex.withLock {
+        cancelSessionLocked(sessionId)
+    }
+
+    private suspend fun cancelSessionLocked(sessionId: Long) {
         val session = dao.getActiveSession() ?: return
         if (session.id == sessionId) {
             dao.updateSession(
@@ -788,6 +957,17 @@ class WorkoutEngine(
     fun getCalendarHistoryFlow(): Flow<List<SessionCalendarSummary>> {
         return dao.getAllCompletedSessionsWithDetailsFlow()
     }
+
+    /**
+     * O resumo de **uma** sessão concluída.
+     *
+     * A tela de resumo filtrava `getCalendarHistoryFlow()` por id, ou seja, observava o histórico
+     * inteiro e o recarregava a cada mudança em qualquer treino para desenhar um só (auditoria
+     * 2026-09-12).
+     */
+    fun getCompletedSessionSummaryFlow(sessionId: Long): Flow<SessionCalendarSummary?> {
+        return dao.getCompletedSessionSummaryByIdFlow(sessionId)
+    }
     
     /**
      * Apagar histórico é direito do usuário e continua sendo delete **físico local** (T16.3 não
@@ -801,9 +981,22 @@ class WorkoutEngine(
         }
     }
 
+    /**
+     * Grava a academia/observação de um check-in — criando o check-in se ele não existir.
+     *
+     * O caminho de inserção entrou na auditoria de 2026-09-12. `updateCheckIn` sozinho é um
+     * `UPDATE ... WHERE id = ?`, e a tela de histórico monta a entidade com `id = 0` quando a
+     * sessão nunca teve check-in (treino iniciado com o check-in automático desligado). O `UPDATE`
+     * não encontrava linha nenhuma, a mutação de sync era registrada mesmo assim e o usuário via o
+     * diálogo fechar como se tivesse salvado. Nada era gravado, e nada era dito.
+     */
     suspend fun updateCheckInDetails(checkIn: CheckInEntity) {
         syncMutations.mutate {
-            dao.updateCheckIn(checkIn)
+            if (checkIn.id == 0L) {
+                dao.insertCheckIn(checkIn)
+            } else {
+                dao.updateCheckIn(checkIn)
+            }
             upsert(SyncEntityType.CHECK_IN, checkIn.syncId)
         }
     }
@@ -814,4 +1007,12 @@ class WorkoutEngine(
         }
         dao.updateExerciseSessions(updated)
     }
+
+    companion object {
+        private const val TAG = "WorkoutEngine"
+
+        /** Devolvido por [adjustRestTimer] quando não há descanso em andamento para estender. */
+        const val NO_ACTIVE_REST_TIMER = -1L
+    }
+
 }

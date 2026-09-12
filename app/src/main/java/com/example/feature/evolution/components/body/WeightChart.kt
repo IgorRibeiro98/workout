@@ -37,8 +37,10 @@ fun WeightChart(
     }
 
     val chartPoints = remember(validMeasurements) {
-        validMeasurements.map {
-            ChartPoint(date = it.date, value = it.weightKg!!)
+        // `mapNotNull` em vez de `!!`: o filtro acima já garante o não-nulo, mas quem escrever o
+        // próximo filtro não precisa saber disso para não quebrar esta linha.
+        validMeasurements.mapNotNull { measurement ->
+            measurement.weightKg?.let { ChartPoint(date = measurement.date, value = it) }
         }
     }
 

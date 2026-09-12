@@ -217,3 +217,54 @@ export function libpqEnvironment(raw: string): Record<string, string> {
   }
   return env;
 }
+
+/**
+ * A URL é um endpoint **pooled** (PgBouncer em modo transação)?
+ *
+ * No Neon o pooler é um host próprio, sempre com o sufixo `-pooler` antes do domínio
+ * (`ep-xxx-pooler.sa-east-1.aws.neon.tech`). É a única forma verificável de distinguir os dois
+ * endpoints a partir da string, e é a que o provedor documenta.
+ */
+export function isPooledPostgresEndpoint(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  return /-pooler(\.|$)/.test(url.hostname);
+}
+
+/**
+ * Aplicar migration por um endpoint pooled é o incidente do lock preso da T18.3 esperando repetir.
+ *
+ * O runner serializa migrations com `pg_advisory_lock` — um lock de **sessão** — e ajusta
+ * `statement_timeout`/`lock_timeout` e `search_path` com `set_config(..., false)`, que também são
+ * de sessão. Atrás de um PgBouncer em modo transação, "sessão" deixa de existir como conceito
+ * estável: cada transação pode cair numa conexão de servidor diferente, e então
+ *
+ * - o `pg_advisory_unlock` pode chegar numa conexão que nunca teve o lock (o unlock falha em
+ *   silêncio, e a conexão que o tem volta para o pool ainda segurando-o — foi exatamente o
+ *   `maintenance_locked_stale` de todo ciclo no primeiro dia de heartbeat);
+ * - o `statement_timeout = 0` da migration pode ficar numa conexão de servidor reutilizada por
+ *   tráfego comum, que passa a rodar **sem teto de tempo**;
+ * - o `SET search_path` pode não valer para o `CREATE TABLE` seguinte.
+ *
+ * Nada disso falha alto: falha em silêncio, e só aparece como banco travado. Por isso a recusa é
+ * no startup, antes de qualquer DDL — e ela nomeia `DATABASE_URL_DIRECT`, que é o conserto.
+ * Devolve a razão da recusa, ou `undefined` quando a URL serve para migrar.
+ */
+export function migrationEndpointViolation(
+  effectiveUrl: string,
+  directIsExplicit: boolean,
+): string | undefined {
+  if (!isPooledPostgresEndpoint(effectiveUrl)) {
+    return undefined;
+  }
+  return directIsExplicit
+    ? 'DATABASE_URL_DIRECT aponta para o endpoint POOLED (host com "-pooler"): migration exige a ' +
+        'conexão direta, onde lock consultivo e timeouts de sessão valem para a sessão inteira'
+    : 'DATABASE_URL é o endpoint POOLED (host com "-pooler") e DATABASE_URL_DIRECT está ausente ' +
+        '(vazia conta como ausente): defina DATABASE_URL_DIRECT com a conexão direta, ou rode a ' +
+        'migration pelo Job dedicado (DATABASE_MIGRATION_MODE=verify nesta instância)';
+}

@@ -22,6 +22,7 @@ import type {
   UnblockUserResponseDto,
 } from './block.contract';
 import { BLOCKS_ROUTE_PREFIX } from './block.contract';
+import { parseBlockUserRequest } from './block.validator';
 import { assertBodyWithinLimit } from './social.validator';
 import type { RequestWithRawBody } from '../../common/raw-body';
 
@@ -38,7 +39,8 @@ export class BlockController {
     @Req() req: Request,
   ): Promise<BlockUserResponseDto> {
     assertBodyWithinLimit((req as RequestWithRawBody).rawBody);
-    return await this.blockService.blockUser(principal.uid, body.blockedSocialId);
+    const request = parseBlockUserRequest(body as unknown);
+    return await this.blockService.blockUser(principal.uid, request.blockedSocialId);
   }
 
   @Delete(':socialId')

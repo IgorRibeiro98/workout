@@ -7,6 +7,7 @@ import {
 } from '../database/postgres-migration-runner';
 import { MIGRATIONS_DIRNAME } from '../database/database.constants';
 import {
+  migrationEndpointViolation,
   normalizeSslMode,
   postgresUrlIdentity,
   PostgresUrlIdentityError,
@@ -68,6 +69,18 @@ export async function runDatabaseMigration(): Promise<number> {
       return 1;
     }
     throw error;
+  }
+
+  // T18.3.2 — e ela precisa ser a conexão DIRETA, não o pooler.
+  //
+  // Apontar o secret direto para o endpoint pooled por engano passava despercebido: a migration
+  // "funcionava" até o dia em que o advisory lock de sessão ficasse preso numa conexão de servidor
+  // que o unlock nunca reencontra. Recusa aqui, com o nome da variável a corrigir.
+  const endpointViolation = migrationEndpointViolation(directUrl, true);
+  if (endpointViolation !== undefined) {
+    process.stderr.write(`migrate:database recusou DATABASE_URL_DIRECT: ${endpointViolation}.\n`);
+    emit('migration_failed', { status: 'FAILED', database, errorName: 'PooledMigrationEndpoint' });
+    return 1;
   }
 
   // A mesma política de TLS da API (T18.3 §20): `sslmode=require` vira `verify-full` explícito.

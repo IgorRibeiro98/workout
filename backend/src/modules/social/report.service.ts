@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Inject,
   Injectable,
-  NotFoundException,
 } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import { CLOCK, type Clock } from '../../common/clock';
@@ -179,16 +178,19 @@ export class ReportService {
       // O caminho da T17.6, preservado inteiro: alvo por `socialId`, com exigência de contexto
       // social legítimo (amizade, pedido pendente ou desafio compartilhado). Denunciar um
       // desconhecido continua não sendo possível.
+      // As duas recusas são a **mesma** resposta, de propósito: um `socialId` que não existe e um
+      // que existe sem contexto social precisam ser indistinguíveis. Enquanto o inexistente era
+      // `404` e o sem-contexto `403`, esta rota respondia "esta identidade existe" para qualquer
+      // palpite — um oráculo de existência sobre a conta dos outros, que é o que a regra "dado de
+      // outra conta é indistinguível de inexistente" existe para impedir.
       const target = await this.friendshipRepo.findProfileBySocialId(targetId);
       if (!target) {
-        throw new NotFoundException('Perfil do usuário denunciado não encontrado.');
+        throw reportTargetNotReachable();
       }
       if (target.ownerUid !== reporterUid) {
         const hasContext = await this.reportRepo.hasLegitimateContext(reporterUid, target.ownerUid);
         if (!hasContext) {
-          throw new ForbiddenException(
-            'Você só pode denunciar usuários com quem possui interação social legítima (amizade, pedido pendente ou desafio compartilhado).',
-          );
+          throw reportTargetNotReachable();
         }
       }
       return { authorUid: target.ownerUid, targetId };
@@ -235,4 +237,14 @@ export class ReportService {
     }
     return { authorUid: comment.authorUid, targetId };
   }
+}
+
+/**
+ * A recusa de uma denúncia de usuário sem contexto social — e também a de um `socialId` que não
+ * existe. Uma função só porque as duas precisam ser **a mesma** resposta, palavra por palavra.
+ */
+function reportTargetNotReachable(): ForbiddenException {
+  return new ForbiddenException(
+    'Você só pode denunciar usuários com quem possui interação social legítima (amizade, pedido pendente ou desafio compartilhado).',
+  );
 }

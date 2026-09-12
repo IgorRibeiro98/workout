@@ -1,5 +1,7 @@
 package com.example.data.social
 
+import android.os.Build
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.remote.spark.SparkAuthInterceptor
 import com.example.data.remote.spark.SparkBackendClient
 import com.example.domain.auth.AuthTokenProvider
@@ -17,7 +19,19 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
 
+/**
+ * Robolectric porque `SparkBackendClient` registra a falha de rede em `android.util.Log`.
+ *
+ * Até a auditoria de 2026-09-12 o teste rodava em JVM pura e passava por causa de
+ * `isReturnDefaultValues`, que fazia o `Log` devolver `0` em silêncio — o mesmo mecanismo que
+ * esconderia qualquer outra chamada a `android.*` num teste sem runner. Com a flag desligada, o
+ * caminho de erro precisa do framework de verdade.
+ */
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [Build.VERSION_CODES.TIRAMISU])
 class SparkSocialNotificationGatewayTest {
 
     private val testDeviceId = "dev-12345-abcde"

@@ -38,26 +38,35 @@ import com.example.ui.components.SwipeActionRow
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.res.stringResource
 import com.example.R
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.presentation.friends.ShareWorkoutDialog
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TemplateDetailsScreen(
     viewModel: TemplateDetailsViewModel,
     onBack: () -> Unit,
-    onAdaptWithCoach: () -> Unit = {}
+    onAdaptWithCoach: () -> Unit = {},
+    /**
+     * O estado do diálogo de compartilhar (T17.7). `null` esconde a ação: um build sem backend
+     * configurado monta esta tela inteira sem ela.
+     */
+    shareViewModel: com.example.presentation.friends.ShareWorkoutViewModel? = null
 ) {
-    val template by viewModel.template.collectAsState()
-    val exercises by viewModel.exercises.collectAsState()
-    val rawExercises by viewModel.rawExercises.collectAsState()
-    val allExercises by viewModel.allExercises.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val settingsManager = remember { (context.applicationContext as com.example.MainApplication).settingsManager }
-    val hapticEnabled by settingsManager.hapticEnabledFlow.collectAsState(initial = true)
-    
+    val template by viewModel.template.collectAsStateWithLifecycle()
+    val exercises by viewModel.exercises.collectAsStateWithLifecycle()
+    val rawExercises by viewModel.rawExercises.collectAsStateWithLifecycle()
+    val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
+    // A preferência de vibração vem da ViewModel: a tela não lê o `SettingsManager` do
+    // `MainApplication` (§3).
+    val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+
     var showShareDialog by remember { mutableStateOf(false) }
     var showAddPickerSheet by remember { mutableStateOf(false) }
     var exerciseToEdit by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
@@ -71,8 +80,9 @@ fun TemplateDetailsScreen(
                 title = { 
                     Column {
                         Text(template?.name ?: "Treino", color = TextPrimary, fontWeight = FontWeight.Bold)
-                        if (!template?.dayOfWeek.isNullOrEmpty()) {
-                            Text(template?.dayOfWeek!!, color = Lime400, fontSize = 12.sp)
+                        val dayOfWeek = template?.dayOfWeek
+                        if (!dayOfWeek.isNullOrEmpty()) {
+                            Text(dayOfWeek, color = Lime400, fontSize = 12.sp)
                         }
                     }
                 },
@@ -83,14 +93,15 @@ fun TemplateDetailsScreen(
                 },
                 actions = {
                     // Compartilhar treino com amigos (T17.7)
+                    val canShare = exercises.isNotEmpty() && shareViewModel != null
                     IconButton(
                         onClick = { showShareDialog = true },
-                        enabled = exercises.isNotEmpty()
+                        enabled = canShare
                     ) {
                         Icon(
                             imageVector = Icons.Default.Share,
                             contentDescription = "Compartilhar treino",
-                            tint = if (exercises.isNotEmpty()) Lime400 else TextSecondary
+                            tint = if (canShare) Lime400 else TextSecondary
                         )
                     }
                     // O Coach entra a partir do treino aberto; ele sugere, quem altera é o usuário.
@@ -105,6 +116,7 @@ fun TemplateDetailsScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddPickerSheet = true },
@@ -279,7 +291,7 @@ fun TemplateDetailsScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(muscleFilters) { filter ->
+                    items(muscleFilters, key = { it }) { filter ->
                         val isSelected = filter == selectedMuscleFilter
                         Box(
                             modifier = Modifier
@@ -400,8 +412,9 @@ fun TemplateDetailsScreen(
     }
 
     // Exercise Action Sheet
-    if (activeExerciseActionSheet != null) {
-        val selectedItem = activeExerciseActionSheet!!
+    val actionSheetItem = activeExerciseActionSheet
+    if (actionSheetItem != null) {
+        val selectedItem = actionSheetItem
         val currentIndex = exercises.indexOfFirst { it.templateExercise.id == selectedItem.templateExercise.id }
         val actions = buildList {
             if (currentIndex > 0) {
@@ -458,8 +471,9 @@ fun TemplateDetailsScreen(
         )
     }
 
-    if (exerciseToDelete != null) {
-        val item = exerciseToDelete!!
+    val pendingRemoval = exerciseToDelete
+    if (pendingRemoval != null) {
+        val item = pendingRemoval
         AlertDialog(
             onDismissRequest = { exerciseToDelete = null },
             title = { Text("Remover Exercício", color = TextPrimary) },
@@ -478,19 +492,20 @@ fun TemplateDetailsScreen(
     }
 
     // Exercise Configuration Bottom Sheet
-    if (exerciseToEdit != null) {
-        var sets by remember { mutableStateOf(exerciseToEdit!!.templateExercise.targetSets.toString()) }
-        var minReps by remember { mutableStateOf(exerciseToEdit!!.templateExercise.minReps.toString()) }
-        var maxReps by remember { mutableStateOf(exerciseToEdit!!.templateExercise.maxReps.toString()) }
-        var plannedWeight by remember { mutableStateOf(exerciseToEdit!!.templateExercise.plannedWeight?.toString() ?: "") }
-        var machine by remember { mutableStateOf(exerciseToEdit!!.templateExercise.machineLabel ?: "") }
-        var restSeconds by remember { mutableStateOf(exerciseToEdit!!.templateExercise.restDurationSeconds.toString()) }
-        var notes by remember { mutableStateOf(exerciseToEdit!!.templateExercise.notes ?: "") }
+    val editingExercise = exerciseToEdit
+    if (editingExercise != null) {
+        var sets by remember { mutableStateOf(editingExercise.templateExercise.targetSets.toString()) }
+        var minReps by remember { mutableStateOf(editingExercise.templateExercise.minReps.toString()) }
+        var maxReps by remember { mutableStateOf(editingExercise.templateExercise.maxReps.toString()) }
+        var plannedWeight by remember { mutableStateOf(editingExercise.templateExercise.plannedWeight?.toString() ?: "") }
+        var machine by remember { mutableStateOf(editingExercise.templateExercise.machineLabel ?: "") }
+        var restSeconds by remember { mutableStateOf(editingExercise.templateExercise.restDurationSeconds.toString()) }
+        var notes by remember { mutableStateOf(editingExercise.templateExercise.notes ?: "") }
 
         AppModalBottomSheet(
             onDismissRequest = { exerciseToEdit = null },
             title = "Configurações do Exercício",
-            subtitle = exerciseToEdit!!.resolvedExercise.displayName
+            subtitle = editingExercise.resolvedExercise.displayName
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -551,7 +566,7 @@ fun TemplateDetailsScreen(
 
                 Button(
                     onClick = {
-                        val updated = exerciseToEdit!!.templateExercise.copy(
+                        val updated = editingExercise.templateExercise.copy(
                             targetSets = sets.toIntOrNull() ?: 3,
                             minReps = minReps.toIntOrNull() ?: 8,
                             maxReps = maxReps.toIntOrNull() ?: 12,
@@ -575,26 +590,29 @@ fun TemplateDetailsScreen(
         }
     }
 
-    if (showShareDialog && template != null) {
-        val app = context.applicationContext as com.example.MainApplication
+    val templateToShare = template
+    if (showShareDialog && templateToShare != null && shareViewModel != null) {
         // O snapshot é montado **aqui**, onde a entidade de treino legitimamente vive. O diálogo
         // social recebe só o resultado portável — ver `ShareWorkoutDialog` (T17.10 §105).
-        val snapshotResult = remember(template, rawExercises) {
+        val snapshotResult = remember(templateToShare, rawExercises) {
             com.example.data.repository.WorkoutShareSnapshotBuilder()
-                .buildSnapshot(template!!, rawExercises)
+                .buildSnapshot(templateToShare, rawExercises)
         }
         ShareWorkoutDialog(
             buildResult = snapshotResult,
-            friendGateway = app.friendGateway,
-            shareGateway = app.workoutShareGateway,
-            onDismiss = { showShareDialog = false },
+            viewModel = shareViewModel,
+            onDismiss = {
+                showShareDialog = false
+                shareViewModel.reset()
+            },
+            // Snackbar, e não `Toast`: era o único `Toast` do app, e um aviso do sistema por cima
+            // de uma tela que já tem Scaffold destoa de todo o resto (diálogo/snackbar).
             onShareSuccess = {
                 showShareDialog = false
-                android.widget.Toast.makeText(
-                    context,
-                    "Treino compartilhado com sucesso!",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
+                shareViewModel.reset()
+                snackbarScope.launch {
+                    snackbarHostState.showSnackbar("Treino compartilhado com sucesso!")
+                }
             }
         )
     }

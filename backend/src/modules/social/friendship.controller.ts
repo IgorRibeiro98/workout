@@ -91,7 +91,9 @@ export class FriendshipController {
     return await this.service.incoming(
       principal,
       requestIdOf(request),
-      parseListQuery(limit, cursor),
+      // A lista de pedidos ordena por `createdAt`: o primário do cursor é número, e um valor que
+      // não seja número é cursor malformado — `400`, e não uma consulta com `NaN`.
+      parseListQuery(limit, cursor, { numericPrimary: true }),
     );
   }
 
@@ -107,7 +109,7 @@ export class FriendshipController {
     return await this.service.outgoing(
       principal,
       requestIdOf(request),
-      parseListQuery(limit, cursor),
+      parseListQuery(limit, cursor, { numericPrimary: true }),
     );
   }
 

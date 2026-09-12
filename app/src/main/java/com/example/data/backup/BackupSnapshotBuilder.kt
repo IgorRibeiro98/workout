@@ -54,14 +54,17 @@ class BackupSnapshotBuilder(
      * o que a pessoa treina. Não estabelece vínculo nem cria tentativa — é leitura pura.
      */
     suspend fun summary(): BackupSummary = BackupSummary(
-        programs = workoutDao.getAllProgramSyncIds().size,
-        templates = workoutDao.getAllTemplateSyncIds().size,
-        completedSessions = workoutDao.getCompletedSessionSyncIds().size,
-        customExercises = workoutDao.getCustomExerciseSyncIds().size,
-        bodyMeasurements = bodyMeasurementDao.getAllMeasurementSyncIds().size,
-        checkIns = workoutDao.getAllCheckInSyncIds().size,
-        exerciseOverrides = workoutDao.getAllOverrides().size,
-        weeklyGoals = weeklyGoalDao.getAllGoals().size
+        // `COUNT(*)`, e não `.size` de listas: as consultas de enumeração existem para montar o
+        // snapshot, e usá-las aqui trazia todo o histórico para a memória — inclusive as linhas
+        // inteiras das customizações e das metas — só para produzir oito números.
+        programs = workoutDao.countPrograms(),
+        templates = workoutDao.countTemplates(),
+        completedSessions = workoutDao.countCompletedSessions(),
+        customExercises = workoutDao.countCustomExercises(),
+        bodyMeasurements = bodyMeasurementDao.countMeasurements(),
+        checkIns = workoutDao.countCheckIns(),
+        exerciseOverrides = workoutDao.countExerciseOverrides(),
+        weeklyGoals = weeklyGoalDao.countGoals()
     )
 
     /**

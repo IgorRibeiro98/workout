@@ -6,9 +6,12 @@ import android.content.Intent
 import com.example.MainApplication
 import com.example.data.datastore.SettingsManager
 import com.example.domain.engine.WorkoutEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 
@@ -23,11 +26,22 @@ class RestNotificationReceiver : BroadcastReceiver() {
         val notificationManager = app.notificationManager
         val pendingResult = goAsync()
 
-        CoroutineScope(ioDispatcher).launch {
+        // `SupervisorJob` + teto de tempo (auditoria 2026-09-12).
+        //
+        // `goAsync()` dá ao receiver uma janela de ~10 s antes de o sistema considerar o processo
+        // ocioso e passível de morte. Um DataStore ou um Room que não responda deixaria
+        // `pendingResult.finish()` sem ser chamado — e um `BroadcastReceiver` que não termina é
+        // um ANR de broadcast. `withTimeoutOrNull` garante o `finish()`; o `SupervisorJob` impede
+        // que uma falha aqui cancele o escopo de outro broadcast em andamento.
+        CoroutineScope(SupervisorJob() + ioDispatcher).launch {
             try {
-                handleIntent(intent, workoutEngine, settingsManager, notificationManager, context.applicationContext)
+                withTimeoutOrNull(GO_ASYNC_BUDGET_MS) {
+                    handleIntent(intent, workoutEngine, settingsManager, notificationManager, context.applicationContext)
+                } ?: android.util.Log.w(TAG, "ação ${intent.action} não terminou no orçamento do goAsync")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e(TAG, "falha ao tratar ${intent.action}", e)
             } finally {
                 pendingResult.finish()
             }
@@ -43,11 +57,21 @@ class RestNotificationReceiver : BroadcastReceiver() {
     ) {
         when (intent.action) {
             ACTION_ADD_30S -> {
+                // Sem descanso em andamento não há o que estender: o botão veio de uma notificação
+                // obsoleta. `adjustRestTimer` devolve [WorkoutEngine.NO_ACTIVE_REST_TIMER] nesse
+                // caso, e remostrar a notificação com um alvo inventado era justamente o defeito
+                // que a auditoria de 2026-09-12 encontrou.
                 val target = workoutEngine.adjustRestTimer(30)
-                val exName = intent.getStringExtra("exerciseName")
-                    ?: workoutEngine.getActiveExerciseNameForTimer()
-                    ?: "Exercício"
-                notificationManager.showTimerNotification(exName, target)
+                if (target == WorkoutEngine.NO_ACTIVE_REST_TIMER) {
+                    notificationManager.cancelNotification()
+                } else {
+                    // Quem observa `restTimerTarget` e remostra a notificação é o `MainApplication`,
+                    // autoridade única desde a auditoria. Aqui basta mudar o alvo.
+                    val exName = intent.getStringExtra("exerciseName")
+                        ?: workoutEngine.getActiveExerciseNameForTimer()
+                        ?: "Exercício"
+                    notificationManager.showTimerNotification(exName, target)
+                }
             }
 
             ACTION_SKIP -> {
@@ -81,6 +105,16 @@ class RestNotificationReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        private const val TAG = "RestNotifReceiver"
+
+        /**
+         * Orçamento de tempo do `goAsync()`.
+         *
+         * O sistema dá cerca de 10 s a um `BroadcastReceiver` assíncrono. 8 s deixa margem para o
+         * `finish()` acontecer dentro da janela em vez de exatamente na borda dela.
+         */
+        private const val GO_ASYNC_BUDGET_MS = 8_000L
+
         const val ACTION_ADD_30S = "com.example.ACTION_ADD_30S"
         const val ACTION_SKIP = "com.example.ACTION_SKIP"
         const val ACTION_TIMER_FINISHED = "com.example.ACTION_TIMER_FINISHED"

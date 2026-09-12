@@ -4,6 +4,7 @@ import com.example.data.local.BodyMeasurementDao
 import com.example.data.local.BodyMeasurementEntity
 import com.example.data.sync.SyncEntityType
 import com.example.data.sync.SyncMutationCoordinator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -35,6 +36,10 @@ class BodyMeasurementRepository(
         // pessoal ao recálculo inteiro.
         try {
             onMeasurementChanged?.invoke()
+        } catch (e: CancellationException) {
+            // O gatilho é suspenso: engolir o cancelamento faria esta corrotina continuar como se
+            // o trabalho tivesse terminado, e quem a cancelou nunca saberia.
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -54,6 +59,8 @@ class BodyMeasurementRepository(
         }
         try {
             onMeasurementChanged?.invoke()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
         }

@@ -216,12 +216,21 @@ export class NotificationService {
 
   /**
    * O convite para um Squad — o **único** push da T17.11 (§90/§95).
+   *
+   * O `client` é o mesmo parâmetro dos demais `enqueue*`, e pela mesma razão (T17.13.1 §45–§47):
+   * o evento é o **outbox** do convite, e as duas escritas precisam ser a mesma transação. Sem
+   * ele, esta chamada saía por uma conexão nova: o convite podia ser desfeito por um ROLLBACK e o
+   * evento continuar lá — ou o evento falhar e o convite ficar gravado sem que ninguém fosse
+   * avisado dele.
    */
-  async enqueueGroupInvitationReceived(input: {
-    invitationId: string;
-    recipientUid: string;
-    expiresAt: number;
-  }): Promise<void> {
+  async enqueueGroupInvitationReceived(
+    client: PoolClient | undefined,
+    input: {
+      invitationId: string;
+      recipientUid: string;
+      expiresAt: number;
+    },
+  ): Promise<void> {
     const now = this.clock.now();
     await this.repository.createEvent(
       {
@@ -234,6 +243,7 @@ export class NotificationService {
         expiresAt: input.expiresAt,
       },
       now,
+      client,
     );
   }
 

@@ -13,6 +13,13 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import org.json.JSONArray
 
+/**
+ * O JSON do catálogo premium é conteúdo do app, e uma falha aqui é um defeito de conteúdo — não
+ * algo que o usuário possa resolver. A seção some, e o motivo fica no Logcat em vez de
+ * desaparecer: engolir a exceção calada era o que tornava "a dica sumiu" impossível de investigar.
+ */
+private const val PREMIUM_CARD_TAG = "PremiumExerciseCard"
+
 @Composable
 fun ExerciseTipsCard(tipsJson: String?) {
     if (tipsJson.isNullOrEmpty()) return
@@ -29,7 +36,9 @@ fun ExerciseTipsCard(tipsJson: String?) {
                     list.add(Pair("", arr.getString(i)))
                 }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w(PREMIUM_CARD_TAG, "dicas do exercício com JSON inválido", e)
+        }
         list
     }
 

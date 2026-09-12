@@ -173,6 +173,32 @@ class SyncDevice(
             }
         )
 
+    /**
+     * Um programa vindo de manifesto, como o `ProgramImporter` o cria.
+     *
+     * O que importa aqui é o par de identidades: `externalId` é a identidade **de conteúdo** e é a
+     * mesma em todo aparelho que importou o mesmo manifesto; `syncId` é local e nasce diferente em
+     * cada um. É essa combinação que produz a colisão de índice único quando o programa chega pela
+     * nuvem.
+     */
+    suspend fun importProgram(
+        externalId: String,
+        name: String = "Programa importado",
+        syncId: String = SyncIds.random()
+    ): Long = database.workoutDao().insertProgram(
+        WorkoutProgramEntity(name = name, externalId = externalId, syncId = syncId)
+    )
+
+    /** Registra a intenção de enviar um agregado que já existe no banco, pelo caminho real. */
+    suspend fun recordUpsert(type: SyncEntityType, entitySyncId: String) {
+        mutations.mutate { upsert(type, entitySyncId) }
+    }
+
+    suspend fun programBySyncId(syncId: String): WorkoutProgramEntity? =
+        database.workoutDao().getProgramBySyncId(syncId)
+
+    suspend fun programCount(): Int = database.workoutDao().getAllProgramsSync().size
+
     suspend fun sync(currentUid: String? = ownerUid): SyncOutcome = repository.syncNow(currentUid)
 
     // ------------------------------------------------------------------ alterações locais

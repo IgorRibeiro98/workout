@@ -28,7 +28,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +52,7 @@ import com.example.ui.theme.Red400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 const val CHALLENGE_DETAIL_DESCRIPTION = "Detalhe do desafio"
 const val LEADERBOARD_DESCRIPTION = "Placar do desafio"
@@ -97,7 +97,7 @@ fun ChallengeDetailScreen(
     viewModel: ChallengeViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(challengeId) { viewModel.openChallenge(challengeId) }
     // Sair da tela descarta o que foi lido: ele é cache, e a próxima abertura relê. Sem isto, o

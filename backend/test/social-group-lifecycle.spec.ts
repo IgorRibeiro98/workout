@@ -429,9 +429,8 @@ describe('T17.11 — ciclo de vida, push e integridade', () => {
 
     /** Roda um ciclo do dispatcher, como a T17.5 faz nos testes dela. */
     async function dispatchOnce(): Promise<void> {
-      const { NotificationDispatcher } = await import(
-        '../src/modules/social/notification.dispatcher'
-      );
+      const { NotificationDispatcher } =
+        await import('../src/modules/social/notification.dispatcher');
       const dispatcher = s.app.get(NotificationDispatcher);
       await dispatcher.runDispatchCycle();
     }

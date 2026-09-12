@@ -147,6 +147,17 @@ class SyncPushBuilder(
         )
     }
 
+    /**
+     * O hash canônico do agregado **como ele está agora**, ou `null` se ele não existe mais aqui.
+     *
+     * Mesma montagem e mesmo hash de [prepare] — de propósito. É o que permite ao repositório, ao
+     * confirmar um push, perguntar "o que subiu ainda descreve o Room?" sem inventar uma segunda
+     * forma canônica que divergiria da primeira na primeira mudança de contrato.
+     */
+    suspend fun currentPayloadHash(entityType: SyncEntityType, entitySyncId: String): String? =
+        snapshotBuilder.snapshot(entityType, entitySyncId)
+            ?.let { BackupCanonicalJson.canonicalHash(it.payload).hash }
+
     private data class AggregateKey(val entityType: SyncEntityType, val entitySyncId: String)
 }
 

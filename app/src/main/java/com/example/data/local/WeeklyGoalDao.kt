@@ -17,6 +17,10 @@ interface WeeklyGoalDao {
     @Query("SELECT * FROM weekly_goal_history ORDER BY effectiveFromWeekStartEpochDay ASC")
     fun getAllGoalsFlow(): Flow<List<WeeklyGoalHistoryEntity>>
 
+    /** Quantas metas semanais existem — para o resumo de adoção, que só precisa do número. */
+    @Query("SELECT COUNT(*) FROM weekly_goal_history")
+    suspend fun countGoals(): Int
+
     @Query("SELECT * FROM weekly_goal_history WHERE effectiveFromWeekStartEpochDay <= :weekStartEpochDay ORDER BY effectiveFromWeekStartEpochDay DESC LIMIT 1")
     suspend fun getGoalForWeek(weekStartEpochDay: Long): WeeklyGoalHistoryEntity?
 

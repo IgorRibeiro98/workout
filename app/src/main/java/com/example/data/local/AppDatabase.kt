@@ -8,6 +8,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -46,7 +47,7 @@ import kotlinx.coroutines.launch
         com.example.data.sync.SyncConflictEntity::class,
         WorkoutShareImportReceiptEntity::class
     ],
-    version = 36,
+    version = 37,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -176,6 +177,41 @@ abstract class AppDatabase : RoomDatabase() {
          * Idempotência local: garante que importar a mesma oferta de treino repetidamente
          * (ou após crash) não gere templates duplicados no Room.
          */
+        /**
+         * Índices que faltavam nas colunas de filtro e junção mais quentes (auditoria 2026-09-12).
+         *
+         * Migração puramente aditiva: nenhuma coluna, nenhuma tabela e nenhum dado mudam — só
+         * passam a existir cinco índices. `IF NOT EXISTS` em todos porque um banco criado do zero
+         * na versão 37 já os terá pelo `@Entity`, e a migração precisa ser inofensiva nesse caso.
+         *
+         * Os nomes seguem exatamente a convenção do Room (`index_<tabela>_<colunas>`): se
+         * divergirem, a validação de schema do Room reprova a migração em tempo de abertura.
+         */
+        val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_sessions_status_finishedAt` " +
+                        "ON `workout_sessions` (`status`, `finishedAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_sessions_status_startedAt` " +
+                        "ON `workout_sessions` (`status`, `startedAt`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercise_sessions_actualExerciseId` " +
+                        "ON `exercise_sessions` (`actualExerciseId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_exercise_sessions_plannedExerciseId` " +
+                        "ON `exercise_sessions` (`plannedExerciseId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_check_ins_checkInTime` " +
+                        "ON `check_ins` (`checkInTime`)"
+                )
+            }
+        }
+
         val MIGRATION_35_36 = object : Migration(35, 36) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -792,7 +828,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37
                 )
                 .addCallback(DatabaseCallback())
                 .build()
@@ -806,8 +842,12 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
             INSTANCE?.let { database ->
-                CoroutineScope(Dispatchers.IO).launch {
-                    populateDatabase(database.workoutDao())
+                // Escopo supervisionado e com log (auditoria 2026-09-12). Era um
+                // `CoroutineScope(Dispatchers.IO).launch` anônimo sem nenhum tratamento de erro: se
+                // a semeadura falhasse, o app abria com banco vazio e ninguém ficava sabendo.
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    runCatching { populateDatabase(database.workoutDao()) }
+                        .onFailure { android.util.Log.e("AppDatabase", "semeadura inicial falhou", it) }
                 }
             }
         }
@@ -815,13 +855,34 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         suspend fun populateDatabase(dao: WorkoutDao) {
             val existing = dao.getAllProgramsSync()
             if (existing.isEmpty()) {
-                val programId = dao.insertProgram(WorkoutProgramEntity(name = "ABCDE Hipertrofia", isCurrent = true))
+                // `externalId` fixo no programa semeado (auditoria 2026-09-12).
+                //
+                // O programa inicial nasce com `syncId` aleatório como qualquer outro, e por isso
+                // subia para a conta como dado pessoal: cada aparelho novo que ativasse a nuvem
+                // acrescentava mais um "ABCDE Hipertrofia" à mesma conta, e depois do pull o
+                // usuário via programas duplicados sem ter criado nenhum.
+                //
+                // `externalId` é a identidade **de conteúdo** de um programa, e já existe com
+                // índice único. Um valor fixo aqui dá ao aplicador de sync como reconhecer "este é
+                // o mesmo programa semeado" e reconciliar, em vez de inserir outro.
+                val programId = dao.insertProgram(
+                    WorkoutProgramEntity(
+                        name = "ABCDE Hipertrofia",
+                        isCurrent = true,
+                        externalId = SEED_PROGRAM_EXTERNAL_ID
+                    )
+                )
                 dao.insertTemplate(WorkoutTemplateEntity(programId = programId, name = "Quadríceps", shortIdentifier = "A", orderInProgram = 0))
                 dao.insertTemplate(WorkoutTemplateEntity(programId = programId, name = "Peito + Costas", shortIdentifier = "B", orderInProgram = 1))
                 dao.insertTemplate(WorkoutTemplateEntity(programId = programId, name = "Posterior", shortIdentifier = "C", orderInProgram = 2))
                 dao.insertTemplate(WorkoutTemplateEntity(programId = programId, name = "Ombros + Braços", shortIdentifier = "D", orderInProgram = 3))
                 dao.insertTemplate(WorkoutTemplateEntity(programId = programId, name = "Full Body", shortIdentifier = "E", orderInProgram = 4))
             }
+        }
+
+        private companion object {
+            /** Identidade de conteúdo do programa semeado. Não muda: é o que o sync reconhece. */
+            const val SEED_PROGRAM_EXTERNAL_ID = "seed:abcde-hipertrofia"
         }
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
@@ -47,20 +48,38 @@ fun TodayScreen(
     onNavigateToProfile: () -> Unit = {},
     onNavigateToEvolution: () -> Unit = {}
 ) {
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val isStarting by viewModel.isStartingWorkout.collectAsStateWithLifecycle()
+    val isFinishing by viewModel.isFinishingWorkout.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    
+
     var showSwapSheet by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
-    var isFinishing by remember { mutableStateOf(false) }
     var showWeeklyGoalSheet by remember { mutableStateOf(false) }
-    
+
     val activeXpGains = remember { mutableStateListOf<XpTransaction>() }
 
     LaunchedEffect(viewModel.xpGainFlow) {
         viewModel.xpGainFlow?.collect { transaction ->
             activeXpGains.add(transaction)
+        }
+    }
+
+    // Navegar e avisar são consequências do que a ViewModel conseguiu fazer, e não do toque.
+    // `showSnackbar` suspende até o aviso sumir, por isso ele sai numa corrotina à parte — senão o
+    // próximo evento ficaria esperando o anterior desaparecer da tela.
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                TodayEvent.WorkoutStarted -> onNavigateToExecution()
+                is TodayEvent.WorkoutStartFailed ->
+                    coroutineScope.launch { snackbarHostState.showSnackbar(event.message) }
+                TodayEvent.WorkoutFinished ->
+                    coroutineScope.launch { snackbarHostState.showSnackbar("Treino finalizado.") }
+                is TodayEvent.WorkoutFinishFailed ->
+                    coroutineScope.launch { snackbarHostState.showSnackbar(event.message) }
+            }
         }
     }
 
@@ -118,11 +137,12 @@ fun TodayScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
             
-            if (state.userProgress != null) {
+            val userProgress = state.userProgress
+            if (userProgress != null) {
                 XpProgressBar(
-                    currentXp = state.userProgress!!.currentLevelXp,
-                    xpForNextLevel = state.userProgress!!.xpForNextLevel,
-                    level = state.userProgress!!.currentLevel
+                    currentXp = userProgress.currentLevelXp,
+                    xpForNextLevel = userProgress.xpForNextLevel,
+                    level = userProgress.currentLevel
                 )
             }
 
@@ -233,7 +253,7 @@ fun TodayScreen(
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    val estTime = if (state.nextTemplateExerciseCount > 0) state.nextTemplateExerciseCount * 8 + 10 else 45
+                    val estTime = state.estimatedMinutes
                     val dayLabel = state.nextTemplate?.dayOfWeek?.let { "$it · " } ?: ""
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -294,11 +314,14 @@ fun TodayScreen(
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
+                    // Quem navega é o evento da ViewModel, e não o toque: a sessão precisa existir
+                    // antes de a execução abrir.
+                    val templateToStart = state.nextTemplate
                     Button(
                         onClick = {
-                            viewModel.startWorkout(state.nextTemplate!!.id)
-                            onNavigateToExecution()
+                            if (templateToStart != null) viewModel.startWorkout(templateToStart.id)
                         },
+                        enabled = templateToStart != null && !isStarting,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Lime400,
                             contentColor = BackgroundDark
@@ -585,22 +608,28 @@ fun TodayScreen(
                 contentAlignment = Alignment.TopEnd
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // `key` pelo id da transação: sem ele, remover o primeiro ganho fazia o
+                    // seguinte cair no slot do anterior, nascer invisível e nunca ser removido —
+                    // resíduo permanente na sobreposição a cada rajada de 2+ transações.
                     activeXpGains.forEach { gain ->
-                        XpGainAnimation(
-                            amount = gain.amount,
-                            reason = gain.reason,
-                            onAnimationEnd = {
-                                activeXpGains.remove(gain)
-                            }
-                        )
+                        key(gain.eventId) {
+                            XpGainAnimation(
+                                amount = gain.amount,
+                                reason = gain.reason,
+                                onAnimationEnd = {
+                                    activeXpGains.remove(gain)
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    if (showFinishDialog && state.activeSession != null) {
-        val active = state.activeSession!!
+    val activeSession = state.activeSession
+    if (showFinishDialog && activeSession != null) {
+        val active = activeSession
         AlertDialog(
             onDismissRequest = {
                 if (!isFinishing) showFinishDialog = false
@@ -622,16 +651,12 @@ fun TodayScreen(
             },
             confirmButton = {
                 TextButton(
+                    enabled = !isFinishing,
                     onClick = {
-                        if (!isFinishing) {
-                            isFinishing = true
-                            showFinishDialog = false
-                            viewModel.finishActiveWorkout(active.id)
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Treino finalizado.")
-                            }
-                            isFinishing = false
-                        }
+                        showFinishDialog = false
+                        // O aviso de sucesso sai do evento da ViewModel, depois de o motor
+                        // confirmar — aqui ele aparecia igual quando a finalização falhava.
+                        viewModel.finishActiveWorkout(active.id)
                     },
                     modifier = Modifier.testTag("confirm_finish_workout_button")
                 ) {
@@ -677,7 +702,7 @@ fun TodayScreen(
                 Text("Escolher outro treino para hoje", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
-                    items(state.allTemplates) { tpl ->
+                    items(state.allTemplates, key = { it.id }) { tpl ->
                         val isSuggested = state.sequence.find { it.isCurrent }?.template?.id == tpl.id
                         Row(
                             modifier = Modifier

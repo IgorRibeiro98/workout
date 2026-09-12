@@ -19,8 +19,19 @@ data class ResolvedTemplateExercise(
 )
 
 class TemplateDetailsViewModel(
-    private val repository: WorkoutRepository
+    private val repository: WorkoutRepository,
+    settingsManager: com.example.data.datastore.SettingsManager
 ) : ViewModel() {
+
+    /**
+     * Preferência de vibração dos gestos de arrastar.
+     *
+     * Ela vem por aqui porque a tela não pode ler o `SettingsManager` do `MainApplication` direto
+     * (§3): a UI consome ViewModel, e não a camada de dados.
+     */
+    val hapticEnabled: StateFlow<Boolean> = settingsManager.hapticEnabledFlow
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     private val _templateId = MutableStateFlow<Long>(-1L)
 

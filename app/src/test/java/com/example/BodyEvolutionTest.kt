@@ -68,6 +68,7 @@ class BodyEvolutionTest {
         return object : BodyMeasurementDao {
             override fun getAllMeasurements(): Flow<List<BodyMeasurementEntity>> = flow
             override suspend fun getAllMeasurementsSync(): List<BodyMeasurementEntity> = flow.value
+            override suspend fun countMeasurements(): Int = flow.value.size
             override fun getLatestMeasurement(): Flow<BodyMeasurementEntity?> = flowOf(flow.value.firstOrNull())
             override suspend fun getLatestMeasurementSync(): BodyMeasurementEntity? = flow.value.firstOrNull()
             override fun getMeasurementById(id: Long): Flow<BodyMeasurementEntity?> = flowOf(flow.value.find { it.id == id })

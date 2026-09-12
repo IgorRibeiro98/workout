@@ -1,6 +1,7 @@
 package com.example.data.remote.provider
 
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.remote.CatalogPage
 import com.example.data.remote.ExternalExerciseDto
 import com.example.data.remote.NetworkResult
@@ -62,10 +63,17 @@ class ExerciseApiV2Provider(
 
     init {
         val effectiveUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+        // Só em debug: em release, o Logcat receberia a URL de cada consulta ao ExerciseDB —
+        // inclusive o termo que a pessoa digitou. `NONE` mantém a cadeia de interceptors idêntica
+        // entre as variantes.
         val loggingInterceptor = HttpLoggingInterceptor { message ->
             Log.d("ExerciseDB_V2_HTTP", message)
         }.apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
 
         val client = OkHttpClient.Builder()

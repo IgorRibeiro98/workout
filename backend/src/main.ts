@@ -95,15 +95,22 @@ async function bootstrap(): Promise<void> {
   //
   // `keepAliveTimeout` precisa ser **maior** que o keep-alive do proxy à frente: se o Node fecha
   // primeiro, o Caddy reaproveita uma conexão morta e o cliente vê um 502 esporádico que não tem
-  // nada a ver com a aplicação. `headersTimeout` acompanha o `requestTimeout` porque o Node exige
-  // que ele não seja menor.
+  // nada a ver com a aplicação.
+  //
+  // `headersTimeout` acompanha o `requestTimeout` **sem ultrapassá-lo** (T18.3.2): a relação que o
+  // Node valida é `headersTimeout <= requestTimeout` — passar os dois por opções do construtor com
+  // o inverso lança `ERR_OUT_OF_RANGE`. Atribuídos como propriedade (como aqui) nada é validado,
+  // então o valor antigo (`requestTimeout + 5 s`) não dava erro nenhum: ele só descrevia uma janela
+  // de cabeçalho que o teto da requisição inteira já teria encerrado antes. Igual aos dois é o
+  // valor mais permissivo que a relação aceita, e preserva a intenção original — não cortar um
+  // celular lento enviando um backup de 4 MiB.
   const server = app.getHttpServer() as {
     requestTimeout: number;
     headersTimeout: number;
     keepAliveTimeout: number;
   };
   server.requestTimeout = config.httpRequestTimeoutMs;
-  server.headersTimeout = config.httpRequestTimeoutMs + 5_000;
+  server.headersTimeout = config.httpRequestTimeoutMs;
   server.keepAliveTimeout = config.httpKeepAliveTimeoutMs;
 
   logger.info('server.started', {

@@ -324,4 +324,74 @@ class SyncPushAckTest {
         assertEquals(0, device.api.pushCalls)
         assertEquals(1, device.pendingCount())
     }
+
+    // ------------------------------------------------------ alteração durante o envio
+
+    @Test
+    fun edicaoFeitaDuranteOEnvioNaoEPerdidaPeloAcknowledge() = runTest {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+
+        // A janela exata: `prepare()` congelou o payload de "Treino A", a requisição saiu, e o
+        // usuário renomeia. A coalescência reaproveita a entrada pendente que está sendo enviada —
+        // é justamente por isso que o `acknowledge` a apagaria junto com a edição.
+        device.api.onPushInFlight = {
+            device.renameTemplate(templateSyncId, "Treino A editado")
+            device.api.onPushInFlight = null
+        }
+
+        val first = device.sync() as SyncOutcome.Success
+        assertEquals(1, first.pushed)
+
+        // A alteração continua na fila: o que subiu descrevia o nome antigo.
+        assertEquals("a edição feita em voo precisa continuar pendente", 1, device.pendingCount())
+        assertEquals("Treino A editado", device.templateName(templateSyncId))
+
+        // E o ciclo seguinte a entrega. O servidor termina com o nome que o usuário vê no aparelho.
+        val second = device.sync() as SyncOutcome.Success
+        assertEquals(1, second.pushed)
+        assertEquals(0, device.pendingCount())
+        assertEquals(
+            "Treino A editado",
+            payloadField(
+                server.payloadOf(ownerUid, SyncEntityType.WORKOUT_TEMPLATE, templateSyncId),
+                "name"
+            )
+        )
+    }
+
+    @Test
+    fun envioSemEdicaoEmVooNaoReenfileiraNada() = runTest {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+
+        val outcome = device.sync() as SyncOutcome.Success
+
+        // O contraponto do teste acima: sem alteração no meio, o hash do Room é o hash que subiu e
+        // a fila fica vazia. Sem esta garantia, o reenfileiramento viraria um laço de push infinito.
+        assertEquals(1, outcome.pushed)
+        assertEquals(0, device.pendingCount())
+        assertEquals(1, server.pushRequests)
+
+        val again = device.sync() as SyncOutcome.Success
+        assertEquals(0, again.pushed)
+        assertEquals(0, device.pendingCount())
+        assertEquals("Treino A", device.templateName(templateSyncId))
+    }
+
+    @Test
+    fun exclusaoConfirmadaDuranteOVooNaoReenfileiraUpsert() = runTest {
+        device.bind()
+        val measurementSyncId = device.newMeasurement(80f)
+        device.sync()
+        device.deleteMeasurement(measurementSyncId)
+
+        val outcome = device.sync() as SyncOutcome.Success
+
+        // Uma exclusão não afirma conteúdo: não há hash a comparar, e o agregado já não existe
+        // localmente. Reenfileirar um `UPSERT` aqui ressuscitaria no servidor o que foi apagado.
+        assertEquals(1, outcome.pushed)
+        assertEquals(0, device.pendingCount())
+        assertTrue(server.isDeleted(ownerUid, SyncEntityType.BODY_MEASUREMENT, measurementSyncId))
+    }
 }

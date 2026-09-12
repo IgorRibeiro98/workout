@@ -464,6 +464,11 @@ export class ChallengeRepository {
     now: number,
   ): Promise<AcceptInvitationOutcome> {
     return this.db.transaction(async (client): Promise<AcceptInvitationOutcome> => {
+      // O teto de participantes só é um teto se contar e inserir forem uma coisa só. O lock é o
+      // mesmo mecanismo de `lockRelationshipPair` (par social), aqui sobre o desafio: sem ele, N
+      // aceites simultâneos liam a contagem antes de qualquer inserção e **todos** passavam.
+      await lockChallenge(client, challengeId);
+
       const changedRes = await client.query(
         `UPDATE challenge_invitations SET status = 'ACCEPTED', updated_at = $1
           WHERE invitation_id = $2 AND status = 'PENDING'`,
@@ -781,4 +786,19 @@ function paginateChallenges<T>(
     total,
     nextCursor: hasMore && items.length > 0 ? cursorOf(items[items.length - 1]) : null,
   };
+}
+
+/**
+ * Serializa as decisões de **teto** de um desafio (T18.3.2).
+ *
+ * `pg_advisory_xact_lock`, a mesma convenção de `lockRelationshipPair` (par social) e do Account
+ * Mutation Fence: dois argumentos hasheados, adquirido dentro da transação, liberado sozinho no
+ * COMMIT/ROLLBACK. Ele existe porque `countActiveParticipants` seguido de `INSERT` só é um limite
+ * se as duas coisas acontecerem sob a mesma serialização.
+ */
+async function lockChallenge(client: PoolClient, challengeId: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [
+    'challenge',
+    challengeId,
+  ]);
 }
