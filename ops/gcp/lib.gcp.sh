@@ -61,7 +61,26 @@ SPARK_SA_SCHEDULER="${SPARK_SA_SCHEDULER:-spark-maintenance-scheduler}"
 # de Firebase, Gemini, HMAC ou deploy.
 SPARK_SA_BACKUP="${SPARK_SA_BACKUP:-spark-backend-backup}"
 
+# T18.3.2: a identidade de DEPLOY, separada das quatro de cima (que executam workload, nunca
+# publicam). Só ela é impersonada pelo GitHub Actions via Workload Identity Federation — nunca por
+# chave JSON.
+SPARK_SA_GITHUB_DEPLOYER="${SPARK_SA_GITHUB_DEPLOYER:-spark-github-deployer}"
+
 sa_email() { printf '%s@%s.iam.gserviceaccount.com' "$1" "${SPARK_GCP_PROJECT}"; }
+
+# ---------------------------------------------------------------- GitHub Actions / Workload Identity Federation (T18.3.2)
+#
+# Nomes estáveis e documentados (ops/gcp/bootstrap-github-deploy.sh, docs/operations/AGENT_DEPLOYMENT.md).
+# Mudar qualquer um destes depois do primeiro bootstrap real exige recriar o Provider — o comentário
+# do próprio bootstrap explica por quê (a condição de atributo é imutável em segurança: nunca
+# corrigida em silêncio).
+SPARK_GITHUB_REPO="${SPARK_GITHUB_REPO:-IgorRibeiro98/workout}"
+SPARK_WIF_POOL="${SPARK_WIF_POOL:-github-actions}"
+SPARK_WIF_PROVIDER="${SPARK_WIF_PROVIDER:-workout}"
+# Produção só é alcançável a partir deste ref e deste GitHub Environment — os dois entram na
+# condição de atributo do Provider (§ deploy-backend.yml exige environment: production).
+SPARK_GITHUB_DEPLOY_REF="${SPARK_GITHUB_DEPLOY_REF:-refs/heads/main}"
+SPARK_GITHUB_DEPLOY_ENVIRONMENT="${SPARK_GITHUB_DEPLOY_ENVIRONMENT:-production}"
 
 # ---------------------------------------------------------------- Secret Manager
 

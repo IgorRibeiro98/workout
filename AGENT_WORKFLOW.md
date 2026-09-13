@@ -239,3 +239,14 @@ At the beginning of a new development task, follow this instruction:
 ```text
 Read PROJECT_RULES.md, ARCHITECTURE.md, AGENT_WORKFLOW.md and DEFINITION_OF_DONE.md before modifying code. If this is a bug, also read BUG_FIX_PROTOCOL.md. If this is a feature, also read FEATURE_PROTOCOL.md. Investigate the current implementation and create a checklist with subchecks before editing. Treat the repository's corrected current code as authoritative when it conflicts with stale documentation. Do not create parallel architecture. Implement the smallest safe change, compile early, run relevant tests, validate the real behavior, review the final diff and audit the implementation against the original checklist before reporting completion.
 ```
+
+## 14. Deploy do Spark Backend (T18.3.2)
+
+Quando uma tarefa exigir deploy real do Spark Backend, use exclusivamente o workflow manual
+**Deploy Spark Backend** (`gh workflow run deploy-backend.yml --ref main`, depois `gh run watch`).
+Não reproduza os comandos internos do Cloud Run (`gcloud run deploy`, `gcloud run jobs deploy`,
+`update-traffic`) e não rode `ops/gcp/deploy-cloud-run.sh` localmente para um deploy normal. Um
+deploy só é permitido para um SHA presente em `main` cujo workflow `backend` tenha concluído com
+sucesso — o próprio workflow de deploy verifica isso e recusa quando não é o caso. Detalhes,
+matriz de IAM e o fluxo completo esperado de um agente ficam em
+[`docs/operations/AGENT_DEPLOYMENT.md`](docs/operations/AGENT_DEPLOYMENT.md).

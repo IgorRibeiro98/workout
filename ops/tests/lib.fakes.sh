@@ -285,6 +285,99 @@ FAKE_GCLOUD
   chmod +x "${dir}/git" "${dir}/gh" "${dir}/docker" "${dir}/curl" "${dir}/gcloud"
 }
 
+# Dublê de `gcloud` dedicado a `ops/gcp/bootstrap-github-deploy.sh` (T18.3.2), isolado do dublê de
+# `install_fakes` acima — nenhum teste existente chama esta função, então estendê-la aqui não muda
+# o comportamento de nenhum dos outros dublês. Casa por SUBSTRING (grep -F) em vez de posição de
+# argumento: o script real mistura `--project` antes e depois do subcomando (uma vez direto, outra
+# via `resource_exists`, que o antepõe) — combinar por texto evita repetir esse detalhe aqui.
+#
+#   GCLOUD_PROJECT_MISSING=1        `projects describe` falha (projeto inexistente/sem acesso)
+#   FAKE_PROJECT_NUMBER             `--format=value(projectNumber)` (default 965678405850)
+#   GCLOUD_WIF_POOL_MISSING=1       pool ainda não existe
+#   FAKE_WIF_POOL_STATE             estado do pool (default ACTIVE)
+#   GCLOUD_WIF_PROVIDER_MISSING=1   provider ainda não existe
+#   FAKE_WIF_ISSUER                 issuer do provider já existente (default: o esperado)
+#   FAKE_WIF_CONDITION               attribute-condition do provider já existente (default: a esperada)
+#   FAKE_WIF_PROVIDER_STATE          estado do provider (default ACTIVE)
+#   GCLOUD_DEPLOYER_SA_MISSING=1     a service account de deploy ainda não existe
+#   GCLOUD_DEPLOYER_HAS_KEY=1        `keys list --managed-by user` devolve uma chave (drift)
+install_wif_fakes() {
+  local dir="$1"
+  mkdir -p "${dir}"
+
+  cat > "${dir}/gcloud" <<'FAKE_WIF_GCLOUD'
+#!/usr/bin/env bash
+set -euo pipefail
+ALL="$*"
+printf '%s\n' "${ALL}" >> "${GCLOUD_CALL_LOG}"
+
+matches() { printf '%s' "${ALL}" | grep -qF -- "$1"; }
+
+for arg in "$@"; do
+  if [ "${arg}" = "--data-file=-" ]; then cat > /dev/null; break; fi
+done
+
+if matches "projects describe"; then
+  if matches "--format=value(projectNumber)"; then
+    printf '%s\n' "${FAKE_PROJECT_NUMBER:-965678405850}"
+    exit 0
+  fi
+  [ -z "${GCLOUD_PROJECT_MISSING:-}" ] || exit 1
+  exit 0
+fi
+
+if matches "iam workload-identity-pools providers describe"; then
+  if matches "--format=value(state)"; then
+    printf '%s\n' "${FAKE_WIF_PROVIDER_STATE:-ACTIVE}"; exit 0
+  fi
+  if matches "--format=value(oidc.issuerUri)"; then
+    printf '%s\n' "${FAKE_WIF_ISSUER:-https://token.actions.githubusercontent.com}"; exit 0
+  fi
+  if matches "--format=value(attributeCondition)"; then
+    # O espaço à direita no default reproduz o que o GCP real devolveu no bootstrap real desta
+    # tarefa (T18.3.2) — sem ele, este dublê não teria pego o falso DRIFT que `tr -s` sozinho
+    # (sem aparar borda) produzia na comparação de compatibilidade.
+    printf '%s\n' "${FAKE_WIF_CONDITION:-assertion.repository == 'IgorRibeiro98/workout' && assertion.ref == 'refs/heads/main' && assertion.environment == 'production' }"
+    exit 0
+  fi
+  [ -z "${GCLOUD_WIF_PROVIDER_MISSING:-}" ] || exit 1
+  exit 0
+fi
+
+if matches "iam workload-identity-pools providers create-oidc"; then exit 0; fi
+
+if matches "iam workload-identity-pools describe"; then
+  if matches "--format=value(state)"; then
+    printf '%s\n' "${FAKE_WIF_POOL_STATE:-ACTIVE}"; exit 0
+  fi
+  [ -z "${GCLOUD_WIF_POOL_MISSING:-}" ] || exit 1
+  exit 0
+fi
+
+if matches "iam workload-identity-pools create"; then exit 0; fi
+
+if matches "iam service-accounts keys list"; then
+  [ -z "${GCLOUD_DEPLOYER_HAS_KEY:-}" ] || printf 'projects/x/serviceAccounts/y/keys/deadbeef\n'
+  exit 0
+fi
+
+if matches "iam service-accounts describe"; then
+  [ -z "${GCLOUD_DEPLOYER_SA_MISSING:-}" ] || exit 1
+  exit 0
+fi
+
+if matches "iam service-accounts create"; then exit 0; fi
+
+if matches "services enable"; then exit 0; fi
+
+# Qualquer add-iam-policy-binding (projeto, secret, SA, bucket, Artifact Registry) e qualquer outro
+# comando não coberto acima: sucesso silencioso — só o log importa para as verificações do teste.
+exit 0
+FAKE_WIF_GCLOUD
+
+  chmod +x "${dir}/gcloud"
+}
+
 # Uma verificação com contagem de falhas — o mesmo `check` dos outros testes de ops/.
 fakes_failures=0
 check() {

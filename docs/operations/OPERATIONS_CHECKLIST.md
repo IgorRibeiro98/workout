@@ -44,11 +44,29 @@ ops/gcp/config-drift-audit.sh              # não faça deploy por cima de um dr
 
 ## O deploy
 
+**Caminho canônico (T18.3.2): GitHub Actions**, sem sessão pessoal de `gcloud`, sem Docker local,
+sem chave de Service Account:
+
+```bash
+gh workflow run deploy-backend.yml --ref main
+gh run watch "$(gh run list --workflow deploy-backend.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
+```
+
+Se o Environment `production` tiver Required reviewers configurado, o run fica em "Waiting" até
+alguém aprovar — isso é esperado, não uma falha. Ver
+[`AGENT_DEPLOYMENT.md`](./AGENT_DEPLOYMENT.md) e
+[`CLOUD_RUN_DEPLOYMENT.md` §20](./CLOUD_RUN_DEPLOYMENT.md#20-deploy-via-github-actions-e-workload-identity-federation-t1832).
+
+**Break-glass (GitHub indisponível, investigação operacional, manutenção extraordinária) —**
+rodar `ops/gcp/deploy-cloud-run.sh` localmente continua funcionando, com a sessão `gcloud` pessoal
+do operador:
+
 ```bash
 ops/gcp/deploy-cloud-run.sh                # muda: jobs (backup, audit, migrate) + candidate → smoke → tráfego + maintenance + schedulers
 ```
 
-O que ele faz, nesta ordem, e onde para se algo falhar:
+Nos dois caminhos o motor é o mesmo script, e faz, nesta ordem, o mesmo trabalho — o GitHub Actions
+não duplica nada disto, só fornece identidade e orquestração:
 build (sem provenance/SBOM) → push → digest → **versões dos secrets** (pinadas; sem versão
 habilitada, para) → jobs `spark-db-backup` e `spark-storage-audit` → **gate de DR** (backup válido ≤
 `SPARK_DR_MAX_BACKUP_AGE_HOURS`, senão executa `spark-db-backup` e espera; com
@@ -56,7 +74,8 @@ habilitada, para) → jobs `spark-db-backup` e `spark-storage-audit` → **gate 
 `--no-traffic` → smoke → 100% do tráfego → `spark-maintenance` → schedulers.
 
 O deploy imprime `secrets pinados nesta release: …=vN …` — é a correlação revision → versão de
-secret. Guarde-a com o relatório do deploy.
+secret. Guarde-a com o relatório do deploy (no caminho do GitHub Actions, isto vai para o log do
+job "Deploy"; o Step Summary do run traz commit, revision, digest e tráfego).
 
 ## Depois de um deploy
 

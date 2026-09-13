@@ -1,0 +1,218 @@
+# Deploy Spark Backend (T18.3.2) — publica produção no Cloud Run.
+#
+# `merge ≠ deploy`: este workflow NUNCA dispara por push nem por pull_request. Ele só existe para
+# ser chamado manualmente — pelo botão "Run workflow" no GitHub, ou por
+# `gh workflow run deploy-backend.yml --ref main`. Todo o resto (build, push, digest, versões de
+# secret pinadas, gate de DR, migration, candidate/smoke, tráfego, maintenance, schedulers) é
+# `ops/gcp/deploy-cloud-run.sh` — o mesmo motor do deploy local, a única autoridade do "como". Este
+# arquivo só fornece identidade (Workload Identity Federation, sem chave), ambiente controlado
+# (GitHub Environment "production") e orquestração (guardas, resumo, validação final).
+#
+# Ver docs/operations/AGENT_DEPLOYMENT.md para o fluxo completo esperado de um agente, e
+# docs/operations/CLOUD_RUN_DEPLOYMENT.md §19 para o desenho da integração.
+
+name: Deploy Spark Backend
+
+on:
+  workflow_dispatch:
+
+# Permissões mínimas: `id-token: write` existe só para o OIDC do Workload Identity Federation
+# (google-github-actions/auth). Nunca `write-all`, nunca permissão de escrita em conteúdo/PR/issues.
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+# Produção é uma fila de um. Dois deploys nunca correm ao mesmo tempo, e o segundo espera o
+# primeiro terminar — nunca cancela um deploy de produção em andamento porque outro foi pedido.
+concurrency:
+  group: spark-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy de produção
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # O Environment é a fronteira operacional (§5 da tarefa). Configurar "Required reviewers" nele
+    # é MANUAL SETUP REQUIRED — ver docs/operations/AGENT_DEPLOYMENT.md. Este YAML não simula nem
+    # substitui essa aprovação: ele só declara o Environment, que é onde ela se conecta quando
+    # configurada.
+    environment: production
+    env:
+      SPARK_GCP_PROJECT: ${{ vars.SPARK_GCP_PROJECT }}
+      SPARK_FIREBASE_PROJECT: ${{ vars.SPARK_FIREBASE_PROJECT }}
+      SPARK_GCP_REGION: ${{ vars.SPARK_GCP_REGION }}
+      # `gh`/`git` usam isto para consultar a Actions API e o `origin/main` remoto — é o que faz
+      # `ops/lib.deploy-gate.sh` (T18.3.2) funcionar dentro do runner sem nenhuma credencial extra.
+      # NUNCA `SPARK_DEPLOY_ALLOW_UNVERIFIED`: produção normal nunca pula o portão de procedência.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # ---------------------------------------------------------------- guardas, antes de qualquer coisa
+      - name: Guarda — produção só aceita refs/heads/main
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Deploy de produção só aceita refs/heads/main (recebido: ${{ github.ref }}). Feature branch, tag, PR e commit avulso são recusados."
+            exit 1
+          fi
+          echo "guarda: github.ref é refs/heads/main"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # Histórico completo: o portão de procedência (`ops/lib.deploy-gate.sh`) precisa de
+          # `git merge-base --is-ancestor` contra `origin/main`, que exige commits reais, não um
+          # checkout raso de profundidade 1.
+          fetch-depth: 0
+
+      - name: Guarda — HEAD é exatamente origin/main
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          head="$(git rev-parse HEAD)"
+          upstream="$(git rev-parse origin/main)"
+          if [ "${head}" != "${upstream}" ]; then
+            echo "::error::HEAD (${head}) não é origin/main (${upstream}) no momento do checkout — produção só recebe o main atual."
+            exit 1
+          fi
+          echo "guarda: HEAD == origin/main (${head})"
+          {
+            echo "sha=${head}"
+          } >> "${GITHUB_OUTPUT}"
+        id: commit
+
+      - name: Preflight (sem segredo)
+        run: |
+          set -euo pipefail
+          {
+            echo "# Spark Backend Deploy"
+            echo
+            echo "| Campo | Valor |"
+            echo "| --- | --- |"
+            echo "| Repositório | \`${{ github.repository }}\` |"
+            echo "| Commit | \`${{ steps.commit.outputs.sha }}\` |"
+            echo "| Branch | \`${{ github.ref_name }}\` |"
+            echo "| Projeto GCP | \`${SPARK_GCP_PROJECT}\` |"
+            echo "| Projeto Firebase | \`${SPARK_FIREBASE_PROJECT}\` |"
+            echo "| Região | \`${SPARK_GCP_REGION}\` |"
+            echo "| Deploy Service Account | \`${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}\` |"
+            echo "| Run | [\`${{ github.run_id }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "repositório: ${{ github.repository }} | commit: ${{ steps.commit.outputs.sha }} | projeto: ${SPARK_GCP_PROJECT} | região: ${SPARK_GCP_REGION}"
+          [ -n "${SPARK_GCP_PROJECT}" ] || { echo "::error::vars.SPARK_GCP_PROJECT não configurada no Environment production"; exit 1; }
+          [ -n "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ] || { echo "::error::vars.GCP_WORKLOAD_IDENTITY_PROVIDER não configurada no Environment production"; exit 1; }
+          [ -n "${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}" ] || { echo "::error::vars.GCP_DEPLOY_SERVICE_ACCOUNT não configurada no Environment production"; exit 1; }
+
+      # ---------------------------------------------------------------- identidade: OIDC → WIF → impersonation
+      # Nunca Service Account JSON. `google-github-actions/auth` troca o token OIDC deste job (por
+      # isso `id-token: write`) por uma credencial federada de curta duração via o Workload Identity
+      # Provider — sem chave, sem `credentials_json`, sem `GCP_CREDENTIALS`.
+      - name: Autenticação Google Cloud (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: gcloud auth configure-docker
+        run: gcloud auth configure-docker "${SPARK_GCP_REGION}-docker.pkg.dev" --quiet
+
+      # ---------------------------------------------------------------- o deploy em si — um comando, uma autoridade
+      # `ops/gcp/deploy-cloud-run.sh` é o motor inteiro: build → push → digest → secrets pinados →
+      # gate de DR → migration → candidate → smoke → tráfego → maintenance → schedulers. Nada disso
+      # é duplicado aqui, e nenhuma flag de emergência (--skip-maintenance,
+      # SPARK_DEPLOY_ALLOW_UNVERIFIED) é usada — produção normal roda o fluxo inteiro. O portão de
+      # procedência (origin/main + CI `backend.yml` verde no MESMO commit) roda DENTRO deste
+      # comando, via `ops/lib.deploy-gate.sh` — usando o `git`/`gh` deste runner, sem nenhum código
+      # de gate duplicado neste YAML.
+      - name: Deploy (ops/gcp/deploy-cloud-run.sh)
+        run: ops/gcp/deploy-cloud-run.sh
+
+      # ---------------------------------------------------------------- validação final, independente
+      - name: Resolver a URL pública do serviço
+        id: service
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe spark-backend --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --format='value(status.url)')"
+          revision="$(gcloud run services describe spark-backend --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --format='value(status.traffic[0].revisionName)')"
+          digest="$(gcloud run services describe spark-backend --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --format='value(spec.template.spec.containers[0].image)')"
+          traffic="$(gcloud run services describe spark-backend --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --format='value(status.traffic[0].percent)')"
+          {
+            echo "url=${url}"
+            echo "revision=${revision}"
+            echo "digest=${digest}"
+            echo "traffic=${traffic}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke final (independente do deploy)
+        run: ops/gcp/smoke-cloud-run.sh "${{ steps.service.outputs.url }}"
+
+      # `--backups-only`: o heartbeat de spark-maintenance exige run.invoker do deployer sobre um
+      # serviço privado que ele não precisa operar — IAM extra só para um check secundário, que o
+      # enunciado pede para não conceder (§22/§9). O heartbeat completo já é coberto pelos alertas
+      # do Cloud Monitoring (T18.3) e por OPERATIONS_CHECKLIST.md; aqui confirmamos exatamente o que
+      # o deploy acabou de gatear: existe backup de DR válido e recente.
+      - name: DR status (backups)
+        id: dr
+        run: ops/gcp/dr-status.sh --backups-only
+
+      # ---------------------------------------------------------------- resumo — sempre, mesmo em falha
+      - name: Resumo do deploy
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ job.status }}" = "success" ]; then
+            status="PASS"
+          else
+            status="FAIL"
+          fi
+          {
+            echo "Status: **${status}**"
+            echo
+            echo "Commit: \`${{ steps.commit.outputs.sha }}\`"
+            echo
+            echo "Projeto: \`${SPARK_GCP_PROJECT}\`"
+            echo
+            echo "Região: \`${SPARK_GCP_REGION}\`"
+            echo
+            if [ -n "${{ steps.service.outputs.revision }}" ]; then
+              echo "Revision: \`${{ steps.service.outputs.revision }}\`"
+              echo
+              echo "Imagem: \`${{ steps.service.outputs.digest }}\`"
+              echo
+              echo "Tráfego: \`${{ steps.service.outputs.traffic }}%\`"
+              echo
+            fi
+            echo "Migration/gate de DR/candidate smoke: ver o passo \"Deploy (ops/gcp/deploy-cloud-run.sh)\" acima — falha aqui aparece como FAIL naquele passo, nunca mascarada."
+            echo
+            if [ "${{ steps.dr.outcome }}" = "success" ]; then
+              echo "DR: PASS"
+            else
+              echo "DR: FAIL ou NOT VERIFIED — ver o passo \"DR status (backups)\""
+            fi
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Nunca rollback automático (§24): migration pode já ter rodado, e rollback de aplicação não é
+      # rollback de schema. Só informação, para o operador decidir.
+      - name: Em caso de falha — informação de rollback (nunca automático)
+        if: failure()
+        run: |
+          set -euo pipefail
+          current="$(gcloud run services describe spark-backend --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --format='value(status.traffic[0].revisionName)' 2> /dev/null || echo desconhecida)"
+          {
+            echo "## Deploy FALHOU"
+            echo
+            echo "Revision atualmente servindo tráfego: \`${current}\` (o deploy não promove tráfego antes do smoke passar — se isto não é a revision nova, o tráfego nunca saiu do que já estava em produção)."
+            echo
+            echo "Rollback é uma decisão do operador, nunca automática (migration pode já ter rodado; rollback de aplicação não desfaz schema):"
+            echo '```'
+            echo "ops/gcp/rollback-cloud-run.sh <revision-anterior>   # ops/gcp/rollback-cloud-run.sh --list para escolher"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

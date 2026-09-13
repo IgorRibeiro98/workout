@@ -100,6 +100,31 @@ produção** com `sslmode=disable|no-verify` ou `uselibpqcompat=true` sem `verif
 prova a normalização, que o aviso não dispara para a string normalizada, e falha deliberadamente
 quando a major do `pg` mudar — para a atualização não passar despercebida.
 
+### Deploy do GitHub Actions: nenhuma chave, nenhum segredo do GCP (T18.3.2)
+
+A identidade que publica produção pelo GitHub Actions (`spark-github-deployer`) nunca tem chave
+JSON. `.github/workflows/deploy-backend.yml` troca o token OIDC do próprio job
+(`permissions.id-token: write`) por uma credencial federada de curta duração via **Workload
+Identity Federation** (`google-github-actions/auth`, ação oficial do Google) — o mesmo princípio de
+"nenhum arquivo, nenhuma variável de credencial" que já vale para o Firebase Admin e o bucket na
+tabela acima, agora aplicado à identidade que faz o deploy em si.
+
+O `Environment: production` do GitHub não guarda nenhum `secrets.*` do GCP — só `vars.*`
+(`SPARK_GCP_PROJECT`, `SPARK_FIREBASE_PROJECT`, `SPARK_GCP_REGION`,
+`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`), porque nenhum desses valores é
+sensível — todos aparecem em texto claro nesta documentação. `GCP_CREDENTIALS` e um
+`credentials_json` de Service Account são explicitamente **proibidos** neste workflow (verificado
+estaticamente por `ops/tests/deploy-backend-workflow.test.sh`).
+
+O Provider de identidade (`workout`, no pool `github-actions`) só aceita tokens OIDC que casem as
+três condições ao mesmo tempo: `repository == 'IgorRibeiro98/workout'`,
+`ref == 'refs/heads/main'` e `environment == 'production'` — nunca o pool inteiro, nunca só o
+repositório. `spark-github-deployer` nunca tem `Owner`, `Editor`, `secretmanager.secretAccessor`
+(só `secretmanager.viewer` — lista/lê metadata de versão, nunca o valor) ou
+`iam.serviceAccountKeyAdmin`. A matriz completa de IAM está em
+[`CLOUD_RUN_DEPLOYMENT.md` §20.2](./CLOUD_RUN_DEPLOYMENT.md#202-matriz-de-iam-do-deployer-spark-github-deployer),
+e `ops/gcp/bootstrap-github-deploy.sh --verify` confere isso contra o IAM real, sem corrigir nada.
+
 ## O que já é garantido por teste
 
 Não por disciplina — por suíte que quebra:
@@ -116,7 +141,15 @@ Não por disciplina — por suíte que quebra:
 - release não permite texto claro, e o endereço de release precisa ser HTTPS em host público
   (`SparkBackendEndpointTest`, `SparkProductionNetworkConfigTest`);
 - `Authorization`, cookie e corpo nunca aparecem em log (`http.spec.ts`, `ai-logging.spec.ts`,
-  `backup-logging.spec.ts`, `sync-persistence.spec.ts`).
+  `backup-logging.spec.ts`, `sync-persistence.spec.ts`);
+- `deploy-backend.yml` nunca tem `credentials_json`, `GCP_CREDENTIALS`, `secretAccessor`,
+  `private_key` nem `GOOGLE_APPLICATION_CREDENTIALS` explícito, só `workflow_dispatch` (nunca
+  `push`/`pull_request`), `permissions` mínimas e `environment: production`
+  (`ops/tests/deploy-backend-workflow.test.sh`);
+- `ops/gcp/bootstrap-github-deploy.sh` nunca cria chave de Service Account, nunca concede
+  Owner/Editor/`secretmanager.secretAccessor` ao deployer, e um Provider existente com
+  issuer/condição diferente do esperado aborta em vez de ser corrigido em silêncio
+  (`ops/tests/bootstrap-github-deploy.test.sh`).
 
 ## Histórico de credenciais no Git
 

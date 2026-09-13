@@ -676,3 +676,152 @@ E no backend (`env.schema.ts`): `MAINTENANCE_STALE_AFTER_MS` (5 min), `DATABASE_
 `SPARK_DR_WORK_DIR`, `SPARK_DR_MAX_DUMP_BYTES`, `SPARK_GIT_COMMIT`, `SPARK_IMAGE_DIGEST`,
 `SPARK_DRILL_ADMIN_URL`, `SPARK_DRILL_DATABASE`, `SPARK_DRILL_KEEP_DATABASE`,
 `SPARK_DRILL_REPLACE_EXISTING`, `SPARK_DR_BACKUP_ID`.
+
+## 20. Deploy via GitHub Actions e Workload Identity Federation (T18.3.2)
+
+> Caminho canônico de produção a partir desta tarefa. Ver
+> [`AGENT_DEPLOYMENT.md`](./AGENT_DEPLOYMENT.md) para o fluxo que um agente deve seguir — este
+> documento é o desenho técnico.
+
+Até a T18.3.1, publicar produção exigia rodar `ops/gcp/deploy-cloud-run.sh` numa máquina com
+`gcloud`/Docker autenticados com a sessão pessoal do operador. A T18.3.2 transforma isso numa
+operação manual do GitHub Actions — `merge ≠ deploy`, e o motor continua sendo exatamente o mesmo
+script:
+
+```text
+código em main
+      ↓
+backend.yml verde NAQUELE commit
+      ↓
+workflow manual "Deploy Spark Backend" (workflow_dispatch)
+      ↓
+GitHub Environment production (Required reviewers — manual)
+      ↓
+OIDC do job → Workload Identity Federation → impersonation de spark-github-deployer (sem chave)
+      ↓
+ops/gcp/deploy-cloud-run.sh   ← autoridade única, sem duplicação no YAML
+      ↓
+Cloud Run
+      ↓
+smoke final + dr-status --backups-only
+      ↓
+Step Summary (commit, revision, digest, tráfego, DR)
+```
+
+`.github/workflows/deploy-backend.yml` só tem `workflow_dispatch:` — nunca `push:`/`pull_request:`.
+Ele nunca reimplementa `gcloud run deploy`/`gcloud run jobs deploy`/`update-traffic`: chama
+`ops/gcp/deploy-cloud-run.sh` como qualquer execução local faria, e o portão de procedência (origin/
+main + `backend.yml` `completed:success` no MESMO SHA — T18.3.2, `ops/lib.deploy-gate.sh`) roda
+**dentro** desse comando, usando o `git`/`gh` do próprio runner. Um commit sem CI verde, com CI em
+andamento, com CI vermelho, ou cujo CI verde é de **outro** SHA — todos abortam antes do build.
+
+### 20.1 Configuração inicial (MANUAL SETUP REQUIRED)
+
+```bash
+# 1. bootstrap idempotente (Pool, Provider, Service Account de deploy, IAM mínimo)
+SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943 ops/gcp/bootstrap-github-deploy.sh
+
+# 2. conferir (só leitura — PASS/DRIFT/NOT_VERIFIED)
+SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943 ops/gcp/bootstrap-github-deploy.sh --verify
+```
+
+No GitHub (**MANUAL SETUP REQUIRED** — nenhum destes passos acontece por script):
+
+1. **Settings → Environments → New environment → `production`.**
+2. **Recomendado: marque "Required reviewers"** e adicione ao menos um revisor humano. Sem isto, um
+   `workflow_dispatch` publica produção sem nenhuma pausa para aprovação — com Required reviewers,
+   o run fica em "Waiting" até alguém aprovar, e é isso que permite o fluxo "agente dispara, humano
+   aprova".
+3. **Environment `production` → Variables** (nunca Secrets — nenhum destes valores é sensível):
+
+   | Nome | Valor |
+   | --- | --- |
+   | `SPARK_GCP_PROJECT` | `project-47b17b25-909d-4ae8-943` |
+   | `SPARK_FIREBASE_PROJECT` | `spark-36b11` |
+   | `SPARK_GCP_REGION` | `southamerica-east1` |
+   | `GCP_WORKLOAD_IDENTITY_PROVIDER` | saída do bootstrap (`projects/<NUM>/locations/global/workloadIdentityPools/github-actions/providers/workout`) |
+   | `GCP_DEPLOY_SERVICE_ACCOUNT` | `spark-github-deployer@project-47b17b25-909d-4ae8-943.iam.gserviceaccount.com` |
+
+   Automatizável com `gh` quando conveniente (nunca obrigatório — configurar pela UI funciona
+   igual, e uma falha aqui nunca desfaz o bootstrap do GCP):
+
+   ```bash
+   gh variable set SPARK_GCP_PROJECT --env production --body project-47b17b25-909d-4ae8-943
+   gh variable set SPARK_FIREBASE_PROJECT --env production --body spark-36b11
+   gh variable set SPARK_GCP_REGION --env production --body southamerica-east1
+   gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER --env production --body "projects/<NUM>/locations/global/workloadIdentityPools/github-actions/providers/workout"
+   gh variable set GCP_DEPLOY_SERVICE_ACCOUNT --env production --body spark-github-deployer@project-47b17b25-909d-4ae8-943.iam.gserviceaccount.com
+   ```
+
+4. **Primeira execução:** `gh workflow run deploy-backend.yml --ref main`, depois `gh run watch
+   <RUN_ID> --exit-status`. Ver [`AGENT_DEPLOYMENT.md`](./AGENT_DEPLOYMENT.md).
+
+### 20.2 Matriz de IAM do deployer (`spark-github-deployer`)
+
+Construída comparando cada comando real de `deploy-cloud-run.sh`/`lib.gcp.sh`/`lib.dr.sh`/
+`smoke-cloud-run.sh` com o papel mínimo que o satisfaz — nunca concedendo Editor/Owner e reduzindo
+depois.
+
+| Comando/recurso | Permissão necessária | Papel concedido | Escopo |
+| --- | --- | --- | --- |
+| OIDC do GitHub → impersonation | gerar token de curta duração como o deployer | `roles/iam.workloadIdentityUser` | sobre a própria SA `spark-github-deployer`; membro = `principalSet` do repositório (nunca o pool inteiro) |
+| `docker push`, resolver digest | `artifactregistry.repositories.{uploadArtifacts,downloadArtifacts,get}` | `roles/artifactregistry.writer` | só o repositório `spark` |
+| `resolve_secret_version` (4 secrets) | listar/ler METADATA de versão — nunca o valor | `roles/secretmanager.viewer` | um binding por secret (nunca `secretAccessor`) |
+| `gcloud run deploy/jobs deploy/execute/describe`, `update-traffic`, `services/jobs add-iam-policy-binding` (invoker do Scheduler) | `run.services.*`, `run.jobs.*`, `run.services.setIamPolicy`, `run.jobs.setIamPolicy` | `roles/run.admin` | projeto (Cloud Run não sustenta condição de recurso na criação de um serviço/job que ainda não existe, e `setIamPolicy` só existe em `run.admin`, não em `run.developer`) |
+| `gcloud scheduler jobs create/update/describe` (dois jobs) | `cloudscheduler.jobs.*` | `roles/cloudscheduler.admin` | projeto (mesma limitação de condição na criação) |
+| `--service-account`/`--oidc-service-account-email`/`--oauth-service-account-email` sobre runtime/migrator/backup/scheduler | `iam.serviceAccounts.actAs` | `roles/iam.serviceAccountUser` | um binding por SA — as quatro, nunca "todas as SAs do projeto" |
+| `lib.dr.sh` (gate de DR): `storage ls`/`cat manifest.json`/`objects describe` sob o prefixo de DR | `storage.objects.{get,list}` | `roles/storage.objectViewer` (condicionado) + `roles/storage.legacyBucketReader` (listar nomes, sem condição) | bucket `spark-private-assets-prod`, condição `resource.name.startsWith(".../objects/system/dr/postgres/")` — nunca fora do prefixo, nunca escrita |
+
+**Nunca concedido ao deployer:** `roles/owner`, `roles/editor`, `roles/secretmanager.secretAccessor`,
+`roles/iam.serviceAccountKeyAdmin`, qualquer chave JSON. `ops/gcp/bootstrap-github-deploy.sh
+--verify` confere isso contra o IAM real.
+
+`config-drift-audit.sh` e `iam-audit.sh` **não** rodam dentro de `deploy-backend.yml`: os dois
+exigem `resourcemanager.projects.get`/`getIamPolicy` (para ler a política do projeto e confirmar os
+dois projetos), que não está em nenhum papel da matriz acima — conceder isso só para um check
+secundário alargaria o deployer além do que o deploy em si precisa (§9/§22 da tarefa). As duas
+auditorias continuam disponíveis para um operador humano com credencial mais ampla (ver
+[`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md)). Pelo mesmo motivo, a validação final do
+workflow usa `dr-status.sh --backups-only` (só o bucket) em vez do heartbeat completo de
+`spark-maintenance`, que exigiria `run.invoker` do deployer sobre um serviço privado que ele não
+precisa operar — o heartbeat completo já é coberto pelos alertas do Cloud Monitoring (T18.3).
+
+### 20.3 O Provider — restrito a este repositório, este ref, este Environment
+
+`ops/gcp/bootstrap-github-deploy.sh` cria o Provider `workout` no pool `github-actions` com uma
+`attribute-condition` que exige as três coisas ao mesmo tempo:
+
+```text
+assertion.repository == 'IgorRibeiro98/workout'
+  && assertion.ref == 'refs/heads/main'
+  && assertion.environment == 'production'
+```
+
+Nenhuma delas sozinha basta: repositório sem ref permitiria qualquer branch do repo certo; ref sem
+`environment` ignoraria o Required Reviewers do Environment. O binding de `workloadIdentityUser` na
+Service Account usa `principalSet://.../attribute.repository/IgorRibeiro98/workout` — nunca
+`principal://.../subject/*` nem o pool inteiro. Rodar o bootstrap de novo NUNCA corrige um Provider
+já existente com issuer/condição diferentes — isso é DRIFT DE SEGURANÇA, e o script aborta pedindo
+revisão manual em vez de alargar (ou estreitar) silenciosamente quem pode virar o deployer.
+
+### 20.4 Break-glass: deploy local
+
+`ops/gcp/deploy-cloud-run.sh` continua existindo e continua sendo o motor — rodá-lo localmente
+nunca foi removido. Depois da T18.3.2 ele deixa de ser o caminho **normal**: é a exceção para
+
+- o GitHub Actions estar indisponível;
+- investigação operacional que precisa rodar passo a passo;
+- manutenção extraordinária fora do fluxo padrão.
+
+Nesses casos, o operador humano autentica com a própria sessão `gcloud` (nunca a identidade
+`spark-github-deployer`, que só existe via WIF) e roda exatamente o comando de sempre:
+
+```bash
+export SPARK_GCP_PROJECT=project-47b17b25-909d-4ae8-943
+export SPARK_FIREBASE_PROJECT=spark-36b11
+export SPARK_GCP_REGION=southamerica-east1
+ops/gcp/deploy-cloud-run.sh
+```
+
+Um agente nunca deve escolher este caminho para um deploy normal — ver
+[`AGENT_DEPLOYMENT.md`](./AGENT_DEPLOYMENT.md#nunca-faça-isto-para-um-deploy-normal).

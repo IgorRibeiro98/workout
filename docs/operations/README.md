@@ -1,11 +1,12 @@
-# `docs/operations/` — operação do Spark em produção (T16.8 → T18.3)
+# `docs/operations/` — operação do Spark em produção (T16.8 → T18.3.2)
 
-Oito documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
-mesmo comando oito vezes.
+Nove documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
+mesmo comando nove vezes.
 
 | Documento | A pergunta que ele responde |
 | --- | --- |
-| [CLOUD_RUN_DEPLOYMENT.md](./CLOUD_RUN_DEPLOYMENT.md) | Como coloco isso no ar no Google Cloud Run? Bootstrap, deploy, rollback, migration job, Secret Manager (versões pinadas), ADC, maintenance, Scheduler. **Topologia real desde a T18.2.** |
+| [CLOUD_RUN_DEPLOYMENT.md](./CLOUD_RUN_DEPLOYMENT.md) | Como coloco isso no ar no Google Cloud Run? Bootstrap, deploy, rollback, migration job, Secret Manager (versões pinadas), ADC, maintenance, Scheduler, e o deploy via GitHub Actions/Workload Identity Federation (T18.3.2). **Topologia real desde a T18.2.** |
+| [AGENT_DEPLOYMENT.md](./AGENT_DEPLOYMENT.md) | Sou um agente e preciso publicar produção — o que exatamente eu rodo, e o que eu nunca devo rodar? (T18.3.2) |
 | [OPERATIONS_CHECKLIST.md](./OPERATIONS_CHECKLIST.md) | O que eu rodo toda semana, todo mês, antes e depois de um deploy, numa rotação de secret, num incidente? Comandos copiáveis (T18.3). |
 | [DISASTER_RECOVERY.md](./DISASTER_RECOVERY.md) | O PostgreSQL morreu. O que eu faço agora? Backup independente do Neon, restore em destino limpo, ensaio, anti-ressurreição, RPO/RTO — Cloud Run (T18.3) e VPS. |
 | [OBSERVABILITY.md](./OBSERVABILITY.md) | Como eu sei que algo quebrou? Eventos estruturados, heartbeat do maintenance, tamanho do banco, alertas, auditorias (T18.3). |

@@ -27,3 +27,7 @@ ops/*.env
 restic-password
 backup.env
 backend.env
+
+# Credencial temporária gerada pela `google-github-actions/auth` (T18.3.2) dentro do workspace do
+# runner do GitHub Actions — nunca uma chave, mas nunca deveria ser versionada por engano também.
+gha-creds-*.json

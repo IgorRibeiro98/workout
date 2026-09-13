@@ -33,11 +33,15 @@ on:
       # e um defeito neles é um backup que não acontece.
       - 'ops/**'
       - '.github/workflows/backend.yml'
+      # O workflow de deploy de produção (T18.3.2) é código operacional como qualquer outro em
+      # ops/: uma mudança nele precisa passar por este CI antes de poder ser usada para publicar.
+      - '.github/workflows/deploy-backend.yml'
   pull_request:
     paths:
       - 'backend/**'
       - 'ops/**'
       - '.github/workflows/backend.yml'
+      - '.github/workflows/deploy-backend.yml'
 
 # A chave HMAC dos tombstones de exclusão de conta, para os jobs que rodam o backend em
 # `NODE_ENV=production` (T17.13.1 §4).
@@ -584,6 +588,23 @@ jobs:
       # quando um digest em uso por uma revision ativa cairia fora da janela de retenção.
       - name: Retenção do Artifact Registry (offline)
         run: ops/tests/artifact-registry-retention.test.sh
+
+      # T18.3.2 — o bootstrap idempotente da integração GitHub Actions → Cloud Run via Workload
+      # Identity Federation: cria/reutiliza pool, provider e a Service Account de deploy; nunca
+      # corrige em silêncio um Provider existente com issuer/condição divergente (DRIFT); nunca cria
+      # chave; IAM mínimo (run.admin/cloudscheduler.admin de projeto, artifactregistry.writer só no
+      # repositório, secretmanager.viewer — nunca secretAccessor —, serviceAccountUser só nas quatro
+      # SAs de workload, leitura condicionada ao prefixo de DR no bucket); idempotente de ponta a
+      # ponta.
+      - name: Bootstrap GitHub Actions → WIF (offline)
+        run: ops/tests/bootstrap-github-deploy.test.sh
+
+      # T18.3.2 — verificação estática de deploy-backend.yml: só workflow_dispatch (nunca push/
+      # pull_request), permissões mínimas com id-token: write, environment: production,
+      # concurrency de produção com cancel-in-progress: false, OIDC sem nenhuma chave/credencial,
+      # guardas de main, e nenhum comando de deploy duplicado fora de ops/gcp/deploy-cloud-run.sh.
+      - name: Workflow de deploy do backend (estático)
+        run: ops/tests/deploy-backend-workflow.test.sh
 
       # T18.3 §26 — regras de segurança dos scripts, verificadas sobre o código: `set -euo
       # pipefail`, `rm -rf` só com guard, segredo nunca no argv de `docker run`, nenhum
