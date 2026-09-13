@@ -135,9 +135,14 @@ echo
 echo "=== o novo workflow entra no CI operacional (backend.yml) ==="
 
 BACKEND_WORKFLOW="${REPO_ROOT}/.github/workflows/backend.yml"
+# Cada bloco é isolado do resto do arquivo — parado no próximo irmão de mesma indentação (nunca até
+# o EOF), para não confundir "está na lista de paths do gatilho certo" com "a string aparece em
+# algum lugar do arquivo" (um comentário posterior sobre este mesmo teste, por exemplo).
+backend_on_block() { awk '/^  push:/{flag=1;next} /^  [a-zA-Z]/{flag=0} flag' "${BACKEND_WORKFLOW}"; }
+backend_pr_block() { awk '/^  pull_request:/{flag=1;next} /^  [a-zA-Z]/{flag=0} flag' "${BACKEND_WORKFLOW}"; }
 check "backend.yml vigia mudanças em deploy-backend.yml (push)" "sim" \
-  "$(awk '/^  push:/{flag=1} /^  pull_request:/{flag=0} flag' "${BACKEND_WORKFLOW}" | grep -q '.github/workflows/deploy-backend.yml' && echo sim || echo não)"
+  "$(backend_on_block | grep -q '.github/workflows/deploy-backend.yml' && echo sim || echo não)"
 check "backend.yml vigia mudanças em deploy-backend.yml (pull_request)" "sim" \
-  "$(awk '/^  pull_request:/{flag=1} flag' "${BACKEND_WORKFLOW}" | grep -q '.github/workflows/deploy-backend.yml' && echo sim || echo não)"
+  "$(backend_pr_block | grep -q '.github/workflows/deploy-backend.yml' && echo sim || echo não)"
 
 finish_checks "deploy-backend.yml: workflow_dispatch exclusivo, OIDC sem chave, autoridade única de deploy, guardas de main"
