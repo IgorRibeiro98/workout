@@ -240,6 +240,49 @@ tasks.register<VerifyReleaseEndpointGate>("verifyReleaseEndpointGate") {
   )
 }
 
+/**
+ * Os metadados **efetivos** do release, legíveis por máquina (T18.4).
+ *
+ * `ops/android/build-play-bundle.sh` precisa saber com que `applicationId`, `versionCode`,
+ * `versionName`, SDKs e endereço de backend o bundle vai ser produzido — e precisa saber isso
+ * **antes** de gastar minutos em testes e build, para recusar cedo um release apontando para o app
+ * errado ou para o backend errado. Um `grep versionCode app/build.gradle.kts` responderia à
+ * pergunta errada: ele lê o que está escrito, não o que o AGP resolveu para a variante `release`
+ * (sufixos, overrides por flavor, propriedade vinda de `~/.gradle/gradle.properties`).
+ *
+ * A tarefa lê os valores da própria variante (`androidComponents.onVariants`) e do mesmo
+ * `releaseBackendBaseUrl(providers)` que alimenta o `BuildConfig` — uma fonte só, sem cópia da
+ * regra. Ela não toca segredo nenhum, não depende de rede, escreve um arquivo `chave=valor` em
+ * `build/play-release/metadata.properties` e é compatível com o cache de configuração: só
+ * valores simples entram como entrada.
+ */
+abstract class PrintPlayReleaseMetadata : DefaultTask() {
+
+  @get:Input abstract val applicationId: Property<String>
+  @get:Input abstract val versionCode: Property<Int>
+  @get:Input abstract val versionName: Property<String>
+  @get:Input abstract val compileSdk: Property<Int>
+  @get:Input abstract val targetSdk: Property<Int>
+  @get:Input abstract val backendBaseUrl: Property<String>
+  @get:OutputFile abstract val outputFile: RegularFileProperty
+
+  @TaskAction
+  fun write() {
+    val lines = listOf(
+      "applicationId=${applicationId.get()}",
+      "versionCode=${versionCode.get()}",
+      "versionName=${versionName.get()}",
+      "compileSdk=${compileSdk.get()}",
+      "targetSdk=${targetSdk.get()}",
+      "backendBaseUrl=${backendBaseUrl.get()}",
+    )
+    val file = outputFile.get().asFile
+    file.parentFile.mkdirs()
+    file.writeText(lines.joinToString("\n", postfix = "\n"))
+    lines.forEach { logger.lifecycle(it) }
+  }
+}
+
 android {
     testOptions {
         unitTests {
@@ -301,7 +344,8 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 
       // Endereço do Spark Backend em produção (T16.1/T16.2). Não é segredo, mas também não é
-      // código: vem de `-PsparkBackendBaseUrl=...` ou de `local.properties`, e nasce vazio.
+      // código: é a propriedade Gradle `sparkBackendBaseUrl` (`-P`, `gradle.properties` ou
+      // `~/.gradle/gradle.properties` — nunca `local.properties`, que o Gradle não lê), e nasce vazio.
       // Vazio significa "backend não configurado": o Coach responde indisponível, nenhuma
       // requisição sai e o núcleo do Spark continua completo. Nunca há fallback para localhost.
       buildConfigField(
@@ -338,6 +382,27 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+}
+
+androidComponents {
+  onVariants(selector().withName("release")) { variant ->
+    // Um bundle tem uma saída só; um segundo output aqui significaria splits/ABI que este
+    // projeto não usa — e um `versionCode` ambíguo, que o script não deve escolher em silêncio.
+    val output = variant.outputs.single()
+    tasks.register<PrintPlayReleaseMetadata>("printPlayReleaseMetadata") {
+      group = "verification"
+      description =
+        "Escreve os metadados efetivos do release (applicationId, versão, SDKs, backend) para o " +
+          "fluxo canônico de bundle do Google Play (ops/android/build-play-bundle.sh)."
+      applicationId.set(variant.applicationId)
+      versionCode.set(output.versionCode.map { it ?: throw GradleException("versionCode ausente") })
+      versionName.set(output.versionName.map { it ?: throw GradleException("versionName ausente") })
+      compileSdk.set(android.compileSdk ?: throw GradleException("compileSdk ausente"))
+      targetSdk.set(variant.targetSdk.apiLevel)
+      backendBaseUrl.set(releaseBackendBaseUrl(providers))
+      outputFile.set(layout.buildDirectory.file("play-release/metadata.properties"))
+    }
   }
 }
 

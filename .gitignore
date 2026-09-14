@@ -31,3 +31,13 @@ backend.env
 # Credencial temporária gerada pela `google-github-actions/auth` (T18.3.2) dentro do workspace do
 # runner do GitHub Actions — nunca uma chave, mas nunca deveria ser versionada por engano também.
 gha-creds-*.json
+
+# Bundles assinados para o Google Play (T18.4): `ops/android/build-play-bundle.sh` publica
+# `dist/spark-<versionName>-<versionCode>.aab` + `.sha256`. Artefato de release não é código.
+/dist/
+
+# Keystores nunca entram no Git — nem a upload key (`~/.android/spark-upload.jks`, que já vive
+# fora do repositório), nem uma cópia "temporária" dela. Certificados públicos `.pem` continuam
+# permitidos: não há regra para eles de propósito.
+*.jks
+*.keystore

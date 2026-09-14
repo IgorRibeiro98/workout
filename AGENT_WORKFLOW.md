@@ -250,3 +250,21 @@ deploy só é permitido para um SHA presente em `main` cujo workflow `backend` t
 sucesso — o próprio workflow de deploy verifica isso e recusa quando não é o caso. Detalhes,
 matriz de IAM e o fluxo completo esperado de um agente ficam em
 [`docs/operations/AGENT_DEPLOYMENT.md`](docs/operations/AGENT_DEPLOYMENT.md).
+
+## 15. Bundle Android para o Google Play (T18.4)
+
+Quando uma tarefa exigir gerar o bundle Android (`.aab`) para publicação no Google Play, use
+exclusivamente:
+
+```bash
+./ops/android/build-play-bundle.sh
+```
+
+Leia antes: [`docs/operations/ANDROID_PLAY_RELEASE.md`](docs/operations/ANDROID_PLAY_RELEASE.md).
+
+Não execute manualmente `bundleRelease`/`jarsigner`/`keytool`, não crie `signingConfig` contendo
+credenciais, não solicite nem aceite a senha da upload key (o `jarsigner` a pede ao usuário no
+terminal), e não considere um AAB pronto se o script não concluir com `RESULT: PASS` e o
+artefato + SHA-256 em `dist/`. Sem terminal interativo, rode `--check` para validar tudo até o
+bundle e entregue o comando ao usuário. `versionCode`/`versionName` são decisão explícita em
+`app/build.gradle.kts`, commitada em `main` antes do release — o script não os altera.

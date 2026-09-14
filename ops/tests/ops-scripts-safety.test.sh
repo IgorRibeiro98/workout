@@ -3,8 +3,8 @@
 # As regras de segurança dos scripts operacionais (T18.3 §26), verificadas estaticamente sobre o
 # código — não por inspeção humana:
 #
-#   - todo script de ops/ e ops/gcp/ roda com `set -euo pipefail` (direto, ou pelo `lib` que ele
-#     carrega — os libs declaram);
+#   - todo script de ops/, ops/gcp/ e ops/android/ roda com `set -euo pipefail` (ou `set -Eeuo
+#     pipefail`; direto, ou pelo `lib` que ele carrega — os libs declaram);
 #   - nenhum `rm -rf` de uma variável sem um guard `[ -n "${VAR}" ]` no mesmo script (uma
 #     variável vazia viraria `rm -rf ""`/`rm -rf /`);
 #   - nenhum segredo entra no argv de `docker run`: `-e NOME=valor` é proibido para
@@ -12,7 +12,8 @@
 #   - nenhuma referência `secret:latest` nos scripts de deploy;
 #   - o ensaio de restauração nunca conhece a URL de produção (nem DATABASE_URL, nem
 #     DATABASE_URL_DIRECT);
-#   - o smoke nunca imprime o token de invocação.
+#   - o smoke nunca imprime o token de invocação;
+#   - o fluxo do bundle do Google Play (T18.4) nunca passa senha ao jarsigner nem a lê do ambiente.
 #
 # Uso: ops/tests/ops-scripts-safety.test.sh
 
@@ -29,9 +30,9 @@ code_only() {
 }
 
 echo "=== set -euo pipefail ==="
-for script in "${OPS_DIR}"/*.sh "${OPS_DIR}"/gcp/*.sh; do
+for script in "${OPS_DIR}"/*.sh "${OPS_DIR}"/gcp/*.sh "${OPS_DIR}"/android/*.sh; do
   name="${script#"${OPS_DIR}"/}"
-  if code_only "${script}" | grep -q 'set -euo pipefail'; then
+  if code_only "${script}" | grep -qE 'set -E?euo pipefail'; then
     check "${name}: declara set -euo pipefail" "sim" "sim"
   elif code_only "${script}" | grep -qE '^\. "\$\{SCRIPT_DIR\}/(lib\.sh|lib\.gcp\.sh)"'; then
     check "${name}: herda set -euo pipefail do lib que carrega" "sim" "sim"
@@ -42,7 +43,7 @@ done
 
 echo
 echo "=== rm -rf sem guard ==="
-for script in "${OPS_DIR}"/*.sh "${OPS_DIR}"/gcp/*.sh "${OPS_DIR}"/tests/*.sh; do
+for script in "${OPS_DIR}"/*.sh "${OPS_DIR}"/gcp/*.sh "${OPS_DIR}"/android/*.sh "${OPS_DIR}"/tests/*.sh; do
   name="${script#"${OPS_DIR}"/}"
   while IFS= read -r line; do
     [ -n "${line}" ] || continue
@@ -72,6 +73,15 @@ for script in "${OPS_DIR}"/*.sh "${OPS_DIR}"/gcp/*.sh; do
 done
 check "smoke: o token de invocação nunca é ecoado" "não" \
   "$(code_only "${OPS_DIR}/gcp/smoke-cloud-run.sh" | grep -E 'log .*INVOKER_TOKEN|echo .*INVOKER_TOKEN|printf .*INVOKER_TOKEN' | grep -q . && echo sim || echo não)"
+
+# O bundle do Google Play (T18.4): a senha da upload key só existe no prompt interativo do jarsigner.
+PLAY_SCRIPT="${OPS_DIR}/android/build-play-bundle.sh"
+check "android/build-play-bundle.sh: jarsigner nunca recebe -storepass/-keypass" "0" \
+  "$(code_only "${PLAY_SCRIPT}" | grep -cE '(^|[[:space:]])-(storepass|keypass)([[:space:]]|$)' || true)"
+check "android/build-play-bundle.sh: nenhuma variável *PASS/*PASSWORD é lida" "0" \
+  "$(code_only "${PLAY_SCRIPT}" | grep -cE '\$\{?[A-Z_]*PASS(WORD)?\b' || true)"
+check "android/build-play-bundle.sh: sem eval, sem set -x, sem source" "0" \
+  "$(code_only "${PLAY_SCRIPT}" | grep -cE '(^|[^a-z_])eval[[:space:]]|set -x|^[[:space:]]*(source|\.) ' || true)"
 
 echo
 echo "=== nenhum secret:latest ==="

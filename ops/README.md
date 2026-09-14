@@ -11,6 +11,14 @@ nenhum é infraestrutura que ninguém consegue repetir depois de um desastre.
 > alertas (`monitoring-alerts.sh`). Ver
 > [`docs/operations/CLOUD_RUN_DEPLOYMENT.md`](../docs/operations/CLOUD_RUN_DEPLOYMENT.md) e
 > [`docs/operations/OPERATIONS_CHECKLIST.md`](../docs/operations/OPERATIONS_CHECKLIST.md).
+>
+> O **bundle Android assinado para o Google Play** (T18.4) vive em [`ops/android/`](./android/):
+> `build-play-bundle.sh` (o único entrypoint — testes, lint, `bundleRelease`, `jarsigner` com a
+> senha digitada no terminal, verificação, `dist/spark-<versionName>-<versionCode>.aab` + `.sha256`)
+> e `play-release.conf` (os valores públicos pinados: applicationId, backend de produção,
+> fingerprint da upload key, SDK mínimo). Runbook:
+> [`docs/operations/ANDROID_PLAY_RELEASE.md`](../docs/operations/ANDROID_PLAY_RELEASE.md).
+> Teste offline: `tests/build-play-bundle.test.sh`.
 
 O banco é o PostgreSQL de `DATABASE_URL` (T18.0). Os scripts o alcançam com `pg_dump`,
 `pg_restore` e `psql` rodando **por container** (`SPARK_PG_TOOLS_IMAGE`, `postgres:18-alpine`),
@@ -39,6 +47,7 @@ com permissão `600`.
 | `tests/lib.fakes.sh` | Dublês de `gcloud`/`docker`/`git`/`curl` para os testes offline de `ops/gcp/`. |
 | `tests/deploy-first-run.test.sh`, `deploy-hardening.test.sh`, `rollback-drill.test.sh`, `gcp-audits.test.sh`, `monitoring-alerts.test.sh`, `artifact-registry-retention.test.sh`, `gcp-cross-project.test.sh` | Os scripts de `ops/gcp/` provados sem GCP (T18.2.1/T18.3). |
 | `tests/ops-scripts-safety.test.sh` | Regras estáticas: `set -euo pipefail`, `rm -rf` só com guard, segredo nunca no argv, sem `:latest`, ensaio cego para produção (T18.3 §26). |
+| `tests/build-play-bundle.test.sh` | O fluxo do bundle para o Google Play (T18.4) provado sem JDK, SDK, keystore, senha ou rede: dublês + pseudo-terminal; cada falha fechada, senha nunca no argv, `--check` não assina, artefato só depois de tudo passar. |
 | `systemd/` | Unidades e timers para o backup diário e a verificação horária. |
 
 ## Convenções

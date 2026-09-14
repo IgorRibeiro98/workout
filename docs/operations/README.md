@@ -1,12 +1,13 @@
-# `docs/operations/` — operação do Spark em produção (T16.8 → T18.3.2)
+# `docs/operations/` — operação do Spark em produção (T16.8 → T18.4)
 
-Nove documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
-mesmo comando nove vezes.
+Dez documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
+mesmo comando dez vezes.
 
 | Documento | A pergunta que ele responde |
 | --- | --- |
 | [CLOUD_RUN_DEPLOYMENT.md](./CLOUD_RUN_DEPLOYMENT.md) | Como coloco isso no ar no Google Cloud Run? Bootstrap, deploy, rollback, migration job, Secret Manager (versões pinadas), ADC, maintenance, Scheduler, e o deploy via GitHub Actions/Workload Identity Federation (T18.3.2). **Topologia real desde a T18.2.** |
 | [AGENT_DEPLOYMENT.md](./AGENT_DEPLOYMENT.md) | Sou um agente e preciso publicar produção — o que exatamente eu rodo, e o que eu nunca devo rodar? (T18.3.2) |
+| [ANDROID_PLAY_RELEASE.md](./ANDROID_PLAY_RELEASE.md) | Como gero o `.aab` assinado do Spark para o Google Play? Um comando (`ops/android/build-play-bundle.sh`), a senha só no `jarsigner`, upload key × App Signing key, versionamento, rotação, regra para agentes (T18.4). |
 | [OPERATIONS_CHECKLIST.md](./OPERATIONS_CHECKLIST.md) | O que eu rodo toda semana, todo mês, antes e depois de um deploy, numa rotação de secret, num incidente? Comandos copiáveis (T18.3). |
 | [DISASTER_RECOVERY.md](./DISASTER_RECOVERY.md) | O PostgreSQL morreu. O que eu faço agora? Backup independente do Neon, restore em destino limpo, ensaio, anti-ressurreição, RPO/RTO — Cloud Run (T18.3) e VPS. |
 | [OBSERVABILITY.md](./OBSERVABILITY.md) | Como eu sei que algo quebrou? Eventos estruturados, heartbeat do maintenance, tamanho do banco, alertas, auditorias (T18.3). |
@@ -16,7 +17,8 @@ mesmo comando nove vezes.
 | [RUNBOOK.md](./RUNBOOK.md) | Uma coisa quebrou. O que eu faço? Por sintoma — nas duas topologias. |
 
 Os scripts da VPS estão em [`../../ops/`](../../ops/); os do Cloud Run em
-[`../../ops/gcp/`](../../ops/gcp/).
+[`../../ops/gcp/`](../../ops/gcp/); o do bundle Android para o Play em
+[`../../ops/android/`](../../ops/android/).
 
 ## Vocabulário de estado
 
@@ -38,6 +40,7 @@ CI (DOCKER + POSTGRESQL)     ✅ VERIFIED     (persistência, topologia, pg_dump
 REAL CLOUD RUN (T18.2)       ✅ VERIFIED     (primeiro deploy, migration, health, 401, maintenance, Scheduler — revision spark-backend-00001-gs2)
 REAL DR / ALERTAS (T18.3)    ver o relatório final da T18.3 — cada item é VERIFIED ou NOT VERIFIED por evidência, nunca por inspeção
 REAL FIREBASE AUTH (token)   ❌ NOT VERIFIED — procedimento em OPERATIONS_CHECKLIST.md; exige conta de teste
+ANDROID PLAY BUNDLE (T18.4)  ✅ IMPLEMENTED   (script + task Gradle + teste offline; assinatura real exige operador com TTY — ver ANDROID_PLAY_RELEASE.md)
 REAL VPS / DNS / TLS         ❌ NOT VERIFIED — não há VPS provisionada (topologia alternativa)
 REAL OFF-SITE BACKUP (VPS)   ❌ NOT VERIFIED — sem storage contratado (topologia alternativa)
 ```

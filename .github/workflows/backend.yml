@@ -518,9 +518,10 @@ jobs:
       # `SC1090`/`SC1091` onde o caminho do `source` é configuração operacional e não existe em
       # tempo de análise, e `SC2034` em `ops/gcp/lib.gcp.sh` (T18.2.1) onde a variável é consumida
       # por `deploy-cloud-run.sh` depois do `source` — invisível para o ShellCheck ao analisar
-      # `lib.gcp.sh` isoladamente.
+      # `lib.gcp.sh` isoladamente. `ops/android/` entra desde a T18.4: o fluxo do bundle assinado
+      # para o Google Play é script de release como qualquer outro em `ops/`.
       - name: shellcheck
-        run: shellcheck ops/*.sh ops/tests/*.sh ops/gcp/*.sh
+        run: shellcheck ops/*.sh ops/tests/*.sh ops/gcp/*.sh ops/android/*.sh
 
       # Nenhuma supressão em bloco (T16.8.1 §5): a saída fácil para deixar o passo acima verde é
       # um `# shellcheck disable=` com meia dúzia de códigos no topo do arquivo, e ela apaga os
@@ -608,9 +609,19 @@ jobs:
 
       # T18.3 §26 — regras de segurança dos scripts, verificadas sobre o código: `set -euo
       # pipefail`, `rm -rf` só com guard, segredo nunca no argv de `docker run`, nenhum
-      # `secret:latest`, ensaio de restauração cego para a URL de produção.
+      # `secret:latest`, ensaio de restauração cego para a URL de produção. Desde a T18.4 inclui
+      # `ops/android/`: o jarsigner nunca recebe `-storepass`/`-keypass`, e nenhuma variável de
+      # senha é lida.
       - name: Segurança dos scripts operacionais (estático)
         run: ops/tests/ops-scripts-safety.test.sh
+
+      # T18.4 — o bundle assinado para o Google Play, provado sem JDK, sem SDK, sem a upload key e
+      # sem senha (dublês de gradlew/keytool/jarsigner/git; pseudo-terminal via `script`): cada
+      # falha fechada para antes da etapa seguinte, a senha nunca entra no argv, sem TTY o fluxo
+      # de assinatura nem começa, `--check` não assina, e dist/ só recebe
+      # `spark-<versionName>-<versionCode>.aab` + `.sha256` depois de tudo passar.
+      - name: Bundle do Google Play (offline)
+        run: ops/tests/build-play-bundle.test.sh
 
       # A proibição de `777`/`666` (T16.8 §145/§146). Ela existia como regra escrita e não como
       # verificação — e `ops/verify-backup.sh` tinha um `chmod 777` no ensaio de restauração, que
