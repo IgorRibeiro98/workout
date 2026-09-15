@@ -64,7 +64,7 @@ WORK_DIR=""
 SUMMARY_PRINTED=0
 
 # Ferramentas resolvidas no preflight (caminhos absolutos; ver resolve_java_tool).
-JAVA_BIN=""; KEYTOOL_BIN=""; JARSIGNER_BIN=""
+JAVA_BIN=""; KEYTOOL_BIN=""; JARSIGNER_BIN=""; JAVA_VERSION=""
 # `-J` força a saída em inglês: o script lê "SHA1:", "jar verified." e "jar is unsigned." — e
 # keytool/jarsigner traduzem essas linhas conforme o locale da máquina.
 JAVA_LANG_ARGS=(-J-Duser.language=en -J-Duser.country=US)
@@ -265,7 +265,10 @@ preflight() {
     "Corrija com: chmod +x ${REPO_ROOT}/gradlew"
   resolve_android_sdk
   require_interactive_terminal
-  log "Java .................. ${JAVA_BIN}"
+  # A versão fica no resumo: o CI constrói com JDK 21, e um release feito com outro JDK precisa
+  # ser rastreável como tal (Robolectric, R8 e o próprio Gradle mudam de comportamento por major).
+  JAVA_VERSION="$("${JAVA_BIN}" -version 2>&1 | head -n 1 | sed -n 's/.*version "\([^"]*\)".*/\1/p')"
+  log "Java .................. ${JAVA_BIN} (${JAVA_VERSION:-versão desconhecida})"
   log "Gradle ................ ${REPO_ROOT}/gradlew"
   log "Modo .................. ${MODE}"
 }
@@ -614,6 +617,9 @@ Git
   Branch ............... ${GIT_BRANCH}
   Commit ............... ${GIT_COMMIT_SHORT}
   Worktree ............. ${GIT_WORKTREE}
+
+Toolchain
+  JDK .................. ${JAVA_VERSION:-desconhecido} (${JAVA_BIN})
 
 Android
   Application ID ....... ${APPLICATION_ID}

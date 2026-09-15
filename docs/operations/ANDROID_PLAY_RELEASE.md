@@ -77,7 +77,7 @@ Signing key.
 
 | O quê | Como | Por quê |
 | --- | --- | --- |
-| JDK 17+ completo (`java`, `javac`, `keytool`, `jarsigner`) | Temurin 21: `curl -sL -o jdk21.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"`, extrair, `export JAVA_HOME=<jdk>` | Gradle 9.3.1 + AGP 9.1.1 exigem 17+; `jarsigner`/`keytool` só existem no JDK (um JRE não serve). |
+| JDK **21** completo (`java`, `javac`, `keytool`, `jarsigner`) | Temurin 21: `curl -sL -o jdk21.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"`, extrair, `export JAVA_HOME=<jdk>` | É o JDK do CI (`android.yml`). Gradle 9.3.1 + AGP 9.1.1 aceitam 17+, mas o Robolectric só emula a API 36 em Java 21 — um JDK 17 já quebrou a suíte uma vez (§11). `jarsigner`/`keytool` só existem no JDK (um JRE não serve). O script usa `$JAVA_HOME/bin` quando `JAVA_HOME` está definido, senão o `java` do PATH, e registra a versão no resumo. |
 | Android SDK command-line tools | `commandlinetools-linux-*_latest.zip` em `<sdk>/cmdline-tools/latest/`; `yes \| sdkmanager --sdk_root=<sdk> --licenses` | O AGP resolve o SDK por `local.properties` (`sdk.dir=<sdk>`) ou `ANDROID_HOME`. O script confere, não cria. |
 | `platforms;android-36`, `build-tools;36.0.0`, `platform-tools` | `sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"` | `compileSdk = 36` e `targetSdk = 36` (política do Play desde 31/08/2026). |
 | Gradle Wrapper | Já está no repositório (`./gradlew`, executável) | Nunca um Gradle global. |
@@ -177,7 +177,7 @@ stdin e stdout são um terminal, e o script recusa qualquer outra coisa.
 ```text
 ==> Preflight
 Android SDK ........... /home/…/android-sdk (local.properties)
-Java .................. /home/…/jdk/bin/java
+Java .................. /home/…/jdk/bin/java (21.0.12.1)
 Gradle ................ /home/…/workout/gradlew
 Modo .................. sign
 
@@ -238,6 +238,9 @@ Git
   Branch ............... main
   Commit ............... abcdef123456
   Worktree ............. clean
+
+Toolchain
+  JDK .................. 21.0.12.1 (/home/…/jdk/bin/java)
 
 Android
   Application ID ....... com.aistudio.workout.v2
@@ -419,6 +422,7 @@ conscientemente.
 | `ERROR: jarsigner falhou` | Senha errada (mais comum) | Rode de novo. Nada foi publicado; o intermediário está intacto. |
 | `ERROR: assinatura final inválida` / `não é a upload key registrada` | A assinatura não verifica contra a keystore/alias, ou o signer não é a chave registrada | Não envie nada ao Play. Confira keystore, alias e `.conf`. |
 | `:app:testDebugUnitTest falhou` / `lintVitalRelease falhou` | Suíte vermelha / lint fatal | Corrija o código. Nunca baseline, nunca `-x test`. |
+| `Failed to create a Robolectric sandbox: Android SDK 36 requires Java 21 (have Java 17)` | O `java` em uso é 17; um teste Robolectric sem `@Config(sdk = …)` herda o `compileSdk` | Rode com o JDK 21 (`JAVA_HOME=~/spark-toolchain/jdk`, o mesmo do CI). Se um teste novo reproduzir isso, pine `sdk = [Build.VERSION_CODES.TIRAMISU]` como as demais classes da suíte. |
 | Play Console: "You uploaded an APK or Android App Bundle that was signed in debug mode" ou "wrong key" | AAB assinado com outra chave | O script deveria ter recusado; confira se o AAB enviado é o de `dist/` e o SHA-256 confere. |
 | Play Console: "Version code X has already been used" | `versionCode` não subiu | Suba `versionCode`, commite, gere de novo (o artefato anterior fica em `dist/` com o nome antigo). |
 

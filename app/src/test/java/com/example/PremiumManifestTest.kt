@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.local.AppDatabase
@@ -15,7 +16,10 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(manifest = Config.NONE)
+// `sdk` pinado como nas demais classes Robolectric da suíte (T18.4). Sem o pin, o Robolectric
+// emula o `compileSdk` (36), que exige Java 21 — e a suíte passava em JDK 21 (CI) e falhava em
+// JDK 17 com "Android SDK 36 requires Java 21". Um teste não pode depender do JDK de quem roda.
+@Config(manifest = Config.NONE, sdk = [Build.VERSION_CODES.TIRAMISU])
 class PremiumManifestTest {
 
     private lateinit var database: AppDatabase
