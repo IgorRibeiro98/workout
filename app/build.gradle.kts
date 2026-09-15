@@ -343,6 +343,26 @@ android {
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 
+      // Símbolos nativos no bundle (T18.4.2). O app não tem código nativo próprio, mas carrega
+      // `.so` pré-compilados de dependências AndroidX (`androidx.graphics.path`, contador
+      // compartilhado do DataStore), e o Play Console avisou na versão 6 que o AAB "contém código
+      // nativo" sem símbolos de depuração. `SYMBOL_TABLE` manda o AGP extrair a tabela de símbolos
+      // de cada `.so` para `BUNDLE-METADATA/com.android.tools.build.debugsymbols/`; `FULL` (DWARF
+      // inteiro) não tem uso concreto aqui.
+      //
+      // Duas limitações medidas na T18.4.2, para ninguém concluir errado a partir de um build verde:
+      // - a extração usa `llvm-objcopy` do **NDK**. Sem NDK no SDK o AGP não baixa nada e não
+      //   falha: registra em `--info` que a pasta não existe e segue sem produzir símbolos;
+      // - as `.so` do AndroidX chegam já sem `.symtab` (`llvm-nm`: "no symbols"). O AGP compara o
+      //   tamanho da lib com o da versão passada pelo `llvm-strip`, vê que nada mudou e pula a
+      //   extração ("has already been stripped"). Enquanto o código nativo vier só dessas libs,
+      //   o AAB **não** ganha o diretório de símbolos e o aviso do Play pode continuar — não há
+      //   símbolo a enviar. A configuração fica porque passa a valer no dia em que uma dependência
+      //   trouxer uma `.so` com símbolos. Ver docs/operations/ANDROID_PLAY_RELEASE.md §2 e §11.
+      ndk {
+        debugSymbolLevel = "SYMBOL_TABLE"
+      }
+
       // Endereço do Spark Backend em produção (T16.1/T16.2). Não é segredo, mas também não é
       // código: é a propriedade Gradle `sparkBackendBaseUrl` (`-P`, `gradle.properties` ou
       // `~/.gradle/gradle.properties` — nunca `local.properties`, que o Gradle não lê), e nasce vazio.
