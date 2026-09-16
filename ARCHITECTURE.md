@@ -566,6 +566,7 @@ Firebase e sem Gemini.
 | Spark Backend (PostgreSQL / Neon) | autoridade de **persistência remota** (PostgreSQL desde T18.0/T18.0.1) — metadata, ownership, hashes, índices e estado transacional da conta; convergência entre dispositivos |
 | Object Storage (GCS privado; disco local com o provider `local`) | autoridade de **bytes** (T18.1) — fotos dos check-ins e o documento canônico de cada backup, sempre referenciados por `storage_key` no PostgreSQL. Nunca metadata, nunca estado |
 | Firebase | identidade/autenticação (`Firebase Auth`) |
+| Spark Backend — `AiEntitlementResolver` | autoridade de **entitlement de capability de IA** por conta (T19.0) — `AI_ENABLED`, quota e concorrência continuam onde já estavam; o Android só lê o resultado, nunca decide |
 | Gemini | serviço probabilístico — nunca autoridade do domínio |
 
 ### Direção de fluxo
@@ -692,7 +693,8 @@ persistência do domínio        validação da resposta
 | T18.1.1 | Endurecimento: Account Mutation Fence, migração de mídia legada, coleta honesta | **implementado** (bucket real NOT VERIFIED sem ADC local) |
 | T18.2 | Cloud Run: serviço, service account anexada, Secret Manager | **implementado** (Cloud Run real NOT VERIFIED sem gcloud/rede GCP) |
 | T18.2.1 | Cross-project: projeto GCP de infraestrutura ≠ projeto Firebase | **implementado** (bootstrap real NOT VERIFIED sem gcloud/rede GCP) |
-| T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | pendente |
+| T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | **implementado** (DR real VERIFIED em GCP) |
+| T19.0 | ACL/entitlements granular de capabilities de IA por conta | **implementado** |
 
 ### Identidade global dos dados e Outbox (T16.3)
 

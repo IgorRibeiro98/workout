@@ -27,6 +27,8 @@ import {
 } from './ai-coach.validator';
 import { AiRequestRegistry } from './ai-request.registry';
 import { AiUsageRepository, utcDateOf } from './ai-usage.repository';
+import { capabilityFor } from './entitlement/ai-capability';
+import { AiEntitlementResolver } from './entitlement/ai-entitlement.resolver';
 import {
   AI_PROVIDER_GATEWAY,
   AiProviderError,
@@ -42,6 +44,7 @@ import {
  * ```text
  * token verificado (guard)
  *   → contrato (schemaVersion, corpo, tetos)
+ *   → entitlement da conta para a capability desta operação (T19.0)
  *   → vaga de concorrência / deduplicação
  *   → quota (registrada antes da chamada)
  *   → UMA chamada ao provider
@@ -54,6 +57,11 @@ import {
  * mesmo se o provider falhar (§35). Uma ação explícita do usuário produz **no máximo uma**
  * invocação do modelo: não há crítica, reescrita, segunda opinião ou retry automático (§29, §30).
  *
+ * O entitlement é verificado **antes** da vaga de concorrência e da quota (T19.0 §6.2/§10): uma
+ * capability negada não reserva vaga, não consome quota e não chama o provider. A decisão em si —
+ * "esta conta pode usar esta capability?" — não mora aqui; ela vem de `AiEntitlementResolver`, o
+ * único lugar do backend que responde essa pergunta.
+ *
  * O serviço não escreve nada de domínio. Ele não conhece treino, sessão, XP ou PR — e não existe
  * tabela desses no servidor para conhecer.
  */
@@ -64,6 +72,7 @@ export class AiCoachService {
     @Inject(AI_PROVIDER_GATEWAY) private readonly provider: AiProviderGateway,
     private readonly usage: AiUsageRepository,
     private readonly registry: AiRequestRegistry,
+    private readonly entitlements: AiEntitlementResolver,
     private readonly logger: SparkLogger,
   ) {}
 
@@ -88,6 +97,8 @@ export class AiCoachService {
     const request = this.parseRequest(body);
     const { clientRequestId, requestType } = request;
     const uid = principal.uid;
+
+    await this.assertEntitled(uid, requestType, requestId, clientRequestId);
 
     const slot = this.registry.tryAcquire(uid, clientRequestId);
     if (!slot.acquired) {
@@ -169,6 +180,39 @@ export class AiCoachService {
     }
 
     return parsed.data;
+  }
+
+  /**
+   * A capability desta operação, autorizada para esta conta — antes de qualquer custo (T19.0).
+   *
+   * `RESOLUTION_FAILED` vira `503`, nunca `403`: o servidor não decidiu negar, não conseguiu
+   * decidir. As duas recusam a chamada — é só isso que fail-closed exige —, mas a distinção
+   * importa para quem lê o log e para quem opera o servidor (§24).
+   */
+  private async assertEntitled(
+    uid: string,
+    requestType: AiCoachRequestType,
+    requestId: string,
+    clientRequestId: string,
+  ): Promise<void> {
+    const capability = capabilityFor(requestType);
+    const decision = await this.entitlements.resolve(uid, capability);
+    if (decision.allowed) {
+      return;
+    }
+
+    this.logger.warn('ai.entitlement.denied', {
+      requestId,
+      clientRequestId,
+      uidPrefix: uidPrefix(uid),
+      requestType,
+      capability,
+      reason: decision.reason,
+    });
+
+    throw decision.reason === 'RESOLUTION_FAILED'
+      ? AiCoachErrors.entitlementUnavailable()
+      : AiCoachErrors.capabilityDenied();
   }
 
   /**

@@ -227,6 +227,20 @@ class SparkBackendAiCoachGatewayTest {
     }
 
     @Test
+    fun `403 vira capability negada, distinto de pedido de conta (T19_0)`() = runBlocking {
+        val gateway = gatewayWith(
+            mutableListOf(),
+            status = 403,
+            body = errorEnvelope("AI_CAPABILITY_DENIED")
+        )
+
+        val result = gateway.request(analyzeRequest()) as AiCoachGatewayResult.Error
+
+        assertEquals(AiCoachErrorKind.CAPABILITY_DENIED, result.kind)
+        assertEquals("AI_CAPABILITY_DENIED", result.detail)
+    }
+
+    @Test
     fun `409 vira erro recuperavel do provider`() = runBlocking {
         val gateway = gatewayWith(mutableListOf(), status = 409, body = errorEnvelope("AI_REQUEST_CONFLICT"))
 

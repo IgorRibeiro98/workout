@@ -56,6 +56,11 @@ export const ACCOUNT_UID_COLUMNS: readonly AccountUidColumn[] = [
   // 3. Coach IA (T16.2). Contagem de uso por conta.
   { table: 'ai_usage_daily', column: 'uid', role: 'OWNER' },
 
+  // 3.1 Entitlements de capability do Coach IA (T19.0). Mesma categoria de `ai_usage_daily`: uma
+  //     linha por conta, sem FK para `social_profiles` — o entitlement existe independente do
+  //     Social estar ativo.
+  { table: 'ai_capability_entitlements', column: 'uid', role: 'OWNER' },
+
   // 4. Notificações (T17.5). `social_notification_deliveries` não aparece pelo mesmo motivo de
   //    `backup_items`: ela referencia o evento e o dispositivo, nunca a conta diretamente.
   { table: 'social_notification_events', column: 'recipient_uid', role: 'OWNER' },

@@ -1691,6 +1691,68 @@ Fechamento pós-auditoria do Social. Nenhuma funcionalidade nova; sete regras qu
   partir do estado real. Isso não é uma segunda máquina de estados: a tabela continua sendo a
   autoridade.
 
+## 13.20 ACL/entitlements de capabilities de IA (T19.0)
+
+`AI_ENABLED` e quota respondem "o Coach está ligado?" e "esta conta ainda tem saldo?". Nenhuma das
+duas responde "esta conta pode usar esta funcionalidade específica?" — a T19.0 introduz essa
+terceira pergunta, granular por conta e por capability, sem virar plano nem RBAC genérico.
+
+- **Capability não é plano, e não é quota.** `hasCapability(AI_GENERATE_WORKOUT)`, nunca
+  `isPremium()`/`isBeta()`/`isAdmin()` espalhado pelo domínio. Capability é "pode usar isto?";
+  quota é "ainda tem saldo?" — perguntas diferentes, na ordem certa: uma negação de capability não
+  consome quota, não reserva concorrência e não chama o provider.
+- **`AI_ENABLED` continua superior a tudo.** A ordem é fixa: guard de auth → `AI_ENABLED` →
+  entitlement → concorrência → quota → provider. `AI_ENABLED=false` nega mesmo com entitlement
+  concedido explicitamente; entitlement negado nega mesmo com quota disponível. Nenhuma capability
+  pode contornar o interruptor global.
+- **Um resolver central, e só ele decide.** `AiEntitlementResolver`
+  (`backend/src/modules/ai/entitlement/`) é o único lugar que responde "esta conta pode esta
+  capability?" — usado por `AiCoachService` (para autorizar) e por
+  `AccountCapabilitiesController` (para o próprio endpoint de leitura). Nenhum controller ou
+  serviço novo deve consultar `AiEntitlementRepository` diretamente.
+- **Mapeamento operação → capability é 1:1, exaustivo e sem `default` genérico.**
+  `capabilityFor()` (backend) e `AiCoachRequestType.requiredCapability` (Android) mapeiam as sete
+  operações do Coach para `AI_ANALYZE_WORKOUT` / `AI_GENERATE_WORKOUT` / `AI_ADAPT_WORKOUT` /
+  `AI_EXPLAIN` (os quatro `EXPLAIN_*` compartilham `AI_EXPLAIN`, via `isExplanation()`). Uma
+  operação nova sem entrada não compila — nos dois lados.
+- **A tabela guarda exceções, não concessões — a estratégia de compatibilidade.** Para uma
+  capability **conhecida**, ausência de linha em `ai_capability_entitlements` significa liberado:
+  é a mesma permissão que toda conta autenticada já tinha antes da T19.0, e introduzir a ACL não
+  pode revogar ninguém por omissão. `REVOKED` é a única forma de negar uma capability conhecida;
+  `GRANTED` existe para restaurar acesso depois de um `REVOKED` (idempotente, sem duplicar linha —
+  `PRIMARY KEY (uid, capability)`). Uma capability **fora** da lista conhecida nunca é liberada —
+  fail-closed, e é o que impede uma operação desconhecida de cair em permissão genérica.
+- **Fail-closed é sobre não saber, não sobre negar de propósito.** Falha ao consultar o banco vira
+  `503 AI_ENTITLEMENT_UNAVAILABLE`, nunca `403 AI_CAPABILITY_DENIED` — a mesma distinção que
+  `ACCOUNT_STATE_UNAVAILABLE` já faz para o tombstone de exclusão de conta. As duas recusam a
+  operação online; a diferença importa para quem lê o log, e nenhuma das duas toca o Workout local.
+- **O endpoint é account-scoped por construção.** `GET /v1/account/capabilities` lê `uid` só do
+  token verificado — não existe (nem pode existir) parâmetro de conta na rota, na query ou no
+  corpo. O corpo de resposta é só `{ capability, allowed }` por capability: sem uid, sem o motivo
+  interno da decisão.
+- **O Android nunca é autoridade.** `AiCapabilitiesViewModel` (compartilhado pelas três telas do
+  Coach, como `FriendsViewModel`) só orienta a UX — habilitar/desabilitar uma ação, mostrar uma
+  mensagem. `CoachActionAvailability` distingue `ALLOWED` / `DENIED` / `DETERMINING` (carregando
+  ou sem conta) / `UNKNOWN` (falha ao carregar — nunca interpretada como permissão). O backend
+  valida de novo em toda chamada real, mesmo que este estado diga "permitido": um `403
+  AI_CAPABILITY_DENIED` na chamada em si vira `AiCoachErrorKind.CAPABILITY_DENIED`, um valor
+  próprio, nunca reaproveitando `AUTH_REQUIRED`. Troca de conta invalida o estado antes de
+  qualquer requisição nova, e a resposta de uma consulta iniciada pela conta anterior é descartada
+  se a conta mudou no meio do voo — o mesmo padrão de `FriendsViewModel`.
+- **Grant/revoke/list é uma ferramenta operacional, não um endpoint de produto.** `npm run
+  capabilities:ai -- grant|revoke|list`, no mesmo padrão dos outros comandos de `backend/src/cli/`
+  (`AppConfig.fromEnv()` + `PostgresService`, sem HTTP, sem admin secret). Não existe painel
+  administrativo nem rota `/v1/admin/*`.
+- **Entitlement entra no inventário anti-ressurreição.** `ai_capability_entitlements.uid` está em
+  `ACCOUNT_UID_COLUMNS` (`account-uid-inventory.ts`, §13.19) como `OWNER`, e
+  `AccountDeletionRepository.purgeStatements()` a limpa junto de `ai_usage_daily`: excluir uma
+  conta remove o entitlement dela, e um restore de um snapshot antigo não pode ressuscitar uma
+  revogação nem uma concessão de conta já excluída.
+- **Testes.** Toda mudança em capabilities/entitlement roda
+  `./gradlew :app:testDebugUnitTest --tests "com.example.domain.ai.*" --tests
+  "com.example.data.ai.*" --tests "com.example.presentation.coach.*"` e `npm test` em `backend/`.
+  As duas são offline, usam dublês e não consomem cota.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

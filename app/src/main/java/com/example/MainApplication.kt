@@ -174,6 +174,17 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
         com.example.data.ai.SparkBackendAiCoachGateway(sparkBackendClient)
     }
 
+    /**
+     * Capabilities de IA por conta (T19.0).
+     *
+     * Só orienta a UX das telas do Coach — o backend segue validando de novo em toda chamada real
+     * (`AiCoachService`), mesmo que esta consulta diga "permitido". Mesmo cliente, mesmo
+     * interceptor: `by lazy` pela mesma razão do [aiCoachGateway].
+     */
+    val aiCapabilitiesGateway: com.example.domain.ai.AiCapabilitiesGateway by lazy {
+        com.example.data.ai.SparkAiCapabilitiesGateway(sparkBackendClient)
+    }
+
     val analyzeWorkoutUseCase: com.example.domain.ai.usecase.AnalyzeWorkoutUseCase by lazy {
         com.example.domain.ai.usecase.AnalyzeWorkoutUseCase(
             contextBuilder = com.example.data.ai.WorkoutAiCoachContextBuilder(

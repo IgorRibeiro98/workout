@@ -49,8 +49,9 @@ export class AccountDeletionRepository {
     );
     await client.query(`DELETE FROM backup_snapshots WHERE owner_uid = $1`, [ownerUid]);
 
-    // 3. IA Usage
+    // 3. IA Usage e entitlements (T19.0)
     await client.query(`DELETE FROM ai_usage_daily WHERE uid = $1`, [ownerUid]);
+    await client.query(`DELETE FROM ai_capability_entitlements WHERE uid = $1`, [ownerUid]);
 
     // 4. Notificações
     await client.query(

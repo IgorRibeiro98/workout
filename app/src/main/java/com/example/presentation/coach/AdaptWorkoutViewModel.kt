@@ -175,6 +175,13 @@ class AdaptWorkoutViewModel(
             isWarning = true
         )
 
+        // Conta autenticada, sem entitlement para esta capability (T19.0).
+        AiCoachErrorKind.CAPABILITY_DENIED -> AdaptWorkoutStatus.Message(
+            text = "Adaptar com IA não está disponível para esta conta no momento. Editar o " +
+                "treino à mão continua funcionando normalmente.",
+            canRetry = false
+        )
+
         AiCoachErrorKind.RATE_LIMITED -> AdaptWorkoutStatus.Message(
             text = "O Coach atingiu o limite de uso. Tente novamente mais tarde." +
                 (detail?.let { " ($it)" } ?: ""),

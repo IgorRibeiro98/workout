@@ -133,6 +133,13 @@ class AiCoachViewModel(
                 "funcionando offline."
         )
 
+        // Conta autenticada, sem entitlement para esta capability (T19.0). Não convida a entrar
+        // de novo — entrar não muda o entitlement — e não convida a tentar de novo.
+        AiCoachErrorKind.CAPABILITY_DENIED -> AiCoachUiState.Error(
+            message = "A análise de treino não está disponível para esta conta no momento.",
+            canRetry = false
+        )
+
         AiCoachErrorKind.RATE_LIMITED -> AiCoachUiState.Error(
             message = "O Coach atingiu o limite de uso. Tente novamente mais tarde." + (detail?.let { " ($it)" } ?: ""),
             canRetry = false

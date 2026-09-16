@@ -61,6 +61,11 @@ class MainViewModelFactory(
     private val authGateway: com.example.domain.auth.AuthGateway? = null,
     /** Cliente do Spark Backend (T16.1). `null` quando não há endereço configurado neste build. */
     private val sparkBackendClient: com.example.data.remote.spark.SparkBackendClient? = null,
+    /**
+     * Capabilities de IA por conta (T19.0). `null` faz as telas do Coach tratarem toda capability
+     * como indeterminada — o backend continua validando de novo em qualquer caso.
+     */
+    private val aiCapabilitiesGateway: com.example.domain.ai.AiCapabilitiesGateway? = null,
     /** Backup estruturado (T16.4). `null` remove a seção de backup do Perfil, e nada mais muda. */
     private val backupRepository: com.example.data.backup.BackupRepository? = null,
     /** Restore seguro (T16.5). `null` remove a seção de restore do Perfil, e nada mais muda. */
@@ -483,6 +488,17 @@ class MainViewModelFactory(
             return com.example.presentation.account.SyncViewModel(
                 repository = sync,
                 coordinator = coordinator
+            ) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCapabilitiesViewModel::class.java)) {
+            val capabilities = aiCapabilitiesGateway
+                ?: throw IllegalStateException("AiCapabilitiesGateway not provided")
+            val gateway = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.coach.AiCapabilitiesViewModel(
+                gateway = capabilities,
+                authGateway = gateway
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.coach.AiCoachViewModel::class.java)) {

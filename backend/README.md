@@ -190,7 +190,8 @@ T18.2): nenhum arquivo, identidade da service account anexada. Passo a passo dos
 | `GET /health/live` | pública | O processo está vivo. Não consulta nada externo. |
 | `GET /health/ready` | pública | Configuração carregada + PostgreSQL acessível + migrations aplicadas. `503` quando algo falta. |
 | `GET /v1/auth/me` | **Bearer** | Devolve `{ "uid": ... }` derivado do token verificado. |
-| `POST /v1/ai/coach` | **Bearer** | Coach IA: recebe contexto + intenção, decide prompt e modelo, chama o Gemini e devolve a resposta validada. |
+| `POST /v1/ai/coach` | **Bearer** | Coach IA: recebe contexto + intenção, decide prompt e modelo, chama o Gemini e devolve a resposta validada. Autorização por capability antes de concorrência/quota/provider (T19.0). |
+| `GET /v1/account/capabilities` | **Bearer** | As quatro capabilities de IA (T19.0) da própria conta — só `{ capability, allowed }`, nunca de outra conta. |
 | `POST /v1/backups` | **Bearer** | Recebe um snapshot completo do estado pessoal, valida por inteiro, guarda em uma transação e devolve **metadata**. |
 | `GET /v1/backups/latest` | **Bearer** | Metadata do backup mais recente **daquela conta**. `404` quando não há nenhum. |
 | `GET /v1/backups` | **Bearer** | Metadata dos backups retidos daquela conta, na ordem do servidor (T16.5). |
@@ -325,6 +326,42 @@ concluída é imutável. Não existe tabela de treino, sessão ou série aqui �
 isso. O backup da T16.4 não muda essa regra: ele guarda o snapshot como payload opaco, e não
 transforma treino em tabela consultável.
 
+#### Entitlements de capability (T19.0)
+
+`AI_ENABLED` (kill switch global) e quota (saldo diário) já existiam. A T19.0 acrescenta a
+pergunta que faltava: **esta conta pode usar esta capability específica do Coach?**
+
+```text
+ANALYZE_WORKOUT              → AI_ANALYZE_WORKOUT
+GENERATE_WORKOUT             → AI_GENERATE_WORKOUT
+ADAPT_WORKOUT                → AI_ADAPT_WORKOUT
+EXPLAIN_*                    → AI_EXPLAIN
+```
+
+`AiEntitlementResolver` (`src/modules/ai/entitlement/`) é o único lugar que decide — usado por
+`AiCoachService` (autoriza a operação, antes de concorrência e quota) e por
+`AccountCapabilitiesController` (`GET /v1/account/capabilities`, leitura da própria conta). A
+ordem completa é `auth → AI_ENABLED → entitlement → concorrência → quota → provider`: uma
+capability negada não reserva vaga, não consome quota e não chama o Gemini.
+
+`ai_capability_entitlements` guarda **exceções**, não concessões: para as quatro capabilities
+conhecidas, ausência de linha é `ALLOW` — a mesma permissão que toda conta autenticada já tinha
+antes desta tarefa, preservada deliberadamente para não revogar ninguém por omissão. `REVOKED` é a
+única negação explícita; uma capability fora da lista conhecida, ou uma falha ao consultar o
+banco, nunca é liberada (fail-closed — a segunda vira `503 AI_ENTITLEMENT_UNAVAILABLE`, distinta
+de um `403 AI_CAPABILITY_DENIED` deliberado).
+
+Grant/revoke/list é operacional, não um endpoint de produto:
+
+```bash
+npm run capabilities:ai -- grant  <uid> <capability>
+npm run capabilities:ai -- revoke <uid> <capability>
+npm run capabilities:ai -- list   <uid>
+```
+
+Mesmo padrão dos outros comandos de `src/cli/`: fala com o banco diretamente, sem servidor HTTP e
+sem admin secret — a proteção é quem tem acesso ao ambiente que roda o comando.
+
 ### Backup (T16.4)
 
 ```text
@@ -457,7 +494,8 @@ precisa de ownership, versionamento, idempotência e tombstones. Cada fase da T1
 Ver a [matriz de dados](../docs/architecture/data-classification-matrix.md).
 
 As tabelas de hoje: `server_metadata` (estado técnico), `ai_usage_daily` (contagem de uso do Coach,
-sem conteúdo), `backup_snapshots` + `backup_items` (T16.4/T16.5; desde a T18.1 só metadata,
+sem conteúdo), `ai_capability_entitlements` (exceções de entitlement por conta/capability, T19.0),
+`backup_snapshots` + `backup_items` (T16.4/T16.5; desde a T18.1 só metadata,
 hashes e `storage_key` — o documento vive no Object Storage), `sync_entities` + `sync_changes` +
 `sync_mutations` (T16.6/T16.7) e, desde a T17.0, `social_profiles` + `social_privacy_settings` +
 `friend_requests` + `friendships`.

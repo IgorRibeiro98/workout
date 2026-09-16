@@ -19,8 +19,17 @@ export const AI_COACH_REQUEST_TYPES = [
 
 export type AiCoachRequestType = (typeof AI_COACH_REQUEST_TYPES)[number];
 
-/** Os quatro `EXPLAIN_*` são read-only por contrato: eles explicam algo que o app já decidiu. */
-export function isExplanation(type: AiCoachRequestType): boolean {
+/** Os quatro tipos `EXPLAIN_*`, isolados para quem precisa do subconjunto exato (T19.0). */
+export type AiCoachExplanationRequestType = Extract<AiCoachRequestType, `EXPLAIN_${string}`>;
+
+/**
+ * Os quatro `EXPLAIN_*` são read-only por contrato: eles explicam algo que o app já decidiu.
+ *
+ * É um type predicate — não só `boolean` — para que quem já verificou possa deixar o compilador
+ * provar exaustividade sobre o restante (`capabilityFor`, em `entitlement/ai-capability.ts`, é o
+ * primeiro a depender disso).
+ */
+export function isExplanation(type: AiCoachRequestType): type is AiCoachExplanationRequestType {
   return type.startsWith('EXPLAIN_');
 }
 
@@ -61,6 +70,22 @@ export const AI_ERROR_CODES = {
   AI_PROVIDER_UNAVAILABLE: 'AI_PROVIDER_UNAVAILABLE',
   /** O provider não respondeu dentro do tempo permitido. */
   AI_PROVIDER_TIMEOUT: 'AI_PROVIDER_TIMEOUT',
+  /**
+   * A conta está autenticada, mas não tem entitlement para esta capability (T19.0).
+   *
+   * Distinto de `AI_USER_QUOTA_EXCEEDED`: quota é "ainda tem saldo?", entitlement é "pode usar
+   * isto?" — a segunda pergunta é respondida primeiro, e uma negação aqui não consome quota nem
+   * chama o provider.
+   */
+  AI_CAPABILITY_DENIED: 'AI_CAPABILITY_DENIED',
+  /**
+   * O servidor não conseguiu determinar o entitlement com segurança (T19.0, fail-closed).
+   *
+   * Distinto de `AI_CAPABILITY_DENIED`: ali a resposta é "não" de propósito; aqui o servidor não
+   * sabe, e por isso recusa a operação online — o mesmo desenho de `ACCOUNT_STATE_UNAVAILABLE`
+   * para o tombstone de exclusão de conta.
+   */
+  AI_ENTITLEMENT_UNAVAILABLE: 'AI_ENTITLEMENT_UNAVAILABLE',
 } as const;
 
 export type AiErrorCode = (typeof AI_ERROR_CODES)[keyof typeof AI_ERROR_CODES];

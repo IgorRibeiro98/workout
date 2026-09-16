@@ -22,6 +22,7 @@
     "migrate:database": "node dist/cli/migrate-database.js",
     "migrate:deletion-ledger": "node dist/cli/migrate-deletion-ledger-to-object-storage.js",
     "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js",
+    "capabilities:ai": "node dist/cli/manage-ai-capabilities.js",
     "dr:backup": "node dist/cli/db-backup.js",
     "dr:restore-drill": "node dist/cli/db-restore-drill.js",
     "audit:storage": "node dist/cli/storage-audit.js"

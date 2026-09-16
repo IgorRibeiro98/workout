@@ -256,6 +256,13 @@ class GenerateWorkoutViewModel(
             isWarning = true
         )
 
+        // Conta autenticada, sem entitlement para esta capability (T19.0).
+        AiCoachErrorKind.CAPABILITY_DENIED -> GenerateWorkoutStatus.Message(
+            text = "Gerar treino com IA não está disponível para esta conta no momento. Criar " +
+                "treino manualmente continua funcionando normalmente.",
+            canRetry = false
+        )
+
         AiCoachErrorKind.RATE_LIMITED -> GenerateWorkoutStatus.Message(
             text = "O Coach atingiu o limite de uso. Tente novamente mais tarde." +
                 (detail?.let { " ($it)" } ?: ""),

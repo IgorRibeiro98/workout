@@ -4,6 +4,9 @@ import { AiCoachController } from './ai-coach.controller';
 import { AiCoachService } from './ai-coach.service';
 import { AiRequestRegistry } from './ai-request.registry';
 import { AiUsageRepository } from './ai-usage.repository';
+import { AccountCapabilitiesController } from './entitlement/account-capabilities.controller';
+import { AiEntitlementRepository } from './entitlement/ai-entitlement.repository';
+import { AiEntitlementResolver } from './entitlement/ai-entitlement.resolver';
 import { AI_PROVIDER_GATEWAY } from './provider/ai-provider.gateway';
 import { GeminiAiProviderGateway } from './provider/gemini-ai-provider.gateway';
 
@@ -17,14 +20,20 @@ import { GeminiAiProviderGateway } from './provider/gemini-ai-provider.gateway';
  *
  * Importa `AuthModule` porque a rota é protegida pelo `BearerAuthGuard`: no Spark Backend não
  * existe endpoint de IA público.
+ *
+ * `AiEntitlementResolver` (T19.0) é o único lugar que decide entitlement, usado por
+ * `AiCoachService` (para autorizar uma operação) e por `AccountCapabilitiesController` (para
+ * `GET /v1/account/capabilities`) — as duas pontas do mesmo módulo, nunca duas fontes.
  */
 @Module({
   imports: [AuthModule],
-  controllers: [AiCoachController],
+  controllers: [AiCoachController, AccountCapabilitiesController],
   providers: [
     AiCoachService,
     AiUsageRepository,
     AiRequestRegistry,
+    AiEntitlementRepository,
+    AiEntitlementResolver,
     GeminiAiProviderGateway,
     { provide: AI_PROVIDER_GATEWAY, useExisting: GeminiAiProviderGateway },
   ],

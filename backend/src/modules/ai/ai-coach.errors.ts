@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   GatewayTimeoutException,
   HttpException,
   HttpStatus,
@@ -23,6 +24,8 @@ function aiException(status: HttpStatus, code: AiErrorCode, message: string): Ht
       return new BadRequestException(body);
     case HttpStatus.CONFLICT:
       return new ConflictException(body);
+    case HttpStatus.FORBIDDEN:
+      return new ForbiddenException(body);
     case HttpStatus.UNPROCESSABLE_ENTITY:
       return new UnprocessableEntityException(body);
     case HttpStatus.TOO_MANY_REQUESTS:
@@ -89,5 +92,21 @@ export const AiCoachErrors = {
       HttpStatus.GATEWAY_TIMEOUT,
       AI_ERROR_CODES.AI_PROVIDER_TIMEOUT,
       'o Coach demorou demais para responder',
+    ),
+
+  /** Conta autenticada, sem entitlement para a capability exigida (T19.0). Nada foi consumido. */
+  capabilityDenied: () =>
+    aiException(
+      HttpStatus.FORBIDDEN,
+      AI_ERROR_CODES.AI_CAPABILITY_DENIED,
+      'esta conta não tem acesso a esta funcionalidade do Coach',
+    ),
+
+  /** O entitlement não pôde ser determinado com segurança — fail-closed (T19.0). */
+  entitlementUnavailable: () =>
+    aiException(
+      HttpStatus.SERVICE_UNAVAILABLE,
+      AI_ERROR_CODES.AI_ENTITLEMENT_UNAVAILABLE,
+      'não foi possível confirmar a autorização desta conta agora',
     ),
 };

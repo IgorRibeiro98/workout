@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Client } from 'pg';
+import { Client, Pool } from 'pg';
 import { SparkLogger } from '../src/common/logger';
-import { loadMigrations } from '../src/database/postgres-migration-runner';
+import { loadMigrations, runMigrations } from '../src/database/postgres-migration-runner';
 import { PostgresUrlIdentityError } from '../src/database/postgres-url';
 import { runDrBackup } from '../src/dr/db-backup.runner';
 import {
@@ -247,8 +247,27 @@ describe('T18.3 — ensaio de restauração em destino limpo', () => {
   });
 
   it('snapshot antigo + schema posteriormente expandido: o objeto novo NÃO sobrevive ao restore limpo (§7)', async () => {
-    // O backup descreve a versão 1 do schema (as tabelas são as mesmas: a 0002 só acrescenta
-    // coluna e índice), e o "dump" restaura só até a 1.
+    // O backup descreve a versão 1 do schema, e o "dump" restaura só até a 1. As tabelas da versão
+    // 1 já não são as mesmas do schema atual (T19.0, migration 0004, cria uma tabela nova) — então
+    // `oldManifest.schema.tables` precisa vir de aplicar só a primeira migration a um banco vazio,
+    // e não do manifesto atual, ou a comparação do próprio ensaio (linha 226 em diante) reprovaria
+    // um restore que está correto.
+    const version1Database = uniqueDrill();
+    await admin((client) => client.query(`CREATE DATABASE "${version1Database}"`));
+    const version1Pool = new Pool({ connectionString: withDatabase(ADMIN_URL, version1Database) });
+    let tablesAsOfVersion1: string[];
+    try {
+      await runMigrations(version1Pool, loadMigrations(MIGRATIONS_DIR).slice(0, 1));
+      const tablesResult = await version1Pool.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+         ORDER BY table_name`,
+      );
+      tablesAsOfVersion1 = tablesResult.rows.map((row) => row.table_name);
+    } finally {
+      await version1Pool.end();
+    }
+
     const manifest = parseDrManifest((await storage.read(drManifestObjectName(backupId)))!);
     const oldManifest = {
       ...manifest,
@@ -256,6 +275,7 @@ describe('T18.3 — ensaio de restauração em destino limpo', () => {
         ...manifest.schema,
         schemaVersion: 1,
         migrations: manifest.schema.migrations.slice(0, 1),
+        tables: tablesAsOfVersion1,
       },
     };
     storage.corrupt(drManifestObjectName(backupId), serializeDrManifest(oldManifest));

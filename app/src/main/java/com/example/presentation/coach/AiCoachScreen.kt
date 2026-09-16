@@ -36,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.runtime.LaunchedEffect
+import com.example.domain.ai.model.AiCapability
 import com.example.domain.ai.model.AiDataQualityLevel
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +64,8 @@ fun AiCoachScreen(
     viewModel: AiCoachViewModel,
     onNavigateBack: () -> Unit,
     onNavigateToGenerateWorkout: () -> Unit = {},
+    /** Capabilities de IA (T19.0). `null` faz a tela tratar a disponibilidade como indeterminada. */
+    capabilitiesViewModel: AiCapabilitiesViewModel? = null,
     /** Entrar na Conta Spark, pela mesma infraestrutura da T16.1. Nunca disparado sozinho. */
     onSignIn: (android.content.Context) -> Unit = {},
     isSignInAvailable: Boolean = true,
@@ -69,12 +73,19 @@ fun AiCoachScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
+    val capabilitiesState by (capabilitiesViewModel?.state
+        ?: kotlinx.coroutines.flow.MutableStateFlow(AiCapabilitiesUiState.LoadFailed))
+        .collectAsStateWithLifecycle()
+
+    LaunchedEffect(capabilitiesViewModel) { capabilitiesViewModel?.ensureLoaded() }
 
     AiCoachScreenContent(
         uiState = uiState,
         onAnalyze = viewModel::analyze,
         onNavigateBack = onNavigateBack,
         onNavigateToGenerateWorkout = onNavigateToGenerateWorkout,
+        capabilityAvailability = capabilitiesState.availabilityOf(AiCapability.AI_ANALYZE_WORKOUT),
+        onRetryCapabilities = { capabilitiesViewModel?.retry() },
         canExplain = viewModel.canExplain,
         onExplain = viewModel::explain,
         onSignIn = onSignIn,
@@ -95,6 +106,8 @@ internal fun AiCoachScreenContent(
     onAnalyze: () -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateToGenerateWorkout: () -> Unit = {},
+    capabilityAvailability: CoachActionAvailability = CoachActionAvailability.DETERMINING,
+    onRetryCapabilities: () -> Unit = {},
     /** `false` esconde as entradas contextuais: sem Coach, nenhum botão promete o que não há. */
     canExplain: Boolean = false,
     /** Recebe o id do alvo, nunca o texto exibido. */
@@ -143,9 +156,16 @@ internal fun AiCoachScreenContent(
                 fontSize = 13.sp
             )
 
+            CoachCapabilityNotice(
+                availability = capabilityAvailability,
+                deniedMessage = "A análise de treino não está disponível para esta conta.",
+                onRetry = onRetryCapabilities
+            )
+
             Button(
                 onClick = onAnalyze,
-                enabled = uiState !is AiCoachUiState.Loading,
+                enabled = uiState !is AiCoachUiState.Loading &&
+                    capabilityAvailability != CoachActionAvailability.DENIED,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(

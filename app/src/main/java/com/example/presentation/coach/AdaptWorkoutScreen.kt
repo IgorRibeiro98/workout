@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.ai.model.AiCapability
 import com.example.domain.ai.model.AiDataQualityLevel
 import com.example.domain.ai.model.WorkoutAdaptationChange
 import com.example.domain.ai.model.WorkoutAdaptationDraft
@@ -85,18 +86,26 @@ fun AdaptWorkoutScreen(
     viewModel: AdaptWorkoutViewModel,
     templateId: Long,
     onNavigateBack: () -> Unit,
+    /** Capabilities de IA (T19.0). `null` faz a tela tratar a disponibilidade como indeterminada. */
+    capabilitiesViewModel: AiCapabilitiesViewModel? = null,
     onSignIn: (android.content.Context) -> Unit = {},
     isSignInAvailable: Boolean = true,
     isSigningIn: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
+    val capabilitiesState by (capabilitiesViewModel?.state
+        ?: kotlinx.coroutines.flow.MutableStateFlow(AiCapabilitiesUiState.LoadFailed))
+        .collectAsStateWithLifecycle()
 
     // Só informa qual treino está aberto. Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(templateId) { viewModel.load(templateId) }
+    LaunchedEffect(capabilitiesViewModel) { capabilitiesViewModel?.ensureLoaded() }
 
     AdaptWorkoutScreenContent(
         uiState = uiState,
+        capabilityAvailability = capabilitiesState.availabilityOf(AiCapability.AI_ADAPT_WORKOUT),
+        onRetryCapabilities = { capabilitiesViewModel?.retry() },
         actions = AdaptWorkoutActions(
             onAdapt = viewModel::adapt,
             onToggleChange = viewModel::toggleChange,
@@ -122,7 +131,9 @@ fun AdaptWorkoutScreen(
 @Composable
 internal fun AdaptWorkoutScreenContent(
     uiState: AdaptWorkoutUiState,
-    actions: AdaptWorkoutActions
+    actions: AdaptWorkoutActions,
+    capabilityAvailability: CoachActionAvailability = CoachActionAvailability.DETERMINING,
+    onRetryCapabilities: () -> Unit = {}
 ) {
     Scaffold(
         containerColor = BackgroundDark,
@@ -164,9 +175,17 @@ internal fun AdaptWorkoutScreenContent(
                 fontSize = 13.sp
             )
 
+            CoachCapabilityNotice(
+                availability = capabilityAvailability,
+                deniedMessage = "Adaptar com IA não está disponível para esta conta. Editar o " +
+                    "treino à mão continua funcionando normalmente.",
+                onRetry = onRetryCapabilities
+            )
+
             Button(
                 onClick = actions.onAdapt,
-                enabled = uiState.canAdapt,
+                enabled = uiState.canAdapt &&
+                    capabilityAvailability != CoachActionAvailability.DENIED,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(

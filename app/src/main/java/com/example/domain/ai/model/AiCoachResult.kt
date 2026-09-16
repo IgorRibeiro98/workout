@@ -27,6 +27,15 @@ enum class AiCoachErrorKind {
     TIMEOUT,
     /** A resposta chegou, mas não passou no schema ou na validação semântica. */
     INVALID_RESPONSE,
+
+    /**
+     * A conta está autenticada, mas não tem entitlement para esta capability (T19.0).
+     *
+     * Distinto de [AUTH_REQUIRED]: aqui existe conta, e o servidor já sabe quem é — a negação é
+     * por capability, não por identidade. O app nunca deve tratar isto como convite para entrar:
+     * entrar de novo não muda o entitlement.
+     */
+    CAPABILITY_DENIED,
     /** Erro do provider que não se encaixa nos anteriores. */
     PROVIDER
 }

@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.ai.model.AiCapability
 import com.example.domain.ai.model.EquipmentAvailability
 import com.example.domain.ai.model.GeneratedWorkoutDraft
 import com.example.domain.ai.model.GeneratedWorkoutDraftExercise
@@ -98,18 +99,26 @@ fun GenerateWorkoutScreen(
     viewModel: GenerateWorkoutViewModel,
     onNavigateBack: () -> Unit,
     onOpenTemplate: (Long) -> Unit,
+    /** Capabilities de IA (T19.0). `null` faz a tela tratar a disponibilidade como indeterminada. */
+    capabilitiesViewModel: AiCapabilitiesViewModel? = null,
     onSignIn: (android.content.Context) -> Unit = {},
     isSignInAvailable: Boolean = true,
     isSigningIn: Boolean = false
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
+    val capabilitiesState by (capabilitiesViewModel?.state
+        ?: kotlinx.coroutines.flow.MutableStateFlow(AiCapabilitiesUiState.LoadFailed))
+        .collectAsStateWithLifecycle()
 
     // Só carrega o recorte local do catálogo (Room). Nenhuma chamada ao modelo acontece aqui.
     LaunchedEffect(Unit) { viewModel.refreshCandidates() }
+    LaunchedEffect(capabilitiesViewModel) { capabilitiesViewModel?.ensureLoaded() }
 
     GenerateWorkoutScreenContent(
         uiState = uiState,
+        capabilityAvailability = capabilitiesState.availabilityOf(AiCapability.AI_GENERATE_WORKOUT),
+        onRetryCapabilities = { capabilitiesViewModel?.retry() },
         actions = GenerateWorkoutActions(
             onGoalChange = viewModel::setGoal,
             onDurationChange = viewModel::setDuration,
@@ -142,7 +151,9 @@ fun GenerateWorkoutScreen(
 @Composable
 internal fun GenerateWorkoutScreenContent(
     uiState: GenerateWorkoutUiState,
-    actions: GenerateWorkoutActions
+    actions: GenerateWorkoutActions,
+    capabilityAvailability: CoachActionAvailability = CoachActionAvailability.DETERMINING,
+    onRetryCapabilities: () -> Unit = {}
 ) {
     Scaffold(
         containerColor = BackgroundDark,
@@ -186,9 +197,17 @@ internal fun GenerateWorkoutScreenContent(
 
             ConfigurationSection(uiState, actions)
 
+            CoachCapabilityNotice(
+                availability = capabilityAvailability,
+                deniedMessage = "Gerar treino com IA não está disponível para esta conta. Criar " +
+                    "treino manualmente continua funcionando normalmente.",
+                onRetry = onRetryCapabilities
+            )
+
             Button(
                 onClick = actions.onGenerate,
-                enabled = uiState.canGenerate,
+                enabled = uiState.canGenerate &&
+                    capabilityAvailability != CoachActionAvailability.DENIED,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(

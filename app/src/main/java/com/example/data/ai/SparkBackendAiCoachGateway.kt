@@ -303,9 +303,18 @@ class SparkBackendAiCoachGateway(
      * Nenhum detalhe do servidor ou do SDK do Gemini atravessa: o que sobe é a classe do erro e,
      * quando existe, o `code` do envelope — que é vocabulário do Spark, não do provider.
      */
+    /**
+     * Status HTTP → [AiCoachErrorKind].
+     *
+     * `HTTP_FORBIDDEN` (T19.0) é `AI_CAPABILITY_DENIED`: conta autenticada, sem entitlement para a
+     * capability desta operação. `AI_ENTITLEMENT_UNAVAILABLE` — o servidor não conseguiu decidir —
+     * chega como `503`, e cai deliberadamente no mesmo [AiCoachErrorKind.UNAVAILABLE] de sempre:
+     * para o app, "não deu para confirmar" e "está fora do ar agora" pedem a mesma reação.
+     */
     private fun errorKindOf(code: Int): AiCoachErrorKind = when (code) {
         HTTP_UNAUTHORIZED -> AiCoachErrorKind.AUTH_REQUIRED
         HTTP_BAD_REQUEST -> AiCoachErrorKind.INVALID_RESPONSE
+        HTTP_FORBIDDEN -> AiCoachErrorKind.CAPABILITY_DENIED
         HTTP_CONFLICT -> AiCoachErrorKind.PROVIDER
         HTTP_UNPROCESSABLE -> AiCoachErrorKind.INVALID_RESPONSE
         HTTP_TOO_MANY_REQUESTS -> AiCoachErrorKind.RATE_LIMITED
@@ -335,6 +344,7 @@ class SparkBackendAiCoachGateway(
         const val HTTP_CREATED = 201
         const val HTTP_BAD_REQUEST = 400
         const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_FORBIDDEN = 403
         const val HTTP_CONFLICT = 409
         const val HTTP_UNPROCESSABLE = 422
         const val HTTP_TOO_MANY_REQUESTS = 429

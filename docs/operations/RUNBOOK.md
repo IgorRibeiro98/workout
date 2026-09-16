@@ -294,6 +294,31 @@ readiness não depende do Gemini, por decisão (§61).
 
 ---
 
+## Uma conta recebe `403 AI_CAPABILITY_DENIED` inesperadamente (T19.0)
+
+**Sintoma:** o app mostra a capability como indisponível, ou a chamada real ao Coach recusa com
+`AI_CAPABILITY_DENIED`, para uma conta que deveria ter acesso.
+
+```bash
+cd backend
+npm run capabilities:ai -- list <uid>
+```
+
+Nenhuma linha impressa (só "nenhuma linha gravada") significa que a conta está no default —
+**liberado** para as quatro capabilities conhecidas. Uma linha `REVOKED` é a causa: alguém negou
+aquela capability para aquela conta deliberadamente.
+
+```bash
+npm run capabilities:ai -- grant <uid> <capability>
+```
+
+`grant`/`revoke` são idempotentes — repetir não duplica linha nem falha. Capabilities conhecidas:
+`AI_ANALYZE_WORKOUT`, `AI_GENERATE_WORKOUT`, `AI_ADAPT_WORKOUT`, `AI_EXPLAIN`. Isto não substitui
+`AI_ENABLED` nem a quota: os dois continuam funcionando exatamente como antes, e `AI_ENABLED=false`
+continua vencendo mesmo com entitlement concedido.
+
+---
+
 ## Bug grave no sync
 
 **Sintoma:** dado convergindo errado, conflito aparecendo onde não deveria, mutação aplicada de
