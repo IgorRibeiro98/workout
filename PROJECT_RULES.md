@@ -295,8 +295,8 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
   já cobriu, **depois** da confirmação do servidor. Desde a **T16.6** ela também é a fila do push
   incremental — que igualmente só a libera com confirmação. O que continua proibido é o que a
   regra sempre quis dizer: trabalho **periódico**, polling e retry automático de recusa. Ver §13.4.
-- **Migrations.** Room é `version = 35` (34 na T16.6, 33 na T16.5) com schema exportado versionado
-  em `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da
+- **Migrations.** Room é `version = 38` (37 na auditoria de 2026-09-12, 36 na T17.7, 35 na T16.7,
+  34 na T16.6, 33 na T16.5) com schema exportado versionado em `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da
   versão anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
   abreviado).
@@ -1888,6 +1888,75 @@ canônico: `docs/architecture/social-progress-authority.md`.
   "com.example.presentation.account.SocialProfile*"`. Mudou `XpRewardPolicy`, `MissionCatalog`,
   `AchievementCatalog` ou `ConsistencyCalculator`? Regenerar as fixtures **e** o espelho em
   `social-gamification.ts`/`social-consistency.ts`, e provar nos dois lados.
+
+## 13.23 Compartilhamento de programa completo: cópia, nunca vínculo (T19.3)
+
+O Spark passou a compartilhar um **programa inteiro** — programa, treinos e exercícios — pela mesma
+oferta da T17.7. As regras abaixo são o que impede o compartilhamento de virar sincronização viva
+entre duas pessoas, de transportar o que é pessoal, ou de criar uma segunda arquitetura de share.
+Documento canônico: `docs/architecture/workout-sharing.md`.
+
+- **O núcleo não paga nada por isso.** Sem conta, sem perfil social, com o servidor fora: criar,
+  editar, executar e excluir programas continuam exatamente como estavam — e um programa importado
+  é um programa como qualquer outro, inteiramente utilizável offline.
+- **Uma oferta, dois tipos.** `workout_shares.share_type` ∈ {`WORKOUT_TEMPLATE`,
+  `WORKOUT_PROGRAM`}; ciclo de vida, idempotência de criação, transições CAS, outbox de
+  notificação, cancelamento por bloqueio e purge de conta são **os mesmos**. Criar uma tabela, um
+  módulo, um gateway ou um importador paralelos "para programa" é exatamente o que esta regra
+  proíbe. O discriminador do corpo é o campo presente (`snapshot` **ou** `programSnapshot`); um
+  `shareType` no corpo recusa a requisição inteira.
+- **Snapshot imutável, portável e mínimo.** Programa: `name`, `description`. Treino: `name`,
+  `shortIdentifier`, `orderInProgram`, `dayOfWeek`. Exercício: `canonicalExerciseId`, `sortOrder`,
+  `targetSets`, `minReps`, `maxReps`, `restDurationSeconds`. **Nunca:** `plannedWeight`,
+  `machineLabel`, `notes`, `localId`, `syncId`, `programId`, `templateId`, `isCurrent`,
+  `externalId`, sessão, PR, carga realizada, histórico, XP, medida, uid, e-mail. O servidor recusa
+  por nome e por allowlist; o snapshot é gravado e devolvido verbatim; não existe rota de edição.
+  Editar o programa depois de compartilhar não altera a oferta.
+- **Exercício é `canonicalId`, nunca nome.** O importador resolve pelo catálogo local; id que não
+  resolve recusa a importação **inteira** antes de qualquer escrita. CUSTOM bloqueia o programa
+  inteiro, no aparelho, antes de existir oferta — e a mensagem nomeia o treino e o exercício.
+  Portabilidade de CUSTOM é tarefa futura, com contrato próprio.
+- **O aceite é servidor-primeiro.** `POST :shareId/accept` revalida bloqueio, cancelamento,
+  expiração e amizade, transiciona `PENDING → ACCEPTED` por CAS e devolve o conteúdo sobre o qual a
+  cópia é construída — nunca o que a tela tinha em memória. É idempotente em `ACCEPTED` **e** em
+  `IMPORTED`. O app não importa a partir do `GET :shareId` (a T17.7 fazia isso e nunca chamava
+  `accept`; a T19.3 corrigiu para os dois tipos).
+- **A importação é uma transação.** Programa + treinos + exercícios + recibo entram juntos
+  (`WorkoutRepository.addProgramWithTemplates`), ou nada entra. O recibo
+  (`workout_share_import_receipts`, Room v38) nasce **dentro** da transação e é a idempotência que
+  sobrevive ao processo morrer: toque duplo, retry e reabrir a oferta produzem **uma** cópia.
+  `importingShareId` na tela e o `accept` repetível no servidor são as outras duas camadas.
+- **Identidade nova, sempre.** `localId` é do Room de quem recebe; `syncId` é `SyncIds.random()`
+  na construção — para o programa e para cada treino. Nada do remetente é reutilizado, e o snapshot
+  nem carrega esses valores. Com a nuvem ativa, a cópia entra na Outbox de sync como criação local,
+  o programa **antes** dos treinos.
+- **`isCurrent` é decisão do usuário.** O programa importado nasce `isCurrent = false`, sempre —
+  inclusive quando não existe programa nenhum. Trocar o programa atual continua sendo
+  `setCurrentProgram`, pela tela de Treinos, e a tela de importação diz isso.
+- **Cópia é independente em tudo.** Editar, apagar, desfazer amizade, bloquear ou excluir a conta
+  do remetente **não** alcança a cópia. O servidor não sabe que ela existe: `complete-import` marca
+  a oferta, não a cópia. Bloqueio cancela só ofertas `PENDING`/`ACCEPTED`; exclusão de conta purga
+  a oferta. Não existe — e é bloqueante se aparecer — qualquer referência da cópia à oferta além do
+  recibo, ou da oferta à cópia.
+- **Ofertas são account-scoped.** `SharedWorkoutsViewModel` limpa a tela **antes** de a leitura da
+  conta nova sair e descarta a resposta de qualquer requisição iniciada pela conta anterior —
+  lista, detalhe, importação, recusa, cancelamento.
+- **Offline não finge.** Criar e aceitar exigem servidor; sem rede a falha é clara e nada fica
+  pendente (não existe Outbox social). "Já importado" responde pelo recibo local, sem rede.
+- **Compatibilidade.** Um cliente anterior à T19.3 recebe a oferta de programa **sem** `snapshot`
+  e não tem o que importar — nunca decodifica um programa como um treino sem exercícios. Um tipo
+  desconhecido para o app é conteúdo `null`, e o botão de importar não aparece.
+- **Logs.** Servidor: `shareId`, `shareType`, `templateCount`, `exerciseCount`, evento, desfecho.
+  Nunca nome de programa ou de treino, `displayName`, `socialId`, uid completo ou snapshot.
+  Android: nada.
+- **Testes.** Toda mudança no compartilhamento roda `npm test` em `backend/` (ao menos
+  `program-share.spec.ts`, `workout-share.spec.ts`, `workout-share-atomicity.spec.ts`,
+  `social-privacy-sweep.spec.ts`) e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.repository.WorkoutShare*" --tests
+  "com.example.presentation.friends.SharedWorkouts*" --tests
+  "com.example.presentation.friends.ShareWorkout*" --tests
+  "com.example.data.local.AppDatabaseMigration37To38Test" --tests
+  "com.example.data.social.SocialBoundaryInspectionTest"`. As duas são offline.
 
 ## 14. Tests and build are part of implementation
 

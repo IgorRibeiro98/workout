@@ -378,10 +378,15 @@ fun MainScreen() {
                 val programId = backStackEntry.arguments?.getString("programId")?.toLongOrNull() ?: -1L
                 val viewModel: com.example.presentation.workouts.ProgramDetailsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 LaunchedEffect(programId) { viewModel.loadProgram(programId) }
+                // O diálogo de compartilhar programa (T19.3) tem estado próprio, como o do treino:
+                // ele vive com a rota, e fechar o diálogo não cancela um envio que já saiu.
+                val shareViewModel: com.example.presentation.friends.ShareWorkoutViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 com.example.presentation.workouts.ProgramDetailsScreen(
                     viewModel = viewModel,
                     onNavigateBack = { navController.popBackStack() },
-                    onTemplateClick = { id -> navController.pushOnce(Screen.TemplateDetails.createRoute(id)) }
+                    onTemplateClick = { id -> navController.pushOnce(Screen.TemplateDetails.createRoute(id)) },
+                    shareViewModel = shareViewModel
                 )
             }
             composable(Screen.TemplateDetails.route) { backStackEntry ->

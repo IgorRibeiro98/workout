@@ -96,6 +96,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
     mediaId: string;
     commentId: string;
     shareId: string;
+    programShareId: string;
     challengeId: string;
   };
 
@@ -169,6 +170,39 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       })
       .expect(201);
 
+    // T19.3 — uma oferta de **programa** também é superfície voltada a amigo, e é varrida junto.
+    const programShare = await request(s.server())
+      .post('/v1/social/workout-shares')
+      .set('Authorization', s.auth(ACCOUNT_A.token))
+      .send({
+        recipientSocialId: socialIdB,
+        clientRequestId: uuid(),
+        programSnapshot: {
+          snapshotVersion: 1,
+          name: 'Programa compartilhado',
+          description: 'Push/Pull',
+          templates: [
+            {
+              name: 'Push',
+              shortIdentifier: 'A',
+              orderInProgram: 0,
+              dayOfWeek: 'Seg',
+              exercises: [
+                {
+                  canonicalExerciseId: 'supino-reto-barra',
+                  sortOrder: 0,
+                  targetSets: 3,
+                  minReps: 8,
+                  maxReps: 12,
+                  restDurationSeconds: 90,
+                },
+              ],
+            },
+          ],
+        },
+      })
+      .expect(201);
+
     const challenge = await request(s.server())
       .post('/v1/social/challenges')
       .set('Authorization', s.auth(ACCOUNT_A.token))
@@ -194,6 +228,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       mediaId,
       commentId: comment.body.commentId as string,
       shareId: share.body.shareId as string,
+      programShareId: programShare.body.shareId as string,
       challengeId: challenge.body.challenge.challengeId as string,
     };
   }, 60_000);
@@ -217,6 +252,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
     ['workout-shares received', '/v1/social/workout-shares/received'],
     ['workout-shares sent', '/v1/social/workout-shares/sent'],
     ['workout-share detail', `/v1/social/workout-shares/${ids.shareId}`],
+    ['program-share detail', `/v1/social/workout-shares/${ids.programShareId}`],
     ['feed', '/v1/social/feed'],
     ['check-in detail', `/v1/social/workout-checkins/${ids.checkInId}`],
     ['comments', `/v1/social/workout-checkins/${ids.checkInId}/comments`],
@@ -369,6 +405,44 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
     expect(Object.keys(exercise).sort()).toEqual(allowedExerciseKeys.sort());
   });
 
+  it('o snapshot de programa compartilhado só carrega o que é portável (T19.3)', async () => {
+    const detail = await request(s.server())
+      .get(`/v1/social/workout-shares/${ids.programShareId}`)
+      .set('Authorization', s.auth(ACCOUNT_B.token))
+      .expect(200);
+
+    // Uma oferta de programa **não** tem `snapshot`: um cliente anterior à T19.3 não pode
+    // decodificá-la como um treino sem exercícios.
+    expect(detail.body.shareType).toBe('WORKOUT_PROGRAM');
+    expect(detail.body).not.toHaveProperty('snapshot');
+
+    // Allowlist em cada nível (§11): o que **não** está aqui é vazamento, mesmo com nome novo.
+    const snapshot = detail.body.programSnapshot as Record<string, unknown>;
+    const allowedSnapshotKeys = ['description', 'name', 'snapshotVersion', 'templates'];
+    expect(Object.keys(snapshot).filter((key) => !allowedSnapshotKeys.includes(key))).toEqual([]);
+
+    const template = (snapshot.templates as Array<Record<string, unknown>>)[0];
+    const allowedTemplateKeys = [
+      'dayOfWeek',
+      'exercises',
+      'name',
+      'orderInProgram',
+      'shortIdentifier',
+    ];
+    expect(Object.keys(template).filter((key) => !allowedTemplateKeys.includes(key))).toEqual([]);
+
+    const exercise = (template.exercises as Array<Record<string, unknown>>)[0];
+    const allowedExerciseKeys = [
+      'canonicalExerciseId',
+      'maxReps',
+      'minReps',
+      'restDurationSeconds',
+      'sortOrder',
+      'targetSets',
+    ];
+    expect(Object.keys(exercise).sort()).toEqual(allowedExerciseKeys.sort());
+  });
+
   it('o DTO do Feed é o contrato inteiro, e nada além dele (§39)', async () => {
     const feed = await request(s.server())
       .get('/v1/social/feed')
@@ -405,6 +479,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       ['comments', `/v1/social/workout-checkins/${ids.checkInId}/comments`],
       ['media', `/v1/social/media/${ids.mediaId}`],
       ['workout-share detail', `/v1/social/workout-shares/${ids.shareId}`],
+      ['program-share detail', `/v1/social/workout-shares/${ids.programShareId}`],
       ['challenge detail', `/v1/social/challenges/${ids.challengeId}`],
     ];
 

@@ -1,19 +1,50 @@
 package com.example.data.social
 
 import com.example.domain.social.SharedExerciseSnapshot
+import com.example.domain.social.SharedProgramSnapshot
+import com.example.domain.social.SharedProgramTemplateSnapshot
 import com.example.domain.social.SharedWorkoutSnapshot
+import com.example.domain.social.WorkoutShareContent
 import com.example.domain.social.WorkoutShareDetail
 import com.example.domain.social.WorkoutShareItem
+import com.example.domain.social.WorkoutShareKind
 import com.example.domain.social.WorkoutShareOtherUser
 import com.example.domain.social.WorkoutShareStatus
 import kotlinx.serialization.Serializable
 
+/**
+ * O corpo de `POST /v1/social/workout-shares`.
+ *
+ * Exatamente um dos dois snapshots vai preenchido — o campo presente é o discriminador do tipo
+ * (T19.3). O gateway serializa com `explicitNulls = false`, então o ausente não vira `null` no
+ * JSON: o servidor recusa o corpo com os dois, ou com nenhum.
+ */
 @Serializable
 data class CreateWorkoutShareRequestDto(
     val recipientSocialId: String,
     val clientRequestId: String,
-    val snapshot: SharedWorkoutSnapshotDto
-)
+    val snapshot: SharedWorkoutSnapshotDto? = null,
+    val programSnapshot: SharedProgramSnapshotDto? = null
+) {
+    companion object {
+        fun of(
+            recipientSocialId: String,
+            clientRequestId: String,
+            content: WorkoutShareContent
+        ): CreateWorkoutShareRequestDto = when (content) {
+            is WorkoutShareContent.Workout -> CreateWorkoutShareRequestDto(
+                recipientSocialId = recipientSocialId,
+                clientRequestId = clientRequestId,
+                snapshot = SharedWorkoutSnapshotDto.fromDomain(content.snapshot)
+            )
+            is WorkoutShareContent.Program -> CreateWorkoutShareRequestDto(
+                recipientSocialId = recipientSocialId,
+                clientRequestId = clientRequestId,
+                programSnapshot = SharedProgramSnapshotDto.fromDomain(content.snapshot)
+            )
+        }
+    }
+}
 
 @Serializable
 data class SharedWorkoutSnapshotDto(
@@ -35,6 +66,59 @@ data class SharedWorkoutSnapshotDto(
                 snapshotVersion = domain.snapshotVersion,
                 name = domain.name,
                 shortIdentifier = domain.shortIdentifier,
+                exercises = domain.exercises.map { SharedExerciseSnapshotDto.fromDomain(it) }
+            )
+    }
+}
+
+@Serializable
+data class SharedProgramSnapshotDto(
+    val snapshotVersion: Int = 1,
+    val name: String,
+    val description: String? = null,
+    val templates: List<SharedProgramTemplateSnapshotDto> = emptyList()
+) {
+    fun toDomain(): SharedProgramSnapshot = SharedProgramSnapshot(
+        snapshotVersion = snapshotVersion,
+        name = name,
+        description = description,
+        templates = templates.map { it.toDomain() }
+    )
+
+    companion object {
+        fun fromDomain(domain: SharedProgramSnapshot): SharedProgramSnapshotDto =
+            SharedProgramSnapshotDto(
+                snapshotVersion = domain.snapshotVersion,
+                name = domain.name,
+                description = domain.description,
+                templates = domain.templates.map { SharedProgramTemplateSnapshotDto.fromDomain(it) }
+            )
+    }
+}
+
+@Serializable
+data class SharedProgramTemplateSnapshotDto(
+    val name: String,
+    val shortIdentifier: String? = null,
+    val orderInProgram: Int,
+    val dayOfWeek: String? = null,
+    val exercises: List<SharedExerciseSnapshotDto> = emptyList()
+) {
+    fun toDomain(): SharedProgramTemplateSnapshot = SharedProgramTemplateSnapshot(
+        name = name,
+        shortIdentifier = shortIdentifier,
+        orderInProgram = orderInProgram,
+        dayOfWeek = dayOfWeek,
+        exercises = exercises.map { it.toDomain() }
+    )
+
+    companion object {
+        fun fromDomain(domain: SharedProgramTemplateSnapshot): SharedProgramTemplateSnapshotDto =
+            SharedProgramTemplateSnapshotDto(
+                name = domain.name,
+                shortIdentifier = domain.shortIdentifier,
+                orderInProgram = domain.orderInProgram,
+                dayOfWeek = domain.dayOfWeek,
                 exercises = domain.exercises.map { SharedExerciseSnapshotDto.fromDomain(it) }
             )
     }
@@ -82,22 +166,34 @@ data class WorkoutShareOtherUserDto(
     )
 }
 
+/**
+ * `shareType` ausente é um servidor anterior à T19.3, que só conhecia treino. Um valor que esta
+ * versão não conhece é lido como treino **sem conteúdo**: a lista o mostra, e o detalhe diz que
+ * ele não pode ser importado aqui — em vez de decodificar um tipo novo como se fosse um treino.
+ */
+private fun kindOf(shareType: String): WorkoutShareKind? =
+    runCatching { WorkoutShareKind.valueOf(shareType) }.getOrNull()
+
 @Serializable
 data class WorkoutShareItemDto(
     val shareId: String,
+    val shareType: String = WorkoutShareKind.WORKOUT_TEMPLATE.name,
     val status: String,
     val createdAt: Long,
     val expiresAt: Long,
     val templateName: String,
+    val templateCount: Int = 1,
     val exerciseCount: Int,
     val otherUser: WorkoutShareOtherUserDto
 ) {
     fun toDomain(): WorkoutShareItem = WorkoutShareItem(
         shareId = shareId,
+        kind = kindOf(shareType) ?: WorkoutShareKind.WORKOUT_TEMPLATE,
         status = runCatching { WorkoutShareStatus.valueOf(status) }.getOrDefault(WorkoutShareStatus.PENDING),
         createdAt = createdAt,
         expiresAt = expiresAt,
         templateName = templateName,
+        templateCount = templateCount,
         exerciseCount = exerciseCount,
         otherUser = otherUser.toDomain()
     )
@@ -106,22 +202,35 @@ data class WorkoutShareItemDto(
 @Serializable
 data class WorkoutShareDetailDto(
     val shareId: String,
+    val shareType: String = WorkoutShareKind.WORKOUT_TEMPLATE.name,
     val status: String,
     val createdAt: Long,
     val expiresAt: Long,
     val sender: WorkoutShareOtherUserDto,
     val recipient: WorkoutShareOtherUserDto,
-    val snapshot: SharedWorkoutSnapshotDto? = null
+    val snapshot: SharedWorkoutSnapshotDto? = null,
+    val programSnapshot: SharedProgramSnapshotDto? = null
 ) {
-    fun toDomain(): WorkoutShareDetail = WorkoutShareDetail(
-        shareId = shareId,
-        status = runCatching { WorkoutShareStatus.valueOf(status) }.getOrDefault(WorkoutShareStatus.PENDING),
-        createdAt = createdAt,
-        expiresAt = expiresAt,
-        sender = sender.toDomain(),
-        recipient = recipient.toDomain(),
-        snapshot = snapshot?.toDomain()
-    )
+    fun toDomain(): WorkoutShareDetail {
+        val kind = kindOf(shareType)
+        // O conteúdo é lido pelo **tipo declarado**, nunca pela forma do JSON: um snapshot que não
+        // corresponde ao tipo é conteúdo ausente, não uma adivinhação.
+        val content: WorkoutShareContent? = when (kind) {
+            WorkoutShareKind.WORKOUT_TEMPLATE -> snapshot?.let { WorkoutShareContent.Workout(it.toDomain()) }
+            WorkoutShareKind.WORKOUT_PROGRAM -> programSnapshot?.let { WorkoutShareContent.Program(it.toDomain()) }
+            null -> null
+        }
+        return WorkoutShareDetail(
+            shareId = shareId,
+            kind = kind ?: WorkoutShareKind.WORKOUT_TEMPLATE,
+            status = runCatching { WorkoutShareStatus.valueOf(status) }.getOrDefault(WorkoutShareStatus.PENDING),
+            createdAt = createdAt,
+            expiresAt = expiresAt,
+            sender = sender.toDomain(),
+            recipient = recipient.toDomain(),
+            content = content
+        )
+    }
 }
 
 @Serializable

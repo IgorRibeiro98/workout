@@ -18,7 +18,6 @@ import {
   CreateWorkoutShareRequest,
   WorkoutShareDetailDto,
   WorkoutShareItemDto,
-  WorkoutTemplateShareSnapshotV1,
 } from './workout-share.contract';
 import {
   assertWorkoutShareBodyWithinLimit,
@@ -64,12 +63,17 @@ export class WorkoutShareController {
     return this.service.getShareDetail(principal.uid, shareId);
   }
 
+  /**
+   * Aceitar devolve a oferta inteira, com o snapshot no campo do seu tipo (T19.3). Até a T19.3 a
+   * resposta era o snapshot de treino cru — sem dizer o que era —, e nenhum cliente publicado a
+   * consumia: o app importava a partir do `GET :shareId` sem nunca aceitar.
+   */
   @Post(':shareId/accept')
   @HttpCode(HttpStatus.OK)
   async accept(
     @Principal() principal: AuthenticatedPrincipal,
     @Param('shareId') shareId: string,
-  ): Promise<WorkoutTemplateShareSnapshotV1> {
+  ): Promise<WorkoutShareDetailDto> {
     return this.service.acceptShare(principal.uid, shareId);
   }
 

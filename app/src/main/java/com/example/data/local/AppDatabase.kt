@@ -47,7 +47,7 @@ import kotlinx.coroutines.launch
         com.example.data.sync.SyncConflictEntity::class,
         WorkoutShareImportReceiptEntity::class
     ],
-    version = 37,
+    version = 38,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -77,7 +77,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 36
+        const val SCHEMA_VERSION: Int = 38
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -177,6 +177,44 @@ abstract class AppDatabase : RoomDatabase() {
          * Idempotência local: garante que importar a mesma oferta de treino repetidamente
          * (ou após crash) não gere templates duplicados no Room.
          */
+        /**
+         * T19.3 — o recibo de importação passa a apontar para um treino **ou** para um programa.
+         *
+         * `importedTemplateLocalId` era `NOT NULL`, e um programa importado (T19.3) não tem um
+         * treino raiz para preencher ali. Trocar a restrição exige recriar a tabela: SQLite não
+         * relaxa `NOT NULL` com `ALTER TABLE`. Os recibos existentes migram inteiros, com
+         * `importedProgramLocalId` nulo — todos eram treinos, porque até aqui só treino era
+         * compartilhável. Nenhuma outra tabela é tocada.
+         *
+         * A recriação segue a ordem que o Room valida na abertura: tabela nova, cópia, `DROP`,
+         * `RENAME`. A chave primária continua sendo `shareId`.
+         */
+        val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_share_import_receipts_new` (
+                        `shareId` TEXT NOT NULL,
+                        `importedTemplateLocalId` INTEGER,
+                        `importedProgramLocalId` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`shareId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "INSERT INTO `workout_share_import_receipts_new` " +
+                        "(`shareId`, `importedTemplateLocalId`, `importedProgramLocalId`, `createdAt`) " +
+                        "SELECT `shareId`, `importedTemplateLocalId`, NULL, `createdAt` " +
+                        "FROM `workout_share_import_receipts`"
+                )
+                db.execSQL("DROP TABLE `workout_share_import_receipts`")
+                db.execSQL(
+                    "ALTER TABLE `workout_share_import_receipts_new` RENAME TO `workout_share_import_receipts`"
+                )
+            }
+        }
+
         /**
          * Índices que faltavam nas colunas de filtro e junção mais quentes (auditoria 2026-09-12).
          *
@@ -828,7 +866,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38
                 )
                 .addCallback(DatabaseCallback())
                 .build()

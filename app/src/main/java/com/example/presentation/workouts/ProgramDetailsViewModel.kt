@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.repository.SnapshotBuildResult
 import com.example.data.repository.WorkoutRepository
+import com.example.data.repository.WorkoutShareSnapshotBuilder
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -64,5 +66,36 @@ class ProgramDetailsViewModel(
         viewModelScope.launch {
             repository.setCurrentProgram(id)
         }
+    }
+
+    // ------------------------------------------------------------------ compartilhar (T19.3)
+
+    private val _shareBuildResult = MutableStateFlow<SnapshotBuildResult?>(null)
+
+    /**
+     * O snapshot do programa para o diálogo de compartilhar, ou o motivo de ele estar bloqueado.
+     * `null` é "diálogo fechado".
+     */
+    val shareBuildResult: StateFlow<SnapshotBuildResult?> = _shareBuildResult.asStateFlow()
+
+    /**
+     * Monta o snapshot **aqui**, onde as entidades de treino legitimamente vivem: o programa, seus
+     * treinos em ordem e os exercícios de cada um, lidos do Room neste instante. O diálogo social
+     * recebe só o resultado portável — e a política de exercício CUSTOM é aplicada fail-closed
+     * antes de existir qualquer oferta.
+     */
+    fun prepareShare() {
+        val id = _programId.value ?: return
+        viewModelScope.launch {
+            val program = repository.getProgram(id) ?: return@launch
+            val templates = repository.dao.getTemplatesForProgramSync(id).map { template ->
+                template to repository.getTemplateExercisesSync(template.id)
+            }
+            _shareBuildResult.value = WorkoutShareSnapshotBuilder().buildProgramSnapshot(program, templates)
+        }
+    }
+
+    fun dismissShare() {
+        _shareBuildResult.value = null
     }
 }

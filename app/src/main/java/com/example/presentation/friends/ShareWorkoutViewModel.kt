@@ -5,8 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.domain.social.Friend
 import com.example.domain.social.FriendGateway
 import com.example.domain.social.FriendOutcome
-import com.example.domain.social.SharedWorkoutSnapshot
+import com.example.domain.social.WorkoutShareContent
 import com.example.domain.social.WorkoutShareGateway
+import com.example.domain.social.WorkoutShareError
 import com.example.domain.social.WorkoutShareOutcome
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,7 +27,8 @@ data class ShareWorkoutUiState(
 )
 
 /**
- * O estado do diálogo "Compartilhar treino" (T17.7).
+ * O estado do diálogo "Compartilhar treino" (T17.7) — e "Compartilhar programa" (T19.3), que é o
+ * mesmo diálogo com outro conteúdo.
  *
  * Ele existe porque o diálogo carregava a lista de amigos num `LaunchedEffect` e enviava o treino
  * num `rememberCoroutineScope`: fechar o diálogo (ou uma mudança de configuração) cancelava a
@@ -65,8 +67,12 @@ class ShareWorkoutViewModel(
         _uiState.update { it.copy(selectedFriendId = socialId) }
     }
 
-    /** Envia o snapshot ao amigo selecionado. Um toque repetido durante o envio não faz nada. */
-    fun share(snapshot: SharedWorkoutSnapshot) {
+    /**
+     * Envia o conteúdo — um treino ou um programa inteiro — ao amigo selecionado. Um toque
+     * repetido durante o envio não faz nada; um toque depois de uma falha é uma tentativa nova,
+     * com `clientRequestId` novo.
+     */
+    fun share(content: WorkoutShareContent) {
         val state = _uiState.value
         val target = state.selectedFriendId ?: return
         if (state.isSending) return
@@ -75,7 +81,7 @@ class ShareWorkoutViewModel(
             val outcome = shareGateway.createShare(
                 recipientSocialId = target,
                 clientRequestId = UUID.randomUUID().toString(),
-                snapshot = snapshot
+                content = content
             )
             when (outcome) {
                 is WorkoutShareOutcome.Success ->
@@ -84,7 +90,7 @@ class ShareWorkoutViewModel(
                     _uiState.update {
                         it.copy(
                             isSending = false,
-                            errorMessage = "Falha ao enviar treino. Tente novamente."
+                            errorMessage = shareFailureMessage(content, outcome.error)
                         )
                     }
             }
@@ -94,5 +100,19 @@ class ShareWorkoutViewModel(
     /** Devolve o diálogo ao estado inicial quando ele é fechado e reaberto. */
     fun reset() {
         _uiState.value = ShareWorkoutUiState()
+    }
+
+    private fun shareFailureMessage(content: WorkoutShareContent, error: WorkoutShareError): String {
+        val what = if (content is WorkoutShareContent.Program) "programa" else "treino"
+        return when (error) {
+            WorkoutShareError.NETWORK -> "Sem conexão. O $what não foi enviado — tente novamente com internet."
+            WorkoutShareError.AUTH_REQUIRED -> "Entre na sua Conta Spark para compartilhar."
+            WorkoutShareError.SOCIAL_NOT_ENABLED -> "Ative o Social no seu perfil para compartilhar."
+            WorkoutShareError.FRIENDSHIP_REQUIRED -> "Só é possível compartilhar com amigos."
+            WorkoutShareError.BLOCKED_USER -> "Não é possível compartilhar com este usuário."
+            WorkoutShareError.RATE_LIMITED -> "Você atingiu o limite de compartilhamentos por agora. Tente mais tarde."
+            WorkoutShareError.INVALID_SNAPSHOT -> "O $what não pôde ser compartilhado: o servidor recusou o conteúdo."
+            else -> "Falha ao enviar $what. Tente novamente."
+        }
     }
 }

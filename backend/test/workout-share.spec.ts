@@ -132,9 +132,12 @@ describe('Workout Shares: Compartilhamento de Treinos entre Amigos (T17.7)', () 
       .set('Authorization', auth(ACCOUNTS.B.token))
       .expect(200);
 
-    expect(acceptRes.body.snapshotVersion).toBe(1);
-    expect(acceptRes.body.name).toBe('Upper A');
-    expect(acceptRes.body.exercises).toHaveLength(2);
+    // Desde a T19.3 o aceite devolve a oferta inteira, com o snapshot no campo do seu tipo.
+    expect(acceptRes.body.status).toBe('ACCEPTED');
+    expect(acceptRes.body.shareType).toBe('WORKOUT_TEMPLATE');
+    expect(acceptRes.body.snapshot.snapshotVersion).toBe(1);
+    expect(acceptRes.body.snapshot.name).toBe('Upper A');
+    expect(acceptRes.body.snapshot.exercises).toHaveLength(2);
 
     // B conclui importação
     await request(server())

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.repository.SnapshotBuildResult
+import com.example.domain.social.WorkoutShareContent
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.Red400
@@ -50,7 +51,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 /**
- * O diálogo de compartilhar treino (T17.7).
+ * O diálogo de compartilhar treino (T17.7) — e programa inteiro (T19.3), pelo mesmo diálogo.
  *
  * Ele recebe o snapshot **já construído**, e não o `WorkoutTemplateEntity` com a lista de
  * exercícios (T17.10 §105). A diferença não é estética: a fronteira do social é não conhecer Room,
@@ -90,7 +91,7 @@ fun ShareWorkoutDialog(
                 }
                 is SnapshotBuildResult.Success -> {
                     ShareWorkoutContent(
-                        snapshot = buildResult.snapshot,
+                        content = buildResult.content,
                         viewModel = viewModel,
                         onDismiss = onDismiss,
                         onShareSuccess = onShareSuccess
@@ -151,7 +152,7 @@ private fun ShareBlockedContent(
 
 @Composable
 private fun ShareWorkoutContent(
-    snapshot: com.example.domain.social.SharedWorkoutSnapshot,
+    content: WorkoutShareContent,
     viewModel: ShareWorkoutViewModel,
     onDismiss: () -> Unit,
     onShareSuccess: () -> Unit
@@ -161,6 +162,7 @@ private fun ShareWorkoutContent(
     val isLoadingFriends = state.isLoadingFriends
     val isSending = state.isSending
     val errorMessage = state.errorMessage
+    val isProgram = content is WorkoutShareContent.Program
 
     LaunchedEffect(viewModel) { viewModel.loadFriends() }
 
@@ -172,13 +174,17 @@ private fun ShareWorkoutContent(
 
     Column(modifier = Modifier.padding(20.dp)) {
         Text(
-            text = "Compartilhar Treino",
+            text = if (isProgram) "Compartilhar Programa" else "Compartilhar Treino",
             color = TextPrimary,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "${snapshot.name} (${snapshot.exercises.size} exercícios)",
+            text = if (isProgram) {
+                "${content.displayName} (${content.templateCount} treinos, ${content.exerciseCount} exercícios)"
+            } else {
+                "${content.displayName} (${content.exerciseCount} exercícios)"
+            },
             color = TextSecondary,
             fontSize = 13.sp
         )
@@ -204,8 +210,14 @@ private fun ShareWorkoutContent(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Apenas exercícios do catálogo, séries, repetições e descansos serão compartilhados. " +
-                        "Suas cargas, notas e máquinas NÃO são enviadas.",
+                    text = if (isProgram) {
+                        "O programa inteiro vai como uma cópia: nomes dos treinos, ordem, exercícios do catálogo, " +
+                            "séries, repetições e descansos. Suas cargas, notas, máquinas e histórico NÃO são enviados, " +
+                            "e o que seu amigo receber não muda quando você editar o seu."
+                    } else {
+                        "Apenas exercícios do catálogo, séries, repetições e descansos serão compartilhados. " +
+                            "Suas cargas, notas e máquinas NÃO são enviadas."
+                    },
                     color = Color(0xFFE3F2FD),
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -327,7 +339,7 @@ private fun ShareWorkoutContent(
             Spacer(modifier = Modifier.width(8.dp))
 
             Button(
-                onClick = { viewModel.share(snapshot) },
+                onClick = { viewModel.share(content) },
                 enabled = state.selectedFriendId != null && !isSending,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Lime400,
@@ -342,7 +354,7 @@ private fun ShareWorkoutContent(
                         strokeWidth = 2.dp
                     )
                 } else {
-                    Text("Enviar Treino", fontWeight = FontWeight.Bold)
+                    Text(if (isProgram) "Enviar Programa" else "Enviar Treino", fontWeight = FontWeight.Bold)
                 }
             }
         }

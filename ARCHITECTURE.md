@@ -2075,7 +2075,11 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > **T17.6** — hardening social: bloqueio bilateral, denúncia minimalista sem texto livre, exclusão
 > de conta server-authoritative com tombstone HMAC, migration `0013_social_hardening.sql`.
 > **T17.7** — compartilhamento de treinos entre amigos por **cópia independente** (snapshot V1, sem
-> carga, nota nem identificador local), migration `0014_workout_shares.sql`.
+> carga, nota nem identificador local), migration `0014_workout_shares.sql`. **Desde a T19.3** a
+> mesma oferta transporta um **programa inteiro** (`share_type = WORKOUT_PROGRAM`, migration
+> PostgreSQL `0006`), o aceite é servidor-primeiro e idempotente, e a importação do programa —
+> programa + treinos + exercícios + recibo, `isCurrent = false`, `syncId`s novos — é uma transação
+> Room (v38). Contrato em [`docs/architecture/workout-sharing.md`](docs/architecture/workout-sharing.md).
 > **T17.8** — check-ins de treino e Feed social: publicação **explícita por sessão**, validada
 > contra a sessão canônica sincronizada pela `CanonicalTrainingSource`, janela de 48h com o relógio
 > do servidor, Feed `FRIENDS_ONLY` bounded (30 dias, teto 50), migration
@@ -2167,7 +2171,8 @@ Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-
 [`docs/architecture/social-activity-ranking.md`](docs/architecture/social-activity-ranking.md) (T17.4) e
 [`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5) e
 [`docs/architecture/social-domain.md` §11–§13](docs/architecture/social-domain.md) (T17.6, T17.7 e
-T17.8) e
+T17.8),
+[`docs/architecture/workout-sharing.md`](docs/architecture/workout-sharing.md) (T17.7 / T19.3) e
 [`docs/architecture/social-groups.md`](docs/architecture/social-groups.md) (T17.11) e
 [`docs/architecture/social-interaction-audience.md`](docs/architecture/social-interaction-audience.md)
 (T17.12);

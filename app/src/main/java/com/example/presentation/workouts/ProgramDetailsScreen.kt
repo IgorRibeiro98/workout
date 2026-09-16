@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,19 +34,30 @@ import com.example.R
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.presentation.friends.ShareWorkoutDialog
+import com.example.presentation.friends.ShareWorkoutViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProgramDetailsScreen(
     viewModel: ProgramDetailsViewModel,
     onNavigateBack: () -> Unit,
-    onTemplateClick: (Long) -> Unit
+    onTemplateClick: (Long) -> Unit,
+    /**
+     * O estado do diálogo de compartilhar programa (T19.3). `null` esconde a ação: um build sem
+     * backend configurado monta esta tela inteira sem ela — como na tela do treino (T17.7).
+     */
+    shareViewModel: ShareWorkoutViewModel? = null
 ) {
     val program by viewModel.program.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     // A preferência de vibração vem da ViewModel: a tela não lê o `SettingsManager` do
     // `MainApplication` (§3).
     val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
+    val shareBuildResult by viewModel.shareBuildResult.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
     
     var showAddTemplateDialog by remember { mutableStateOf(false) }
     var templateToDelete by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
@@ -61,9 +73,28 @@ fun ProgramDetailsScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = TextPrimary)
                     }
                 },
+                actions = {
+                    // Compartilhar o programa inteiro com um amigo (T19.3). O snapshot é montado na
+                    // ViewModel, a partir do Room; a política de exercício CUSTOM decide antes de
+                    // existir oferta.
+                    if (shareViewModel != null) {
+                        val canShare = templates.isNotEmpty()
+                        IconButton(
+                            onClick = { viewModel.prepareShare() },
+                            enabled = canShare
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Compartilhar programa",
+                                tint = if (canShare) Lime400 else TextSecondary
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddTemplateDialog = true },
@@ -189,6 +220,25 @@ fun ProgramDetailsScreen(
                 item { Spacer(modifier = Modifier.height(80.dp)) }
             }
         }
+    }
+
+    val buildResult = shareBuildResult
+    if (buildResult != null && shareViewModel != null) {
+        ShareWorkoutDialog(
+            buildResult = buildResult,
+            viewModel = shareViewModel,
+            onDismiss = {
+                viewModel.dismissShare()
+                shareViewModel.reset()
+            },
+            onShareSuccess = {
+                viewModel.dismissShare()
+                shareViewModel.reset()
+                snackbarScope.launch {
+                    snackbarHostState.showSnackbar("Programa compartilhado com sucesso!")
+                }
+            }
+        )
     }
 
     val sheetTemplate = activeTemplateForSheet

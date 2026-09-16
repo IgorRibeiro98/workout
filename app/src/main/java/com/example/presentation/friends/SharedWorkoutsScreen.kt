@@ -58,9 +58,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.domain.social.SharedWorkoutSnapshot
+import com.example.domain.social.SharedExerciseSnapshot
+import com.example.domain.social.WorkoutShareContent
 import com.example.domain.social.WorkoutShareDetail
 import com.example.domain.social.WorkoutShareItem
+import com.example.domain.social.WorkoutShareKind
 import com.example.domain.social.WorkoutShareStatus
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
@@ -174,9 +176,9 @@ fun SharedWorkoutsScreen(
                     ) {
                         Text(
                             text = if (state.selectedTab == SharedWorkoutsTab.RECEIVED) {
-                                "Nenhum treino compartilhado com você ainda."
+                                "Nenhum treino ou programa compartilhado com você ainda."
                             } else {
-                                "Você ainda não compartilhou treinos com amigos."
+                                "Você ainda não compartilhou treinos ou programas com amigos."
                             },
                             color = TextSecondary,
                             textAlign = TextAlign.Center,
@@ -214,9 +216,8 @@ fun SharedWorkoutsScreen(
             isReceived = state.selectedTab == SharedWorkoutsTab.RECEIVED,
             isImporting = state.importingShareId == previewDetail.shareId,
             onDismiss = { viewModel.closeDetail() },
-            onImport = { snapshot ->
-                viewModel.importWorkout(previewDetail.shareId, snapshot)
-            },
+            // O conteúdo importado é o que o servidor devolver no aceite, não o da prévia.
+            onImport = { viewModel.importShare(previewDetail.shareId) },
             onDecline = {
                 viewModel.declineShare(previewDetail.shareId)
             }
@@ -277,7 +278,11 @@ fun WorkoutShareCard(
             )
 
             Text(
-                text = "${item.exerciseCount} exercícios",
+                text = if (item.kind == WorkoutShareKind.WORKOUT_PROGRAM) {
+                    "Programa · ${item.templateCount} treinos · ${item.exerciseCount} exercícios"
+                } else {
+                    "${item.exerciseCount} exercícios"
+                },
                 color = TextSecondary,
                 fontSize = 13.sp
             )
@@ -324,10 +329,11 @@ fun WorkoutSharePreviewDialog(
     isReceived: Boolean,
     isImporting: Boolean,
     onDismiss: () -> Unit,
-    onImport: (SharedWorkoutSnapshot) -> Unit,
+    onImport: () -> Unit,
     onDecline: () -> Unit
 ) {
-    val snapshot = detail.snapshot
+    val content = detail.content
+    val isProgram = detail.kind == WorkoutShareKind.WORKOUT_PROGRAM
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -344,7 +350,7 @@ fun WorkoutSharePreviewDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = detail.snapshot?.name ?: "Treino Compartilhado",
+                    text = content?.displayName ?: if (isProgram) "Programa Compartilhado" else "Treino Compartilhado",
                     color = TextPrimary,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
@@ -382,8 +388,14 @@ fun WorkoutSharePreviewDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Ao adicionar, uma cópia independente é criada na sua conta. " +
-                                "Cargas planejadas, anotações e histórico do amigo não são incluídos.",
+                            text = if (isProgram) {
+                                "Ao adicionar, uma cópia independente do programa inteiro é criada na sua conta, " +
+                                    "sem virar o seu programa atual. Cargas planejadas, anotações e histórico do amigo " +
+                                    "não são incluídos, e alterações que ele fizer depois não chegam até você."
+                            } else {
+                                "Ao adicionar, uma cópia independente é criada na sua conta. " +
+                                    "Cargas planejadas, anotações e histórico do amigo não são incluídos."
+                            },
                             color = Color(0xFFE3F2FD),
                             fontSize = 12.sp,
                             lineHeight = 16.sp
@@ -393,38 +405,68 @@ fun WorkoutSharePreviewDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text(
-                    text = "Exercícios (${snapshot?.exercises?.size ?: 0})",
-                    color = TextPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (snapshot != null && snapshot.exercises.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        snapshot.exercises.forEachIndexed { idx, ex ->
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(BackgroundDark, RoundedCornerShape(8.dp))
-                                    .padding(10.dp)
-                            ) {
-                                Text(
-                                    text = "${idx + 1}. ${ex.canonicalExerciseId.removePrefix("canonical:").replace("-", " ").capitalizeWords()}",
-                                    color = TextPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "${ex.targetSets} séries × ${ex.minReps}–${ex.maxReps} reps • Descanso: ${ex.restDurationSeconds}s",
-                                    color = TextSecondary,
-                                    fontSize = 12.sp
-                                )
+                when (content) {
+                    is WorkoutShareContent.Workout -> {
+                        Text(
+                            text = "Exercícios (${content.exerciseCount})",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        SharedExerciseList(content.snapshot.exercises)
+                    }
+                    is WorkoutShareContent.Program -> {
+                        content.snapshot.description?.takeIf { it.isNotBlank() }?.let { description ->
+                            Text(text = description, color = TextSecondary, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                        Text(
+                            text = "Treinos (${content.templateCount}) · ${content.exerciseCount} exercícios",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            content.snapshot.templates.sortedBy { it.orderInProgram }.forEach { template ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(BackgroundDark, RoundedCornerShape(8.dp))
+                                        .padding(10.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = template.shortIdentifier?.takeIf { it.isNotBlank() } ?: "•",
+                                            color = Lime400,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = template.name,
+                                            color = TextPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        template.dayOfWeek?.takeIf { it.isNotBlank() }?.let { day ->
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(text = day, color = Lime400, fontSize = 12.sp)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    SharedExerciseList(template.exercises, compact = true)
+                                }
                             }
                         }
+                    }
+                    null -> {
+                        Text(
+                            text = "Esta oferta não pode ser adicionada nesta versão do Spark. Atualize o app para vê-la.",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                 }
 
@@ -441,20 +483,21 @@ fun WorkoutSharePreviewDialog(
                             CircularProgressIndicator(color = Lime400)
                         }
                     } else {
-                        Button(
-                            onClick = {
-                                if (snapshot != null) {
-                                    onImport(snapshot)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Lime400,
-                                contentColor = Color.Black
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Adicionar aos meus treinos", fontWeight = FontWeight.Bold)
+                        if (content != null) {
+                            Button(
+                                onClick = onImport,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Lime400,
+                                    contentColor = Color.Black
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (isProgram) "Adicionar aos meus programas" else "Adicionar aos meus treinos",
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
 
                         if (detail.status == WorkoutShareStatus.PENDING) {
@@ -477,6 +520,38 @@ fun WorkoutSharePreviewDialog(
                 ) {
                     Text("Fechar", color = TextSecondary)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedExerciseList(exercises: List<SharedExerciseSnapshot>, compact: Boolean = false) {
+    if (exercises.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
+        exercises.sortedBy { it.sortOrder }.forEachIndexed { idx, ex ->
+            Column(
+                modifier = if (compact) {
+                    Modifier.fillMaxWidth()
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .background(BackgroundDark, RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                }
+            ) {
+                Text(
+                    text = "${idx + 1}. ${ex.canonicalExerciseId.removePrefix("canonical:").replace("-", " ").capitalizeWords()}",
+                    color = TextPrimary,
+                    fontSize = if (compact) 13.sp else 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${ex.targetSets} séries × ${ex.minReps}–${ex.maxReps} reps • Descanso: ${ex.restDurationSeconds}s",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
             }
         }
     }

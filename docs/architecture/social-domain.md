@@ -431,6 +431,12 @@ e Solicitações no Android). O desenho completo dela vive em
 
 ## 12. T17.7 — Compartilhamento Seguro de Treinos entre Amigos
 
+> **T19.3:** o compartilhamento passou a ter documento próprio —
+> [`workout-sharing.md`](./workout-sharing.md) — que cobre o treino avulso (T17.7) e o **programa
+> completo** (T19.3, `share_type = WORKOUT_PROGRAM`), o aceite servidor-primeiro e a importação
+> transacional do programa. Esta seção fica como registro histórico da T17.7; onde os dois
+> divergirem, vale o documento novo.
+
 ### 12.1 Princípio Fundamental: Transferência por Cópia Independente
 - **Cópia vs. Vínculo Vivo**: O compartilhamento transfere exclusivamente uma cópia estrutural instantânea (`SharedWorkoutSnapshot` V1).
 - **Isolamento Total**: Nunca é criado qualquer link vivo, sincronizado ou dependente entre os usuários.
@@ -463,7 +469,7 @@ e Solicitações no Android). O desenho completo dela vive em
 
 ### 12.5 Idempotência e Persistência Local
 - **Backend**: Idempotência de envio garantida por `(sender_uid, client_request_id)` com constraint UNIQUE.
-- **Android**: Tabela local `workout_share_import_receipts` (Room v36, `MIGRATION_35_36`) registra o `shareId` e o `importedTemplateLocalId`. Importações repetidas retornam o template existente sem duplicar registros no banco.
+- **Android**: Tabela local `workout_share_import_receipts` (Room v36, `MIGRATION_35_36`; desde a T19.3, v38 com `importedProgramLocalId` nulável — `MIGRATION_37_38`) registra o `shareId` e o `importedTemplateLocalId` (ou `importedProgramLocalId`). Importações repetidas retornam a cópia existente sem duplicar registros no banco.
 - **Sync Integration**: O novo `WorkoutTemplate` nasce com um novo `syncId` aleatório e é registrado na Outbox local do destinatário, como qualquer outro treino criado diretamente por ele.
 
 

@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DbClient, PostgresService } from '../../database/postgres.service';
 import type {
+  WorkoutProgramShareSnapshotV1,
   WorkoutShareItemDto,
   WorkoutShareStatus,
+  WorkoutShareType,
   WorkoutTemplateShareSnapshotV1,
 } from './workout-share.contract';
 
@@ -11,6 +13,8 @@ export interface StoredWorkoutShare {
   readonly id: string;
   readonly sender_uid: string;
   readonly recipient_uid: string;
+  /** O que a oferta transporta (T19.3): a forma de `snapshot_json` depende disto. */
+  readonly share_type: WorkoutShareType;
   readonly snapshot_version: number;
   readonly snapshot_json: string;
   readonly snapshot_hash: string;
@@ -28,6 +32,7 @@ interface WorkoutShareRow {
   id: string;
   sender_uid: string;
   recipient_uid: string;
+  share_type: string;
   snapshot_version: number | string;
   snapshot_json: string;
   snapshot_hash: string;
@@ -50,6 +55,7 @@ export class WorkoutShareRepository {
       id: row.id,
       sender_uid: row.sender_uid,
       recipient_uid: row.recipient_uid,
+      share_type: row.share_type as WorkoutShareType,
       snapshot_version: Number(row.snapshot_version),
       snapshot_json: row.snapshot_json,
       snapshot_hash: row.snapshot_hash,
@@ -68,14 +74,15 @@ export class WorkoutShareRepository {
     const runner: DbClient = (client ?? this.db) as DbClient;
     await runner.query(
       `INSERT INTO workout_shares
-         (id, sender_uid, recipient_uid, snapshot_version, snapshot_json, snapshot_hash,
-          status, client_request_id, created_at, accepted_at, imported_at, declined_at,
-          cancelled_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+         (id, sender_uid, recipient_uid, share_type, snapshot_version, snapshot_json,
+          snapshot_hash, status, client_request_id, created_at, accepted_at, imported_at,
+          declined_at, cancelled_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [
         share.id,
         share.sender_uid,
         share.recipient_uid,
+        share.share_type,
         share.snapshot_version,
         share.snapshot_json,
         share.snapshot_hash,
@@ -231,16 +238,8 @@ export class WorkoutShareRepository {
    * é justamente o caso oposto ao do convite de Squad, onde a materialização é obrigatória).
    */
   async listReceived(recipientUid: string, now: number): Promise<WorkoutShareItemDto[]> {
-    const res = await this.db.query<{
-      shareId: string;
-      status: WorkoutShareStatus;
-      createdAt: string | number;
-      expiresAt: string | number;
-      snapshotJson: string;
-      otherSocialId: string;
-      otherDisplayName: string;
-    }>(
-      `SELECT s.id AS "shareId",
+    const res = await this.db.query<WorkoutShareListRow>(
+      `SELECT s.id AS "shareId", s.share_type AS "shareType",
               CASE WHEN s.status = 'PENDING' AND s.expires_at <= $2 THEN 'EXPIRED' ELSE s.status END
                 AS status,
               s.created_at AS "createdAt", s.expires_at AS "expiresAt",
@@ -258,37 +257,15 @@ export class WorkoutShareRepository {
       [recipientUid, now],
     );
 
-    return res.rows.map((r) => {
-      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
-      return {
-        shareId: r.shareId,
-        status: r.status,
-        createdAt: Number(r.createdAt),
-        expiresAt: Number(r.expiresAt),
-        templateName: snap.name,
-        exerciseCount: snap.exercises?.length ?? 0,
-        otherUser: {
-          socialId: r.otherSocialId,
-          displayName: r.otherDisplayName,
-        },
-      };
-    });
+    return res.rows.map((r) => toItemDto(r));
   }
 
   /**
    * Lista enviados para senderUid. `EXPIRED` é derivado na leitura, como em [listReceived].
    */
   async listSent(senderUid: string, now: number): Promise<WorkoutShareItemDto[]> {
-    const res = await this.db.query<{
-      shareId: string;
-      status: WorkoutShareStatus;
-      createdAt: string | number;
-      expiresAt: string | number;
-      snapshotJson: string;
-      otherSocialId: string;
-      otherDisplayName: string;
-    }>(
-      `SELECT s.id AS "shareId",
+    const res = await this.db.query<WorkoutShareListRow>(
+      `SELECT s.id AS "shareId", s.share_type AS "shareType",
               CASE WHEN s.status = 'PENDING' AND s.expires_at <= $2 THEN 'EXPIRED' ELSE s.status END
                 AS status,
               s.created_at AS "createdAt", s.expires_at AS "expiresAt",
@@ -306,20 +283,56 @@ export class WorkoutShareRepository {
       [senderUid, now],
     );
 
-    return res.rows.map((r) => {
-      const snap = JSON.parse(r.snapshotJson) as WorkoutTemplateShareSnapshotV1;
-      return {
-        shareId: r.shareId,
-        status: r.status,
-        createdAt: Number(r.createdAt),
-        expiresAt: Number(r.expiresAt),
-        templateName: snap.name,
-        exerciseCount: snap.exercises?.length ?? 0,
-        otherUser: {
-          socialId: r.otherSocialId,
-          displayName: r.otherDisplayName,
-        },
-      };
-    });
+    return res.rows.map((r) => toItemDto(r));
   }
+}
+
+interface WorkoutShareListRow {
+  shareId: string;
+  shareType: string;
+  status: WorkoutShareStatus;
+  createdAt: string | number;
+  expiresAt: string | number;
+  snapshotJson: string;
+  otherSocialId: string;
+  otherDisplayName: string;
+}
+
+/**
+ * O item de listagem, derivado da linha **pelo tipo** (T19.3).
+ *
+ * Um programa lista o nome do programa em `templateName` — o campo que um cliente anterior à
+ * T19.3 já sabe mostrar — e a soma dos exercícios de todos os treinos em `exerciseCount`.
+ * `templateCount` é o que distingue os dois para quem sabe lê-lo.
+ */
+function toItemDto(row: WorkoutShareListRow): WorkoutShareItemDto {
+  const base = {
+    shareId: row.shareId,
+    status: row.status,
+    createdAt: Number(row.createdAt),
+    expiresAt: Number(row.expiresAt),
+    otherUser: {
+      socialId: row.otherSocialId,
+      displayName: row.otherDisplayName,
+    },
+  };
+  if (row.shareType === 'WORKOUT_PROGRAM') {
+    const snap = JSON.parse(row.snapshotJson) as WorkoutProgramShareSnapshotV1;
+    const templates = snap.templates ?? [];
+    return {
+      ...base,
+      shareType: 'WORKOUT_PROGRAM',
+      templateName: snap.name,
+      templateCount: templates.length,
+      exerciseCount: templates.reduce((sum, t) => sum + (t.exercises?.length ?? 0), 0),
+    };
+  }
+  const snap = JSON.parse(row.snapshotJson) as WorkoutTemplateShareSnapshotV1;
+  return {
+    ...base,
+    shareType: 'WORKOUT_TEMPLATE',
+    templateName: snap.name,
+    templateCount: 1,
+    exerciseCount: snap.exercises?.length ?? 0,
+  };
 }

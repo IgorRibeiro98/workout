@@ -15,4 +15,7 @@ interface WorkoutShareReceiptDao {
 
     @Query("SELECT importedTemplateLocalId FROM workout_share_import_receipts WHERE shareId = :shareId LIMIT 1")
     suspend fun getImportedTemplateId(shareId: String): Long?
+
+    @Query("SELECT importedProgramLocalId FROM workout_share_import_receipts WHERE shareId = :shareId LIMIT 1")
+    suspend fun getImportedProgramId(shareId: String): Long?
 }

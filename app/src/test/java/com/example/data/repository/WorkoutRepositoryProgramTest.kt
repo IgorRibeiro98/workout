@@ -193,4 +193,72 @@ class WorkoutRepositoryProgramTest {
         assertEquals(0, database.syncOutboxDao().count())
         assertNull(database.syncOutboxDao().pendingFor(ownerUid).firstOrNull())
     }
+
+    // ------------------------------------------------------ programa importado inteiro (T19.3)
+
+    @Test
+    fun `addProgramWithTemplates cria tudo numa transacao, nunca como atual, e registra o programa antes dos treinos`() = runTest {
+        val repository = repository()
+        val exerciseId = database.workoutDao().insertExercise(
+            com.example.data.local.ExerciseEntity(name = "Supino", canonicalId = "cat-bench")
+        )
+        // Nenhum programa existe: mesmo assim o importado **não** vira o atual (T19.3 §isCurrent).
+        assertNull(database.workoutDao().getCurrentProgramSync())
+
+        val program = com.example.data.local.WorkoutProgramEntity(name = "PPL", isCurrent = true)
+        val push = com.example.data.local.WorkoutTemplateEntity(programId = 0, name = "Push", shortIdentifier = "A", orderInProgram = 0)
+        val pull = com.example.data.local.WorkoutTemplateEntity(programId = 0, name = "Pull", shortIdentifier = "B", orderInProgram = 1)
+        var seenProgramId: Long? = null
+
+        val programId = repository.addProgramWithTemplates(
+            program = program,
+            templates = listOf(
+                push to listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0)),
+                pull to listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0))
+            )
+        ) { id -> seenProgramId = id }
+
+        assertEquals(programId, seenProgramId)
+        // `isCurrent = true` na entidade de entrada é ignorado: quem decide é o usuário, depois.
+        assertFalse(database.workoutDao().getProgramById(programId)!!.isCurrent)
+        assertNull(database.workoutDao().getCurrentProgramSync())
+        val templates = database.workoutDao().getTemplatesForProgramSync(programId)
+        assertEquals(listOf("Push", "Pull"), templates.map { it.name })
+        assertEquals(listOf(programId, programId), templates.map { it.programId })
+
+        // A Outbox: o programa primeiro, depois cada treino — a ordem em que o outro aparelho
+        // consegue aplicar (o treino referencia o programa por syncId).
+        val entries = database.syncOutboxDao().pendingFor(ownerUid)
+        assertEquals(
+            listOf(
+                SyncEntityType.WORKOUT_PROGRAM.name to program.syncId,
+                SyncEntityType.WORKOUT_TEMPLATE.name to push.syncId,
+                SyncEntityType.WORKOUT_TEMPLATE.name to pull.syncId
+            ),
+            entries.map { it.entityType to it.entitySyncId }
+        )
+        assertTrue(entries.all { it.operation == SyncOperation.UPSERT.name })
+    }
+
+    @Test
+    fun `addProgramWithTemplates que falha no final nao deixa programa nem treino`() = runTest {
+        val repository = repository()
+        val exerciseId = database.workoutDao().insertExercise(
+            com.example.data.local.ExerciseEntity(name = "Supino", canonicalId = "cat-bench")
+        )
+
+        val failed = runCatching {
+            repository.addProgramWithTemplates(
+                program = com.example.data.local.WorkoutProgramEntity(name = "PPL"),
+                templates = listOf(
+                    com.example.data.local.WorkoutTemplateEntity(programId = 0, name = "Push", orderInProgram = 0) to
+                        listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId))
+                )
+            ) { error("recibo indisponível") }
+        }
+
+        assertTrue(failed.isFailure)
+        assertEquals(0, database.workoutDao().countPrograms())
+        assertTrue(database.syncOutboxDao().pendingFor(ownerUid).isEmpty())
+    }
 }

@@ -2,7 +2,7 @@ package com.example.data.social
 
 import com.example.data.remote.spark.SparkBackendClient
 import com.example.data.remote.spark.SparkHttpOutcome
-import com.example.domain.social.SharedWorkoutSnapshot
+import com.example.domain.social.WorkoutShareContent
 import com.example.domain.social.WorkoutShareDetail
 import com.example.domain.social.WorkoutShareError
 import com.example.domain.social.WorkoutShareGateway
@@ -31,13 +31,9 @@ class SparkWorkoutShareGateway(
     override suspend fun createShare(
         recipientSocialId: String,
         clientRequestId: String,
-        snapshot: SharedWorkoutSnapshot
+        content: WorkoutShareContent
     ): WorkoutShareOutcome<WorkoutShareDetail> {
-        val dto = CreateWorkoutShareRequestDto(
-            recipientSocialId = recipientSocialId,
-            clientRequestId = clientRequestId,
-            snapshot = SharedWorkoutSnapshotDto.fromDomain(snapshot)
-        )
+        val dto = CreateWorkoutShareRequestDto.of(recipientSocialId, clientRequestId, content)
         return post(WorkoutShareContract.WORKOUT_SHARES_PATH, json.encodeToString(dto)) { body ->
             json.decodeFromString<WorkoutShareDetailDto>(body).toDomain()
         }
@@ -58,9 +54,9 @@ class SparkWorkoutShareGateway(
             json.decodeFromString<WorkoutShareDetailDto>(body).toDomain()
         }
 
-    override suspend fun acceptShare(shareId: String): WorkoutShareOutcome<SharedWorkoutSnapshot> =
+    override suspend fun acceptShare(shareId: String): WorkoutShareOutcome<WorkoutShareDetail> =
         post(WorkoutShareContract.acceptPath(shareId), "{}") { body ->
-            json.decodeFromString<SharedWorkoutSnapshotDto>(body).toDomain()
+            json.decodeFromString<WorkoutShareDetailDto>(body).toDomain()
         }
 
     override suspend fun completeImport(shareId: String): WorkoutShareOutcome<Unit> =
@@ -139,7 +135,8 @@ class SparkWorkoutShareGateway(
             WorkoutShareContract.ErrorCodes.BLOCKED_USER -> WorkoutShareError.BLOCKED_USER
             WorkoutShareContract.ErrorCodes.SHARE_NOT_FOUND,
             WorkoutShareContract.ErrorCodes.RECIPIENT_NOT_FOUND -> WorkoutShareError.SHARE_NOT_FOUND
-            WorkoutShareContract.ErrorCodes.INVALID_SHARE_STATE -> WorkoutShareError.INVALID_STATE
+            WorkoutShareContract.ErrorCodes.SHARE_NOT_AVAILABLE,
+            WorkoutShareContract.ErrorCodes.CONFLICT -> WorkoutShareError.INVALID_STATE
             WorkoutShareContract.ErrorCodes.INVALID_SNAPSHOT -> WorkoutShareError.INVALID_SNAPSHOT
             else -> when {
                 outcome.code == HTTP_UNAUTHORIZED -> WorkoutShareError.AUTH_REQUIRED

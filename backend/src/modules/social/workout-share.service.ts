@@ -15,15 +15,27 @@ import { BlockRepository } from './block.repository';
 import { NotificationRepository } from './notification.repository';
 import {
   CreateWorkoutShareRequest,
+  SharedExerciseV1,
+  WorkoutProgramShareSnapshotV1,
   WorkoutShareDetailDto,
   WorkoutShareErrorCodes,
   WorkoutShareItemDto,
+  WorkoutShareSnapshotV1,
   WorkoutTemplateShareSnapshotV1,
 } from './workout-share.contract';
 import { StoredWorkoutShare, WorkoutShareRepository } from './workout-share.repository';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
+/**
+ * O teto de um snapshot de **programa** (T19.3): vários treinos numa oferta só.
+ *
+ * 30 treinos × 30 exercícios × ~150 bytes por exercício não cabem nos 64 KiB do treino avulso; o
+ * teto aqui cobre o programa máximo que a validação semântica aceita, com folga, e continua muito
+ * abaixo do corpo global do processo (4 MiB, o do backup).
+ */
+const MAX_PROGRAM_SNAPSHOT_BYTES = 256 * 1024;
+const MAX_PROGRAM_TEMPLATES = 30;
 const MAX_PENDING_SHARES = 10;
 const MAX_DAILY_SHARES = 20;
 
@@ -109,27 +121,39 @@ export class WorkoutShareService {
       throw friendshipRequired();
     }
 
-    // 7. Validação estrita do Snapshot (V1)
-    this.validateSnapshot(request.snapshot);
+    // 7. Validação estrita do Snapshot (V1), pelo tipo (T19.3)
+    const content = request.content;
+    if (content.shareType === 'WORKOUT_PROGRAM') {
+      this.validateProgramSnapshot(content.snapshot);
+    } else {
+      this.validateSnapshot(content.snapshot);
+    }
 
-    const snapshotJson = JSON.stringify(request.snapshot);
-    if (Buffer.byteLength(snapshotJson, 'utf8') > MAX_SNAPSHOT_BYTES) {
+    const snapshotJson = JSON.stringify(content.snapshot);
+    const maxBytes =
+      content.shareType === 'WORKOUT_PROGRAM' ? MAX_PROGRAM_SNAPSHOT_BYTES : MAX_SNAPSHOT_BYTES;
+    if (Buffer.byteLength(snapshotJson, 'utf8') > maxBytes) {
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-        message: 'Snapshot excede o limite máximo permitido de 64KB.',
+        message: `Snapshot excede o limite máximo permitido de ${maxBytes / 1024}KB.`,
       });
     }
 
     const snapshotHash = createHash('sha256').update(snapshotJson).digest('hex');
 
-    // 8. Idempotência por clientRequestId
+    // 8. Idempotência por clientRequestId: mesma chave + mesmo destinatário + mesmo tipo + mesmo
+    // conteúdo é replay; qualquer divergência é conflito, nunca o resultado antigo.
     const existing = await this.repository.findBySenderAndClientRequestId(
       senderUid,
       request.clientRequestId,
     );
     if (existing) {
-      if (existing.recipient_uid === recipientUid && existing.snapshot_hash === snapshotHash) {
-        return this.toDetailDto(existing, senderProfile, recipientProfile, request.snapshot);
+      if (
+        existing.recipient_uid === recipientUid &&
+        existing.share_type === content.shareType &&
+        existing.snapshot_hash === snapshotHash
+      ) {
+        return this.toDetailDto(existing, senderProfile, recipientProfile);
       }
       throw new ConflictException({
         code: WorkoutShareErrorCodes.CONFLICT,
@@ -171,6 +195,7 @@ export class WorkoutShareService {
       id: shareId,
       sender_uid: senderUid,
       recipient_uid: recipientUid,
+      share_type: content.shareType,
       snapshot_version: 1,
       snapshot_json: snapshotJson,
       snapshot_hash: snapshotHash,
@@ -201,13 +226,20 @@ export class WorkoutShareService {
       );
     });
 
+    // Só contagens e tipo: nome do programa, nome do treino e exercícios não vão para log.
     this.logger.info('social.workout_share.created', {
       shareId,
+      shareType: content.shareType,
       snapshotVersion: 1,
-      exerciseCount: request.snapshot.exercises.length,
+      templateCount:
+        content.shareType === 'WORKOUT_PROGRAM' ? content.snapshot.templates.length : 1,
+      exerciseCount:
+        content.shareType === 'WORKOUT_PROGRAM'
+          ? content.snapshot.templates.reduce((sum, t) => sum + t.exercises.length, 0)
+          : content.snapshot.exercises.length,
     });
 
-    return this.toDetailDto(stored, senderProfile, recipientProfile, request.snapshot);
+    return this.toDetailDto(stored, senderProfile, recipientProfile);
   }
 
   async listReceived(recipientUid: string): Promise<WorkoutShareItemDto[]> {
@@ -268,19 +300,22 @@ export class WorkoutShareService {
       }
     }
 
-    const snapshot = JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
-    return this.toDetailDto(
-      { ...share, status: currentStatus },
-      senderProfile,
-      recipientProfile,
-      snapshot,
-    );
+    return this.toDetailDto({ ...share, status: currentStatus }, senderProfile, recipientProfile);
   }
 
-  async acceptShare(
-    recipientUid: string,
-    shareId: string,
-  ): Promise<WorkoutTemplateShareSnapshotV1> {
+  /**
+   * Aceitar: a revalidação **no servidor** de tudo o que pode ter mudado desde que o destinatário
+   * leu a oferta — bloqueio, cancelamento, expiração, amizade — e a transição `PENDING → ACCEPTED`.
+   *
+   * Devolve a oferta inteira, com o snapshot no campo do seu tipo (T19.3): é sobre este conteúdo,
+   * e não sobre o que a tela tinha em memória, que o aparelho constrói a cópia.
+   *
+   * Idempotente em `ACCEPTED` **e** em `IMPORTED`: um aceite repetido — toque duplo, retry depois
+   * de resposta perdida, reabrir uma oferta cuja importação local falhou — devolve o mesmo
+   * conteúdo, e é o recibo local do aparelho que impede uma segunda cópia. Recusar o replay em
+   * `IMPORTED` deixaria sem saída quem importou, concluiu, e cujo recibo se perdeu.
+   */
+  async acceptShare(recipientUid: string, shareId: string): Promise<WorkoutShareDetailDto> {
     const now = this.clock.now();
     const share = await this.repository.findById(shareId);
 
@@ -298,9 +333,8 @@ export class WorkoutShareService {
       });
     }
 
-    // Aceite idempotente: se já estiver ACCEPTED pelo mesmo recipient, devolve o snapshot
-    if (share.status === 'ACCEPTED') {
-      return JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
+    if (share.status === 'ACCEPTED' || share.status === 'IMPORTED') {
+      return this.acceptedDetail(share);
     }
 
     if (share.status !== 'PENDING') {
@@ -332,16 +366,29 @@ export class WorkoutShareService {
     ) {
       const current = await this.repository.findById(shareId);
       if (current && (current.status === 'ACCEPTED' || current.status === 'IMPORTED')) {
-        return JSON.parse(current.snapshot_json) as WorkoutTemplateShareSnapshotV1;
+        return this.acceptedDetail(current);
       }
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.SHARE_NOT_AVAILABLE,
         message: 'Oferta de treino não está mais disponível.',
       });
     }
-    this.logger.info('social.workout_share.accepted', { shareId });
+    this.logger.info('social.workout_share.accepted', { shareId, shareType: share.share_type });
 
-    return JSON.parse(share.snapshot_json) as WorkoutTemplateShareSnapshotV1;
+    return this.acceptedDetail({ ...share, status: 'ACCEPTED', accepted_at: now });
+  }
+
+  /** O detalhe devolvido por [acceptShare], com os perfis lidos como em [getShareDetail]. */
+  private async acceptedDetail(share: StoredWorkoutShare): Promise<WorkoutShareDetailDto> {
+    const senderProfile = (await this.repository.findProfileByUid(share.sender_uid)) ?? {
+      socialId: 'indisponivel',
+      displayName: 'Participante indisponível',
+    };
+    const recipientProfile = (await this.repository.findProfileByUid(share.recipient_uid)) ?? {
+      socialId: 'indisponivel',
+      displayName: 'Participante indisponível',
+    };
+    return this.toDetailDto(share, senderProfile, recipientProfile);
   }
 
   async completeImport(recipientUid: string, shareId: string): Promise<{ success: boolean }> {
@@ -506,57 +553,143 @@ export class WorkoutShareService {
       });
     }
 
-    // Validação de proibições e limites por exercício
-    const forbiddenKeys = [
-      'plannedWeight',
-      'notes',
-      'machineLabel',
-      'localId',
-      'syncId',
-      'programId',
-      'ownerUid',
-      'userId',
-    ];
-    for (const key of forbiddenKeys) {
-      if (key in (snapshot as unknown as Record<string, unknown>)) {
-        throw new BadRequestException({
-          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `Campo proibido no snapshot: ${key}.`,
-        });
-      }
+    rejectForbiddenKeys(snapshot, 'no snapshot');
+    this.validateExercises(snapshot.exercises, '');
+  }
+
+  /**
+   * O snapshot de programa (T19.3): o programa, seus treinos em ordem, e em cada treino a mesma
+   * validação do treino avulso — a regra de exercício é **uma**, e mora em [validateExercises].
+   */
+  private validateProgramSnapshot(snapshot: WorkoutProgramShareSnapshotV1): void {
+    if (!snapshot || typeof snapshot !== 'object') {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: 'Snapshot inválido.',
+      });
     }
 
-    snapshot.exercises.forEach((ex, idx) => {
+    const version = (snapshot as { snapshotVersion?: unknown }).snapshotVersion;
+    if (version !== 1) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: `Versão do snapshot não suportada: ${String(version)}.`,
+      });
+    }
+
+    const name = typeof snapshot.name === 'string' ? snapshot.name.trim() : '';
+    if (!name || name.length > 100) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: 'Nome do programa deve ter entre 1 e 100 caracteres.',
+      });
+    }
+
+    if (
+      snapshot.description != null &&
+      (typeof snapshot.description !== 'string' || snapshot.description.length > 500)
+    ) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: 'Descrição do programa deve ter no máximo 500 caracteres.',
+      });
+    }
+
+    rejectForbiddenKeys(snapshot, 'no snapshot');
+
+    if (
+      !Array.isArray(snapshot.templates) ||
+      snapshot.templates.length === 0 ||
+      snapshot.templates.length > MAX_PROGRAM_TEMPLATES
+    ) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: `Programa deve conter entre 1 e ${MAX_PROGRAM_TEMPLATES} treinos.`,
+      });
+    }
+
+    snapshot.templates.forEach((template, tIdx) => {
+      const where = `no treino [${tIdx}]`;
+      const templateName = typeof template.name === 'string' ? template.name.trim() : '';
+      if (!templateName || templateName.length > 100) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `Nome do treino [${tIdx}] deve ter entre 1 e 100 caracteres.`,
+        });
+      }
+      if (
+        template.shortIdentifier != null &&
+        (typeof template.shortIdentifier !== 'string' || template.shortIdentifier.length > 10)
+      ) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `Identificador curto do treino [${tIdx}] deve ter no máximo 10 caracteres.`,
+        });
+      }
+      if (
+        typeof template.orderInProgram !== 'number' ||
+        !Number.isInteger(template.orderInProgram) ||
+        template.orderInProgram < 0 ||
+        template.orderInProgram > MAX_PROGRAM_TEMPLATES
+      ) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `orderInProgram inválido no treino [${tIdx}].`,
+        });
+      }
+      if (
+        template.dayOfWeek != null &&
+        (typeof template.dayOfWeek !== 'string' ||
+          template.dayOfWeek.trim().length === 0 ||
+          template.dayOfWeek.length > 32)
+      ) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `dayOfWeek inválido no treino [${tIdx}].`,
+        });
+      }
+      rejectForbiddenKeys(template, where);
+      if (
+        !Array.isArray(template.exercises) ||
+        template.exercises.length === 0 ||
+        template.exercises.length > 30
+      ) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `Treino [${tIdx}] deve conter entre 1 e 30 exercícios.`,
+        });
+      }
+      this.validateExercises(template.exercises, `do treino [${tIdx}] `);
+    });
+  }
+
+  /** As regras de um exercício compartilhado — as mesmas para treino avulso e para programa. */
+  private validateExercises(exercises: SharedExerciseV1[], owner: string): void {
+    exercises.forEach((ex, idx) => {
+      const label = `exercício ${owner}[${idx}]`;
       if (
         typeof ex.canonicalExerciseId !== 'string' ||
         !CANONICAL_EXERCISE_ID_PATTERN.test(ex.canonicalExerciseId)
       ) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `Exercício [${idx}] sem canonicalExerciseId válido.`,
+          message: `Exercício ${owner}[${idx}] sem canonicalExerciseId válido.`,
         });
       }
 
-      for (const key of forbiddenKeys) {
-        if (key in (ex as unknown as Record<string, unknown>)) {
-          throw new BadRequestException({
-            code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-            message: `Campo proibido no exercício [${idx}]: ${key}.`,
-          });
-        }
-      }
+      rejectForbiddenKeys(ex, `no ${label}`);
 
       if (typeof ex.sortOrder !== 'number' || ex.sortOrder < 0 || ex.sortOrder > 30) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `sortOrder inválido no exercício [${idx}].`,
+          message: `sortOrder inválido no ${label}.`,
         });
       }
 
       if (typeof ex.targetSets !== 'number' || ex.targetSets < 1 || ex.targetSets > 20) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `targetSets inválido no exercício [${idx}] (1..20).`,
+          message: `targetSets inválido no ${label} (1..20).`,
         });
       }
 
@@ -569,7 +702,7 @@ export class WorkoutShareService {
       ) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `Faixa de repetições inválida no exercício [${idx}] (minReps <= maxReps).`,
+          message: `Faixa de repetições inválida no ${label} (minReps <= maxReps).`,
         });
       }
 
@@ -580,20 +713,27 @@ export class WorkoutShareService {
       ) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `restDurationSeconds inválido no exercício [${idx}] (0..600).`,
+          message: `restDurationSeconds inválido no ${label} (0..600).`,
         });
       }
     });
   }
 
+  /**
+   * O detalhe de uma oferta, com o snapshot **no campo do seu tipo** (T19.3).
+   *
+   * O JSON gravado é interpretado pelo `share_type` da linha — nunca pela forma do conteúdo. Um
+   * cliente anterior à T19.3 lê `snapshot` ausente numa oferta de programa e não tem o que
+   * importar, que é o comportamento certo para quem não conhece o tipo.
+   */
   private toDetailDto(
     stored: StoredWorkoutShare,
     sender: { socialId: string; displayName: string },
     recipient: { socialId: string; displayName: string },
-    snapshot?: WorkoutTemplateShareSnapshotV1,
   ): WorkoutShareDetailDto {
-    return {
+    const base = {
       shareId: stored.id,
+      shareType: stored.share_type,
       status: stored.status,
       createdAt: stored.created_at,
       expiresAt: stored.expires_at,
@@ -605,8 +745,41 @@ export class WorkoutShareService {
         socialId: recipient.socialId,
         displayName: recipient.displayName,
       },
-      snapshot,
     };
+    const parsed = JSON.parse(stored.snapshot_json) as WorkoutShareSnapshotV1['snapshot'];
+    return stored.share_type === 'WORKOUT_PROGRAM'
+      ? { ...base, programSnapshot: parsed as WorkoutProgramShareSnapshotV1 }
+      : { ...base, snapshot: parsed as WorkoutTemplateShareSnapshotV1 };
+  }
+}
+
+/**
+ * O que **nunca** viaja num snapshot, em nenhum nível — carga, nota, máquina, identidade local ou
+ * de sync, dono. A allowlist do validador estrutural já recusa qualquer chave desconhecida; esta
+ * lista é a segunda linha, com nome, para que o motivo apareça na resposta.
+ */
+const FORBIDDEN_SNAPSHOT_KEYS = [
+  'plannedWeight',
+  'notes',
+  'machineLabel',
+  'localId',
+  'syncId',
+  'programId',
+  'templateId',
+  'ownerUid',
+  'userId',
+  'isCurrent',
+  'externalId',
+] as const;
+
+function rejectForbiddenKeys(object: unknown, where: string): void {
+  for (const key of FORBIDDEN_SNAPSHOT_KEYS) {
+    if (key in (object as Record<string, unknown>)) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: `Campo proibido ${where}: ${key}.`,
+      });
+    }
   }
 }
 

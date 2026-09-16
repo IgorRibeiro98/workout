@@ -167,6 +167,43 @@ class WorkoutRepository(
     }
 
     /**
+     * Cria um programa **inteiro** — cabeçalho, treinos, exercícios e o registro de quem o pediu —
+     * numa transação só (T19.3).
+     *
+     * É o caminho da importação de programa compartilhado: ou o programa completo entra, ou nada
+     * entra. Uma interrupção no meio faz rollback de tudo, inclusive do recibo que [andThen]
+     * grava — e é o recibo que impede a oferta de ser importada duas vezes.
+     *
+     * O programa nasce com `isCurrent = false`, sempre: receber um programa não troca o programa
+     * atual de ninguém, nem quando não existe nenhum. Quem decide qual é o atual é o usuário, pela
+     * mesma tela de sempre ([setCurrentProgram]).
+     *
+     * Identidade: o `syncId` do programa e o de cada treino são os que as entidades trazem —
+     * gerados aqui, no aparelho de quem recebe, nunca os do remetente. As mutações de sync são
+     * registradas na ordem em que o outro aparelho precisa aplicá-las: o programa antes dos
+     * treinos que o referenciam.
+     */
+    suspend fun addProgramWithTemplates(
+        program: WorkoutProgramEntity,
+        templates: List<Pair<WorkoutTemplateEntity, List<WorkoutTemplateExerciseEntity>>>,
+        andThen: suspend (programId: Long) -> Unit = {}
+    ): Long = syncMutations.mutate {
+        val programId = dao.insertProgram(program.copy(isCurrent = false))
+        val templateSyncIds = templates.map { (template, exercises) ->
+            val templateId = dao.insertTemplate(template.copy(programId = programId))
+            exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+            template.syncId
+        }
+        andThen(programId)
+        upsert(SyncEntityType.WORKOUT_PROGRAM, program.syncId)
+        templateSyncIds.forEach { upsert(SyncEntityType.WORKOUT_TEMPLATE, it) }
+        programId
+    }
+
+    /** O programa pela linha do Room. */
+    suspend fun getProgram(programId: Long): WorkoutProgramEntity? = dao.getProgramById(programId)
+
+    /**
      * O programa que deve receber um treino novo: o atual, ou o primeiro existente.
      *
      * Mesma escolha que a tela de treinos faz ao criar um template manualmente; `null` significa

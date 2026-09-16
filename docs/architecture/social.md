@@ -22,14 +22,16 @@
 | Notificações push | [`social-notifications.md`](./social-notifications.md) |
 | Squads privados, posse, convites e feed de grupo | [`social-groups.md`](./social-groups.md) |
 | Audiência de interação (`FRIEND` / `GROUP`) | [`social-interaction-audience.md`](./social-interaction-audience.md) |
+| Compartilhamento de treino e de programa (Workout Share / Program Share) | [`workout-sharing.md`](./workout-sharing.md) |
 | Classificação de dado por sensibilidade | [`data-classification-matrix.md`](./data-classification-matrix.md) |
 | Arquitetura online (por que existe backend) | [`ADR-0001-spark-online-architecture.md`](./ADR-0001-spark-online-architecture.md) |
 | Sync do treino (T16) | [`sync-protocol.md`](./sync-protocol.md) |
 
-Bloqueio, denúncia, exclusão de conta (T17.6), compartilhamento de treino (T17.7), check-ins e
-Feed (T17.8) e conteúdo do check-in (T17.9) **não têm documento próprio**: as regras normativas
-deles estão em `PROJECT_RULES.md` §13.14 e §13.15 e nos comentários dos arquivos citados abaixo.
-Este documento é o índice para eles.
+Bloqueio, denúncia, exclusão de conta (T17.6), check-ins e Feed (T17.8) e conteúdo do check-in
+(T17.9) **não têm documento próprio**: as regras normativas deles estão em `PROJECT_RULES.md`
+§13.14 e §13.15 e nos comentários dos arquivos citados abaixo. Este documento é o índice para eles.
+O compartilhamento (T17.7 / T19.3) ganhou documento próprio na T19.3:
+[`workout-sharing.md`](./workout-sharing.md).
 
 ### O que mudou no Social V2 (T17.11 / T17.12)
 
@@ -247,23 +249,30 @@ rota. A tela aberta consulta o estado atual — o push não é snapshot de autor
 Isolamento de conta: `recipientSocialId` diferente do `socialId` ativo (ou app deslogado) faz o push
 ser descartado em silêncio.
 
-## 9. Compartilhamento de treino (T17.7)
+## 9. Compartilhamento de treino (T17.7) e de programa (T19.3)
 
-Snapshot **versionado e imutável** (`snapshotVersion: 1`), contendo apenas o que é portável:
+Contrato completo em [`workout-sharing.md`](./workout-sharing.md). O resumo:
+
+Snapshot **versionado e imutável** (`snapshotVersion: 1`), contendo apenas o que é portável. Um
+treino avulso (`WORKOUT_TEMPLATE`) ou um programa inteiro (`WORKOUT_PROGRAM`), na **mesma** oferta
+(`workout_shares.share_type`):
 
 ```text
-name, shortIdentifier, exercises[ canonicalExerciseId, sortOrder,
-                                  targetSets, minReps, maxReps, restDurationSeconds ]
+programa   name, description
+treino     name, shortIdentifier, orderInProgram, dayOfWeek
+exercício  canonicalExerciseId, sortOrder, targetSets, minReps, maxReps, restDurationSeconds
 ```
 
-Nunca: carga, histórico, notas, número de máquina, `localId`, `syncId`, uid. Exercício **CUSTOM**
-bloqueia o compartilhamento (fail-closed, decidido no aparelho — o servidor não conhece o
-catálogo, e valida a **forma** do identificador).
+Nunca: carga, histórico, notas, número de máquina, `localId`, `syncId`, `isCurrent`, uid. Exercício
+**CUSTOM** bloqueia o compartilhamento — do treino, ou do programa inteiro — fail-closed, decidido
+no aparelho (o servidor não conhece o catálogo, e valida a **forma** do identificador).
 
-A importação cria um `WorkoutTemplate` **novo**, com `localId` e `syncId` novos, e é idempotente
-por recibo local (`WorkoutShareImportReceiptEntity`). Depois de importada, a cópia é do
-destinatário: o remetente editar, apagar o template, desfazer a amizade, bloquear ou excluir a
-conta **não** a alcança.
+O aceite é **servidor-primeiro** (`POST :shareId/accept`, idempotente): é ele que revalida bloqueio,
+cancelamento e expiração e devolve o conteúdo sobre o qual a cópia é construída. A importação cria
+um `WorkoutTemplate` **novo** — ou um `WorkoutProgram` novo com todos os seus treinos, numa
+transação só, com `isCurrent = false` — com `localId` e `syncId` novos, idempotente por recibo local
+(`WorkoutShareImportReceiptEntity`). Depois de importada, a cópia é do destinatário: o remetente
+editar, apagar o original, desfazer a amizade, bloquear ou excluir a conta **não** a alcança.
 
 ## 10. Feed, check-ins e mídia (T17.8 / T17.9)
 
@@ -513,7 +522,7 @@ O que é persistido localmente, e por quê:
 | O que | Onde | Por quê | Entra no backup Android? |
 | --- | --- | --- | --- |
 | Token FCM + `socialId` registrado | DataStore `social_push_scope` | estado técnico da instalação | **não** (excluído) |
-| Recibo de importação de share | Room `WorkoutShareImportReceiptEntity` | evita importar o mesmo share duas vezes num retry | sim (é dado do dono) |
+| Recibo de importação de share (treino ou programa) | Room `WorkoutShareImportReceiptEntity` | evita importar o mesmo share duas vezes num retry | **não** — é estado técnico da instalação; a cópia importada, essa, entra como qualquer treino/programa |
 
 Nada disso é autoridade social. Não existe Outbox social, não existe `FriendProgressEntity`, e
 nenhum agregado social entra em `sync_entities`.
