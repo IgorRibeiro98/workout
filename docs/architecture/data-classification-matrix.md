@@ -25,10 +25,10 @@ colaborativo.
 | `BODY_MEASUREMENT` | sim | não | físico local, **propaga com tombstone** (T16.7) | **sim** | snapshot; medidas distintas coexistem — conflito é editar a **mesma** medida |
 | `CHECK_IN` | sim | não | físico local, **não propaga** | **sim** | snapshot; referência de sessão pode ficar nula até ela chegar |
 | `EXERCISE_OVERRIDE` | sim | não | cascata com o exercício | **não** | só backup completo — escrito hoje por ViewModel direto no DAO |
-| `WEEKLY_GOAL` | sim | não | físico local | **não** | só backup completo — derivado de preferência do DataStore |
+| `WEEKLY_GOAL` | sim | não | físico local | **não** | só backup completo — derivado de preferência do DataStore. **T19.2A:** viaja também como *parâmetro de consistência* pela rota social (`PATCH /v1/social/me/progress-sharing`), fora do sync incremental |
 | `USER_PREFERENCES` | sim | não | — | **não** | só backup completo — DataStore não participa da transação Room |
 | Catálogo canônico, conteúdo premium | — | — | — | **nunca** | conteúdo do app, vem do manifesto versionado |
-| Gamificação, XP, conquistas, PRs | — | — | — | **nunca** | derivado; cada aparelho recalcula do histórico |
+| Gamificação, XP, conquistas, PRs | — | — | — | **nunca** | derivado; cada aparelho recalcula do histórico. **T19.2:** o servidor deriva uma *projeção social verificada* (consistência, XP reconstruível, nível, conquistas de treino/consistência/corpo) dos treinos e medições sincronizados — na leitura, sem tabela e sem receber resultado do cliente; ver `social-progress-authority.md` |
 | Preferências de aparelho, timer, `deviceId` | — | — | — | **nunca** | descrevem a instalação, não a pessoa |
 
 Sessões `IN_PROGRESS`/`PAUSED`/`PLANNED`/`CANCELLED` continuam fora: o registry de payload aceita
@@ -315,7 +315,16 @@ razão está nesta própria matriz: gamificação é `DERIVED` (linha "`gamifica
 `xp_transactions`, `achievement_unlocks`, `personal_records`, nível/XP/streak"), e portanto nível,
 sequência e conquistas **não chegam ao servidor**. Publicá-los exigiria aceitar o valor que o
 aparelho declara — o servidor confiando no cliente sobre progresso — ou recriar os motores de
-domínio em TypeScript. Os dois foram recusados; os três campos respondem `UNSUPPORTED`.
+domínio em TypeScript. Os dois foram recusados na T17.2; os três campos respondiam `UNSUPPORTED`.
+
+**T19.2 (2026-09-16)** reabriu a segunda saída com uma condição: a regra remota
+(`social-consistency.ts`, `social-gamification.ts`) existe **presa** ao Kotlin por fixtures
+compartilhadas (`contracts/social/v1/consistency-streak.json`, `progress-projection.json`) que os
+testes dos dois lados leem — no Android, reproduzindo o motor local ao vivo. A classificação
+`DERIVED` não mudou: nada de XP, unlock ou evento sincroniza; o servidor deriva uma **projeção
+social verificada** dos fatos que já sincronizam, na leitura, e o que ele não reconstrói (XP de
+recorde, conquistas de `PERFORMANCE`) fica fora do valor publicado. Ver
+`social-progress-authority.md`.
 
 A leitura que a projeção faz de `sync_entities` é um `COUNT(*)` por um adapter estreito
 (`SocialProgressSource`), com `owner_uid` na cláusula `WHERE` e **nenhum payload materializado**.

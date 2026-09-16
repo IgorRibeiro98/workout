@@ -63,10 +63,10 @@ fun messageFor(error: SocialProfileError): String = when (error) {
  * UNSUPPORTED   "Não disponível nesta versão"  sincronizar NÃO resolve
  * ```
  *
- * Colapsar as duas últimas faria a tela prometer que sincronizar publicaria o nível — e ele não
- * seria publicado, porque nível, sequência e conquistas são calculados **no aparelho**, a partir
- * de dado que não sai dele. Enquanto isso for verdade, o interruptor pode ser ligado (a preferência
- * fica guardada) e o campo continua ausente para os amigos.
+ * Colapsar as duas últimas faria a tela prometer que sincronizar publicaria o nível — e, com um
+ * servidor anterior à T19.2, ele não seria publicado. Desde a T19.2 o servidor deriva nível,
+ * sequência e conquistas dos treinos sincronizados e dos parâmetros que este app declara; o que
+ * sobra como `UNAVAILABLE` é "ainda não sincronizou / ainda não declarou", e sincronizar resolve.
  */
 fun availabilityLabel(availability: SocialFieldAvailability): String = when (availability) {
     SocialFieldAvailability.AVAILABLE -> "Disponível"
@@ -79,7 +79,8 @@ fun availabilityHint(availability: SocialFieldAvailability): String? = when (ava
     SocialFieldAvailability.AVAILABLE -> null
 
     // O caso real: a conta ainda não sincronizou treino concluído nenhum, ou o servidor ainda não
-    // conhece o fuso desta pessoa. Os dois se resolvem sincronizando.
+    // conhece o fuso e a meta semanal desta pessoa. Tudo se resolve sincronizando e abrindo esta
+    // tela conectado.
     SocialFieldAvailability.UNAVAILABLE ->
         "Seu progresso compartilhado é atualizado depois da sincronização."
 
@@ -89,3 +90,25 @@ fun availabilityHint(availability: SocialFieldAvailability): String? = when (ava
         "Esta informação é calculada no seu aparelho e ainda não chega ao servidor, " +
             "então ela não aparece para os amigos."
 }
+
+/**
+ * O que os amigos veem do nível (T19.2C).
+ *
+ * O nível publicado é o que o **servidor** consegue verificar a partir dos treinos sincronizados
+ * — os recordes pessoais, que valem XP no aparelho, ficam fora. Ele pode ser menor do que o nível
+ * mostrado no Perfil, e a tela do dono diz isso em vez de deixar a diferença parecer um defeito.
+ */
+const val LEVEL_SHARING_NOTE =
+    "Nível verificado pelo servidor a partir dos treinos sincronizados. Pode ser menor que o do " +
+        "aparelho, porque recordes pessoais não entram."
+
+/**
+ * O rótulo de uma conquista publicada, a partir do id canônico do catálogo.
+ *
+ * O servidor envia só o id (`first_workout`); o título e o ícone são os do catálogo deste APK. Um
+ * id que este APK não conhece não vira "conquista desconhecida" — ele é omitido, porque a lista
+ * é de destaques e não de lacunas.
+ */
+fun achievementLabel(achievementId: String): String? =
+    com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(achievementId)
+        ?.let { "${it.icon} ${it.title}" }

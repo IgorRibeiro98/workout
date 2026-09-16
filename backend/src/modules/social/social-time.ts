@@ -196,3 +196,52 @@ export function formatCalendarDate(dateAsUtc: number): string {
 export function localCalendarDateString(instantMs: number, timeZone: string): string {
   return formatCalendarDate(localCalendarDate(instantMs, timeZone));
 }
+
+/** A faixa `[início, fim)` de um dia de calendário, em epoch millis UTC. */
+export interface ChallengeDayWindow {
+  readonly startMs: number;
+  readonly endMs: number;
+}
+
+/**
+ * Os dias de calendário de um desafio, como faixas de instantes.
+ *
+ * Exportada porque é a regra de "que dias este desafio cobre", e o teste precisa poder afirmá-la
+ * diretamente — inclusive nas viradas de horário de verão, onde uma faixa tem 23 ou 25 horas.
+ *
+ * A conversão é a **mesma** de `canonicalWeekWindow` (T17.2) e das janelas de dia da projeção de
+ * progresso (T19.2): todas chamam `localMidnightToInstant`. Uma segunda implementação de
+ * "meia-noite local" divergiria da primeira, e a divergência apareceria como o perfil e o desafio
+ * discordando sobre o dia de um treino.
+ */
+export function challengeDayWindows(
+  startDate: string,
+  endDate: string,
+  timeZoneId: string,
+): readonly ChallengeDayWindow[] {
+  if (!isValidTimeZone(timeZoneId)) {
+    return [];
+  }
+  const start = parseCalendarDate(startDate);
+  const end = parseCalendarDate(endDate);
+  if (!start || !end) {
+    return [];
+  }
+
+  const startAsUtc = calendarDateAsUtc(start);
+  const endAsUtc = calendarDateAsUtc(end);
+  if (endAsUtc < startAsUtc) {
+    return [];
+  }
+
+  const windows: ChallengeDayWindow[] = [];
+  // A iteração é sobre **datas** (aritmética de calendário, sem fuso); a conversão para instante
+  // acontece por dia. Iterar sobre instantes somando 24h é exatamente o erro de §203.
+  for (let dateAsUtc = startAsUtc; dateAsUtc <= endAsUtc; dateAsUtc += DAY_MS) {
+    windows.push({
+      startMs: localMidnightToInstant(dateAsUtc, timeZoneId),
+      endMs: localMidnightToInstant(dateAsUtc + DAY_MS, timeZoneId),
+    });
+  }
+  return windows;
+}

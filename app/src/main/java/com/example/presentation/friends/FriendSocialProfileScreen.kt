@@ -398,11 +398,15 @@ private fun SharedProgressCard(profile: FriendSocialProfile) {
                     value = if (count == 1) "1 treino" else "$count treinos"
                 )
             }
-            // `highlightedAchievementIds` existe no contrato e **nunca** chega preenchido nesta
-            // versão: o servidor não consegue validar que uma conquista foi obtida, então a
-            // seleção de destaques não foi implementada (ver `social-profile-contract.md`). Não
-            // há renderização aqui porque não haveria o que renderizar — e desenhar uma seção
-            // vazia prometeria uma capacidade que não existe.
+            // T19.2C — as conquistas que o servidor consegue **verificar** (treino, consistência,
+            // corpo). Ids que este APK não conhece são omitidos; uma lista vazia não desenha seção.
+            val labels = profile.sharedProgress.highlightedAchievementIds.mapNotNull(::achievementLabel)
+            if (labels.isNotEmpty()) {
+                Text(text = "Conquistas", color = TextSecondary, fontSize = 14.sp)
+                labels.forEach { label ->
+                    Text(text = label, color = TextPrimary, fontSize = 14.sp)
+                }
+            }
         }
     }
 }

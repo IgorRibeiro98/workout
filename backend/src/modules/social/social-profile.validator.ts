@@ -1,6 +1,13 @@
+import { type ConsistencyParameters, isMondayEpochDay } from './social-consistency';
 import { SocialProfileErrors } from './social-profile.errors';
 import { isValidTimeZone } from './social-progress.source';
-import { MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH } from './social.limits';
+import {
+  MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH,
+  MAX_SOCIAL_WEEKLY_GOAL,
+  MAX_SOCIAL_WEEKLY_GOAL_SNAPSHOTS,
+  MIN_SOCIAL_TRACKING_EPOCH_DAY,
+  MIN_SOCIAL_WEEKLY_GOAL,
+} from './social.limits';
 
 /**
  * A validação do perfil social enriquecido (T17.2).
@@ -11,9 +18,11 @@ import { MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH } from './social.limits';
  * PODE     shareLevel, shareConsistencyStreak, shareWeeklyWorkoutCount,
  *          shareHighlightedAchievements    ← preferência: o que os outros podem ver
  *          weekTimeZone                    ← configuração do aparelho, não progresso
+ *          consistency                     ← meta por semana + início do acompanhamento (T19.2A):
+ *                                            os parâmetros da regra, nunca o resultado dela
  *
  * NUNCA    level, xp, totalXp, streak, consistencyStreak, weeklyWorkoutCount,
- *          achievementIds, earnedAchievementIds, ...
+ *          achievementIds, earnedAchievementIds, longestStreak, unlocked, ...
  * ```
  *
  * A segunda lista é recusada **por nome** (§85–§87), e não apenas ausente do conjunto permitido.
@@ -69,6 +78,19 @@ const PROGRESS_VALUE_FIELDS = [
   'highlightedAchievementIds',
   'sharedProgress',
   'availability',
+  // T19.2 — o que a autoridade remota passou a derivar. Recusado por nome pelo mesmo motivo: o
+  // servidor calcula, e um cliente que envie o resultado acredita que ele significa alguma coisa.
+  'currentStreakWeeks',
+  'longestStreakWeeks',
+  'longestStreak',
+  'verifiedXp',
+  'xpTotal',
+  'unlocked',
+  'unlockedAchievementIds',
+  'achievementUnlocks',
+  'missions',
+  'missionsCompleted',
+  'personalRecords',
 ] as const;
 
 export interface UpdateProgressSharingRequest {
@@ -77,6 +99,7 @@ export interface UpdateProgressSharingRequest {
   readonly shareWeeklyWorkoutCount?: boolean;
   readonly shareHighlightedAchievements?: boolean;
   readonly weekTimeZone?: string;
+  readonly consistency?: ConsistencyParameters;
 }
 
 const ALLOWED_FIELDS = [
@@ -85,6 +108,7 @@ const ALLOWED_FIELDS = [
   'shareWeeklyWorkoutCount',
   'shareHighlightedAchievements',
   'weekTimeZone',
+  'consistency',
 ] as const;
 
 /**
@@ -109,6 +133,7 @@ export function parseUpdateProgressSharingRequest(body: unknown): UpdateProgress
     shareWeeklyWorkoutCount?: boolean;
     shareHighlightedAchievements?: boolean;
     weekTimeZone?: string;
+    consistency?: ConsistencyParameters;
   } = {};
 
   if ('shareLevel' in object) {
@@ -134,6 +159,9 @@ export function parseUpdateProgressSharingRequest(body: unknown): UpdateProgress
   }
   if ('weekTimeZone' in object) {
     request.weekTimeZone = requireTimeZone(object.weekTimeZone);
+  }
+  if ('consistency' in object) {
+    request.consistency = requireConsistencyParameters(object.consistency);
   }
 
   if (Object.keys(request).length === 0) {
@@ -192,6 +220,115 @@ function requireTimeZone(value: unknown): string {
     );
   }
   return trimmed;
+}
+
+/**
+ * Os parâmetros de consistência (T19.2A).
+ *
+ * O que se valida aqui é a **forma** de uma configuração — inteiros, segundas-feiras, meta no
+ * intervalo da tela, tamanho plausível — e não a sua veracidade: a meta é escolha do dono, no
+ * aparelho e aqui. O que impede um parâmetro de virar sequência inventada não é esta função, é a
+ * derivação: ela só conta sessões `COMPLETED` que chegaram por sync.
+ *
+ * Os campos de **resultado** (`streak`, `longestStreak`, `completedWorkouts`...) continuam
+ * recusados por nome — inclusive dentro deste objeto, porque é aqui que alguém tentaria encaixá-los.
+ */
+function requireConsistencyParameters(value: unknown): ConsistencyParameters {
+  const object = requireNestedObject(value, 'consistency');
+  rejectProgressValues(object);
+  for (const key of Object.keys(object)) {
+    if (key !== 'trackingStartedAtEpochDay' && key !== 'weeklyGoals') {
+      throw SocialProfileErrors.invalidProgressSettings(
+        `campo não reconhecido em consistency: ${key}`,
+      );
+    }
+  }
+
+  const trackingStartedAtEpochDay = requireEpochDay(
+    object.trackingStartedAtEpochDay,
+    'consistency.trackingStartedAtEpochDay',
+  );
+
+  if (!Array.isArray(object.weeklyGoals)) {
+    throw SocialProfileErrors.invalidProgressSettings(
+      'consistency.weeklyGoals precisa ser uma lista',
+    );
+  }
+  if (object.weeklyGoals.length > MAX_SOCIAL_WEEKLY_GOAL_SNAPSHOTS) {
+    throw SocialProfileErrors.invalidProgressSettings(
+      `consistency.weeklyGoals aceita no máximo ${MAX_SOCIAL_WEEKLY_GOAL_SNAPSHOTS} semanas`,
+    );
+  }
+
+  const seen = new Set<number>();
+  const weeklyGoals = object.weeklyGoals.map((raw: unknown) => {
+    const snapshot = requireNestedObject(raw, 'consistency.weeklyGoals[]');
+    rejectProgressValues(snapshot);
+    for (const key of Object.keys(snapshot)) {
+      if (key !== 'weekStartEpochDay' && key !== 'goal') {
+        throw SocialProfileErrors.invalidProgressSettings(
+          `campo não reconhecido em consistency.weeklyGoals: ${key}`,
+        );
+      }
+    }
+    // `setWeeklyGoal` grava a meta nova a partir da **próxima** segunda-feira: um snapshot até
+    // oito dias à frente de hoje é a configuração normal do app, não um cliente inventando futuro.
+    const weekStartEpochDay = requireEpochDay(
+      snapshot.weekStartEpochDay,
+      'consistency.weeklyGoals[].weekStartEpochDay',
+      8,
+    );
+    if (!isMondayEpochDay(weekStartEpochDay)) {
+      throw SocialProfileErrors.invalidProgressSettings(
+        'consistency.weeklyGoals[].weekStartEpochDay precisa ser uma segunda-feira',
+      );
+    }
+    if (seen.has(weekStartEpochDay)) {
+      throw SocialProfileErrors.invalidProgressSettings(
+        'consistency.weeklyGoals não pode repetir a mesma semana',
+      );
+    }
+    seen.add(weekStartEpochDay);
+
+    const goal = snapshot.goal;
+    if (
+      typeof goal !== 'number' ||
+      !Number.isInteger(goal) ||
+      goal < MIN_SOCIAL_WEEKLY_GOAL ||
+      goal > MAX_SOCIAL_WEEKLY_GOAL
+    ) {
+      throw SocialProfileErrors.invalidProgressSettings(
+        `consistency.weeklyGoals[].goal precisa ser um inteiro entre ${MIN_SOCIAL_WEEKLY_GOAL} e ${MAX_SOCIAL_WEEKLY_GOAL}`,
+      );
+    }
+    return { weekStartEpochDay, goal };
+  });
+
+  return { trackingStartedAtEpochDay, weeklyGoals };
+}
+
+/**
+ * Um epoch day plausível: inteiro, não anterior ao piso do Spark e não mais de [maxDaysAhead]
+ * dias à frente de hoje em UTC (um dono em UTC+14 já está "amanhã" para o servidor).
+ */
+function requireEpochDay(value: unknown, field: string, maxDaysAhead = 1): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw SocialProfileErrors.invalidProgressSettings(
+      `${field} precisa ser um inteiro (epoch day)`,
+    );
+  }
+  const todayUtcEpochDay = Math.floor(Date.now() / 86_400_000);
+  if (value < MIN_SOCIAL_TRACKING_EPOCH_DAY || value > todayUtcEpochDay + maxDaysAhead) {
+    throw SocialProfileErrors.invalidProgressSettings(`${field} está fora do intervalo aceito`);
+  }
+  return value;
+}
+
+function requireNestedObject(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw SocialProfileErrors.invalidProgressSettings(`${field} precisa ser um objeto JSON`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function requireObject(body: unknown): Record<string, unknown> {

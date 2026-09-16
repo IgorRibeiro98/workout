@@ -67,7 +67,10 @@ export const ACCOUNT_UID_COLUMNS: readonly AccountUidColumn[] = [
   { table: 'social_push_devices', column: 'owner_uid', role: 'OWNER' },
   { table: 'social_notification_preferences', column: 'owner_uid', role: 'OWNER' },
 
-  // 5. Configurações sociais (T17.0/T17.2).
+  // 5. Configurações sociais (T17.0/T17.2/T19.2). Os parâmetros de consistência declarados
+  //    (`social_progress_weekly_goals`) são configuração da conta e caem com ela; a projeção de
+  //    progresso em si não tem tabela — é derivada na leitura de `sync_entities`, que já sai acima.
+  { table: 'social_progress_weekly_goals', column: 'owner_uid', role: 'OWNER' },
   { table: 'social_progress_settings', column: 'owner_uid', role: 'OWNER' },
   { table: 'social_privacy_settings', column: 'owner_uid', role: 'OWNER' },
 

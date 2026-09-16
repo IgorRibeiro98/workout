@@ -326,7 +326,7 @@ describe('Perfil social enriquecido', () => {
       expect(JSON.stringify(response.body)).not.toContain('weeklyWorkoutCount');
     });
 
-    it('nível e sequência ligados não aparecem — não há autoridade remota nesta versão', async () => {
+    it('nível e sequência ligados sem parâmetros declarados não aparecem — e o dono vê UNAVAILABLE, não UNSUPPORTED', async () => {
       const { socialIdB } = await becomeFriends();
       await pushSession(TOKEN_B, Date.parse('2026-09-08T12:00:00Z'));
       freezeClock();
@@ -339,18 +339,25 @@ describe('Perfil social enriquecido', () => {
       }).expect(200);
 
       const response = await friendProfile(TOKEN_A, socialIdB);
-      expect(response.body.profile.sharedProgress).toEqual({});
+      // Nível e sequência dependem da meta por semana e do início do acompanhamento, que este
+      // dono ainda não declarou (T19.2A). A conquista de treino, porém, já é afirmável com a
+      // sessão sincronizada — e é a única coisa publicada.
+      expect(response.body.profile.sharedProgress).toEqual({
+        highlightedAchievementIds: ['first_workout'],
+      });
 
-      // E o dono sabe **por quê**: a disponibilidade distingue "ligado sem dado" de "esta versão
-      // não sabe", enquanto o amigo não distingue nada (§37/§38).
+      // E o dono sabe **por quê**: a disponibilidade distingue "ligado sem dado" de "publicado",
+      // enquanto o amigo não distingue nada (§37/§38). Desde a T19.2 existe autoridade remota para
+      // as quatro métricas, então nenhuma responde `UNSUPPORTED`.
       const owner = await sharing(TOKEN_B);
       expect(owner.body.availability).toEqual({
-        level: 'UNSUPPORTED',
-        consistencyStreak: 'UNSUPPORTED',
+        level: 'UNAVAILABLE',
+        consistencyStreak: 'UNAVAILABLE',
         weeklyWorkoutCount: 'AVAILABLE',
-        highlightedAchievements: 'UNSUPPORTED',
+        highlightedAchievements: 'AVAILABLE',
       });
       expect(owner.body.settings.shareLevel).toBe(true);
+      expect(owner.body.settings.consistency).toBeNull();
     });
 
     it('sem fuso declarado a contagem semanal fica indisponível para o dono', async () => {

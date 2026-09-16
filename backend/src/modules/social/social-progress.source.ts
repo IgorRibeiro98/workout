@@ -3,17 +3,28 @@ import { PostgresService } from '../../database/postgres.service';
 import {
   CANONICAL_TRAINING_SOURCE,
   type CanonicalTrainingSource,
+  type LocalDayWindow,
   SyncedCanonicalTrainingSource,
 } from './canonical-training.source';
+import {
+  calculateProgress,
+  calculateWeeklyConsistencies,
+  type ConsistencyParameters,
+  localEpochDay,
+  type WeeklyConsistency,
+  weekStartEpochDay,
+} from './social-consistency';
+import { evaluateVerifiedAchievements, levelFor, projectVerifiedXp } from './social-gamification';
+import { MIN_SOCIAL_TRACKING_EPOCH_DAY } from './social.limits';
 import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } from './social-time';
 
 /**
- * A fronteira estreita entre o Social e o estado canônico do Spark (T17.2 §9/§11).
+ * A fronteira estreita entre o Social e o estado canônico do Spark (T17.2 §9/§11, T19.2).
  *
  * ```text
  * autoridades reais do Spark          SocialProgressSource          SocialProgressProjector
  * (Room do aparelho, e o que          ─────────────────────▶        ─────────────────────▶
- *  chega ao servidor por sync)        um escalar por métrica         projeção segura
+ *  chega ao servidor por sync)        um valor por métrica           projeção segura
  * ```
  *
  * ## Por que uma interface, e por que tão pobre
@@ -23,44 +34,54 @@ import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } fr
  * a partir daí, um campo novo no snapshot de treino viraria campo novo na superfície social sem
  * que ninguém decidisse isso.
  *
- * Cada método devolve **um escalar** ou a declaração de que não há resposta. Nenhum devolve
- * payload, agregado, lista de sessões, série, carga, nota, medida ou timestamp de treino. Um
- * `getSessions()` aqui já seria a fuga que este arquivo existe para fechar (§12).
+ * O que sai é **um valor por métrica**, com disponibilidade. Nenhum método devolve payload,
+ * agregado bruto, lista de sessões, série, carga, nota, medida ou timestamp de treino.
  *
- * ## O que ela **não** é
+ * ## O que mudou na T19.2
  *
- * Ela não calcula regra de domínio. Ela lê estado canônico já sincronizado, ou faz a derivação que
- * o próprio contrato canônico define (contar sessões concluídas numa semana). Ela não reimplementa
- * `XpCalculatorService`, `ConsistencyCalculator` nem `AchievementEvaluator` — se ela precisasse
- * fazê-lo, o Social teria virado uma segunda autoridade de progresso, e a resposta certa é
- * responder [SocialProgressValue] `UNSUPPORTED` (§3).
+ * Até a T17.2 a fonte lia estado sincronizado e respondia `UNSUPPORTED` para o que exigia regra
+ * de domínio. A T19.2 deu ao servidor uma **autoridade remota** própria: a regra canônica de
+ * consistência (`social-consistency.ts`) e a matriz de gamificação reconstruível
+ * (`social-gamification.ts`), as duas presas ao Android por fixtures em `contracts/social/v1/`.
+ * A fonte continua não sendo autoridade sobre o que o **dono** vê no aparelho; ela é autoridade
+ * sobre o que pode ser **publicado**, e só afirma o que reconstrói de fatos sincronizados.
  */
 export interface SocialProgressSource {
-  /** O nível canônico do dono. */
-  getLevel(ownerUid: string): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
-
-  /** A sequência **semanal** de consistência (§20). */
-  getConsistencyStreak(
-    ownerUid: string,
-  ): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
-
   /**
-   * Quantos treinos **concluídos** o dono tem na semana canônica que contém [nowMs].
+   * O que o servidor consegue afirmar sobre o progresso deste dono, agora.
    *
-   * @param weekTimeZone fuso IANA do dono. `null` responde `UNAVAILABLE`: sem ele a semana do
-   * servidor não é a mesma semana do aparelho, e uma contagem em outra semana é uma contagem
-   * errada — não uma aproximação.
+   * Uma chamada, e não uma por métrica: as quatro métricas saem dos **mesmos** fatos agregados
+   * (treinos por dia local, medições por dia local), e lê-los uma vez é o que mantém uma leitura
+   * de perfil em poucas consultas.
    */
-  getWeeklyWorkoutCount(
-    ownerUid: string,
-    weekTimeZone: string | null,
-    nowMs: number,
-  ): SocialProgressValue<number> | Promise<SocialProgressValue<number>>;
+  project(ownerUid: string, context: SocialProgressContext): Promise<SocialProgressProjection>;
+}
 
-  /** Os identificadores canônicos das conquistas que o dono realmente obteve. */
-  getEarnedAchievementIds(
-    ownerUid: string,
-  ): SocialProgressValue<readonly string[]> | Promise<SocialProgressValue<readonly string[]>>;
+/**
+ * O que a projeção precisa saber **além** dos fatos: o fuso e os parâmetros que o dono declarou,
+ * e o relógio do servidor.
+ *
+ * O relógio é o do **servidor**: o relógio do aparelho não decide qual é a semana corrente de
+ * ninguém — dois visitantes com relógios diferentes veriam semanas diferentes do mesmo perfil.
+ */
+export interface SocialProgressContext {
+  readonly weekTimeZone: string | null;
+  readonly consistency: ConsistencyParameters | null;
+  readonly nowMs: number;
+}
+
+/**
+ * O progresso de **um** dono, como o servidor consegue afirmá-lo — antes de qualquer privacidade.
+ *
+ * Cada campo é um [SocialProgressValue], nunca um número solto: é o tipo que carrega a diferença
+ * entre "três treinos", "ainda não sei" e "esta versão não sabe". Um `number | null` colapsaria os
+ * dois últimos, e o primeiro consumidor escreveria `?? 0`.
+ */
+export interface SocialProgressProjection {
+  readonly level: SocialProgressValue<number>;
+  readonly consistencyStreak: SocialProgressValue<number>;
+  readonly weeklyWorkoutCount: SocialProgressValue<number>;
+  readonly highlightedAchievementIds: SocialProgressValue<readonly string[]>;
 }
 
 /**
@@ -72,7 +93,7 @@ export interface SocialProgressSource {
  */
 export type SocialProgressValue<T> =
   | { readonly kind: 'AVAILABLE'; readonly value: T }
-  /** Suportado, e o servidor ainda não tem o que afirmar. Sincronizar resolve. */
+  /** Suportado, e o servidor ainda não tem o que afirmar. Sincronizar (ou declarar fuso/parâmetros) resolve. */
   | { readonly kind: 'UNAVAILABLE' }
   /** Sem autoridade remota nesta versão do Spark. Sincronizar **não** resolve. */
   | { readonly kind: 'UNSUPPORTED' };
@@ -82,38 +103,38 @@ export const unavailable = <T>(): SocialProgressValue<T> => ({ kind: 'UNAVAILABL
 export const unsupported = <T>(): SocialProgressValue<T> => ({ kind: 'UNSUPPORTED' });
 
 /**
- * A implementação sobre o estado que **de fato** chega ao servidor (T17.2).
+ * O horizonte da projeção: nenhum dia anterior a 2020-01-01 é consultado.
  *
- * ## O que existe remotamente, verificado no código e não na documentação
+ * As janelas de dia entram na consulta como arrays, e o horizonte é o que mantém o array
+ * limitado (~2,5 mil dias em 2026). É também o piso aceito para `trackingStartedAtEpochDay`.
+ */
+export const PROGRESS_HORIZON_EPOCH_DAY = MIN_SOCIAL_TRACKING_EPOCH_DAY;
+
+/**
+ * A implementação sobre o estado que **de fato** chega ao servidor.
  *
- * | Métrica | Autoridade canônica | Chega ao servidor? |
+ * ## O que existe remotamente, verificado no código e não na documentação (T19.2)
+ *
+ * | Métrica | Como o servidor afirma | Quando responde `UNAVAILABLE` |
  * | --- | --- | --- |
- * | nível | `XpTransactionRepositoryImpl` sobre `xp_transactions` (Room) | **não** — DERIVED na matriz da T16 |
- * | sequência semanal | `ConsistencyCalculator` sobre semanas, metas e `trackingStartedAt` | **não** — `WEEKLY_GOAL` fora do sync incremental, `trackingStartedAt` nunca sai do aparelho |
- * | treinos da semana | contagem de sessões `COMPLETED` na semana canônica | **sim** — `sync_entities` / `WORKOUT_SESSION` |
- * | conquistas | `AchievementEvaluator` + `achievement_unlocks` (Room) | **não** — DERIVED |
+ * | treinos da semana | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED` na semana canônica | sem fuso, ou nenhuma sessão sincronizada |
+ * | sequência semanal | `social-consistency.ts` sobre treinos por dia + parâmetros declarados | sem fuso, sem parâmetros, ou nenhuma sessão |
+ * | nível | `social-gamification.ts`: XP reconstruível → curva canônica | sem fuso, sem parâmetros, ou nenhuma sessão |
+ * | conquistas | `REMOTE_ACHIEVEMENTS` reconstruíveis (treino, consistência, corpo) | sem fuso, ou nenhuma conquista afirmável |
  *
- * Três das quatro respondem `UNSUPPORTED`, e isso é o resultado honesto do que o Spark
- * sincroniza hoje. As alternativas seriam aceitar o valor que o aparelho declara — o servidor
- * passaria a confiar no cliente sobre progresso — ou portar os três motores de domínio para
- * TypeScript, criando uma segunda autoridade que divergiria da primeira no primeiro ajuste de
- * regra. As duas são proibidas (§3, e os bloqueantes da tarefa).
+ * Nenhuma delas responde `UNSUPPORTED` hoje. O que continua sem autoridade remota é uma **parte**
+ * de duas métricas — o XP de recorde pessoal e as conquistas de `PERFORMANCE` — e essa parte
+ * simplesmente não entra no valor publicado (nível verificado ≤ nível local; conquistas de recorde
+ * nunca na lista). Ver `docs/architecture/social-progress-authority.md`.
  *
- * ## Por que ela lê `sync_entities` diretamente, e por que isso não é "sync virou API social"
- *
- * A T17.0 declarou `NO_CROSS_DOMAIN_READ` quando **nenhuma** projeção existia. A T17.2 precisa da
- * primeira, e §11 é explícito: um adapter interno pode ler estado sincronizado; o que não pode é
- * `sync_entities` virar API social. A fronteira que sustenta isso, e que é testada:
+ * ## Por que ela lê `sync_entities`, e por que isso não é "sync virou API social"
  *
  * - o `SocialModule` continua **sem importar** `SyncModule`, `BackupModule` e `AiModule`. Esta
- *   classe fala com o `PostgresService`, que é infraestrutura compartilhada do processo — e não com
- *   `SyncRepository`, cuja superfície é o protocolo de sync inteiro;
- * - **backup nunca**. `backup_snapshots`, `backup_items` e `backup_payloads` não são lidos por
- *   nada aqui: um snapshot é a conta inteira em um documento, e ler dele para responder "quantos
- *   treinos esta semana" seria abrir a caixa errada;
- * - **nenhum payload sai**. As duas consultas abaixo devolvem `COUNT(*)` e `1`. `json_extract`
- *   entra na cláusula `WHERE`, dentro do SQL, e o conteúdo de nenhuma sessão é materializado em
- *   JavaScript — nem carga, nem exercício, nem nota, nem horário;
+ *   classe fala com a fonte canônica (`CanonicalTrainingSource`), que fala com o `PostgresService`;
+ * - **backup nunca**. `backup_snapshots`, `backup_items` e `backup_payloads` não são lidos;
+ * - **nenhum payload sai**. As consultas devolvem `COUNT(*)` — total, por semana, por dia. O campo
+ *   de instante do payload entra na cláusula `WHERE`, dentro do SQL, e nenhum timestamp de treino
+ *   ou valor de medida é materializado em JavaScript;
  * - **`owner_uid` é o do alvo resolvido server-side**, e está na cláusula `WHERE` de toda consulta
  *   (§118). Não existe caminho em que o uid venha do corpo ou da URL.
  */
@@ -135,76 +156,119 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     }
   }
 
-  /**
-   * Nível — sem autoridade remota.
-   *
-   * O nível do Spark é `XpTransactionRepositoryImpl.calculateProgress` sobre `xp_transactions`, e
-   * a matriz de dados da T16 classifica `xp_transactions` como **DERIVED**: não sincroniza, não
-   * entra no backup, e cada aparelho o reconstrói do histórico. Recalcular a curva de XP aqui
-   * seria criar a segunda autoridade que §19 proíbe explicitamente.
-   */
-  getLevel(): SocialProgressValue<number> {
-    return unsupported();
-  }
-
-  /**
-   * Sequência semanal — sem autoridade remota.
-   *
-   * `ConsistencyCalculator.calculateProgress` precisa de três coisas que o servidor não tem: o
-   * histórico de metas semanais (`WEEKLY_GOAL` está fora do sync incremental — só backup), o
-   * `trackingStartedAt` (DataStore, nunca sai do aparelho) e a regra de "semana não contada" que
-   * decide quando uma semana quebra a sequência. Sem as três, qualquer número daqui seria uma
-   * sequência **parecida**, calculada por outra regra — que é exatamente a segunda autoridade que
-   * a tarefa proíbe.
-   */
-  getConsistencyStreak(): SocialProgressValue<number> {
-    return unsupported();
-  }
-
-  /**
-   * Treinos da semana — a única métrica com autoridade remota hoje.
-   *
-   * Utiliza a fonte canônica unificada CanonicalTrainingSource (T17.4.1).
-   */
-  async getWeeklyWorkoutCount(
+  async project(
     ownerUid: string,
-    weekTimeZone: string | null,
-    nowMs: number,
-  ): Promise<SocialProgressValue<number>> {
-    if (!weekTimeZone) {
-      return unavailable();
-    }
-    const window = canonicalWeekWindow(nowMs, weekTimeZone);
-    if (!window) {
-      return unavailable();
-    }
-    if (!(await this.trainingSource.hasAnyCompletedSession(ownerUid))) {
-      // Nunca sincronizou nada concluído: o servidor não sabe se são zero treinos ou zero
-      // sincronizações, e afirmar zero seria inventar o que não foi comprovado.
-      return unavailable();
+    context: SocialProgressContext,
+  ): Promise<SocialProgressProjection> {
+    const timeZone =
+      context.weekTimeZone && isValidTimeZone(context.weekTimeZone) ? context.weekTimeZone : null;
+
+    // Sem fuso, o servidor não sabe que dia é para este dono — e nenhuma das quatro métricas é
+    // definível sem isso. Supor UTC produziria números plausíveis e errados.
+    if (!timeZone) {
+      return {
+        level: unavailable(),
+        consistencyStreak: unavailable(),
+        weeklyWorkoutCount: unavailable(),
+        highlightedAchievementIds: unavailable(),
+      };
     }
 
-    const total = await this.trainingSource.countCompletedWorkouts(
-      ownerUid,
-      window.startMs,
-      window.endMs,
+    const hasAnySession = await this.trainingSource.hasAnyCompletedSession(ownerUid);
+    const todayEpochDay = localEpochDay(context.nowMs, timeZone);
+    // Até o domingo da semana corrente, e não até hoje: a semana canônica da T17.2 é a janela
+    // inteira `[segunda, segunda)`, e um treino registrado com relógio adiantado não pode sumir
+    // da contagem por cair "amanhã".
+    const currentMonday = weekStartEpochDay(todayEpochDay);
+    const days = localDayWindows(
+      weekStartEpochDay(PROGRESS_HORIZON_EPOCH_DAY),
+      currentMonday + 6,
+      timeZone,
     );
 
-    return available(total);
-  }
+    const [sessionsPerDay, measurementsPerDay] = await Promise.all([
+      hasAnySession
+        ? this.trainingSource.countCompletedWorkoutsPerDay(ownerUid, days)
+        : Promise.resolve(new Map<number, number>()),
+      this.trainingSource.countBodyMeasurementsPerDay(ownerUid, days),
+    ]);
 
-  /**
-   * Conquistas obtidas — sem autoridade remota.
-   *
-   * `achievement_unlocks` é DERIVED na matriz da T16: reconstruído do histórico por
-   * `AchievementReconciler` em cada aparelho, nunca sincronizado, nunca no backup. Sem esta
-   * resposta o servidor **não consegue** validar "esta conquista foi conquistada" (§26), e sem
-   * essa validação a seleção de destaques não pode existir: aceitar o id que o cliente manda seria
-   * deixar qualquer um se declarar dono de `100_workouts`.
-   */
-  getEarnedAchievementIds(): SocialProgressValue<readonly string[]> {
-    return unsupported();
+    // Total de sessões: a contagem direta, e não a soma por dia — um treino anterior ao horizonte
+    // continua sendo um treino concluído para "N treinos" e para o XP de conclusão.
+    const completedWorkouts = hasAnySession
+      ? await this.trainingSource.countCompletedWorkouts(ownerUid, 0, Number.MAX_SAFE_INTEGER)
+      : 0;
+
+    const weeks: WeeklyConsistency[] | null = context.consistency
+      ? calculateWeeklyConsistencies(sessionsPerDay, context.consistency, todayEpochDay)
+      : null;
+    const progress = weeks ? calculateProgress(weeks, todayEpochDay) : null;
+
+    // ---- treinos da semana (T17.2, inalterado): a semana canônica que contém "agora".
+    const weeklyWorkoutCount = hasAnySession
+      ? available(weeklyCount(sessionsPerDay, weekStartEpochDay(todayEpochDay)))
+      : unavailable<number>();
+
+    // ---- sequência semanal (T19.2A): sessões + parâmetros declarados, pela regra canônica.
+    const consistencyStreak =
+      hasAnySession && progress ? available(progress.currentStreakWeeks) : unavailable<number>();
+
+    // ---- nível (T19.2B/C): XP reconstruível → curva canônica. Só com parâmetros: sem eles a
+    // meta semanal (150 XP + missão) ficaria fora, e o nível publicado seria mais baixo do que o
+    // servidor já consegue defender.
+    const level =
+      hasAnySession && weeks
+        ? available(
+            levelFor(projectVerifiedXp({ completedWorkouts, sessionsPerDay, weeks }).total).level,
+          )
+        : unavailable<number>();
+
+    // ---- conquistas (T19.2C): só as reconstruíveis; lista vazia é "nada a afirmar", não "zero".
+    const measurementDays = [...measurementsPerDay.values()].filter((count) => count > 0).length;
+    const earned = evaluateVerifiedAchievements({
+      completedWorkouts,
+      longestStreakWeeks: progress ? progress.longestStreakWeeks : null,
+      measurementDays,
+    });
+    const highlightedAchievementIds =
+      earned.length > 0 ? available<readonly string[]>(earned) : unavailable<readonly string[]>();
+
+    return { level, consistencyStreak, weeklyWorkoutCount, highlightedAchievementIds };
   }
+}
+
+/** Soma dos treinos dos sete dias locais da semana que começa em [weekStart]. */
+function weeklyCount(sessionsPerDay: ReadonlyMap<number, number>, weekStart: number): number {
+  let total = 0;
+  for (let day = weekStart; day < weekStart + 7; day++) {
+    total += sessionsPerDay.get(day) ?? 0;
+  }
+  return total;
+}
+
+/**
+ * As janelas de todos os dias locais de `[fromEpochDay, toEpochDay]`.
+ *
+ * A meia-noite de cada dia é calculada uma vez e compartilhada entre o fim de um dia e o início
+ * do seguinte — a iteração é sobre **datas**, e a conversão para instante é por dia
+ * (`localMidnightToInstant`), nunca "anterior + 24h", que erraria nas viradas de horário de verão.
+ */
+export function localDayWindows(
+  fromEpochDay: number,
+  toEpochDay: number,
+  timeZone: string,
+): LocalDayWindow[] {
+  if (toEpochDay < fromEpochDay) {
+    return [];
+  }
+  const windows: LocalDayWindow[] = [];
+  let start = localMidnightToInstant(fromEpochDay * DAY_MS, timeZone);
+  for (let epochDay = fromEpochDay; epochDay <= toEpochDay; epochDay++) {
+    const end = localMidnightToInstant((epochDay + 1) * DAY_MS, timeZone);
+    windows.push({ epochDay, startMs: start, endMs: end });
+    start = end;
+  }
+  return windows;
 }
 
 /** A janela `[início, fim)` de uma semana canônica, em epoch millis UTC. */

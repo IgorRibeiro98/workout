@@ -119,11 +119,7 @@ export class SocialProfileService {
 
   private async projectFor(target: FriendProfileRow): Promise<SocialFriendProfileDto> {
     const settings = await this.settings.find(target.ownerUid);
-    const projection = await this.projector.project(
-      target.ownerUid,
-      settings.weekTimeZone,
-      Date.now(),
-    );
+    const projection = await this.projector.project(target.ownerUid, settings, Date.now());
 
     return {
       socialId: target.socialId,
@@ -134,7 +130,7 @@ export class SocialProfileService {
 
   private async sharingResponseFor(ownerUid: string): Promise<SocialProgressSharingResponse> {
     const settings = await this.settings.find(ownerUid);
-    const projection = await this.projector.project(ownerUid, settings.weekTimeZone, Date.now());
+    const projection = await this.projector.project(ownerUid, settings, Date.now());
 
     return {
       settings: toSettingsDto(settings),
@@ -170,6 +166,15 @@ function toSettingsDto(settings: StoredProgressSettings): SocialProgressSettings
     shareWeeklyWorkoutCount: settings.shareWeeklyWorkoutCount,
     shareHighlightedAchievements: settings.shareHighlightedAchievements,
     weekTimeZone: settings.weekTimeZone,
+    consistency: settings.consistency
+      ? {
+          trackingStartedAtEpochDay: settings.consistency.trackingStartedAtEpochDay,
+          weeklyGoals: settings.consistency.weeklyGoals.map((snapshot) => ({
+            weekStartEpochDay: snapshot.weekStartEpochDay,
+            goal: snapshot.goal,
+          })),
+        }
+      : null,
     updatedAt: settings.updatedAt,
   };
 }

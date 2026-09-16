@@ -89,8 +89,37 @@ export interface SocialProgressSettingsDto {
   readonly shareHighlightedAchievements: boolean;
   /** Fuso IANA do dono, ou `null` enquanto ele não for conhecido. */
   readonly weekTimeZone: string | null;
+  /**
+   * Os parâmetros de consistência que o dono declarou (T19.2A), ou `null` enquanto o app não os
+   * enviar. São **configuração** — a mesma que o aparelho lê para calcular a própria sequência —,
+   * e voltam para o dono para que o app saiba quando reenviá-los. Nunca chegam a um amigo.
+   */
+  readonly consistency: SocialConsistencyParametersDto | null;
   /** Relógio do servidor, epoch millis UTC (§58). */
   readonly updatedAt: number;
+}
+
+/**
+ * Meta semanal por semana e início do acompanhamento — os dois insumos de
+ * `ConsistencyCalculator` que não são sessão (T19.2A §6.1).
+ *
+ * `weekTimeZone` tornou a **semana** reproduzível no servidor; isto torna a **sequência**
+ * reproduzível. Como o fuso, não é progresso: um cliente que declare meta 1 desde 2020 continua
+ * com sequência zero enquanto não sincronizar treino nenhum. O que é recusado por nome é o
+ * resultado (`streak`, `level`, `xp`...), não o parâmetro.
+ */
+export interface SocialConsistencyParametersDto {
+  /** Epoch day do calendário local em que o acompanhamento começou. */
+  readonly trackingStartedAtEpochDay: number;
+  /** A meta vigente a partir de cada segunda-feira (`weekly_goal_history`). */
+  readonly weeklyGoals: readonly SocialWeeklyGoalDto[];
+}
+
+export interface SocialWeeklyGoalDto {
+  /** Epoch day de uma segunda-feira. */
+  readonly weekStartEpochDay: number;
+  /** Treinos por semana, 1..7 — o intervalo da tela de meta do app. */
+  readonly goal: number;
 }
 
 /**

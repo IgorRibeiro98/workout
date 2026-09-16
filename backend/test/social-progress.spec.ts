@@ -14,6 +14,7 @@ import {
   available,
   canonicalWeekWindow,
   isValidTimeZone,
+  type SocialProgressContext,
   type SocialProgressSource,
   SyncedSocialProgressSource,
   unavailable,
@@ -53,8 +54,10 @@ const UID_B = 'uid-da-conta-b';
  *
  * 1. **a semana é a canônica**, com as mesmas fronteiras que o `ConsistencyCalculator` usa — e a
  *    prova é a fixture compartilhada, lida também pelo teste do Android;
- * 2. **cada métrica usa a autoridade esperada** (§147), e as que não têm autoridade remota
- *    respondem `UNSUPPORTED` em vez de um número inventado por uma regra paralela;
+ * 2. **cada métrica usa a autoridade esperada** (§147) — e, desde a T19.2, as que dependem de
+ *    parâmetros que o dono ainda não declarou respondem `UNAVAILABLE` em vez de um número
+ *    inventado por uma regra paralela (a autoridade remota em si é provada em
+ *    `social-progress-v2.spec.ts`);
  * 3. **ausência de dado nunca vira zero** (§4/§146).
  */
 describe('Projeção de progresso social', () => {
@@ -110,6 +113,14 @@ describe('Projeção de progresso social', () => {
     const TZ = 'America/Sao_Paulo';
     const NOW = Date.parse('2026-09-08T18:00:00Z');
 
+    const contextOf = (weekTimeZone: string | null, nowMs = NOW): SocialProgressContext => ({
+      weekTimeZone,
+      consistency: null,
+      nowMs,
+    });
+    const weeklyCount = async (ownerUid: string, tz: string | null, nowMs = NOW) =>
+      (await source.project(ownerUid, contextOf(tz, nowMs))).weeklyWorkoutCount;
+
     beforeEach(async () => {
       temp = createTempDb();
       postgres = postgresFor(configFor(temp.path));
@@ -150,7 +161,7 @@ describe('Projeção de progresso social', () => {
       insertSession(UID_A, Date.parse('2026-09-08T22:00:00Z')); // terça, 19h local
       insertSession(UID_A, Date.parse('2026-09-14T01:00:00Z')); // domingo, 22h local
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(3));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(3));
     });
 
     it('não conta sessão de outra semana — inclusive a que em UTC parece da semana certa', async () => {
@@ -160,7 +171,7 @@ describe('Projeção de progresso social', () => {
       // Segunda 14, 0h30 local: já é a semana seguinte.
       insertSession(UID_A, Date.parse('2026-09-14T03:30:00Z'));
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(1));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(1));
     });
 
     it('nunca conta status que não seja COMPLETED', async () => {
@@ -169,14 +180,14 @@ describe('Projeção de progresso social', () => {
         insertSession(UID_A, Date.parse('2026-09-08T13:00:00Z'), { status });
       }
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(1));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(1));
     });
 
     it('não conta entidade com tombstone', async () => {
       insertSession(UID_A, Date.parse('2026-09-08T12:00:00Z'));
       insertSession(UID_A, Date.parse('2026-09-08T13:00:00Z'), { deleted: 1 });
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(1));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(1));
     });
 
     it('não conta outros agregados', async () => {
@@ -184,7 +195,7 @@ describe('Projeção de progresso social', () => {
       insertSession(UID_A, Date.parse('2026-09-08T13:00:00Z'), { entityType: 'BODY_MEASUREMENT' });
       insertSession(UID_A, Date.parse('2026-09-08T14:00:00Z'), { entityType: 'CHECK_IN' });
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(1));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(1));
     });
 
     it('não conta a sessão de outra conta', async () => {
@@ -192,71 +203,94 @@ describe('Projeção de progresso social', () => {
       insertSession(UID_B, Date.parse('2026-09-08T12:00:00Z'));
       insertSession(UID_A, Date.parse('2026-09-08T13:00:00Z'));
 
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(1));
-      expect(await source.getWeeklyWorkoutCount(UID_B, TZ, NOW)).toEqual(available(1));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(1));
+      expect(await weeklyCount(UID_B, TZ)).toEqual(available(1));
     });
 
     it('quem nunca sincronizou uma sessão recebe UNAVAILABLE, e não zero', async () => {
       // A diferença que importa: "treinou zero vezes esta semana" é um fato; "nunca sincronizou"
       // é ausência de informação, e o servidor não pode transformar uma na outra (§4/§74).
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(unavailable());
+      expect(await weeklyCount(UID_A, TZ)).toEqual(unavailable());
     });
 
     it('quem já sincronizou e não treinou nesta semana recebe zero — aí o zero é verdade', async () => {
       insertSession(UID_A, Date.parse('2026-08-10T12:00:00Z'));
-      expect(await source.getWeeklyWorkoutCount(UID_A, TZ, NOW)).toEqual(available(0));
+      expect(await weeklyCount(UID_A, TZ)).toEqual(available(0));
     });
 
     it('sem fuso declarado, a contagem é UNAVAILABLE', async () => {
       insertSession(UID_A, Date.parse('2026-09-08T12:00:00Z'));
-      expect(await source.getWeeklyWorkoutCount(UID_A, null, NOW)).toEqual(unavailable());
-      expect(await source.getWeeklyWorkoutCount(UID_A, 'Terra/Media', NOW)).toEqual(unavailable());
+      expect(await weeklyCount(UID_A, null)).toEqual(unavailable());
+      expect(await weeklyCount(UID_A, 'Terra/Media')).toEqual(unavailable());
     });
 
-    it('nível, sequência e conquistas não têm autoridade remota nesta versão', async () => {
-      // Elas não são `UNAVAILABLE` (que significaria "sincronize e resolve"): `xp_transactions`,
-      // `weekly_goal_history` no sync incremental e `achievement_unlocks` simplesmente não chegam
-      // ao servidor. Responder um número aqui exigiria portar `XpCalculatorService`,
-      // `ConsistencyCalculator` e `AchievementEvaluator` — a segunda autoridade que a T17.2 proíbe.
+    it('nível, sequência e conquistas ficam UNAVAILABLE enquanto o dono não declara os parâmetros', async () => {
+      // Não é `UNSUPPORTED`: desde a T19.2 existe autoridade remota (`social-consistency.ts`,
+      // `social-gamification.ts`). O que falta aqui é o insumo que só o dono pode declarar — meta
+      // por semana e início do acompanhamento — e "ainda não disponível" é a frase certa para isso.
+      // As conquistas de treino, porém, já são afirmáveis só com a sessão.
       insertSession(UID_A, Date.parse('2026-09-08T12:00:00Z'));
 
-      expect(await source.getLevel(UID_A)).toEqual(unsupported());
-      expect(await source.getConsistencyStreak(UID_A)).toEqual(unsupported());
-      expect(await source.getEarnedAchievementIds(UID_A)).toEqual(unsupported());
+      const projection = await source.project(UID_A, contextOf(TZ));
+      expect(projection.level).toEqual(unavailable());
+      expect(projection.consistencyStreak).toEqual(unavailable());
+      expect(projection.highlightedAchievementIds).toEqual(available(['first_workout']));
+    });
+
+    it('a contagem semanal por dias locais reproduz cada caso da fixture sobre o banco real', async () => {
+      // A T19.2 passou a somar a semana a partir da projeção por dia local (uma consulta para as
+      // quatro métricas). O resultado precisa ser o mesmo da janela `[segunda, segunda)` da T17.2.
+      for (const entry of WEEK_FIXTURE.cases) {
+        const ownerUid = `uid-${entry.name}`;
+        for (const session of entry.completedSessions) {
+          insertSession(ownerUid, session.millis);
+        }
+        expect(await weeklyCount(ownerUid, entry.timeZone, entry.nowMillis)).toEqual(
+          available(entry.expectedWeeklyWorkoutCount),
+        );
+      }
     });
   });
 
   // ------------------------------------------------------------------ projetor e filtro
 
   describe('o projetor não decide acesso e não calcula regra de domínio', () => {
-    const fakeSource = (overrides: Partial<SocialProgressSource> = {}): SocialProgressSource => ({
-      getLevel: () => unsupported(),
-      getConsistencyStreak: () => unsupported(),
-      getWeeklyWorkoutCount: () => unsupported(),
-      getEarnedAchievementIds: () => unsupported(),
-      ...overrides,
+    const fakeSource = (
+      answer: (ownerUid: string, context: SocialProgressContext) => SocialProgressProjection,
+    ): SocialProgressSource => ({
+      project: (ownerUid, context) => Promise.resolve(answer(ownerUid, context)),
     });
 
-    it('pergunta à fonte pelo dono, e devolve exatamente o que ela respondeu', async () => {
-      const seen: string[] = [];
+    it('pergunta à fonte pelo dono, com o fuso e os parâmetros dele, e devolve exatamente o que ela respondeu', async () => {
+      const seen: Array<{ ownerUid: string; context: SocialProgressContext }> = [];
       const projector = new SocialProgressProjector(
-        fakeSource({
-          getLevel: (ownerUid) => {
-            seen.push(ownerUid);
-            return available(14);
-          },
-          getWeeklyWorkoutCount: (ownerUid, tz, now) => {
-            seen.push(`${ownerUid}|${tz}|${now}`);
-            return available(3);
-          },
+        fakeSource((ownerUid, context) => {
+          seen.push({ ownerUid, context });
+          return {
+            level: available(14),
+            consistencyStreak: unsupported(),
+            weeklyWorkoutCount: available(3),
+            highlightedAchievementIds: unavailable(),
+          };
         }),
       );
 
-      const projection = await projector.project(UID_A, 'America/Sao_Paulo', 1_700_000_000_000);
+      const consistency = { trackingStartedAtEpochDay: 20_682, weeklyGoals: [] };
+      const projection = await projector.project(
+        UID_A,
+        { weekTimeZone: 'America/Sao_Paulo', consistency },
+        1_700_000_000_000,
+      );
 
       expect(projection.level).toEqual(available(14));
       expect(projection.weeklyWorkoutCount).toEqual(available(3));
-      expect(seen).toEqual([UID_A, `${UID_A}|America/Sao_Paulo|1700000000000`]);
+      expect(projection.consistencyStreak).toEqual(unsupported());
+      expect(seen).toEqual([
+        {
+          ownerUid: UID_A,
+          context: { weekTimeZone: 'America/Sao_Paulo', consistency, nowMs: 1_700_000_000_000 },
+        },
+      ]);
     });
   });
 

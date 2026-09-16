@@ -684,7 +684,7 @@ persistência do domínio        validação da resposta
 | T16.8 | Hardening, segurança, backup do servidor e observabilidade | **implementado** (produção NOT VERIFIED) |
 | T17.0 | Fundação social: identidade pública e privacidade | **implementado** |
 | T17.1 | Amigos, convites por código e QR Code | **implementado** |
-| T17.2 | Perfil social e compartilhamento controlado de progresso | **implementado** (1 de 4 métricas projetável — ver §18) |
+| T17.2 | Perfil social e compartilhamento controlado de progresso | **implementado** (1 de 4 métricas projetável na T17.2; 4 de 4 desde a T19.2 — ver §18) |
 | T17.3 | Desafios entre amigos: pontuação canônica e consentimento próprio | **implementado** |
 | T17.4 | Atividade dos amigos e rankings contextuais | **implementado** |
 | T17.5 | Notificações sociais com Firebase Cloud Messaging | **implementado** |
@@ -696,6 +696,7 @@ persistência do domínio        validação da resposta
 | T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | **implementado** (DR real VERIFIED em GCP) |
 | T19.0 | ACL/entitlements granular de capabilities de IA por conta | **implementado** |
 | T19.1 | Social Hub + AI Hub: `SocialHome`/`AiHome` atrás do Perfil, bottom navigation inalterada (5 itens) | **implementado** |
+| T19.2 | Social Progress V2: consistência, nível e conquistas derivados no servidor de fatos sincronizados + parâmetros declarados; `UNSUPPORTED` eliminado onde há autoridade remota | **implementado** (produção NOT VERIFIED até o deploy) |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -2054,9 +2055,12 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > **T17.2** — perfil social enriquecido: projeção de progresso autorizada por amizade,
 > privacidade por campo (quatro interruptores, todos `false`), migration
 > `0009_social_progress_profile.sql`, quatro rotas sob `/v1/social`, telas de Perfil de amigo e
-> Compartilhar progresso no Android. **Uma das quatro métricas é projetável hoje** — treinos da
-> semana; nível, sequência e conquistas respondem `UNSUPPORTED` porque a gamificação é `DERIVED` e
-> não chega ao servidor.
+> Compartilhar progresso no Android. **Uma das quatro métricas era projetável** na T17.2 — treinos
+> da semana; nível, sequência e conquistas respondiam `UNSUPPORTED` porque a gamificação é
+> `DERIVED` e não chega ao servidor. **Desde a T19.2** o servidor deriva as outras três dos
+> treinos e medições sincronizados mais parâmetros declarados pelo dono (meta por semana e início
+> do acompanhamento), com regra presa ao Kotlin por fixture — ver §18 e
+> `docs/architecture/social-progress-authority.md`.
 > **T17.3** — desafios privados entre amigos: dois tipos (`WORKOUTS_COMPLETED`, `ACTIVE_DAYS`),
 > pontuação **derivada na leitura** dos dados canônicos de treino, ciclo de vida derivado do
 > relógio do servidor, migration `0010_social_challenges.sql`, oito rotas sob `/v1/social`, e telas
@@ -2158,6 +2162,7 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 Detalhamento em [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md) (T17.0),
 [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md) (T17.1),
 [`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md) (T17.2),
+[`docs/architecture/social-progress-authority.md`](docs/architecture/social-progress-authority.md) (T19.2),
 [`docs/architecture/challenge-domain.md`](docs/architecture/challenge-domain.md) (T17.3),
 [`docs/architecture/social-activity-ranking.md`](docs/architecture/social-activity-ranking.md) (T17.4) e
 [`docs/architecture/social-notifications.md`](docs/architecture/social-notifications.md) (T17.5) e
@@ -2278,13 +2283,23 @@ Friendship(A,B) ──▶ SocialAccessPolicy ──▶ SocialProgressSource ─�
 
 Invariantes bloqueantes que se somam aos de cima:
 
-16. **O Social projeta progresso; ele nunca é autoridade de progresso.** Não há curva de XP,
-    contagem de semanas consecutivas nem avaliação de conquista no domínio social — nem no servidor,
-    nem no app. Uma métrica sem autoridade **remota** responde `UNSUPPORTED`, e não um número
-    parecido calculado por uma regra paralela.
+16. **O Social projeta progresso; ele nunca é autoridade de progresso do aparelho.** Até a T19.2
+    não havia curva de XP, contagem de semanas consecutivas nem avaliação de conquista no domínio
+    social. **Desde a T19.2** o servidor tem uma autoridade remota **própria** sobre o que pode
+    ser publicado — `social-consistency.ts` e `social-gamification.ts`, a regra canônica presa ao
+    Kotlin por `contracts/social/v1/consistency-streak.json` e `progress-projection.json` (o
+    teste Android reproduz o motor local ao vivo sobre os mesmos fatos). Ela deriva de fatos
+    sincronizados e de parâmetros de configuração declarados; nunca de um valor de progresso
+    enviado pelo cliente, e nunca reescreve a gamificação local. O que o servidor não reconstrói
+    (XP de recorde pessoal, conquistas de `PERFORMANCE`) fica fora do valor publicado — nível
+    verificado ≤ nível local. Uma métrica sem autoridade remota responde `UNSUPPORTED`; com
+    autoridade e sem dado, `UNAVAILABLE`. Não existe tabela de placar: a projeção é derivada na
+    leitura, e replay/rebuild/restore/exclusão de conta não têm o que inflar ou ressuscitar.
 17. **O servidor nunca aceita progresso vindo do cliente.** `level`, `streak`,
     `weeklyWorkoutCount`, `totalXp` e listas de conquistas são recusados **por nome**, invalidando a
-    requisição inteira. Um APK modificado não consegue se declarar nível 99.
+    requisição inteira — inclusive aninhados nos parâmetros de consistência da T19.2A (`consistency:
+    { trackingStartedAtEpochDay, weeklyGoals[] }`, que são configuração validada por forma: segunda-
+    feira, meta 1..7). Um APK modificado não consegue se declarar nível 99.
 18. **Ausência de dado não vira zero.** Quem nunca sincronizou uma sessão concluída recebe campo
     **ausente**, e não "0 treinos". Zero só é publicado quando é fato comprovado.
 19. **A privacidade é aplicada no servidor.** Um campo desligado **não está** no JSON — ele não é

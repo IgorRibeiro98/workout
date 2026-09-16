@@ -23,14 +23,22 @@
   (T17.2),
   [`docs/architecture/challenge-domain.md`](../../../docs/architecture/challenge-domain.md) (T17.3),
   [`docs/architecture/social-activity-ranking.md`](../../../docs/architecture/social-activity-ranking.md) (T17.4) e
-  [`docs/architecture/social-notifications.md`](../../../docs/architecture/social-notifications.md) (T17.5)
+  [`docs/architecture/social-notifications.md`](../../../docs/architecture/social-notifications.md) (T17.5) e
+  [`docs/architecture/social-progress-authority.md`](../../../docs/architecture/social-progress-authority.md) (T19.2)
 - **Fixtures compartilhadas:**
   - [`friend-code-normalization.json`](./friend-code-normalization.json) — os casos canônicos de
     normalização de `friendCode`;
   - [`weekly-window.json`](./weekly-window.json) — a semana canônica do Spark (segunda a domingo,
-    data local) e a contagem de treinos concluídos dentro dela.
+    data local) e a contagem de treinos concluídos dentro dela;
+  - [`consistency-streak.json`](./consistency-streak.json) — **T19.2A**: a sequência semanal de
+    consistência (`ConsistencyCalculator` ⇄ `social-consistency.ts`), semana a semana, com meta por
+    semana, início do acompanhamento e viradas de dia/semana/horário de verão;
+  - [`progress-projection.json`](./progress-projection.json) — **T19.2B/C**: a matriz de
+    autoridade das origens de XP, o espelho dos catálogos de missões e conquistas, a curva de nível
+    e casos completos (sessões + medições → XP, nível, conquistas), verificados no Android pelo
+    motor local ao vivo e no backend por `social-gamification.ts`.
 
-  As duas são lidas pelos testes **dos dois lados**. É o que impede a cópia do Android e a regra do
+  Todas são lidas pelos testes **dos dois lados**. É o que impede a cópia do Android e a regra do
   servidor de divergirem em silêncio.
 
 Este arquivo é a definição legível do que os dois lados precisam concordar. Ele existe pelo mesmo
@@ -154,14 +162,16 @@ pergunta: as de cima dizem *quem pode me alcançar*; estas dizem *o que aparece 
 
 | Campo | Default | Observação |
 | --- | --- | --- |
-| `shareLevel` | `false` | o campo nunca aparece nesta versão: sem autoridade remota (`UNSUPPORTED`) |
-| `shareConsistencyStreak` | `false` | idem |
+| `shareLevel` | `false` | **T19.2:** aparece quando há fuso, parâmetros de consistência e sessão sincronizada — o **nível verificado** (XP reconstruível; recordes ficam fora, então ≤ nível local) |
+| `shareConsistencyStreak` | `false` | **T19.2A:** aparece com fuso, parâmetros e sessão sincronizada — a mesma regra de `ConsistencyCalculator`, presa por `consistency-streak.json` |
 | `shareWeeklyWorkoutCount` | `false` | aparece quando há sessão sincronizada e fuso declarado |
-| `shareHighlightedAchievements` | `false` | idem `shareLevel`; a seleção de destaques não existe |
+| `shareHighlightedAchievements` | `false` | **T19.2C:** aparece com fuso e ao menos uma conquista verificável (treino, consistência, corpo); conquistas de recorde nunca. "Em destaque" = todas as verificáveis; seleção manual não existe |
 | `weekTimeZone` | `null` | **não é privacidade**: é o fuso IANA que torna a semana canônica reproduzível no servidor |
+| `consistency` | `null` | **T19.2A, não é privacidade nem progresso**: `{ trackingStartedAtEpochDay, weeklyGoals: [{ weekStartEpochDay, goal }] }` — os dois insumos de `ConsistencyCalculator` que não são sessão. Substitui o conjunto inteiro; validado por forma (segunda-feira, meta 1..7, piso 2020-01-01, ≤ 520) |
 
 O cliente **nunca** envia `level`, `streak`, `weeklyWorkoutCount`, `totalXp` nem lista de
-conquistas: o validador recusa a requisição inteira, por nome de campo.
+conquistas: o validador recusa a requisição inteira, por nome de campo — inclusive quando o campo
+aparece **dentro** de `consistency` (`streak`, `longestStreak`, `completedWorkouts`, `unlocked`...).
 
 ## 6. Endpoints
 
@@ -372,7 +382,7 @@ E as que a T17.1 acrescentou:
 GET   /v1/social/friends/{socialId}/profile   perfil de um amigo (exige amizade ativa)
 GET   /v1/social/me/profile-preview           o que um amigo veria de mim agora
 GET   /v1/social/me/progress-sharing          minhas preferências + disponibilidade por campo
-PATCH /v1/social/me/progress-sharing          altera preferências (parcial) e o fuso
+PATCH /v1/social/me/progress-sharing          altera preferências (parcial), o fuso e os parâmetros de consistência (T19.2A)
 ```
 
 ### O que um amigo recebe
@@ -382,12 +392,18 @@ PATCH /v1/social/me/progress-sharing          altera preferências (parcial) e o
   "profile": {
     "socialId": "...",
     "displayName": "Igor",
-    "sharedProgress": { "weeklyWorkoutCount": 3 }
+    "sharedProgress": {
+      "level": 3,
+      "consistencyStreak": 2,
+      "weeklyWorkoutCount": 3,
+      "highlightedAchievementIds": ["first_workout", "10_workouts", "streak_2_weeks"]
+    }
   }
 }
 ```
 
-`sharedProgress` está sempre presente e pode estar vazio. **Campo não compartilhado não existe no
+`sharedProgress` está sempre presente e pode estar vazio (o exemplo acima é um dono com tudo ligado
+e tudo disponível, desde a T19.2). **Campo não compartilhado não existe no
 JSON** — não há `null`, não há flag e não há marcador. Escondido e indisponível são a mesma
 ausência para quem olha; só o dono distingue os dois, em `progress-sharing`.
 
@@ -400,8 +416,11 @@ sync ou de backup.
 | Valor | Significa | Ação |
 | --- | --- | --- |
 | `AVAILABLE` | há dado canônico agora | — |
-| `UNAVAILABLE` | suportado, e o servidor ainda não sabe | sincronizar resolve |
+| `UNAVAILABLE` | suportado, e o servidor ainda não sabe (sem sessão sincronizada, sem fuso, ou — T19.2 — sem parâmetros de consistência declarados) | sincronizar / abrir "Compartilhar progresso" conectado resolve |
 | `UNSUPPORTED` | não há autoridade remota nesta versão | sincronizar **não** resolve |
+
+Desde a T19.2 **nenhuma** das quatro métricas responde `UNSUPPORTED` no servidor atual; o valor
+permanece no contrato porque um servidor anterior o responde e o app precisa interpretá-lo.
 
 ### Erros da T17.2
 

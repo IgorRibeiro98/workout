@@ -5,6 +5,12 @@
   `0009_social_progress_profile.sql`, `social-profile.*` e `social-progress.*` em
   `backend/src/modules/social/`, gateway e telas de Perfil de amigo / Compartilhar progresso no
   Android.
+- **Atualização (T19.2, 2026-09-16): as quatro métricas têm autoridade remota.** Nível, sequência
+  semanal e conquistas deixaram de responder `UNSUPPORTED`: o servidor passou a **derivá-las** dos
+  treinos sincronizados e de parâmetros de configuração declarados pelo dono (meta por semana e
+  início do acompanhamento). O pipeline, a privacidade e a autorização desta página **não mudaram**;
+  o que mudou está em [`social-progress-authority.md`](./social-progress-authority.md), e as
+  seções §2 e §6 abaixo trazem a nota correspondente.
 - **Base:** [`social-domain.md`](./social-domain.md) (T17.0 — identidade e privacidade) e
   [`friendship-contract.md`](./friendship-contract.md) (T17.1 — o grafo).
 - **Contrato de protocolo:** [`contracts/social/v1/README.md`](../../contracts/social/v1/README.md)
@@ -57,12 +63,18 @@ seria o desenho que, no dia de um bug, responde o dado de alguém para quem não
 Esta é a tabela que a T17.2 tinha de produzir **antes** de qualquer código, e ela foi produzida
 lendo o código — não a documentação.
 
-| Campo social | Autoridade canônica real | Regra | Chega ao servidor? | Estratégia |
-| --- | --- | --- | --- | --- |
-| `level` | `XpTransactionRepositoryImpl.calculateProgress` sobre `xp_transactions` (Room) | 500 XP no nível 1, `level × 500` depois | **não** | `UNSUPPORTED` |
-| `consistencyStreak` | `ConsistencyCalculator.calculateProgress` sobre semanas, `weekly_goal_history` e `trackingStartedAt` | sequência **semanal** | **não** | `UNSUPPORTED` |
-| `weeklyWorkoutCount` | contagem de sessões `COMPLETED` na semana canônica (`ConsistencyCalculator.weekStart`) | segunda a domingo, data local | **sim** — `sync_entities` / `WORKOUT_SESSION` | **projetado** |
-| `highlightedAchievementIds` | `AchievementEvaluator` + `achievement_unlocks` (Room) | catálogo `AchievementCatalog` + eventos, PRs, sequência e medições | **não** | `UNSUPPORTED` |
+| Campo social | Autoridade canônica real | Regra | Chega ao servidor? | Estratégia (T17.2) | Estratégia (T19.2) |
+| --- | --- | --- | --- | --- | --- |
+| `level` | `XpTransactionRepositoryImpl.calculateProgress` sobre `xp_transactions` (Room) | 500 XP no nível 1, `level × 500` depois | **não** | `UNSUPPORTED` | **derivado**: XP reconstruível (treinos, primeiro treino, meta semanal, 4 missões) → mesma curva; PR fica fora — nível verificado ≤ local |
+| `consistencyStreak` | `ConsistencyCalculator.calculateProgress` sobre semanas, `weekly_goal_history` e `trackingStartedAt` | sequência **semanal** | sessões **sim**; meta e início **declarados** pelo dono via `PATCH` | `UNSUPPORTED` | **derivado**: `social-consistency.ts`, a mesma regra, presa por `consistency-streak.json` |
+| `weeklyWorkoutCount` | contagem de sessões `COMPLETED` na semana canônica (`ConsistencyCalculator.weekStart`) | segunda a domingo, data local | **sim** — `sync_entities` / `WORKOUT_SESSION` | **projetado** | inalterado |
+| `highlightedAchievementIds` | `AchievementEvaluator` + `achievement_unlocks` (Room) | catálogo `AchievementCatalog` + eventos, PRs, sequência e medições | treinos e medições **sim**; PRs **não** | `UNSUPPORTED` | **derivado** para `TRAINING`, `CONSISTENCY` e `BODY`; `PERFORMANCE` nunca publicada |
+
+> **T19.2.** O texto que segue nesta seção descreve a decisão da T17.2 e o motivo dela. A saída 2
+> ("portar para TypeScript") foi a escolhida na T19.2 — **com** a fixture compartilhada que a T17.2
+> já usava para a semana, que é o que transforma "duas implementações que divergem em silêncio" em
+> "duas implementações em que a divergência reprova um teste". A saída 1 continua proibida. Ver
+> [`social-progress-authority.md`](./social-progress-authority.md).
 
 A razão das três `UNSUPPORTED` é a mesma, e ela está registrada desde a T16 na
 [matriz de dados](./data-classification-matrix.md): **gamificação é `DERIVED`**. `xp_transactions`,
@@ -83,12 +95,14 @@ As duas saídas para publicá-las seriam:
 Então elas respondem `UNSUPPORTED`, o interruptor existe e pode ser ligado, e o campo continua
 ausente. **Não fingir suporte** é a decisão; ela custa uma tela mais pobre nesta versão.
 
-### O que desbloquearia as três
+### O que desbloqueou as três (T19.2)
 
-Uma autoridade **remota** para elas — não um envio do cliente. O caminho natural é a gamificação
-deixar de ser puramente derivada e passar a ter um agregado canônico sincronizado, com as mesmas
-garantias do resto do T16 (identidade global, revision, imutabilidade onde couber). Isso é uma
-decisão de arquitetura de gamificação, não de social, e continua registrada como pendência.
+Uma autoridade **remota** para elas — não um envio do cliente. A T19.2 a construiu sem criar um
+agregado de gamificação sincronizado: o servidor reconstrói consistência, XP verificável, nível e
+conquistas a partir dos treinos e medições que **já** sincronizam, mais dois parâmetros de
+configuração (meta por semana e início do acompanhamento) que o dono declara pela rota social —
+exatamente como já declarava o fuso. A gamificação local continua `DERIVED`, continua a autoridade
+operacional do aparelho, e continua sem sincronizar resultado nenhum.
 
 ## 3. `weeklyWorkoutCount`: uma derivação, e não uma regra nova
 
@@ -136,10 +150,10 @@ vez de virar "o perfil do meu amigo mostra um número diferente do meu".
 
 | Campo | Default | Efeito |
 | --- | --- | --- |
-| `shareLevel` | `false` | nunca publica nesta versão (`UNSUPPORTED`) |
-| `shareConsistencyStreak` | `false` | idem |
+| `shareLevel` | `false` | T17.2: nunca publicava (`UNSUPPORTED`). **T19.2:** publica o nível verificado quando há fuso, parâmetros de consistência e sessão sincronizada |
+| `shareConsistencyStreak` | `false` | T17.2: idem. **T19.2A:** publica a sequência canônica quando há fuso, parâmetros e sessão |
 | `shareWeeklyWorkoutCount` | `false` | publica quando há dado e fuso |
-| `shareHighlightedAchievements` | `false` | nunca publica nesta versão (`UNSUPPORTED`) |
+| `shareHighlightedAchievements` | `false` | T17.2: nunca publicava. **T19.2C:** publica as conquistas verificáveis (treino, consistência, corpo) quando há fuso e ao menos uma |
 
 - **todos nascem desligados**, e a migration os grava assim para quem já tinha perfil social
   (T17.0/T17.1). Subir esta versão não publica nada de ninguém;
@@ -208,7 +222,7 @@ Consequências que valem como contrato:
 | `GET /v1/social/friends/{socialId}/profile` | o perfil enriquecido de um amigo |
 | `GET /v1/social/me/profile-preview` | exatamente o que um amigo veria de mim agora |
 | `GET /v1/social/me/progress-sharing` | minhas preferências + a disponibilidade de cada campo |
-| `PATCH /v1/social/me/progress-sharing` | altera preferências (**parcial**) e o fuso |
+| `PATCH /v1/social/me/progress-sharing` | altera preferências (**parcial**), o fuso e, desde a T19.2A, os parâmetros de consistência |
 
 Todas exigem `Authorization: Bearer <Firebase ID Token>`. **Não existe rota pública**, não existe
 busca por nome, por e-mail ou listagem global, e **não existe rota de perfil em lote** — um
@@ -223,7 +237,11 @@ progresso de todo mundo".
   "shareConsistencyStreak": false,
   "shareWeeklyWorkoutCount": true,
   "shareHighlightedAchievements": false,
-  "weekTimeZone": "America/Sao_Paulo"
+  "weekTimeZone": "America/Sao_Paulo",
+  "consistency": {
+    "trackingStartedAtEpochDay": 20684,
+    "weeklyGoals": [{ "weekStartEpochDay": 20682, "goal": 3 }]
+  }
 }
 ```
 
@@ -231,6 +249,13 @@ Semântica de `PATCH`, e só ela: o que não veio no corpo **não muda**. `level
 `weeklyWorkoutCount`, `totalXp` e `earnedAchievementIds` são recusados **por nome**, com a
 requisição inteira invalidada — ignorar em silêncio deixaria um cliente acreditando que enviar
 progresso significa alguma coisa. `updatedAt` vem do relógio do servidor.
+
+`consistency` (T19.2A) é **configuração**, como o fuso: os dois insumos de `ConsistencyCalculator`
+que não são sessão. Quando vem, substitui o conjunto inteiro. `weekStartEpochDay` precisa ser uma
+segunda-feira, `goal` fica em 1..7, epoch days ficam entre 2020-01-01 e amanhã, e no máximo 520
+snapshots. Campos de **resultado** aninhados aqui (`streak`, `longestStreak`, `completedWorkouts`,
+`unlocked`...) são recusados por nome como no topo. A resposta devolve `settings.consistency` ao
+dono (e só a ele) para que o app saiba quando reenviar.
 
 ### Resposta do amigo
 
@@ -245,7 +270,9 @@ progresso significa alguma coisa. `updatedAt` vem do relógio do servidor.
 ```
 
 `sharedProgress` está sempre presente e pode estar **vazio** — e o vazio é o mesmo para quem
-desligou tudo e para quem ligou sem ter dado.
+desligou tudo e para quem ligou sem ter dado. Desde a T19.2 ele pode carregar também `level`,
+`consistencyStreak` e `highlightedAchievementIds` (ids canônicos do `AchievementCatalog`, na ordem
+do catálogo); nunca parâmetros, fuso, XP ou contagens intermediárias.
 
 ### Erros
 

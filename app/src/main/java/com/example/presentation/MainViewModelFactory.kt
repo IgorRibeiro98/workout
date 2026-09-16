@@ -2,6 +2,7 @@ package com.example.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import kotlinx.coroutines.flow.first
 import com.example.data.datastore.SettingsManager
 import com.example.data.repository.BodyMeasurementRepository
 import com.example.data.repository.WorkoutRepository
@@ -324,10 +325,36 @@ class MainViewModelFactory(
                 ?: throw IllegalStateException("AuthGateway not provided")
             val profile = socialProfileGateway
                 ?: throw IllegalStateException("SocialProfileGateway not provided")
+            // T19.2A — os parâmetros de consistência saem das autoridades locais de sempre (meta
+            // semanal em Room, início do acompanhamento no DataStore) e entram na ViewModel como
+            // função: o pacote social não importa repositório de treino nem de gamificação.
+            val consRepo = consistencyRepository
+            val consistencyParameters: (suspend () -> com.example.domain.social.SocialConsistencyParameters?)? =
+                if (consRepo == null) {
+                    null
+                } else {
+                    suspend {
+                        val trackingStartedAt = settingsManager.trackingStartedAtFlow.first()
+                        if (trackingStartedAt == null) {
+                            null
+                        } else {
+                            com.example.domain.social.SocialConsistencyParameters(
+                                trackingStartedAtEpochDay = trackingStartedAt,
+                                weeklyGoals = consRepo.getGoalSnapshots().map {
+                                    com.example.domain.social.SocialWeeklyGoal(
+                                        weekStartEpochDay = it.effectiveFromWeek,
+                                        goal = it.goal
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.SocialProfileViewModel(
                 gateway = profile,
                 authGateway = gateway,
+                consistencyParameters = consistencyParameters,
                 blockGateway = blockGateway,
                 reportGateway = reportGateway
             ) as T

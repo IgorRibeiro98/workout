@@ -131,3 +131,16 @@ export const SOCIAL_LIST_PAGE = {
  * não contra uma lista mantida à mão que envelheceria a cada revisão do banco de fusos.
  */
 export const MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH = 64;
+
+/**
+ * Os parâmetros de consistência (T19.2A).
+ *
+ * A meta semanal é a da tela de meta do app (`TodayScreen`, 1..7). O piso de epoch day é
+ * 2020-01-01: nenhum histórico do Spark começa antes, e um valor abaixo descreve um cliente
+ * defeituoso, não um atleta. O teto de snapshots comporta uma alteração de meta por semana durante
+ * anos — `weekly_goal_history` real tem uma linha por mudança, e não uma por semana.
+ */
+export const MIN_SOCIAL_WEEKLY_GOAL = 1;
+export const MAX_SOCIAL_WEEKLY_GOAL = 7;
+export const MAX_SOCIAL_WEEKLY_GOAL_SNAPSHOTS = 520;
+export const MIN_SOCIAL_TRACKING_EPOCH_DAY = 18_262;

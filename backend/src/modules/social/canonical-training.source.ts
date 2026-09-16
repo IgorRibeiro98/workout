@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PostgresService } from '../../database/postgres.service';
-import { challengeDayWindows } from './challenge-progress.source';
+import { challengeDayWindows } from './social-time';
 
 /**
  * Resumo seguro e mínimo de uma sessão concluída (T17.4 §91/§92).
@@ -64,12 +64,48 @@ export interface CanonicalTrainingSource {
   ): Promise<readonly CompletedWorkoutSummary[]>;
 
   /**
+   * Quantos treinos concluídos começaram em cada dia local do dono (T19.2A).
+   *
+   * Devolve **contagens por dia**, e só para dias com ao menos um treino — nunca o instante de
+   * nenhuma sessão. É a projeção mínima de que a consistência canônica, as missões e as conquistas
+   * de treino precisam, e o servidor a produz de uma vez para todas elas.
+   */
+  countCompletedWorkoutsPerDay(
+    ownerUid: string,
+    days: readonly LocalDayWindow[],
+  ): Promise<Map<number, number>>;
+
+  /**
+   * Quantas medições corporais sincronizadas caem em cada dia local do dono (T19.2C).
+   *
+   * Mesma forma de [countCompletedWorkoutsPerDay]: contagem por dia, nenhum valor de medida sai. É
+   * o que as conquistas `BODY` do catálogo contam ("medições em N datas distintas").
+   */
+  countBodyMeasurementsPerDay(
+    ownerUid: string,
+    days: readonly LocalDayWindow[],
+  ): Promise<Map<number, number>>;
+
+  /**
    * A sessão canônica deste dono, para decidir um check-in (T17.8 §15/§16).
    */
   findSessionForCheckIn(
     ownerUid: string,
     sessionSyncId: string,
   ): Promise<CheckInSessionDetail | null>;
+}
+
+/**
+ * Uma janela de dia **local** do dono, já convertida para instantes (T19.2A).
+ *
+ * `epochDay` é a chave do calendário local (`LocalDate.toEpochDay()` do Kotlin); `startMs`/`endMs`
+ * são a meia-noite local daquele dia e a do dia seguinte, calculadas em `social-time.ts`. Quem
+ * chama já decidiu o fuso; a fonte só agrupa.
+ */
+export interface LocalDayWindow {
+  readonly epochDay: number;
+  readonly startMs: number;
+  readonly endMs: number;
 }
 
 export const CANONICAL_TRAINING_SOURCE = Symbol('CANONICAL_TRAINING_SOURCE');
@@ -213,6 +249,69 @@ export class SyncedCanonicalTrainingSource implements CanonicalTrainingSource {
       sessionSyncId: row.entity_sync_id,
       startedAt: Number(row.started_at),
     }));
+  }
+
+  async countCompletedWorkoutsPerDay(
+    ownerUid: string,
+    days: readonly LocalDayWindow[],
+  ): Promise<Map<number, number>> {
+    return await this.countPerDay(ownerUid, days, 'WORKOUT_SESSION', 'startedAt', true);
+  }
+
+  async countBodyMeasurementsPerDay(
+    ownerUid: string,
+    days: readonly LocalDayWindow[],
+  ): Promise<Map<number, number>> {
+    return await this.countPerDay(ownerUid, days, 'BODY_MEASUREMENT', 'date', false);
+  }
+
+  /**
+   * Uma consulta, `COUNT(*)` por janela de dia. As janelas entram como arrays (`UNNEST`), como em
+   * [countActiveDays]; o campo de instante do payload fica na cláusula `WHERE`/`JOIN`, e o que sai
+   * é `(epoch day, contagem)` — o mesmo desenho de `AGGREGATE_ONLY` das demais consultas daqui.
+   */
+  private async countPerDay(
+    ownerUid: string,
+    days: readonly LocalDayWindow[],
+    entityType: 'WORKOUT_SESSION' | 'BODY_MEASUREMENT',
+    instantField: 'startedAt' | 'date',
+    completedOnly: boolean,
+  ): Promise<Map<number, number>> {
+    const result = new Map<number, number>();
+    if (days.length === 0) {
+      return result;
+    }
+
+    const epochDays = days.map((d) => d.epochDay);
+    const dayStarts = days.map((d) => d.startMs);
+    const dayEnds = days.map((d) => d.endMs);
+    const statusFilter = completedOnly
+      ? `AND (NULLIF(payload, '')::jsonb->>'status') = 'COMPLETED'`
+      : '';
+
+    const res = await this.db.query<{ epoch_day: string | number; total: string | number }>(
+      `WITH local_days AS (
+         SELECT UNNEST($1::bigint[]) AS epoch_day,
+                UNNEST($2::bigint[]) AS day_start,
+                UNNEST($3::bigint[]) AS day_end
+       )
+       SELECT d.epoch_day, COUNT(*) AS total
+         FROM local_days d
+         JOIN sync_entities s
+           ON s.owner_uid = $4
+          AND s.entity_type = $5
+          AND s.deleted = FALSE
+          ${statusFilter}
+          AND CAST(NULLIF(s.payload, '')::jsonb->>'${instantField}' AS BIGINT) >= d.day_start
+          AND CAST(NULLIF(s.payload, '')::jsonb->>'${instantField}' AS BIGINT) < d.day_end
+        GROUP BY d.epoch_day`,
+      [epochDays, dayStarts, dayEnds, ownerUid, entityType],
+    );
+
+    for (const row of res.rows) {
+      result.set(Number(row.epoch_day), Number(row.total));
+    }
+    return result;
   }
 
   async findSessionForCheckIn(

@@ -56,12 +56,17 @@ interface SocialProfileGateway {
      * [weekTimeZone] é o fuso do aparelho, e não uma escolha do usuário: ele existe para que a
      * semana do servidor seja a mesma semana da tela de consistência. Ele não é progresso — é o
      * parâmetro que permite ao servidor derivar a contagem sem inventar um fuso.
+     *
+     * [consistency] (T19.2A) é da mesma natureza: a meta por semana e o início do acompanhamento
+     * que o aparelho já usa. O servidor deriva a sequência das sessões sincronizadas; o app não
+     * envia sequência, nível, XP nem conquista — e não existe parâmetro aqui que os aceite.
      */
     suspend fun updateProgressSharing(
         shareLevel: Boolean? = null,
         shareConsistencyStreak: Boolean? = null,
         shareWeeklyWorkoutCount: Boolean? = null,
         shareHighlightedAchievements: Boolean? = null,
-        weekTimeZone: String? = null
+        weekTimeZone: String? = null,
+        consistency: SocialConsistencyParameters? = null
     ): SocialProfileOutcome<ProgressSharing>
 }

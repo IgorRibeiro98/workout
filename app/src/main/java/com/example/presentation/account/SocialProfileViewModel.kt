@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthState
 import com.example.domain.social.ProgressSharing
+import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
 import com.example.domain.social.SocialProfileOutcome
@@ -59,6 +60,17 @@ class SocialProfileViewModel(
      * fixá-lo — o padrão é o fuso real do aparelho.
      */
     private val deviceTimeZoneId: () -> String = { java.util.TimeZone.getDefault().id },
+    /**
+     * Os parâmetros de consistência deste aparelho (T19.2A): meta por semana e início do
+     * acompanhamento, lidos das autoridades locais de sempre — por quem monta a ViewModel, nunca
+     * por ela. `null` quando o aparelho ainda não os tem (acompanhamento não inicializado) ou
+     * quando o build não os fornece.
+     *
+     * Eles **não** são progresso: são a configuração que o servidor precisa para derivar a mesma
+     * sequência que a tela de consistência mostra. Sequência, nível, XP e conquista continuam
+     * não existindo como parâmetro em lugar nenhum desta classe.
+     */
+    private val consistencyParameters: (suspend () -> SocialConsistencyParameters?)? = null,
     private val blockGateway: com.example.domain.social.BlockGateway? = null,
     private val reportGateway: com.example.domain.social.ReportGateway? = null
 ) : ViewModel() {
@@ -181,8 +193,54 @@ class SocialProfileViewModel(
             val outcome = gateway.progressSharing()
             if (currentUid != uid) return@launch
             applySharing(outcome, busyPhase = ProgressSharingPhase.Loading)
+            if (outcome is SocialProfileOutcome.Success) {
+                alignConsistencyParameters(uid, outcome.value.settings.consistency)
+            }
         }
     }
+
+    /**
+     * Declara ao servidor os parâmetros de consistência deste aparelho quando ele ainda não os
+     * conhece — ou conhece uma versão antiga (a meta semanal mudou desde a última visita).
+     *
+     * É a única escrita que esta tela faz sem um toque: ela não move interruptor nenhum e não
+     * altera privacidade. Sem ela, quem ligou "Consistência semanal" numa versão anterior veria o
+     * campo indisponível para sempre, porque nada mais o faria chegar ao servidor. Falhar aqui
+     * não gera aviso: a disponibilidade na tela já diz "ainda não disponível", e a próxima abertura
+     * tenta de novo.
+     */
+    private suspend fun alignConsistencyParameters(
+        uid: String,
+        known: SocialConsistencyParameters?
+    ) {
+        val local = localConsistencyParameters() ?: return
+        if (local == known) return
+        if (currentUid != uid || _uiState.value.isSharingBusy) return
+
+        // `Saving` enquanto a escrita voa: um toque neste intervalo esperaria a resposta e, se as
+        // duas respostas se cruzassem, a mais antiga poderia sobrescrever o interruptor mais novo.
+        _uiState.value = _uiState.value.copy(sharingPhase = ProgressSharingPhase.Saving)
+        val outcome = gateway.updateProgressSharing(consistency = local)
+        if (currentUid != uid) return
+        _uiState.value = when (outcome) {
+            is SocialProfileOutcome.Success -> _uiState.value.copy(
+                sharingPhase = ProgressSharingPhase.Ready,
+                settings = outcome.value.settings,
+                availability = outcome.value.availability
+            )
+            // Sem aviso: nenhum interruptor foi tocado, e a disponibilidade já diz o que falta.
+            is SocialProfileOutcome.Failure -> _uiState.value.copy(sharingPhase = ProgressSharingPhase.Ready)
+        }
+    }
+
+    private suspend fun localConsistencyParameters(): SocialConsistencyParameters? =
+        try {
+            consistencyParameters?.invoke()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 
     /**
      * Liga ou desliga um campo.
@@ -220,12 +278,19 @@ class SocialProfileViewModel(
         )
 
         viewModelScope.launch {
+            // Os parâmetros de consistência viajam quando o servidor não os tem ou tem outros —
+            // a mesma regra do fuso, pelo mesmo motivo: sem eles, "Consistência semanal" e "Nível"
+            // ficariam indisponíveis para sempre.
+            val local = localConsistencyParameters()
+            val consistency = if (local != null && local != _uiState.value.settings.consistency) local else null
+
             val outcome = gateway.updateProgressSharing(
                 shareLevel = shareLevel,
                 shareConsistencyStreak = shareConsistencyStreak,
                 shareWeeklyWorkoutCount = shareWeeklyWorkoutCount,
                 shareHighlightedAchievements = shareHighlightedAchievements,
-                weekTimeZone = timeZone
+                weekTimeZone = timeZone,
+                consistency = consistency
             )
             if (currentUid != uid) return@launch
             applySharing(outcome, busyPhase = ProgressSharingPhase.Saving)

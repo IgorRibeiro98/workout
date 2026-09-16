@@ -14,7 +14,9 @@ import com.example.domain.auth.SparkAccount
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
+import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.SocialWeeklyGoal
 import com.example.domain.social.SocialProfileError
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -514,12 +516,127 @@ class SocialProfileViewModelTest {
         viewModel.uiState.first { predicate(it.sharingPhase) }.sharingPhase
     }
 
-    private fun viewModel(auth: FakeAuthGateway) =
+    private fun viewModel(
+        auth: FakeAuthGateway,
+        consistency: (suspend () -> SocialConsistencyParameters?)? = null
+    ) =
         SocialProfileViewModel(
             gateway = gateway,
             authGateway = auth,
-            deviceTimeZoneId = { "America/Sao_Paulo" }
+            deviceTimeZoneId = { "America/Sao_Paulo" },
+            consistencyParameters = consistency
         ).also { viewModels.put("social-profile-${viewModelKeys++}", it) }
+
+    // ------------------------------------------------------------------ parâmetros de consistência (T19.2A)
+
+    private val localParameters = SocialConsistencyParameters(
+        trackingStartedAtEpochDay = 20_684,
+        weeklyGoals = listOf(SocialWeeklyGoal(weekStartEpochDay = 20_682, goal = 3))
+    )
+
+    @Test
+    fun `ligar um campo leva os parametros de consistencia junto quando o servidor nao os conhece`() = runBlocking {
+        gateway.currentUid = UID_A
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { localParameters }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+        // A abertura já alinhou: o servidor não conhecia nada, então um PATCH só de parâmetros saiu.
+        assertEquals(listOf<SocialConsistencyParameters?>(localParameters), gateway.consistencyUpdates)
+        assertEquals(localParameters, viewModel.uiState.value.settings.consistency)
+
+        // Um toque depois disso não os reenvia: o servidor já tem exatamente estes.
+        viewModel.setShareConsistencyStreak(true)
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+        assertEquals(listOf(localParameters, null), gateway.consistencyUpdates)
+        assertTrue(viewModel.uiState.value.settings.shareConsistencyStreak)
+        // E o que foi enviado é parâmetro: nenhum campo de resultado existe no tipo.
+        assertEquals(localParameters, gateway.settingsOf(UID_A).consistency)
+    }
+
+    @Test
+    fun `a meta mudou no aparelho — o proximo toque leva os parametros novos`() = runBlocking {
+        var local = localParameters
+        gateway.currentUid = UID_A
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { local }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+        assertEquals(localParameters, gateway.settingsOf(UID_A).consistency)
+
+        local = localParameters.copy(
+            weeklyGoals = localParameters.weeklyGoals + SocialWeeklyGoal(weekStartEpochDay = 20_689, goal = 4)
+        )
+        viewModel.setShareLevel(true)
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertEquals(local, gateway.settingsOf(UID_A).consistency)
+        assertEquals(local, viewModel.uiState.value.settings.consistency)
+    }
+
+    @Test
+    fun `sem parametros locais nada e enviado — e abrir a tela continua sendo uma leitura so`() = runBlocking {
+        gateway.currentUid = UID_A
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { null }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertEquals(1, gateway.requestCount)
+        assertEquals(emptyList<SocialConsistencyParameters?>(), gateway.consistencyUpdates)
+        assertNull(gateway.settingsOf(UID_A).consistency)
+    }
+
+    @Test
+    fun `parametros iguais aos do servidor nao geram escrita ao abrir`() = runBlocking {
+        gateway.register(
+            uid = UID_A,
+            socialId = SOCIAL_A,
+            displayName = "Ana",
+            availability = allAvailable(),
+            settings = ProgressSharingSettings(consistency = localParameters)
+        )
+        gateway.currentUid = UID_A
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { localParameters }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertEquals(1, gateway.requestCount)
+        assertEquals(emptyList<SocialConsistencyParameters?>(), gateway.consistencyUpdates)
+    }
+
+    @Test
+    fun `o alinhamento de parametros nao move interruptor nem mostra aviso quando falha`() = runBlocking {
+        gateway.currentUid = UID_A
+        // A leitura funciona; a escrita de alinhamento falha (o servidor caiu entre as duas). O
+        // provedor é chamado exatamente entre a leitura e a escrita, então é ele que derruba o dublê.
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) {
+            gateway.failWith = SocialProfileError.NETWORK
+            localParameters
+        }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertEquals(2, gateway.requestCount)
+        // O que a tela mostra é o que o servidor confirmou por último; nenhum interruptor se moveu
+        // e nenhum aviso apareceu por causa do alinhamento — ele é silencioso por desenho, e a
+        // disponibilidade ("ainda não disponível") já diz o que falta.
+        assertNull(viewModel.uiState.value.settings.consistency)
+        assertNull(viewModel.uiState.value.notice)
+        assertTrue(viewModel.uiState.value.sharingPhase is ProgressSharingPhase.Ready)
+    }
+
+    @Test
+    fun `o alinhamento iniciado pela conta anterior nao vaza para a conta nova`() = runBlocking {
+        val auth = FakeAuthGateway(initialAccount = accountA)
+        gateway.currentUid = UID_A
+        val viewModel = viewModel(auth) { localParameters }
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+        assertEquals(localParameters, viewModel.uiState.value.settings.consistency)
+
+        // C entra: o estado de A some inteiro — inclusive os parâmetros que A tinha declarado.
+        switchTo(auth, accountC)
+        assertNull(viewModel.uiState.value.settings.consistency)
+        assertTrue(viewModel.uiState.value.sharingPhase is ProgressSharingPhase.Idle)
+    }
 
     private companion object {
         const val AWAIT_TIMEOUT_MS = 5_000L

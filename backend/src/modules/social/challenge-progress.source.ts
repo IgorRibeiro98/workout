@@ -4,13 +4,6 @@ import {
   type CanonicalTrainingSource,
   SyncedCanonicalTrainingSource,
 } from './canonical-training.source';
-import {
-  calendarDateAsUtc,
-  DAY_MS,
-  isValidTimeZone,
-  localMidnightToInstant,
-  parseCalendarDate,
-} from './social-time';
 
 /**
  * A fronteira entre a pontuação de desafio e o estado canônico de treino (T17.3 §77–§79).
@@ -176,51 +169,13 @@ export class SyncedChallengeProgressSource implements ChallengeProgressSource {
   }
 }
 
-/** A faixa `[início, fim)` de um dia de calendário, em epoch millis UTC. */
-export interface ChallengeDayWindow {
-  readonly startMs: number;
-  readonly endMs: number;
-}
-
 /**
  * Os dias de calendário de um desafio, como faixas de instantes.
  *
- * Exportada porque é a regra de "que dias este desafio cobre", e o teste precisa poder afirmá-la
- * diretamente — inclusive nas viradas de horário de verão, onde uma faixa tem 23 ou 25 horas.
- *
- * A conversão é a **mesma** de `canonicalWeekWindow` (T17.2): as duas chamam
- * `localMidnightToInstant`, de `social-time.ts`. Uma segunda implementação de "meia-noite local"
- * divergiria da primeira, e a divergência apareceria como o perfil e o desafio discordando sobre o
- * dia de um treino.
+ * A implementação mora em `social-time.ts` desde a T19.2: `canonical-training.source.ts` também
+ * a usa, e importá-la daqui criava um ciclo de módulos (`canonical-training` ⇄ `challenge-progress`)
+ * em que o token `CANONICAL_TRAINING_SOURCE` podia estar indefinido na hora de decorar o
+ * construtor — dependendo de qual arquivo fosse carregado primeiro. O reexport mantém o ponto de
+ * import da T17.3 e dos testes.
  */
-export function challengeDayWindows(
-  startDate: string,
-  endDate: string,
-  timeZoneId: string,
-): readonly ChallengeDayWindow[] {
-  if (!isValidTimeZone(timeZoneId)) {
-    return [];
-  }
-  const start = parseCalendarDate(startDate);
-  const end = parseCalendarDate(endDate);
-  if (!start || !end) {
-    return [];
-  }
-
-  const startAsUtc = calendarDateAsUtc(start);
-  const endAsUtc = calendarDateAsUtc(end);
-  if (endAsUtc < startAsUtc) {
-    return [];
-  }
-
-  const windows: ChallengeDayWindow[] = [];
-  // A iteração é sobre **datas** (aritmética de calendário, sem fuso); a conversão para instante
-  // acontece por dia. Iterar sobre instantes somando 24h é exatamente o erro de §203.
-  for (let dateAsUtc = startAsUtc; dateAsUtc <= endAsUtc; dateAsUtc += DAY_MS) {
-    windows.push({
-      startMs: localMidnightToInstant(dateAsUtc, timeZoneId),
-      endMs: localMidnightToInstant(dateAsUtc + DAY_MS, timeZoneId),
-    });
-  }
-  return windows;
-}
+export { type ChallengeDayWindow, challengeDayWindows } from './social-time';

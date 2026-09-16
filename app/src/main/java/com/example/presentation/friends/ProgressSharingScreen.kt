@@ -57,10 +57,10 @@ const val PREVIEW_EMPTY_MESSAGE =
  * ```text
  * Compartilhar progresso
  *
- * Nível                    [ ]   Não disponível nesta versão
- * Consistência             [ ]   Não disponível nesta versão
+ * Nível                    [ ]   Disponível / Ainda não disponível
+ * Consistência             [ ]   Disponível / Ainda não disponível
  * Treinos da semana        [ ]   Disponível
- * Conquistas em destaque   [ ]   Não disponível nesta versão
+ * Conquistas em destaque   [ ]   Disponível / Ainda não disponível
  *
  * [ Pré-visualizar meu perfil ]
  * ```
@@ -197,7 +197,8 @@ internal fun ProgressSharingBody(
                 checked = uiState.settings.shareLevel,
                 availability = uiState.availability.level,
                 enabled = enabled,
-                onCheckedChange = onShareLevel
+                onCheckedChange = onShareLevel,
+                note = LEVEL_SHARING_NOTE
             )
             SharingToggle(
                 label = "Consistência semanal",
@@ -249,7 +250,9 @@ private fun SharingToggle(
     checked: Boolean,
     availability: SocialFieldAvailability,
     enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    /** Uma frase sobre o **significado** do campo publicado, quando ele difere do local. */
+    note: String? = null
 ) {
     Surface(
         color = SurfaceDark,
@@ -282,6 +285,7 @@ private fun SharingToggle(
                 availabilityHint(availability)?.let { hint ->
                     Text(text = hint, color = TextSecondary, fontSize = 11.sp)
                 }
+                note?.let { Text(text = it, color = TextSecondary, fontSize = 11.sp) }
             }
             Switch(
                 checked = checked,
@@ -341,6 +345,13 @@ private fun PreviewCard(profile: FriendSocialProfile) {
                         label = "🏋️ Esta semana",
                         value = if (it == 1) "1 treino" else "$it treinos"
                     )
+                }
+                val labels = profile.sharedProgress.highlightedAchievementIds.mapNotNull(::achievementLabel)
+                if (labels.isNotEmpty()) {
+                    Text(text = "Conquistas", color = TextSecondary, fontSize = 14.sp)
+                    labels.forEach { label ->
+                        Text(text = label, color = TextPrimary, fontSize = 14.sp)
+                    }
                 }
             }
         }

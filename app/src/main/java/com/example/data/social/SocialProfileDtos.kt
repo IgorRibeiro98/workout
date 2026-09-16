@@ -5,7 +5,9 @@ import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
+import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.SocialWeeklyGoal
 import kotlinx.serialization.Serializable
 
 /**
@@ -56,7 +58,27 @@ data class ProgressSharingSettingsDto(
     val shareWeeklyWorkoutCount: Boolean = false,
     val shareHighlightedAchievements: Boolean = false,
     val weekTimeZone: String? = null,
+    val consistency: ConsistencyParametersDto? = null,
     val updatedAt: Long = 0L
+)
+
+/**
+ * Os parâmetros de consistência (T19.2A): configuração, nunca progresso.
+ *
+ * Meta por semana e início do acompanhamento — o que `ConsistencyCalculator` lê além das sessões.
+ * O servidor recebe isto e **deriva** a sequência dos treinos sincronizados; nenhum campo aqui
+ * carrega sequência, nível, XP ou conquista, e um que carregasse seria recusado por nome.
+ */
+@Serializable
+data class ConsistencyParametersDto(
+    val trackingStartedAtEpochDay: Long,
+    val weeklyGoals: List<WeeklyGoalDto> = emptyList()
+)
+
+@Serializable
+data class WeeklyGoalDto(
+    val weekStartEpochDay: Long,
+    val goal: Int
 )
 
 /** A disponibilidade de cada campo, como o dono a vê. */
@@ -90,7 +112,18 @@ data class UpdateProgressSharingRequestDto(
     val shareConsistencyStreak: Boolean? = null,
     val shareWeeklyWorkoutCount: Boolean? = null,
     val shareHighlightedAchievements: Boolean? = null,
-    val weekTimeZone: String? = null
+    val weekTimeZone: String? = null,
+    val consistency: ConsistencyParametersDto? = null
+)
+
+fun SocialConsistencyParameters.toDto(): ConsistencyParametersDto = ConsistencyParametersDto(
+    trackingStartedAtEpochDay = trackingStartedAtEpochDay,
+    weeklyGoals = weeklyGoals.map { WeeklyGoalDto(weekStartEpochDay = it.weekStartEpochDay, goal = it.goal) }
+)
+
+fun ConsistencyParametersDto.toDomain(): SocialConsistencyParameters = SocialConsistencyParameters(
+    trackingStartedAtEpochDay = trackingStartedAtEpochDay,
+    weeklyGoals = weeklyGoals.map { SocialWeeklyGoal(weekStartEpochDay = it.weekStartEpochDay, goal = it.goal) }
 )
 
 /**
@@ -123,6 +156,7 @@ fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
         shareWeeklyWorkoutCount = settings.shareWeeklyWorkoutCount,
         shareHighlightedAchievements = settings.shareHighlightedAchievements,
         weekTimeZone = settings.weekTimeZone,
+        consistency = settings.consistency?.toDomain(),
         updatedAt = settings.updatedAt
     ),
     availability = ProgressSharingAvailability(

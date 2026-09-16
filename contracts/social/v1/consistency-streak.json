@@ -1,0 +1,787 @@
+{
+  "description": "A sequência semanal de consistência do Spark (T19.2A). Fixture compartilhada: lida pelo teste do backend (social-progress-v2.spec.ts, sobre social-consistency.ts) e pelo teste do Android (SocialConsistencyContractTest, sobre ConsistencyCalculator). Ela existe porque a mesma regra passou a ter duas implementações — uma em Kotlin, para a tela do dono, e uma em TypeScript, para o que se publica aos amigos — e uma mudança unilateral precisa quebrar o teste de quem mudou, em vez de virar \"o perfil do meu amigo mostra uma sequência diferente da que ele vê\".",
+  "rule": {
+    "week": "segunda-feira da data LOCAL do dono (ConsistencyCalculator.weekStart); sessão atribuída ao dia local de startedAt",
+    "goal": "a meta vigente numa semana é a do último snapshot com weekStartEpochDay <= semana; sem snapshot, a semana é NOT_COUNTED (meta 0)",
+    "tracking": "só semanas a partir da segunda-feira do início do acompanhamento; treino anterior a ela não conta",
+    "status": "semana atual: COMPLETED se treinos >= meta, senão IN_PROGRESS; semana passada: COMPLETED ou MISSED; a primeira semana, se o acompanhamento começou depois de segunda e ela foi MISSED, vira NOT_COUNTED",
+    "currentStreak": "semana atual COMPLETED conta 1; para trás, COMPLETED soma, NOT_COUNTED é pulada, qualquer outra quebra",
+    "longestStreak": "a maior corrida de COMPLETED, com NOT_COUNTED transparente; inclui a semana atual quando COMPLETED; nunca menor que a sequência atual",
+    "epochDay": "dias contados como LocalDate.toEpochDay(): 1970-01-05 (segunda) = 4"
+  },
+  "cases": [
+    {
+      "name": "sequencia-com-quebra",
+      "note": "meta 3 desde 6/7; cinco semanas cumpridas, uma perdida (10/8, só 2 treinos), três cumpridas, semana atual com 1 treino em andamento",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20640,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20640,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-07-06T10:00:00.000Z",
+          "millis": 1783332000000,
+          "local": "2026-07-06T07:00"
+        },
+        {
+          "iso": "2026-07-08T10:00:00.000Z",
+          "millis": 1783504800000,
+          "local": "2026-07-08T07:00"
+        },
+        {
+          "iso": "2026-07-10T10:00:00.000Z",
+          "millis": 1783677600000,
+          "local": "2026-07-10T07:00"
+        },
+        {
+          "iso": "2026-07-13T10:00:00.000Z",
+          "millis": 1783936800000,
+          "local": "2026-07-13T07:00"
+        },
+        {
+          "iso": "2026-07-15T10:00:00.000Z",
+          "millis": 1784109600000,
+          "local": "2026-07-15T07:00"
+        },
+        {
+          "iso": "2026-07-17T10:00:00.000Z",
+          "millis": 1784282400000,
+          "local": "2026-07-17T07:00"
+        },
+        {
+          "iso": "2026-07-20T10:00:00.000Z",
+          "millis": 1784541600000,
+          "local": "2026-07-20T07:00"
+        },
+        {
+          "iso": "2026-07-22T10:00:00.000Z",
+          "millis": 1784714400000,
+          "local": "2026-07-22T07:00"
+        },
+        {
+          "iso": "2026-07-24T10:00:00.000Z",
+          "millis": 1784887200000,
+          "local": "2026-07-24T07:00"
+        },
+        {
+          "iso": "2026-07-27T10:00:00.000Z",
+          "millis": 1785146400000,
+          "local": "2026-07-27T07:00"
+        },
+        {
+          "iso": "2026-07-29T10:00:00.000Z",
+          "millis": 1785319200000,
+          "local": "2026-07-29T07:00"
+        },
+        {
+          "iso": "2026-07-31T10:00:00.000Z",
+          "millis": 1785492000000,
+          "local": "2026-07-31T07:00"
+        },
+        {
+          "iso": "2026-08-03T10:00:00.000Z",
+          "millis": 1785751200000,
+          "local": "2026-08-03T07:00"
+        },
+        {
+          "iso": "2026-08-05T10:00:00.000Z",
+          "millis": 1785924000000,
+          "local": "2026-08-05T07:00"
+        },
+        {
+          "iso": "2026-08-07T10:00:00.000Z",
+          "millis": 1786096800000,
+          "local": "2026-08-07T07:00"
+        },
+        {
+          "iso": "2026-08-10T10:00:00.000Z",
+          "millis": 1786356000000,
+          "local": "2026-08-10T07:00"
+        },
+        {
+          "iso": "2026-08-12T10:00:00.000Z",
+          "millis": 1786528800000,
+          "local": "2026-08-12T07:00"
+        },
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-21T10:00:00.000Z",
+          "millis": 1787306400000,
+          "local": "2026-08-21T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        },
+        {
+          "iso": "2026-09-08T10:00:00.000Z",
+          "millis": 1788861600000,
+          "local": "2026-09-08T07:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20640,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20647,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20654,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20661,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20668,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20675,
+            "goal": 3,
+            "completedWorkouts": 2,
+            "status": "MISSED"
+          },
+          {
+            "weekStartEpochDay": 20682,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 3,
+            "completedWorkouts": 1,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 3,
+        "longestStreakWeeks": 5
+      }
+    },
+    {
+      "name": "inicio-no-meio-da-semana-sem-treino",
+      "note": "acompanhamento começou numa quarta (19/8) e a primeira semana ficou sem treino: NOT_COUNTED, não MISSED; a semana atual já cumprida conta",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20684,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20682,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        },
+        {
+          "iso": "2026-09-07T10:00:00.000Z",
+          "millis": 1788775200000,
+          "local": "2026-09-07T07:00"
+        },
+        {
+          "iso": "2026-09-08T09:00:00.000Z",
+          "millis": 1788858000000,
+          "local": "2026-09-08T06:00"
+        },
+        {
+          "iso": "2026-09-08T15:00:00.000Z",
+          "millis": 1788879600000,
+          "local": "2026-09-08T12:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20682,
+            "goal": 3,
+            "completedWorkouts": 0,
+            "status": "NOT_COUNTED"
+          },
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          }
+        ],
+        "currentStreakWeeks": 3,
+        "longestStreakWeeks": 3
+      }
+    },
+    {
+      "name": "meta-muda-de-3-para-2",
+      "note": "duas semanas com 2 treinos sob meta 3 são MISSED; a partir de 24/8 a meta é 2 e as mesmas 2 sessões cumprem",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20668,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20668,
+            "goal": 3
+          },
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 2
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-03T10:00:00.000Z",
+          "millis": 1785751200000,
+          "local": "2026-08-03T07:00"
+        },
+        {
+          "iso": "2026-08-05T10:00:00.000Z",
+          "millis": 1785924000000,
+          "local": "2026-08-05T07:00"
+        },
+        {
+          "iso": "2026-08-07T10:00:00.000Z",
+          "millis": 1786096800000,
+          "local": "2026-08-07T07:00"
+        },
+        {
+          "iso": "2026-08-10T10:00:00.000Z",
+          "millis": 1786356000000,
+          "local": "2026-08-10T07:00"
+        },
+        {
+          "iso": "2026-08-12T10:00:00.000Z",
+          "millis": 1786528800000,
+          "local": "2026-08-12T07:00"
+        },
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-08T10:00:00.000Z",
+          "millis": 1788861600000,
+          "local": "2026-09-08T07:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20668,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20675,
+            "goal": 3,
+            "completedWorkouts": 2,
+            "status": "MISSED"
+          },
+          {
+            "weekStartEpochDay": 20682,
+            "goal": 3,
+            "completedWorkouts": 2,
+            "status": "MISSED"
+          },
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 2,
+            "completedWorkouts": 1,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 2,
+        "longestStreakWeeks": 2
+      }
+    },
+    {
+      "name": "virada-de-dia-e-de-semana",
+      "note": "dois treinos de domingo à noite (22h e 23h30 locais — em UTC já é segunda) fecham a semana de 31/8; 0h30 de segunda já é a semana seguinte",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20696,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 2
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-09-07T01:00:00.000Z",
+          "millis": 1788742800000,
+          "local": "2026-09-06T22:00"
+        },
+        {
+          "iso": "2026-09-07T02:30:00.000Z",
+          "millis": 1788748200000,
+          "local": "2026-09-06T23:30"
+        },
+        {
+          "iso": "2026-09-07T03:30:00.000Z",
+          "millis": 1788751800000,
+          "local": "2026-09-07T00:30"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 2,
+            "completedWorkouts": 1,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 1,
+        "longestStreakWeeks": 1
+      }
+    },
+    {
+      "name": "treino-antes-do-acompanhamento-nao-conta",
+      "note": "três treinos na semana de 17/8 ficam fora porque o acompanhamento começou em 24/8; a lista de semanas começa em 24/8",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20689,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-21T10:00:00.000Z",
+          "millis": 1787306400000,
+          "local": "2026-08-21T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 3,
+            "completedWorkouts": 3,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 3,
+            "completedWorkouts": 0,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 2,
+        "longestStreakWeeks": 2
+      }
+    },
+    {
+      "name": "new-york-com-inicio-do-horario-de-verao",
+      "note": "o DST começa no domingo 8/3; o treino de domingo 16h EDT ainda fecha a semana de 2/3, e o de 0h EDT de segunda 9/3 já é a semana atual",
+      "timeZone": "America/New_York",
+      "nowLocal": "2026-03-12T13:00",
+      "nowIso": "2026-03-12T17:00:00.000Z",
+      "nowMillis": 1773334800000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20500,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20500,
+            "goal": 2
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-02-16T13:00:00.000Z",
+          "millis": 1771246800000,
+          "local": "2026-02-16T08:00"
+        },
+        {
+          "iso": "2026-02-20T13:00:00.000Z",
+          "millis": 1771592400000,
+          "local": "2026-02-20T08:00"
+        },
+        {
+          "iso": "2026-02-23T13:00:00.000Z",
+          "millis": 1771851600000,
+          "local": "2026-02-23T08:00"
+        },
+        {
+          "iso": "2026-02-27T13:00:00.000Z",
+          "millis": 1772197200000,
+          "local": "2026-02-27T08:00"
+        },
+        {
+          "iso": "2026-03-02T13:00:00.000Z",
+          "millis": 1772456400000,
+          "local": "2026-03-02T08:00"
+        },
+        {
+          "iso": "2026-03-08T20:00:00.000Z",
+          "millis": 1773000000000,
+          "local": "2026-03-08T16:00"
+        },
+        {
+          "iso": "2026-03-09T04:00:00.000Z",
+          "millis": 1773028800000,
+          "local": "2026-03-09T00:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20500,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20507,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20514,
+            "goal": 2,
+            "completedWorkouts": 2,
+            "status": "COMPLETED"
+          },
+          {
+            "weekStartEpochDay": 20521,
+            "goal": 2,
+            "completedWorkouts": 1,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 3,
+        "longestStreakWeeks": 3
+      }
+    },
+    {
+      "name": "sem-treino-nenhum",
+      "note": "parâmetros declarados e nenhum treino: duas semanas MISSED e a atual em andamento — zero, e não erro",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20689,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 3,
+            "completedWorkouts": 0,
+            "status": "MISSED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 3,
+            "completedWorkouts": 0,
+            "status": "MISSED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 3,
+            "completedWorkouts": 0,
+            "status": "IN_PROGRESS"
+          }
+        ],
+        "currentStreakWeeks": 0,
+        "longestStreakWeeks": 0
+      }
+    },
+    {
+      "name": "sem-meta-declarada",
+      "note": "histórico de metas vazio: toda semana é NOT_COUNTED e nenhuma sequência se forma, por mais treinos que existam",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20689,
+        "weeklyGoals": []
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        }
+      ],
+      "expected": {
+        "weeks": [
+          {
+            "weekStartEpochDay": 20689,
+            "goal": 0,
+            "completedWorkouts": 3,
+            "status": "NOT_COUNTED"
+          },
+          {
+            "weekStartEpochDay": 20696,
+            "goal": 0,
+            "completedWorkouts": 3,
+            "status": "NOT_COUNTED"
+          },
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 0,
+            "completedWorkouts": 0,
+            "status": "NOT_COUNTED"
+          }
+        ],
+        "currentStreakWeeks": 0,
+        "longestStreakWeeks": 0
+      }
+    }
+  ]
+}

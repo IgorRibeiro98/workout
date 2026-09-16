@@ -5,6 +5,7 @@ import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
+import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialFieldAvailability
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
@@ -123,10 +124,12 @@ class FakeSocialProfileGateway(
         shareConsistencyStreak: Boolean?,
         shareWeeklyWorkoutCount: Boolean?,
         shareHighlightedAchievements: Boolean?,
-        weekTimeZone: String?
+        weekTimeZone: String?,
+        consistency: SocialConsistencyParameters?
     ): SocialProfileOutcome<ProgressSharing> = respond {
         val uid = currentUid ?: return@respond fail(SocialProfileError.AUTH_REQUIRED)
         val current = settingsOf(uid)
+        consistencyUpdates += consistency
         // Semântica de PATCH: o que não veio não muda. E `updatedAt` é do "servidor".
         settingsByUid[uid] = current.copy(
             shareLevel = shareLevel ?: current.shareLevel,
@@ -135,10 +138,18 @@ class FakeSocialProfileGateway(
             shareHighlightedAchievements =
                 shareHighlightedAchievements ?: current.shareHighlightedAchievements,
             weekTimeZone = weekTimeZone ?: current.weekTimeZone,
+            // Os parâmetros substituem o conjunto inteiro, como no servidor (T19.2A).
+            consistency = consistency ?: current.consistency,
             updatedAt = current.updatedAt + 1
         )
         SocialProfileOutcome.Success(sharingOf(uid))
     }
+
+    /**
+     * O que cada `PATCH` trouxe em `consistency` (`null` = não veio). É o que prova que os
+     * parâmetros viajam quando divergem do que o servidor conhece — e só então.
+     */
+    val consistencyUpdates = mutableListOf<SocialConsistencyParameters?>()
 
     // ------------------------------------------------------------------ regras do dublê
 

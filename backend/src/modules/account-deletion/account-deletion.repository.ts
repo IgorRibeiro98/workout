@@ -68,7 +68,8 @@ export class AccountDeletionRepository {
       ownerUid,
     ]);
 
-    // 5. Configurações sociais
+    // 5. Configurações sociais (os parâmetros de consistência da T19.2A antes da linha que eles referenciam)
+    await client.query(`DELETE FROM social_progress_weekly_goals WHERE owner_uid = $1`, [ownerUid]);
     await client.query(`DELETE FROM social_progress_settings WHERE owner_uid = $1`, [ownerUid]);
     await client.query(`DELETE FROM social_privacy_settings WHERE owner_uid = $1`, [ownerUid]);
 

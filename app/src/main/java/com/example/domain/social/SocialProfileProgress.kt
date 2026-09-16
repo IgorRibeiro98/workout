@@ -74,8 +74,36 @@ data class ProgressSharingSettings(
     val shareWeeklyWorkoutCount: Boolean = false,
     val shareHighlightedAchievements: Boolean = false,
     val weekTimeZone: String? = null,
+    /**
+     * Os parâmetros de consistência que o servidor conhece deste dono (T19.2A), ou `null`
+     * enquanto o app não os enviou. Servem para o app saber **quando** reenviar: quando a meta
+     * semanal muda no aparelho, o servidor precisa da nova para derivar a mesma sequência.
+     */
+    val consistency: SocialConsistencyParameters? = null,
     /** Relógio do **servidor**, epoch millis UTC. */
     val updatedAt: Long = 0L
+)
+
+/**
+ * A meta semanal por semana e o início do acompanhamento — os dois insumos da consistência que não
+ * são sessão (T19.2A).
+ *
+ * Como o [ProgressSharingSettings.weekTimeZone], isto **não é progresso**: é a configuração que o
+ * próprio aparelho lê (`weekly_goal_history` e o início do acompanhamento) para calcular a
+ * sequência do dono. O servidor recebe o parâmetro e deriva a sequência das sessões `COMPLETED`
+ * sincronizadas — um parâmetro não fabrica treino. O que o app **nunca** envia é o resultado:
+ * sequência, nível, XP ou conquista.
+ */
+data class SocialConsistencyParameters(
+    /** Epoch day do calendário local em que o acompanhamento começou. */
+    val trackingStartedAtEpochDay: Long,
+    val weeklyGoals: List<SocialWeeklyGoal>
+)
+
+/** A meta vigente a partir de uma segunda-feira (`epoch day`). */
+data class SocialWeeklyGoal(
+    val weekStartEpochDay: Long,
+    val goal: Int
 )
 
 /**
@@ -91,6 +119,10 @@ data class ProgressSharingSettings(
  * ```
  *
  * Colapsar as duas últimas faria a tela prometer que sincronizar publicaria o nível.
+ *
+ * Desde a T19.2 nenhuma das quatro métricas responde `UNSUPPORTED` no servidor atual: nível,
+ * sequência e conquistas ganharam autoridade remota. O valor continua no contrato porque um
+ * servidor mais antigo ainda o responde, e porque uma métrica futura pode nascer sem autoridade.
  */
 enum class SocialFieldAvailability {
     AVAILABLE,

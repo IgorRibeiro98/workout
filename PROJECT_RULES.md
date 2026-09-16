@@ -1107,15 +1107,20 @@ si, ou uma porta lateral para o domínio privado.
   perfil, com o servidor fora: treinar, histórico, gamificação, backup, restore, sync e Coach
   continuam exatamente como estavam — e o próprio nível, a própria sequência e os próprios treinos
   da semana continuam sendo calculados **no aparelho**, pelas autoridades de sempre.
-- **O Social projeta; ele nunca calcula.** É **proibido** recriar `XpCalculatorService`,
-  `ConsistencyCalculator` ou `AchievementEvaluator` — em TypeScript ou em qualquer lugar do domínio
-  social — "só para o Social funcionar". Duas implementações da mesma regra divergem no primeiro
-  ajuste, e a divergência aparece como um perfil social afirmando um nível que o aparelho da própria
-  pessoa não reconhece. Uma métrica sem autoridade **remota** responde `UNSUPPORTED`.
+- **O Social projeta; ele nunca calcula por conta própria.** Até a T19.2 era **proibido** recriar
+  `XpCalculatorService`, `ConsistencyCalculator` ou `AchievementEvaluator` em TypeScript, porque
+  duas implementações da mesma regra divergem no primeiro ajuste. A T19.2 abriu **uma** exceção,
+  com a condição que já valia para a semana canônica: a regra remota existe (`social-consistency.ts`,
+  `social-gamification.ts`) **somente** presa ao Kotlin por fixture compartilhada em
+  `contracts/social/v1/` lida pelos testes dos dois lados. Uma regra remota sem fixture, ou uma
+  fixture que um lado só atualiza, continua proibida — ver §13.22. Uma métrica sem autoridade
+  **remota** responde `UNSUPPORTED`; uma com autoridade e sem dado, `UNAVAILABLE`.
 - **O servidor nunca confia no cliente sobre progresso.** Não existe — e não pode existir — rota que
   aceite `level`, `streak`, `weeklyWorkoutCount`, `totalXp` ou lista de conquistas vinda do
   aparelho. Os campos são recusados **por nome**, invalidando a requisição inteira. O que o cliente
-  envia é **preferência** (o que compartilhar) e o fuso da própria semana.
+  envia é **preferência** (o que compartilhar), o fuso da própria semana e, desde a T19.2A, os
+  **parâmetros** de consistência (meta por semana e início do acompanhamento) — configuração, nunca
+  resultado.
 - **Ausência de dado não vira zero.** Quem nunca sincronizou uma sessão concluída recebe campo
   **ausente** — nunca "0 treinos", "nível 1" ou "sem conquistas". Zero só é publicado quando é fato
   comprovado. Na tela do dono, "ligado, ainda não disponível" é um estado que precisa existir e ser
@@ -1812,6 +1817,77 @@ e Coach IA são áreas de primeiro nível **atrás do Perfil**: `SocialHome` (`s
 - **Account switch.** Nenhum estado novo foi criado, então nada novo precisa ser invalidado: os
   ViewModels compartilhados já descartam estado e resposta em voo na troca de conta (§13.8 —
   domínio social —, §13.9 e §13.20).
+
+## 13.22 Social Progress V2: autoridade remota de gamificação (T19.2)
+
+O servidor passou a **derivar** nível, sequência semanal e conquistas — e a publicá-los. As regras
+abaixo são o que impede essa autoridade de virar uma vitrine do que o cliente digita, uma segunda
+gamificação que reescreve a local, ou uma tabela de placar que ninguém sabe reconstruir. Documento
+canônico: `docs/architecture/social-progress-authority.md`.
+
+- **O núcleo não paga nada por isso.** Sem conta, sem perfil social, com o servidor fora: treinar,
+  concluir, histórico, gamificação local, XP, conquistas, missões, backup, restore, sync e Coach
+  continuam exatamente como estavam. A gamificação local é a autoridade **operacional** do aparelho;
+  a projeção social é a autoridade sobre o que pode ser **publicado**. Nenhuma escreve na outra.
+- **Fato canônico → servidor reconstrói → métrica → privacidade → amigo.** Nunca "cliente afirma →
+  servidor acredita". Tudo o que vale XP no servidor é reconstruído do que **já** sincroniza
+  (`WORKOUT_SESSION` `COMPLETED`, `BODY_MEASUREMENT`); a matriz `XP_SOURCE_AUTHORITY` classifica
+  cada `GamificationEventType` como `RECONSTRUCTABLE`, `VERIFIABLE`, `LOCAL_ONLY` ou
+  `UNSUPPORTED_SERVER_SIDE`, e há teste que exige a matriz completa. `VERIFIABLE` está definido e
+  **vazio**: não existe canal de ingestão de eventos do cliente, e criar um exige decisão explícita.
+- **Parâmetro não é progresso.** O cliente declara meta por semana e início do acompanhamento —
+  os dois insumos de `ConsistencyCalculator` que não são sessão — pelo `PATCH` da T17.2, como já
+  declarava o fuso. O servidor valida a **forma** (segunda-feira, meta 1..7, piso 2020-01-01, ≤ 520)
+  e deriva a sequência das sessões sincronizadas. Com qualquer parâmetro, a sequência remota é
+  ≤ a que os fatos suportam. Os campos de **resultado** (`streak`, `longestStreak`,
+  `completedWorkouts`, `level`, `xp`, `unlocked`...) são recusados por nome **também dentro** de
+  `consistency`.
+- **A regra remota é a canônica, presa por fixture.** `social-consistency.ts` é
+  `ConsistencyCalculator` linha a linha; `social-gamification.ts` é `XpRewardPolicy` v1 +
+  `MissionCatalog` v1 + `AchievementCatalog` v1 + `calculateProgress` (500, `nível × 500`).
+  `contracts/social/v1/consistency-streak.json` e `progress-projection.json` são lidos por
+  `social-progress-v2.spec.ts` e por `SocialConsistencyContractTest` /
+  `SocialProgressProjectionContractTest` — o segundo **reproduz o motor local ao vivo** sobre os
+  mesmos fatos. Mudar recompensa, missão, limiar de conquista ou curva de um lado só reprova o
+  teste daquele lado. É isso, e não a prosa, que autoriza a segunda implementação.
+- **O que o servidor não reconstrói fica fora — e não vira `UNSUPPORTED` da métrica inteira.** XP
+  de `PERSONAL_RECORD_CREATED` e conquistas de `PERFORMANCE` são `UNSUPPORTED_SERVER_SIDE`: a
+  regra vive no `WorkoutEngine` sobre cargas de série e a `dedupeKey` cita `exerciseId` local; ler
+  cargas no social violaria `AGGREGATE_ONLY`. Consequência declarada: **nível verificado ≤ nível
+  local**, e a tela do dono diz isso. Conquistas de recorde **nunca** entram na lista publicada —
+  nem como "não obtida".
+- **Projeção é leitura; não existe placar.** Nenhuma tabela guarda nível, XP, sequência ou
+  conquista. `SyncedSocialProgressSource.project` deriva as quatro métricas na leitura, de
+  `sync_entities` + parâmetros, em poucas consultas (`COUNT(*)` por dia local via `UNNEST`, o
+  desenho da T17.3). Replay de sync é a mesma linha (`syncId`); "rebuild" é `GET`; três leituras
+  são idênticas; restore não escreve em `sync_entities`; account deletion apaga
+  `social_progress_weekly_goals` no purge e no inventário e não deixa o que ressuscitar. Ler o
+  perfil não cria notificação, check-in, feed nem "nova conquista" — há teste que conta linhas.
+- **Só agregado sai do SQL.** `countCompletedWorkoutsPerDay` e `countBodyMeasurementsPerDay`
+  devolvem `(epoch day, contagem)`; o campo de instante do payload fica na cláusula do `JOIN`.
+  Nenhum timestamp de treino, valor de medida ou payload é materializado em JavaScript. Os testes
+  estruturais de `social-logging.spec.ts` continuam valendo para os arquivos novos.
+- **Disponibilidade honesta.** `AVAILABLE` só com fuso + dado (+ parâmetros para nível e
+  sequência); `UNAVAILABLE` faltando qualquer um — inclusive "ainda não declarou parâmetros";
+  lista de conquistas vazia é `UNAVAILABLE`, não "zero conquistas". `UNSUPPORTED` continua no
+  contrato e nenhuma métrica o produz hoje. Não remover o valor: um servidor anterior o responde.
+- **O app alinha parâmetros sem mover interruptor.** `SocialProfileViewModel` recebe os parâmetros
+  como função (montada em `MainViewModelFactory`; o pacote social continua sem importar
+  repositório de treino ou gamificação) e os envia ao abrir "Compartilhar progresso" quando
+  diferem do que o servidor devolveu, e em cada toque quando diferem. Falha é silenciosa — a
+  disponibilidade já diz o que falta. Offline nada acontece e nada fica pendente (T17.2 §10).
+- **Conquistas chegam como ids canônicos.** O Android resolve título e ícone no `AchievementCatalog`
+  do próprio APK e **omite** id desconhecido. "Em destaque" hoje significa "todas as verificáveis";
+  a seleção manual é escopo futuro.
+- **Logs.** Inalterados: `fieldCount`, prefixo de uid, evento. Nunca nível, sequência, XP, lista
+  de conquistas, meta ou início do acompanhamento.
+- **Testes.** Toda mudança na projeção roda `npm test` em `backend/` (ao menos
+  `social-progress-v2.spec.ts`, `social-progress.spec.ts`, `social-profile.spec.ts`,
+  `social-logging.spec.ts`, `social-v2-audit.spec.ts`) e
+  `./gradlew :app:testDebugUnitTest --tests "com.example.data.social.*" --tests
+  "com.example.presentation.account.SocialProfile*"`. Mudou `XpRewardPolicy`, `MissionCatalog`,
+  `AchievementCatalog` ou `ConsistencyCalculator`? Regenerar as fixtures **e** o espelho em
+  `social-gamification.ts`/`social-consistency.ts`, e provar nos dois lados.
 
 ## 14. Tests and build are part of implementation
 

@@ -7,38 +7,28 @@ import type {
 import type { StoredProgressSettings } from './social-progress.repository';
 import {
   SOCIAL_PROGRESS_SOURCE,
+  type SocialProgressProjection,
   type SocialProgressSource,
   type SocialProgressValue,
 } from './social-progress.source';
 
-/**
- * O progresso de **um** dono, como o servidor consegue afirmá-lo — antes de qualquer privacidade.
- *
- * Cada campo é um [SocialProgressValue], nunca um número solto: é o tipo que carrega a diferença
- * entre "três treinos", "ainda não sei" e "esta versão não sabe". Um `number | null` colapsaria os
- * dois últimos, e o primeiro consumidor escreveria `?? 0`.
- */
-export interface SocialProgressProjection {
-  readonly level: SocialProgressValue<number>;
-  readonly consistencyStreak: SocialProgressValue<number>;
-  readonly weeklyWorkoutCount: SocialProgressValue<number>;
-  readonly highlightedAchievementIds: SocialProgressValue<readonly string[]>;
-}
+export type { SocialProgressProjection } from './social-progress.source';
 
 /**
- * A projeção de progresso do domínio privado para o domínio social (T17.2 §7).
+ * A projeção de progresso do domínio privado para o domínio social (T17.2 §7, T19.2).
  *
  * ```text
- * ownerUid ──▶ SocialProgressSource ──▶ SocialProgressProjection ──▶ (privacidade) ──▶ DTO
+ * ownerUid + parâmetros do dono ──▶ SocialProgressSource ──▶ SocialProgressProjection ──▶ (privacidade) ──▶ DTO
  * ```
  *
  * ## Ele projeta; ele não calcula
  *
  * Não há uma linha de regra de domínio aqui: nenhuma curva de XP, nenhuma contagem de semanas
- * consecutivas, nenhuma avaliação de conquista. Tudo o que ele faz é perguntar à fonte e devolver
- * o que ela respondeu, com o mesmo nome que o produto usa. Se algum dia um `if (streak > 4)`
- * aparecer neste arquivo, o Social terá virado autoridade de progresso — que é exatamente o que a
- * T17.2 existe para impedir.
+ * consecutivas, nenhuma avaliação de conquista. Desde a T19.2 essas regras **existem** no servidor
+ * — em `social-consistency.ts` e `social-gamification.ts`, presas ao Android por fixture — e quem
+ * as aplica é a fonte. O projetor só monta o contexto (fuso, parâmetros declarados, relógio do
+ * servidor) e devolve o que a fonte respondeu, com o mesmo nome que o produto usa. Se algum dia um
+ * `if (streak > 4)` aparecer neste arquivo, a regra terá ganhado uma segunda cópia.
  *
  * ## Ele não conhece o visitante
  *
@@ -60,29 +50,22 @@ export class SocialProgressProjector {
   /**
    * O que o servidor consegue afirmar sobre o progresso deste dono, agora.
    *
+   * @param settings as preferências gravadas do dono — daqui saem só o fuso e os parâmetros de
+   * consistência; os interruptores de privacidade **não** entram na projeção.
    * @param nowMs relógio do **servidor**. O relógio do aparelho não decide qual é a semana
    * corrente de ninguém: dois visitantes com relógios diferentes veriam semanas diferentes do
    * mesmo perfil.
    */
   async project(
     ownerUid: string,
-    weekTimeZone: string | null,
+    settings: Pick<StoredProgressSettings, 'weekTimeZone' | 'consistency'>,
     nowMs: number,
   ): Promise<SocialProgressProjection> {
-    const [level, consistencyStreak, weeklyWorkoutCount, highlightedAchievementIds] =
-      await Promise.all([
-        this.source.getLevel(ownerUid),
-        this.source.getConsistencyStreak(ownerUid),
-        this.source.getWeeklyWorkoutCount(ownerUid, weekTimeZone, nowMs),
-        this.source.getEarnedAchievementIds(ownerUid),
-      ]);
-
-    return {
-      level,
-      consistencyStreak,
-      weeklyWorkoutCount,
-      highlightedAchievementIds,
-    };
+    return await this.source.project(ownerUid, {
+      weekTimeZone: settings.weekTimeZone,
+      consistency: settings.consistency,
+      nowMs,
+    });
   }
 }
 

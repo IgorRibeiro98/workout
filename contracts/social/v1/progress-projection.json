@@ -1,0 +1,659 @@
+{
+  "description": "A autoridade remota de gamificação do Spark (T19.2B/C): que XP o servidor reconstrói dos treinos sincronizados, que nível sai dele e que conquistas ele consegue afirmar. Fixture compartilhada: lida pelo teste do backend (social-progress-v2.spec.ts, sobre social-gamification.ts) e pelo teste do Android (SocialProgressProjectionContractTest), que reproduz o motor local ao vivo (GamificationEventRecorder → XpRewardPolicy/ConsistencyMilestoneEvaluator/MissionEvaluator/AchievementEvaluator) sobre os mesmos fatos e exige o mesmo XP, o mesmo nível e as mesmas conquistas. O que NÃO está aqui — XP de recorde pessoal e conquistas de PERFORMANCE — é o que o servidor não reconstrói: o nível verificado é um limite inferior do nível local.",
+  "catalog": {
+    "xpPolicyVersion": 1,
+    "missionCatalogVersion": 1,
+    "achievementCatalogVersion": 1,
+    "xpSources": [
+      {
+        "event": "WORKOUT_COMPLETED",
+        "xp": 100,
+        "authority": "RECONSTRUCTABLE",
+        "basis": "uma por WORKOUT_SESSION COMPLETED sincronizada (sem tombstone)"
+      },
+      {
+        "event": "FIRST_WORKOUT_COMPLETED",
+        "xp": 100,
+        "authority": "RECONSTRUCTABLE",
+        "basis": "uma vez, quando existe ao menos uma sessão COMPLETED sincronizada"
+      },
+      {
+        "event": "WEEKLY_GOAL_COMPLETED",
+        "xp": 150,
+        "authority": "RECONSTRUCTABLE",
+        "basis": "uma por semana COMPLETED da consistência canônica (sessões + parâmetros declarados, T19.2A)"
+      },
+      {
+        "event": "MISSION_COMPLETED",
+        "xp": "MISSION_CATALOG",
+        "authority": "RECONSTRUCTABLE",
+        "basis": "as quatro missões do catálogo v1 são agregados de sessões por semana e da consistência"
+      },
+      {
+        "event": "PERSONAL_RECORD_CREATED",
+        "xp": 50,
+        "authority": "UNSUPPORTED_SERVER_SIDE",
+        "basis": "a regra é do WorkoutEngine sobre cargas de série e a dedupeKey cita exerciseId local; ler cargas no social violaria AGGREGATE_ONLY"
+      },
+      {
+        "event": "STREAK_MILESTONE_REACHED",
+        "xp": null,
+        "authority": "RECONSTRUCTABLE",
+        "basis": "não vale XP; a sequência é a da consistência canônica"
+      },
+      {
+        "event": "WORKOUT_STARTED",
+        "xp": null,
+        "authority": "LOCAL_ONLY",
+        "basis": "não vale XP; sessões não concluídas não sincronizam"
+      },
+      {
+        "event": "EXERCISE_COMPLETED",
+        "xp": null,
+        "authority": "LOCAL_ONLY",
+        "basis": "não vale XP"
+      },
+      {
+        "event": "FIRST_EXERCISE_COMPLETED",
+        "xp": null,
+        "authority": "LOCAL_ONLY",
+        "basis": "não vale XP"
+      }
+    ],
+    "missions": [
+      {
+        "id": "weekly_workouts_3",
+        "type": "WORKOUT_COUNT",
+        "target": 3,
+        "rewardXp": 150
+      },
+      {
+        "id": "weekly_training_days_3",
+        "type": "TRAINING_DAYS",
+        "target": 3,
+        "rewardXp": 150
+      },
+      {
+        "id": "weekly_goal",
+        "type": "WEEKLY_GOAL",
+        "target": null,
+        "rewardXp": 100
+      },
+      {
+        "id": "total_workouts_10",
+        "type": "TOTAL_WORKOUTS",
+        "target": 10,
+        "rewardXp": 200
+      }
+    ],
+    "achievements": [
+      {
+        "id": "first_workout",
+        "category": "TRAINING",
+        "target": 1,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "10_workouts",
+        "category": "TRAINING",
+        "target": 10,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "25_workouts",
+        "category": "TRAINING",
+        "target": 25,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "50_workouts",
+        "category": "TRAINING",
+        "target": 50,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "100_workouts",
+        "category": "TRAINING",
+        "target": 100,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_2_weeks",
+        "category": "CONSISTENCY",
+        "target": 2,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_4_weeks",
+        "category": "CONSISTENCY",
+        "target": 4,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_8_weeks",
+        "category": "CONSISTENCY",
+        "target": 8,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_12_weeks",
+        "category": "CONSISTENCY",
+        "target": 12,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_24_weeks",
+        "category": "CONSISTENCY",
+        "target": 24,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "streak_52_weeks",
+        "category": "CONSISTENCY",
+        "target": 52,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "first_pr",
+        "category": "PERFORMANCE",
+        "target": 1,
+        "authority": "UNSUPPORTED_SERVER_SIDE"
+      },
+      {
+        "id": "5_prs",
+        "category": "PERFORMANCE",
+        "target": 5,
+        "authority": "UNSUPPORTED_SERVER_SIDE"
+      },
+      {
+        "id": "10_prs",
+        "category": "PERFORMANCE",
+        "target": 10,
+        "authority": "UNSUPPORTED_SERVER_SIDE"
+      },
+      {
+        "id": "25_prs",
+        "category": "PERFORMANCE",
+        "target": 25,
+        "authority": "UNSUPPORTED_SERVER_SIDE"
+      },
+      {
+        "id": "first_measurement",
+        "category": "BODY",
+        "target": 1,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "4_measurements",
+        "category": "BODY",
+        "target": 4,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "12_measurements",
+        "category": "BODY",
+        "target": 12,
+        "authority": "RECONSTRUCTABLE"
+      },
+      {
+        "id": "24_measurements",
+        "category": "BODY",
+        "target": 24,
+        "authority": "RECONSTRUCTABLE"
+      }
+    ],
+    "levelCurve": {
+      "rule": "nível 1 pede 500 XP; cada nível seguinte pede nível × 500 (XpTransactionRepositoryImpl.calculateProgress)",
+      "samples": [
+        {
+          "totalXp": 0,
+          "level": 1,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 500
+        },
+        {
+          "totalXp": 499,
+          "level": 1,
+          "currentLevelXp": 499,
+          "xpForNextLevel": 500
+        },
+        {
+          "totalXp": 500,
+          "level": 2,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 1000
+        },
+        {
+          "totalXp": 1499,
+          "level": 2,
+          "currentLevelXp": 999,
+          "xpForNextLevel": 1000
+        },
+        {
+          "totalXp": 1500,
+          "level": 3,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 1500
+        },
+        {
+          "totalXp": 2400,
+          "level": 3,
+          "currentLevelXp": 900,
+          "xpForNextLevel": 1500
+        },
+        {
+          "totalXp": 2999,
+          "level": 3,
+          "currentLevelXp": 1499,
+          "xpForNextLevel": 1500
+        },
+        {
+          "totalXp": 3000,
+          "level": 4,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 2000
+        },
+        {
+          "totalXp": 4550,
+          "level": 4,
+          "currentLevelXp": 1550,
+          "xpForNextLevel": 2000
+        },
+        {
+          "totalXp": 4999,
+          "level": 4,
+          "currentLevelXp": 1999,
+          "xpForNextLevel": 2000
+        },
+        {
+          "totalXp": 5000,
+          "level": 5,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 2500
+        },
+        {
+          "totalXp": 7500,
+          "level": 6,
+          "currentLevelXp": 0,
+          "xpForNextLevel": 3000
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "dez-treinos-duas-semanas-cumpridas",
+      "note": "meta 3 desde 17/8. Semana 17/8: seg/qua/sex (3 treinos, 3 dias). Semana 24/8: seg x2, ter, qui (4 treinos, 3 dias). Semana 31/8: 2 treinos (perdida). Semana atual: 1. Décimo treino em 8/9 → total_workouts_10. Medições em 4 dias distintos (duas no mesmo dia contam uma)",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20682,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20682,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-21T10:00:00.000Z",
+          "millis": 1787306400000,
+          "local": "2026-08-21T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-24T21:00:00.000Z",
+          "millis": 1787605200000,
+          "local": "2026-08-24T18:00"
+        },
+        {
+          "iso": "2026-08-25T10:00:00.000Z",
+          "millis": 1787652000000,
+          "local": "2026-08-25T07:00"
+        },
+        {
+          "iso": "2026-08-27T10:00:00.000Z",
+          "millis": 1787824800000,
+          "local": "2026-08-27T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-01T10:00:00.000Z",
+          "millis": 1788256800000,
+          "local": "2026-09-01T07:00"
+        },
+        {
+          "iso": "2026-09-08T10:00:00.000Z",
+          "millis": 1788861600000,
+          "local": "2026-09-08T07:00"
+        }
+      ],
+      "bodyMeasurements": [
+        {
+          "iso": "2026-08-18T11:00:00.000Z",
+          "millis": 1787050800000,
+          "local": "2026-08-18T08:00"
+        },
+        {
+          "iso": "2026-08-18T23:00:00.000Z",
+          "millis": 1787094000000,
+          "local": "2026-08-18T20:00"
+        },
+        {
+          "iso": "2026-08-25T11:00:00.000Z",
+          "millis": 1787655600000,
+          "local": "2026-08-25T08:00"
+        },
+        {
+          "iso": "2026-09-01T11:00:00.000Z",
+          "millis": 1788260400000,
+          "local": "2026-09-01T08:00"
+        },
+        {
+          "iso": "2026-09-08T11:00:00.000Z",
+          "millis": 1788865200000,
+          "local": "2026-09-08T08:00"
+        }
+      ],
+      "expected": {
+        "completedWorkouts": 10,
+        "currentStreakWeeks": 0,
+        "longestStreakWeeks": 2,
+        "xp": {
+          "workoutCompleted": 1000,
+          "firstWorkoutCompleted": 100,
+          "weeklyGoalCompleted": 300,
+          "missions": 1000,
+          "total": 2400
+        },
+        "level": {
+          "level": 3,
+          "currentLevelXp": 900,
+          "xpForNextLevel": 1500
+        },
+        "measurementDays": 4,
+        "earnedAchievementIds": [
+          "first_workout",
+          "10_workouts",
+          "streak_2_weeks",
+          "first_measurement",
+          "4_measurements"
+        ]
+      }
+    },
+    {
+      "name": "primeiro-treino",
+      "note": "um único treino: 100 (treino) + 100 (primeiro treino); nenhuma missão, nenhuma meta; nível 1; só first_workout",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20703,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20703,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-09-08T10:00:00.000Z",
+          "millis": 1788861600000,
+          "local": "2026-09-08T07:00"
+        }
+      ],
+      "bodyMeasurements": [],
+      "expected": {
+        "completedWorkouts": 1,
+        "currentStreakWeeks": 0,
+        "longestStreakWeeks": 0,
+        "xp": {
+          "workoutCompleted": 100,
+          "firstWorkoutCompleted": 100,
+          "weeklyGoalCompleted": 0,
+          "missions": 0,
+          "total": 200
+        },
+        "level": {
+          "level": 1,
+          "currentLevelXp": 200,
+          "xpForNextLevel": 500
+        },
+        "measurementDays": 0,
+        "earnedAchievementIds": [
+          "first_workout"
+        ]
+      }
+    },
+    {
+      "name": "cinco-semanas-no-ritmo-inclusive-a-atual",
+      "note": "seg/qua/sex por 4 semanas e a atual já cumprida em 2 dias (seg 7, ter 8 x2): 15 treinos → 15×100 + 100 + 5×150 (meta) + missões (weekly_workouts_3 5×150, weekly_training_days_3 4×150 — a semana atual tem só 2 dias —, weekly_goal 5×100, total_workouts_10 200) = 4400 → nível 4 (500+1000+1500 = 3000 ≤ 4400 < 5000). Sequência 5 → streak_2 e streak_4",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": {
+        "trackingStartedAtEpochDay": 20675,
+        "weeklyGoals": [
+          {
+            "weekStartEpochDay": 20675,
+            "goal": 3
+          }
+        ]
+      },
+      "completedSessions": [
+        {
+          "iso": "2026-08-10T10:00:00.000Z",
+          "millis": 1786356000000,
+          "local": "2026-08-10T07:00"
+        },
+        {
+          "iso": "2026-08-12T10:00:00.000Z",
+          "millis": 1786528800000,
+          "local": "2026-08-12T07:00"
+        },
+        {
+          "iso": "2026-08-14T10:00:00.000Z",
+          "millis": 1786701600000,
+          "local": "2026-08-14T07:00"
+        },
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-21T10:00:00.000Z",
+          "millis": 1787306400000,
+          "local": "2026-08-21T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        },
+        {
+          "iso": "2026-09-07T10:00:00.000Z",
+          "millis": 1788775200000,
+          "local": "2026-09-07T07:00"
+        },
+        {
+          "iso": "2026-09-08T09:00:00.000Z",
+          "millis": 1788858000000,
+          "local": "2026-09-08T06:00"
+        },
+        {
+          "iso": "2026-09-08T15:00:00.000Z",
+          "millis": 1788879600000,
+          "local": "2026-09-08T12:00"
+        }
+      ],
+      "bodyMeasurements": [
+        {
+          "iso": "2026-08-10T11:00:00.000Z",
+          "millis": 1786359600000,
+          "local": "2026-08-10T08:00"
+        }
+      ],
+      "expected": {
+        "completedWorkouts": 15,
+        "currentStreakWeeks": 5,
+        "longestStreakWeeks": 5,
+        "xp": {
+          "workoutCompleted": 1500,
+          "firstWorkoutCompleted": 100,
+          "weeklyGoalCompleted": 750,
+          "missions": 2050,
+          "total": 4400
+        },
+        "level": {
+          "level": 4,
+          "currentLevelXp": 1400,
+          "xpForNextLevel": 2000
+        },
+        "measurementDays": 1,
+        "earnedAchievementIds": [
+          "first_workout",
+          "10_workouts",
+          "streak_2_weeks",
+          "streak_4_weeks",
+          "first_measurement"
+        ]
+      }
+    },
+    {
+      "name": "sem-parametros-declarados",
+      "note": "sem meta/início declarados o servidor não afirma nível nem sequência (UNAVAILABLE); as conquistas de treino e de corpo continuam afirmáveis, as de consistência não",
+      "timeZone": "America/Sao_Paulo",
+      "nowLocal": "2026-09-08T15:00",
+      "nowIso": "2026-09-08T18:00:00.000Z",
+      "nowMillis": 1788890400000,
+      "consistency": null,
+      "completedSessions": [
+        {
+          "iso": "2026-08-17T10:00:00.000Z",
+          "millis": 1786960800000,
+          "local": "2026-08-17T07:00"
+        },
+        {
+          "iso": "2026-08-19T10:00:00.000Z",
+          "millis": 1787133600000,
+          "local": "2026-08-19T07:00"
+        },
+        {
+          "iso": "2026-08-21T10:00:00.000Z",
+          "millis": 1787306400000,
+          "local": "2026-08-21T07:00"
+        },
+        {
+          "iso": "2026-08-24T10:00:00.000Z",
+          "millis": 1787565600000,
+          "local": "2026-08-24T07:00"
+        },
+        {
+          "iso": "2026-08-26T10:00:00.000Z",
+          "millis": 1787738400000,
+          "local": "2026-08-26T07:00"
+        },
+        {
+          "iso": "2026-08-28T10:00:00.000Z",
+          "millis": 1787911200000,
+          "local": "2026-08-28T07:00"
+        },
+        {
+          "iso": "2026-08-31T10:00:00.000Z",
+          "millis": 1788170400000,
+          "local": "2026-08-31T07:00"
+        },
+        {
+          "iso": "2026-09-02T10:00:00.000Z",
+          "millis": 1788343200000,
+          "local": "2026-09-02T07:00"
+        },
+        {
+          "iso": "2026-09-04T10:00:00.000Z",
+          "millis": 1788516000000,
+          "local": "2026-09-04T07:00"
+        },
+        {
+          "iso": "2026-09-07T10:00:00.000Z",
+          "millis": 1788775200000,
+          "local": "2026-09-07T07:00"
+        }
+      ],
+      "bodyMeasurements": [
+        {
+          "iso": "2026-08-18T11:00:00.000Z",
+          "millis": 1787050800000,
+          "local": "2026-08-18T08:00"
+        }
+      ],
+      "expected": {
+        "completedWorkouts": 10,
+        "currentStreakWeeks": null,
+        "longestStreakWeeks": null,
+        "xp": null,
+        "level": null,
+        "measurementDays": 1,
+        "earnedAchievementIds": [
+          "first_workout",
+          "10_workouts",
+          "first_measurement"
+        ]
+      }
+    }
+  ]
+}
