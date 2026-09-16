@@ -129,9 +129,12 @@ Do not create a second ETA calculator or a second recovery clock.
 
 > **Runtime (verificado em 2026-09-16):** o que existe é o treino em dupla **local** da T19.4 —
 > `WorkoutExecutionMode.SOLO` / `DUO_LOCAL` — descrito em §13.24 e em
-> [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md). Não existe
-> `TRIO`, rota de party, `PartyRouteBuilder` nem sessão remota; as regras abaixo valem como direção
-> e são satisfeitas pelo runtime da dupla local onde se aplicam.
+> [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md), e a dupla
+> **à distância** da T19.5 — `DUO_REMOTE`, dois aparelhos, uma sessão em cada — descrita em §13.25 e
+> em [`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md). Não existe
+> `TRIO`, rota de party nem `PartyRouteBuilder`; as regras abaixo valem como direção e são
+> satisfeitas pelos dois runtimes onde se aplicam. A "sessão remota" com sincronização
+> Nostr-inspired citada em `ARCHITECTURE.md §9` nunca existiu; o que existe é o multiplayer da T19.5.
 
 Party mode is optional. Solo must remain a first-class path.
 
@@ -1991,8 +1994,60 @@ As regras que não podem ser quebradas:
 - **A identidade da série vai na intenção.** `completeGuestSet(guestSet, edited)` recebe a linha
   do convidado capturada na composição; nunca decida o participante lendo `state.value` no toque.
 - **Sessão concluída não recebe série**, nem do dono nem do convidado.
-- **Backend N/A.** Nenhum endpoint, migration ou DTO muda por causa da dupla local; T19.5 é outra
-  tarefa.
+- **Backend N/A.** Nenhum endpoint, migration ou DTO muda por causa da dupla local; a dupla à
+  distância (T19.5) é outro modo, §13.25.
+
+## 13.25 Treino em dupla à distância: dois aparelhos, duas sessões, um servidor que só coordena (T19.5)
+
+Contrato completo em [`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md).
+As regras que não podem ser quebradas:
+
+- **O servidor coordena; ele nunca executa.** `multiplayer_rooms`/`_members`/`_events` guardam
+  quem está na sala, quem é o host, quem está conectado, o que aconteceu e em que ordem — e nada
+  além disso. Não existe `WorkoutSession` no servidor, e nenhum evento recebido escreve série,
+  peso, descanso, PR, XP ou status no Room. Há teste estrutural (`MultiplayerBoundaryInspectionTest`).
+  Se o servidor sumir no meio do treino, os dois treinos locais continuam íntegros — e há teste.
+- **`DUO_REMOTE` é a execução solo mais um vínculo.** Uma sessão remota neste aparelho usa as
+  mesmas `set_logs`, o mesmo descanso, o mesmo PR, o mesmo XP; nenhuma tabela de participante é
+  lida. O que se soma é `workout_session_multiplayer_links` (sala, conta, papel) e o
+  `MultiplayerSessionCoordinator`. Nunca uma segunda engine, nunca uma sessão compartilhada.
+- **Cada aparelho tem a própria sessão, e ela é do seu dono.** `UNIQUE (roomId, accountUid)` no
+  vínculo: uma sala, uma conta, uma sessão. O convidado recebe uma **cópia** do treino (o snapshot
+  portável da T17.7), nunca um vínculo vivo com o treino do host.
+- **Só coordenação atravessa a rede.** `SET_COMPLETED` leva exercício canônico, posição, série,
+  total de séries e um timestamp informativo. O validador recusa **por nome** `weight`, `reps`,
+  `rpe`, `rir`, `notes`, `pr`, `xp`, `uid`, `syncId` e qualquer chave fora da allowlist; os DTOs
+  do Android não têm campo para elas. Peso, repetição, PR e XP nunca chegam do peer como verdade
+  — não há por onde.
+- **Ordem é a `sequence` do servidor, por sala, sob lock.** `PRIMARY KEY (room_id, sequence)`. O
+  aparelho aplica só o próximo; lacuna é resync, nunca "aplica assim mesmo"; atrasado é descartado.
+- **Identidade de evento é do cliente e determinística:** `sha256(roomId | fato)`,
+  `UNIQUE (room_id, event_id)`. Reenviar é dedupe. Depois de qualquer reconexão o aparelho reenvia
+  **tudo** o que o Room diz sobre a sessão — é a razão de não existir outbox em memória.
+- **Eventos nascem do estado, não do toque.** `LocalMultiplayerEvents.derive` lê o Room. Um
+  toque que não gravou não vira evento; um evento que não saiu antes da morte do processo sai na
+  reabertura.
+- **Transporte é HTTP long-polling sobre o `SparkBackendClient`.** Sem WebSocket, sem SSE, sem
+  FCM. Presença é o último poll — derivada, nunca gravada. O long-poll é a única chamada
+  cancelável do cliente (`getJsonCancellable`), e é cancelada na troca de conta.
+- **Escopo por conta, e a conta anterior não vaza.** O coordenador relança o laço por
+  `(uid, vínculo)`; um vínculo de outra conta é `OTHER_ACCOUNT` sem chamada nenhuma; a tela do
+  lobby zera **antes** de a requisição da conta nova sair. Cursor, buffer, sala e eventos vivem
+  dentro do laço cancelado.
+- **Dois membros por schema:** `UNIQUE (room_id, role)`, `role IN ('HOST','GUEST')`. Amizade
+  autoriza o convite; bloqueio veta (`404`, indistinguível) e fecha a sala aberta na mesma
+  transação; a exclusão de conta fecha a sala e apaga membership e eventos (inventário de purge).
+- **Sair é definitivo; finish é individual.** `LEFT` não volta por reconexão (`409`), e o vínculo
+  local fica marcado. `MEMBER_FINISHED` marca só quem terminou; a sala continua para o outro. O
+  host não finaliza, não altera nem lê a sessão de ninguém.
+- **Sala encerrada ou expirada recusa evento e join** (`409`), com motivo explícito. Expiração é
+  preguiçosa (sem cron) e gera `ROOM_CLOSED`.
+- **Logs.** No servidor: `roomId`, contagens e motivo. No Android: **nada** — e a ausência é
+  testada. Nunca `socialId`, nome, uid, e-mail ou corpo.
+- **Testes.** Toda mudança no multiplayer roda `npm test -- test/multiplayer.spec.ts` em
+  `backend/` e `./gradlew :app:testDebugUnitTest --tests "com.example.domain.multiplayer.*"
+  --tests "com.example.data.multiplayer.*" --tests "com.example.presentation.multiplayer.*"`.
+  As duas são offline e usam dublê de autenticação e de servidor.
 
 ## 14. Tests and build are part of implementation
 

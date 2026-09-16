@@ -13,6 +13,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { BackupModule } from './modules/backup/backup.module';
 import { HealthModule } from './modules/health/health.module';
 import { SocialModule } from './modules/social/social.module';
+import { MultiplayerModule } from './modules/multiplayer/multiplayer.module';
 import { SyncModule } from './modules/sync/sync.module';
 import { AccountDeletionModule } from './modules/account-deletion/account-deletion.module';
 import { MaintenanceModule } from './maintenance/maintenance.module';
@@ -20,7 +21,8 @@ import { MaintenanceModule } from './maintenance/maintenance.module';
 /**
  * Spark Backend — monólito modular.
  *
- * `auth` (T16.1), `ai` (T16.2), `backup` (T16.4/T16.5), `sync` (T16.6) e `social` (T17.0) estão
+ * `auth` (T16.1), `ai` (T16.2), `backup` (T16.4/T16.5), `sync` (T16.6), `social` (T17.0) e
+ * `multiplayer` (T19.5) estão
  * aqui, no mesmo processo e no mesmo banco. Não há necessidade operacional que justifique
  * separá-los em serviços: um grupo pequeno de usuários, uma VPS, um deploy.
  *
@@ -43,6 +45,7 @@ import { MaintenanceModule } from './maintenance/maintenance.module';
     BackupModule,
     SyncModule,
     SocialModule,
+    MultiplayerModule,
     AccountDeletionModule,
     MaintenanceModule,
   ],
@@ -62,6 +65,7 @@ export class AppModule implements NestModule {
         BackupModule,
         SyncModule,
         SocialModule,
+        MultiplayerModule,
         AccountDeletionModule,
       ],
     };

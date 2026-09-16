@@ -439,6 +439,37 @@ interface WorkoutDao {
     @Query("DELETE FROM workout_guest_set_logs WHERE exerciseSessionId = :exerciseSessionId AND setNumber = :setNumber")
     suspend fun deleteGuestSetLogsForSet(exerciseSessionId: Long, setNumber: Int)
 
+    // ---- Treino em dupla à distância (T19.5) ---------------------------------------------------
+    //
+    // Só o vínculo sessão ↔ sala. A execução de uma sessão `DUO_REMOTE` é a execução solo, e
+    // nenhuma leitura de histórico, PR, estatística, sync ou backup toca esta tabela.
+
+    @Insert
+    suspend fun insertMultiplayerLink(link: WorkoutSessionMultiplayerLinkEntity)
+
+    @Query("SELECT * FROM workout_session_multiplayer_links WHERE sessionId = :sessionId LIMIT 1")
+    suspend fun getMultiplayerLinkForSession(sessionId: Long): WorkoutSessionMultiplayerLinkEntity?
+
+    @Query("SELECT * FROM workout_session_multiplayer_links WHERE sessionId = :sessionId LIMIT 1")
+    fun getMultiplayerLinkForSessionFlow(sessionId: Long): Flow<WorkoutSessionMultiplayerLinkEntity?>
+
+    @Query("SELECT * FROM workout_session_multiplayer_links WHERE roomId = :roomId AND accountUid = :accountUid LIMIT 1")
+    suspend fun getMultiplayerLinkForRoom(roomId: String, accountUid: String): WorkoutSessionMultiplayerLinkEntity?
+
+    /** Vínculos desta conta cuja sessão já acabou sem que a sala tenha sido avisada. */
+    @Query(
+        """
+        SELECT l.* FROM workout_session_multiplayer_links l
+        INNER JOIN workout_sessions s ON s.id = l.sessionId
+        WHERE l.accountUid = :accountUid AND l.finishedNotifiedAt IS NULL AND s.status != 'IN_PROGRESS'
+        ORDER BY l.createdAt ASC
+        """
+    )
+    suspend fun getUnnotifiedFinishedMultiplayerLinks(accountUid: String): List<WorkoutSessionMultiplayerLinkEntity>
+
+    @Query("UPDATE workout_session_multiplayer_links SET finishedNotifiedAt = :at WHERE sessionId = :sessionId")
+    suspend fun markMultiplayerLinkFinishedNotified(sessionId: Long, at: Long)
+
     @Update
     suspend fun updateSetLogs(setLogs: List<SetLogEntity>)
 

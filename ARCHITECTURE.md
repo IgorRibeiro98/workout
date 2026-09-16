@@ -242,9 +242,11 @@ A fresh session must get a fresh `workoutStartedAt`.
 > **Status (verificado em 2026-09-16): não implementado como descrito.** `PartyRouteBuilder`,
 > rotas e nós continuam **não existindo** no código. O que existe desde a **T19.4** é o treino em
 > dupla **local** — `SOLO` / `DUO_LOCAL` — como uma dimensão de participante sobre a execução
-> atual (`WorkoutEngine` + `ExecutionViewModel`), sem rota, sem segunda engine e sem `TRIO`. O
-> contrato do runtime implementado está em
-> [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md); o texto
+> atual (`WorkoutEngine` + `ExecutionViewModel`), sem rota, sem segunda engine e sem `TRIO`, e
+> desde a **T19.5** a dupla **à distância** — `DUO_REMOTE` — em que cada aparelho executa a própria
+> sessão (idêntica à solo) e um servidor só coordena. Os contratos dos runtimes implementados estão
+> em [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md) e
+> [`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md); o texto
 > abaixo é a direção pretendida antiga, mantida como referência, e não prova de que algo existe.
 
 Relevant concept:
@@ -266,6 +268,12 @@ Do not:
 - calculate party rotation only in UI state.
 
 ### Remote Party session feature
+
+> **Status (verificado em 2026-09-16):** a "sincronização Nostr-inspired" abaixo **nunca existiu
+> no código**. O que existe é o multiplayer remoto da **T19.5**: salas no Spark Backend
+> (`backend/src/modules/multiplayer/`), HTTP long-polling sobre o `SparkBackendClient`, e no
+> Android `data/multiplayer/` + `domain/multiplayer/` — contrato em
+> [`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md).
 
 The project also has/has explored a collaborative Party invitation/session flow with Nostr-inspired synchronization.
 
@@ -707,7 +715,7 @@ persistência do domínio        validação da resposta
 | T19.2 | Social Progress V2: consistência, nível e conquistas derivados no servidor de fatos sincronizados + parâmetros declarados; `UNSUPPORTED` eliminado onde há autoridade remota | **implementado** (produção NOT VERIFIED até o deploy) |
 | T19.3 | Program Share: programa inteiro por cópia independente | **implementado** |
 | T19.4 | Treino em dupla local (`DUO_LOCAL`): duas pessoas, um aparelho, uma sessão do dono; convidado sem conta; backend N/A | **implementado** (aparelho real NOT VERIFIED) |
-| T19.5 | Multiplayer remoto | não iniciado |
+| T19.5 | Treino em dupla à distância (`DUO_REMOTE`): dois aparelhos, uma sessão em cada, sala no backend que só coordena (HTTP long-polling, sem WebSocket/FCM) | **implementado** (dois aparelhos reais / Cloud Run real NOT VERIFIED) |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -2048,6 +2056,8 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 - [`docs/architecture/sync-protocol.md`](docs/architecture/sync-protocol.md)
 - [`docs/architecture/social-domain.md`](docs/architecture/social-domain.md)
 - [`docs/architecture/friendship-contract.md`](docs/architecture/friendship-contract.md)
+- [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md)
+- [`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md)
 - [`docs/FIREBASE_AUTH_SETUP.md`](docs/FIREBASE_AUTH_SETUP.md)
 - [`backend/README.md`](backend/README.md)
 - [`contracts/social/v1/README.md`](contracts/social/v1/README.md)

@@ -113,6 +113,16 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     // Treinos compartilhados (T17.7).
     object SharedWorkouts : Screen("shared_workouts", R.string.nav_workouts, Icons.Default.FitnessCenter)
 
+    /**
+     * Treino em dupla à distância (T19.5): convidar um amigo ou aceitar um convite.
+     *
+     * `templateId` é o treino de hoje deste aparelho (o que o host leva para a sala); `-1` quando
+     * não há treino para hoje — dá para aceitar um convite, mas não para convidar.
+     */
+    object MultiplayerLobby : Screen("multiplayer_lobby/{templateId}", R.string.nav_workouts, Icons.Default.FitnessCenter) {
+        fun createRoute(templateId: Long?) = "multiplayer_lobby/${templateId ?: -1L}"
+    }
+
     // Feed de check-ins (T17.8). Dentro da área Social do Perfil, e **sem** item novo de bottom
     // navigation (§83): a barra inferior é do núcleo do produto — treinar, histórico, evolução.
     //

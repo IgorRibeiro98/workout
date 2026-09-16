@@ -7,7 +7,10 @@ import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SessionWithDetails
 import com.example.data.local.SetLogEntity
 import com.example.data.local.WorkoutGuestSetLogEntity
+import com.example.data.local.WorkoutExecutionMode
 import com.example.data.local.WorkoutParticipantRole
+import com.example.data.multiplayer.MultiplayerSessionCoordinator
+import com.example.domain.multiplayer.MultiplayerSessionState
 import com.example.domain.engine.SyncResult
 import com.example.domain.engine.WorkoutEngine
 import com.example.service.WorkoutNotificationManager
@@ -74,6 +77,14 @@ data class ExecutionState(
      * regra abaixo idêntica ao que era antes da dupla.
      */
     val duo: DuoExecution? = null,
+    /**
+     * A sala remota da sessão `DUO_REMOTE` (T19.5): `null` em solo e na dupla local.
+     *
+     * É estado de **conexão e do peer**, e só isso. Nenhuma regra desta tela lê `remote` para
+     * decidir série, descanso, vez ou conclusão — a execução de uma sessão remota é literalmente a
+     * solo, e é assim que uma sala perdida por falta de rede não muda nada do treino.
+     */
+    val remote: MultiplayerSessionState? = null,
     /**
      * O prazo de descanso do participante **da vez**: o temporizador do aparelho para o dono, o
      * `restEndsAt` do convidado para o convidado. Em sessão solo é o próprio temporizador. É o
@@ -199,7 +210,9 @@ data class ExecutionState(
 class ExecutionViewModel(
     private val workoutEngine: WorkoutEngine,
     private val notificationManager: WorkoutNotificationManager,
-    val settingsManager: SettingsManager
+    val settingsManager: SettingsManager,
+    /** O runtime da dupla à distância (T19.5). `null` num build sem backend: `remote` fica `null`, e nada mais muda. */
+    private val multiplayer: MultiplayerSessionCoordinator? = null
 ) : ViewModel() {
 
     /**
@@ -402,12 +415,16 @@ class ExecutionViewModel(
         )
     }
 
+    private val remoteState: Flow<MultiplayerSessionState?> =
+        multiplayer?.state ?: flowOf(null)
+
     val state: StateFlow<ExecutionState> = combine(
         baseSessionState,
         restTimerTarget,
         _setFeedback,
-        _pendingMoveConfirmation
-    ) { baseState, timerTarget, feedback, pendingMove ->
+        _pendingMoveConfirmation,
+        remoteState
+    ) { baseState, timerTarget, feedback, pendingMove, remote ->
         // O descanso que conta é o do participante da vez (T19.4). Em solo, e na vez do dono, é o
         // temporizador do aparelho; na vez do convidado é o `restEndsAt` dele. O descanso do outro
         // participante continua correndo por timestamp — só não é ele que decide a fase.
@@ -420,9 +437,21 @@ class ExecutionViewModel(
             isResting = isTimerActive,
             currentParticipantRestTarget = restTarget,
             lastSetFeedback = feedback,
-            pendingMoveConfirmation = pendingMove
+            pendingMoveConfirmation = pendingMove,
+            // A sala só é mostrada na sessão a que pertence: um estado remoto de uma sessão que
+            // já acabou nunca aparece sobre a próxima.
+            remote = remote?.takeIf { baseState.sessionWithDetails?.session?.executionMode == WorkoutExecutionMode.DUO_REMOTE.name }
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ExecutionState())
+
+    /**
+     * Sai da sala e continua o treino (T19.5 §5.21). A sessão local não muda de status, de modo
+     * nem de conteúdo; só a coordenação remota acaba — e não volta por reconexão automática.
+     */
+    fun leaveMultiplayerRoom() {
+        val coordinator = multiplayer ?: return
+        launchGuarded { coordinator.leaveRoom() }
+    }
 
     // Quem **mostra** a notificação de descanso não é mais este ViewModel.
     //

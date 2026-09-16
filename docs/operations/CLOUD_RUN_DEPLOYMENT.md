@@ -552,6 +552,16 @@ Subir qualquer um destes valores é decisão operacional deliberada (§58), docu
 acontecer — nunca uma "otimização" automática. O objetivo inicial é custo mínimo com
 scale-to-zero.
 
+**Long-polling do multiplayer (T19.5).** `GET /v1/multiplayer/rooms/:id/events?wait=` segura a
+resposta por até 20 s (bem abaixo dos 180 s de request timeout), e cada aparelho numa sala mantém
+**uma** requisição aberta quase o tempo todo. Com `max instances = 1` e `concurrency = 20`, cada
+participante de dupla à distância ocupa 1 dos 20 slots da API enquanto treina — 20 pessoas em
+salas ao mesmo tempo saturariam a API para sync, social e Coach. A espera é ociosa para o Node (uma
+consulta curta por segundo, sem conexão do pool presa), então o remédio é subir
+`SPARK_RUN_API_CONCURRENCY` (80 é seguro com 512 MiB) e/ou `max instances` **antes** de o
+multiplayer ganhar uso real. Sem WebSocket, nada mais muda: o long-poll é HTTP comum e funciona
+igual com uma ou dez instâncias.
+
 ### O que esta tarefa deliberadamente não faz (§60)
 
 Domínio customizado, Load Balancer, CDN, Cloud Armor, Redis, Cloud SQL, migração Neon → Cloud SQL,

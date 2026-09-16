@@ -215,6 +215,14 @@ T18.2): nenhum arquivo, identidade da service account anexada. Passo a passo dos
 | `POST /v1/social/friend-requests/:id/cancel` | **Bearer** | Só quem enviou. Idempotente (T17.1). |
 | `GET /v1/social/friends` | **Bearer** | Meus amigos: `socialId`, `displayName`, `friendsSince`. Sem `friendCode`, sem uid (T17.1). |
 | `POST /v1/social/friends/remove` | **Bearer** | Desfaz a amizade. Qualquer um do par; não bloqueia e não apaga mais nada (T17.1). |
+| `POST /v1/multiplayer/rooms` | **Bearer** | Cria uma sala de treino em dupla à distância para **um** amigo, com o snapshot portável do treino. Idempotente por `clientRequestId`; uma sala aberta por host (T19.5). |
+| `GET /v1/multiplayer/rooms/invitations` | **Bearer** | Salas `WAITING` em que a conta é convidada (T19.5). |
+| `GET /v1/multiplayer/rooms/:id` | **Bearer** | A sala, para membro ou convidado; terceiro recebe `404` (T19.5). |
+| `POST /v1/multiplayer/rooms/:id/join` | **Bearer** | `INVITED → ACTIVE`; rejoin é idempotente; bloqueio, sala fechada e expirada recusam (T19.5). |
+| `POST /v1/multiplayer/rooms/:id/leave` | **Bearer** | Sai (definitivo) — ou recusa o convite. Fecha a sala quando não sobra ninguém (T19.5). |
+| `POST /v1/multiplayer/rooms/:id/close` | **Bearer** | Só o host. Idempotente (T19.5). |
+| `POST /v1/multiplayer/rooms/:id/events` | **Bearer** | Publica 1–50 eventos de coordenação (`WORKOUT_STARTED`, `SET_COMPLETED`, `MEMBER_FINISHED`). `sequence` do servidor; `eventId` repetido devolve a sequence antiga; peso/reps/RPE/PR/XP recusados por nome (T19.5). |
+| `GET /v1/multiplayer/rooms/:id/events?after=&wait=` | **Bearer** | Eventos depois de `after`, em ordem; com `wait` (≤ 20 000 ms) segura a resposta até haver novidade — long-polling. O poll é a presença (T19.5). |
 
 Desde a T16.8, toda rota autenticada tem um teto por conta (`API_RATE_LIMITED`, 429), o backup tem
 tetos próprios de escrita e leitura (`BACKUP_RATE_LIMITED`), e as respostas de `/v1` saem com
@@ -457,8 +465,10 @@ backend/
 │   ├── modules/sync/            Sync incremental: contrato, política, validação, change log
 │   ├── modules/account-deletion/ Exclusão de conta; ledger anti-ressurreição (disco ou Object
 │   │                             Storage — T18.2)
-│   └── modules/social/          Social: identidade pública, privacidade, política de acesso
-│                                 e o grafo (friendship.*): pedidos e amizade bilateral
+│   ├── modules/social/          Social: identidade pública, privacidade, política de acesso
+│   │                             e o grafo (friendship.*): pedidos e amizade bilateral
+│   └── modules/multiplayer/     Treino em dupla à distância (T19.5): salas, membership e o log
+│                                 ordenado de eventos; long-polling. Coordena, nunca executa
 ├── migrations/                  NNNN_nome.sql, versionadas (PostgreSQL)
 └── test/
 ```

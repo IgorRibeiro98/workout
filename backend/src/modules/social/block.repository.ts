@@ -141,6 +141,21 @@ export class BlockRepository {
       [now, blockerUid, blockedUid, blockedUid, blockerUid],
     );
 
+    // 3b. Salas de treino em dupla à distância (T19.5) abertas entre o par: fecham na mesma
+    //     transação do bloqueio. O outro participante vê `CLOSED` no próximo poll; o motivo é
+    //     neutro (`UNAVAILABLE`) — bloquear nunca é anunciado a quem foi bloqueado.
+    await client.query(
+      `UPDATE multiplayer_rooms
+       SET status = 'CLOSED', close_reason = 'UNAVAILABLE', closed_at = $1, updated_at = $1
+       WHERE status IN ('WAITING', 'ACTIVE')
+         AND id IN (
+           SELECT a.room_id FROM multiplayer_room_members a
+           JOIN multiplayer_room_members b ON b.room_id = a.room_id
+           WHERE a.member_uid = $2 AND b.member_uid = $3
+         )`,
+      [now, blockerUid, blockedUid],
+    );
+
     // 4. Desafios compartilhados:
     // Se blocker é creator e blocked é member em desafio não encerrado -> retira o blocked
     await client.query(

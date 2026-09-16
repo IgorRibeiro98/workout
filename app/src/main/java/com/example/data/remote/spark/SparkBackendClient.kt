@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.coroutines.resume
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -330,6 +331,51 @@ class SparkBackendClient(
         } catch (e: IOException) {
             Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
             SparkHttpOutcome.NetworkFailure
+        }
+    }
+
+    /**
+     * `GET` autenticado **cancelável**, com teto de leitura próprio (T19.5).
+     *
+     * Existe para o long-poll do multiplayer: a resposta fica aberta até 20 s no servidor, e o
+     * `execute()` bloqueante de [getJson] não tem como ser interrompido — um logout no meio da
+     * espera deixaria a conexão da conta anterior aberta até o servidor responder, e a resposta
+     * chegaria já com outra conta ativa. Aqui a chamada é `enqueue`, e cancelar a corrotina
+     * cancela o `Call`: a conexão fecha na hora (§10 da T19.5, "conexão antiga é encerrada").
+     *
+     * Mesmo cliente, mesmo interceptor, mesmo lugar montando `Authorization: Bearer`.
+     */
+    suspend fun getJsonCancellable(path: String, readTimeoutSeconds: Long): SparkHttpOutcome {
+        if (!isConfigured) return SparkHttpOutcome.NotConfigured
+
+        val url = "${baseUrl.trimEnd('/')}/$path"
+        val request = Request.Builder().url(url).get().build()
+        val call = callClient(readTimeoutSeconds).newCall(request)
+
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {
+                    if (!continuation.isActive) return
+                    val outcome = if (e is MissingAuthTokenException) {
+                        SparkHttpOutcome.SignedOut
+                    } else {
+                        Log.i(TAG, "Spark Backend indisponível: ${e.javaClass.simpleName}")
+                        SparkHttpOutcome.NetworkFailure
+                    }
+                    continuation.resume(outcome)
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val outcome = response.use {
+                        SparkHttpOutcome.Response(
+                            code = it.code,
+                            body = it.body?.string().orEmpty()
+                        )
+                    }
+                    if (continuation.isActive) continuation.resume(outcome)
+                }
+            })
         }
     }
 

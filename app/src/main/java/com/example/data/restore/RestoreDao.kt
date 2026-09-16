@@ -48,6 +48,10 @@ interface RestoreDao {
     @Query("DELETE FROM workout_session_participants")
     suspend fun deleteAllSessionParticipants()
 
+    /** O vínculo com a sala remota (T19.5) é estado operacional, como as tabelas da dupla local. */
+    @Query("DELETE FROM workout_session_multiplayer_links")
+    suspend fun deleteAllMultiplayerLinks()
+
     @Query("DELETE FROM set_logs")
     suspend fun deleteAllSetLogs()
 

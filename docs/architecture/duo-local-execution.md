@@ -29,8 +29,9 @@ engine, uma segunda máquina de estados nem uma segunda sessão. `SOLO` continua
 caminho canônico: numa sessão solo nenhuma tabela de participante é lida, e cada regra da tela é
 literalmente a mesma de antes (o `duo` é `null`).
 
-Não faz parte desta versão: multiplayer remoto, dois celulares, `TRIO`, guest com conta, histórico
-ou XP próprios do guest, exercícios diferentes por participante. T19.5 é outra fronteira.
+Não faz parte desta versão: `TRIO`, guest com conta, histórico ou XP próprios do guest, exercícios
+diferentes por participante. Dois celulares é a **T19.5** (`DUO_REMOTE`,
+[`multiplayer-remote.md`](multiplayer-remote.md)) — outro modo, com outra sessão em cada aparelho.
 
 ## 2. Autoridades
 

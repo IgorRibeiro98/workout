@@ -36,7 +36,11 @@ export class AccountDeletionRepository {
   /**
    * Os `DELETE` do purge executados dentro de um PoolClient transacional.
    */
-  async purgeStatements(client: PoolClient, ownerUid: string): Promise<void> {
+  async purgeStatements(
+    client: PoolClient,
+    ownerUid: string,
+    now: number = Date.now(),
+  ): Promise<void> {
     // 1. Sync
     await client.query(`DELETE FROM sync_entities WHERE owner_uid = $1`, [ownerUid]);
     await client.query(`DELETE FROM sync_changes WHERE owner_uid = $1`, [ownerUid]);
@@ -124,7 +128,21 @@ export class AccountDeletionRepository {
     await client.query(`DELETE FROM social_checkin_media WHERE owner_uid = $1`, [ownerUid]);
     await client.query(`DELETE FROM social_workout_checkins WHERE author_uid = $1`, [ownerUid]);
 
-    // 11. Squads
+    // 11. Multiplayer remoto (T19.5). A sala em que a conta era convidada ou membro fecha para o
+    //     outro participante (o poll dele vê `CLOSED`), e nada da conta sobrevive: nem a sala que
+    //     ela abriu, nem a membership, nem os eventos que ela publicou em sala alheia.
+    await client.query(
+      `UPDATE multiplayer_rooms
+       SET status = 'CLOSED', close_reason = 'UNAVAILABLE', closed_at = $2, updated_at = $2
+       WHERE status IN ('WAITING', 'ACTIVE')
+         AND id IN (SELECT room_id FROM multiplayer_room_members WHERE member_uid = $1)`,
+      [ownerUid, now],
+    );
+    await client.query(`DELETE FROM multiplayer_room_events WHERE actor_uid = $1`, [ownerUid]);
+    await client.query(`DELETE FROM multiplayer_room_members WHERE member_uid = $1`, [ownerUid]);
+    await client.query(`DELETE FROM multiplayer_rooms WHERE host_uid = $1`, [ownerUid]);
+
+    // 12. Squads
     await client.query(
       `DELETE FROM social_group_checkin_shares
        WHERE group_id IN (SELECT id FROM social_groups WHERE owner_uid = $1)`,

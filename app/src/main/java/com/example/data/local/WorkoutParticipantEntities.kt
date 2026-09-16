@@ -6,15 +6,20 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * Como uma sessão é executada (T19.4).
+ * Como uma sessão é executada (T19.4 / T19.5).
  *
  * `SOLO` é o padrão e o caminho canônico: toda sessão anterior à T19.4 é `SOLO` por `DEFAULT` na
  * migração, e nada da execução solo lê as tabelas de participante. `DUO_LOCAL` é duas pessoas, um
  * aparelho, uma sessão — o convidado é local, sem conta, e a sessão continua sendo do dono.
  *
- * Não existe `TRIO` nem modo remoto: T19.5 é outra tarefa e outra fronteira.
+ * `DUO_REMOTE` (T19.5) é duas pessoas, **dois** aparelhos: a execução deste aparelho é idêntica ao
+ * `SOLO` — mesmas `set_logs`, mesmo PR, mesmo XP, nenhuma tabela de participante — e o que se soma
+ * é um vínculo com uma sala no Spark Backend (`workout_session_multiplayer_links`), por onde os dois
+ * aparelhos se enxergam. A sessão continua sendo deste aparelho, e o servidor nunca a escreve.
+ *
+ * Não existe `TRIO`.
  */
-enum class WorkoutExecutionMode { SOLO, DUO_LOCAL }
+enum class WorkoutExecutionMode { SOLO, DUO_LOCAL, DUO_REMOTE }
 
 /** Quem é o participante dentro da execução: o dono do aparelho, ou um convidado local. */
 enum class WorkoutParticipantRole { OWNER, GUEST }

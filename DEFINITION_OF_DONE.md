@@ -95,8 +95,11 @@ When relevant:
 
 ## 10. Party mode
 
-When relevant (o runtime hoje é o treino em dupla **local** da T19.4 — `SOLO` / `DUO_LOCAL`, sem
-`TRIO` nem rota; ver [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md)):
+When relevant (o runtime hoje é o treino em dupla **local** da T19.4 — `SOLO` / `DUO_LOCAL` — e a
+dupla **à distância** da T19.5 — `DUO_REMOTE`, dois aparelhos, uma sessão em cada, servidor que só
+coordena —, sem `TRIO` nem rota; ver
+[`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md) e
+[`docs/architecture/multiplayer-remote.md`](docs/architecture/multiplayer-remote.md)):
 
 - [ ] Participant count comes from configuration/session state.
 - [ ] Participant names/order are not hardcoded.
@@ -106,6 +109,7 @@ When relevant (o runtime hoje é o treino em dupla **local** da T19.4 — `SOLO`
 - [ ] REST nodes retain the correct relationship to their execution/set anchor.
 - [ ] Solo mode still works after party changes.
 - [ ] Reopen/recovery behavior is validated where applicable.
+- [ ] `DUO_REMOTE`: no received event writes to Room; the local session survives the server going away; account switch does not leak the room.
 
 ## 11. Workout builder / drag and drop
 

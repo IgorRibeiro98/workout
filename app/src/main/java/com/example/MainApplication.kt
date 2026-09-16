@@ -459,6 +459,43 @@ class MainApplication : Application(), ImageLoaderFactory, androidx.work.Configu
     }
 
     /**
+     * Treino em dupla à distância (T19.5).
+     *
+     * Três peças, todas `by lazy` e todas dependentes do cliente HTTP: o gateway (a sala, no
+     * servidor), o starter (a sala ligada a uma sessão **deste** aparelho) e o coordenador (os dois
+     * aparelhos se vendo durante o treino). Sem endereço de backend, o gateway responde "não
+     * configurado", o lobby diz isso, e nada do solo ou da dupla local muda.
+     *
+     * O coordenador começa a observar quando a UI monta (`MainScreen`), e não no `onCreate`:
+     * observar a conta liga o listener do Firebase Auth, e um processo acordado em segundo plano
+     * (WorkManager do sync) não tem por que tocá-lo. Na UI é o mesmo instante em que a fábrica de
+     * ViewModels já lê `authGateway`. Uma sessão `DUO_REMOTE` em andamento de uma abertura
+     * anterior, ou concluída sem que a sala fosse avisada, é retomada aí. Sem sessão vinculada,
+     * observar não faz chamada nenhuma.
+     */
+    val multiplayerGateway: com.example.domain.multiplayer.MultiplayerGateway by lazy {
+        com.example.data.multiplayer.SparkMultiplayerGateway(sparkBackendClient)
+    }
+
+    val multiplayerStarter: com.example.data.multiplayer.MultiplayerWorkoutStarter by lazy {
+        com.example.data.multiplayer.MultiplayerWorkoutStarter(
+            gateway = multiplayerGateway,
+            engine = workoutEngine,
+            repository = repository
+        )
+    }
+
+    val multiplayerCoordinator: com.example.data.multiplayer.MultiplayerSessionCoordinator by lazy {
+        com.example.data.multiplayer.MultiplayerSessionCoordinator(
+            engine = workoutEngine,
+            dao = database.workoutDao(),
+            gateway = multiplayerGateway,
+            authGateway = authGateway,
+            scope = applicationScope
+        )
+    }
+
+    /**
      * O cache de fotos do Feed (T17.9 §56/§57).
      *
      * Em memória, com escopo de conta, e trocado **antes** de qualquer requisição da conta nova

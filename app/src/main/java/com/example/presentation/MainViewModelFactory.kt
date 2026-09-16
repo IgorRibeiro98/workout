@@ -122,7 +122,16 @@ class MainViewModelFactory(
      * Squads privados (T17.11). `null` remove a área de Squads inteira, e nada mais muda — treinar,
      * consultar histórico e usar o Feed de amigos seguem idênticos (§116).
      */
-    private val socialGroupGateway: com.example.domain.social.SocialGroupGateway? = null
+    private val socialGroupGateway: com.example.domain.social.SocialGroupGateway? = null,
+    /**
+     * Treino em dupla à distância (T19.5). Os três vêm juntos ou não vêm: o gateway fala com a
+     * sala, o starter liga a sala a uma sessão deste aparelho, e o coordenador mantém os dois
+     * aparelhos se vendo durante o treino. `null` remove a entrada no lobby, e nada mais muda —
+     * solo e dupla local seguem idênticos.
+     */
+    private val multiplayerGateway: com.example.domain.multiplayer.MultiplayerGateway? = null,
+    private val multiplayerStarter: com.example.data.multiplayer.MultiplayerWorkoutStarter? = null,
+    private val multiplayerCoordinator: com.example.data.multiplayer.MultiplayerSessionCoordinator? = null
 ) : ViewModelProvider.Factory {
 
     /**
@@ -573,7 +582,26 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(ExecutionViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return ExecutionViewModel(workoutEngine, notificationManager, settingsManager) as T
+            return ExecutionViewModel(workoutEngine, notificationManager, settingsManager, multiplayerCoordinator) as T
+        }
+        if (modelClass.isAssignableFrom(com.example.presentation.multiplayer.MultiplayerLobbyViewModel::class.java)) {
+            val gateway = multiplayerGateway
+                ?: throw IllegalStateException("MultiplayerGateway not provided")
+            val starter = multiplayerStarter
+                ?: throw IllegalStateException("MultiplayerWorkoutStarter not provided")
+            // Amigos entram só para a **seleção** do convidado: quem decide se ele pode ser
+            // convidado é o servidor, na criação da sala.
+            val friends = friendGateway
+                ?: throw IllegalStateException("FriendGateway not provided")
+            val auth = authGateway
+                ?: throw IllegalStateException("AuthGateway not provided")
+            @Suppress("UNCHECKED_CAST")
+            return com.example.presentation.multiplayer.MultiplayerLobbyViewModel(
+                gateway = gateway,
+                starter = starter,
+                friendGateway = friends,
+                authGateway = auth
+            ) as T
         }
         if (modelClass.isAssignableFrom(HistoryViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

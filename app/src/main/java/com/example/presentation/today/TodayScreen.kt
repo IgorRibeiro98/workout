@@ -47,7 +47,9 @@ fun TodayScreen(
     viewModel: TodayViewModel,
     onNavigateToExecution: () -> Unit,
     onNavigateToProfile: () -> Unit = {},
-    onNavigateToEvolution: () -> Unit = {}
+    onNavigateToEvolution: () -> Unit = {},
+    /** Dupla à distância (T19.5): abre o lobby com o treino de hoje (ou `null`, só para aceitar convite). */
+    onNavigateToMultiplayer: (Long?) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isStarting by viewModel.isStartingWorkout.collectAsStateWithLifecycle()
@@ -179,10 +181,13 @@ fun TodayScreen(
                             fontWeight = FontWeight.Black,
                             lineHeight = 32.sp
                         )
-                        if (state.activeSession?.executionMode == com.example.data.local.WorkoutExecutionMode.DUO_LOCAL.name) {
+                        val activeMode = state.activeSession?.executionMode
+                        if (activeMode == com.example.data.local.WorkoutExecutionMode.DUO_LOCAL.name ||
+                            activeMode == com.example.data.local.WorkoutExecutionMode.DUO_REMOTE.name
+                        ) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Treino em dupla",
+                                text = if (activeMode == com.example.data.local.WorkoutExecutionMode.DUO_REMOTE.name) "Treino em dupla à distância" else "Treino em dupla",
                                 color = BackgroundDark.copy(alpha = 0.7f),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
@@ -830,6 +835,27 @@ fun TodayScreen(
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Text("INICIAR EM DUPLA", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                }
+                // Dupla à distância (T19.5): outro aparelho, outra conta, a mesma execução local.
+                // É uma tela própria porque envolve conta, amigo e sala — nada disso cabe num nome.
+                TextButton(
+                    onClick = {
+                        showDuoStartSheet = false
+                        onNavigateToMultiplayer(templateToStart?.id)
+                    },
+                    enabled = !isStarting,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .testTag("today_start_remote_duo_button")
+                ) {
+                    Text(
+                        "TREINAR COM UM AMIGO À DISTÂNCIA",
+                        color = Lime400,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        letterSpacing = 1.sp
+                    )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }

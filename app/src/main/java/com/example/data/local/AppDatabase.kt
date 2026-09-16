@@ -47,9 +47,10 @@ import kotlinx.coroutines.launch
         com.example.data.sync.SyncConflictEntity::class,
         WorkoutShareImportReceiptEntity::class,
         WorkoutSessionParticipantEntity::class,
-        WorkoutGuestSetLogEntity::class
+        WorkoutGuestSetLogEntity::class,
+        WorkoutSessionMultiplayerLinkEntity::class
     ],
-    version = 39,
+    version = 40,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -207,6 +208,41 @@ abstract class AppDatabase : RoomDatabase() {
          * Os `CREATE TABLE`/`CREATE INDEX` são os que o KSP gerou em `schemas/39.json`: divergir
          * deles faz a validação do Room reprovar a migração na abertura.
          */
+        /**
+         * Treino em dupla à distância (T19.5): o vínculo sessão ↔ sala, e só ele.
+         *
+         * Aditiva. `workout_sessions` não muda de forma — `executionMode` já existia e passa a
+         * aceitar o valor `DUO_REMOTE` sem coluna nova. Nenhuma linha existente é tocada. O estado
+         * remoto (membros, eventos, cursor) **não** é persistido: é relido do servidor a cada
+         * reconexão, e uma cópia local seria uma segunda autoridade sobre o que este aparelho não
+         * controla.
+         *
+         * O `CREATE TABLE`/`CREATE INDEX` é o que o KSP gerou em `schemas/40.json`.
+         */
+        val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_session_multiplayer_links` (
+                        `sessionId` INTEGER NOT NULL,
+                        `roomId` TEXT NOT NULL,
+                        `accountUid` TEXT NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `peerDisplayName` TEXT,
+                        `createdAt` INTEGER NOT NULL,
+                        `finishedNotifiedAt` INTEGER,
+                        PRIMARY KEY(`sessionId`),
+                        FOREIGN KEY(`sessionId`) REFERENCES `workout_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_session_multiplayer_links_roomId_accountUid` " +
+                        "ON `workout_session_multiplayer_links` (`roomId`, `accountUid`)"
+                )
+            }
+        }
+
         val MIGRATION_38_39 = object : Migration(38, 39) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -943,7 +979,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40
                 )
                 .addCallback(DatabaseCallback())
                 .build()

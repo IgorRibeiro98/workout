@@ -82,6 +82,21 @@ class WorkoutEngine(
             }
         }
 
+    /**
+     * O vínculo da sessão ativa com uma sala remota (T19.5) — `null` em `SOLO` e `DUO_LOCAL`.
+     *
+     * Mesmo desenho de [activeDuoExecutionFlow]: numa sessão que não é `DUO_REMOTE` a tabela de
+     * vínculo nunca é consultada. O vínculo é só (sala, conta, papel); o estado da sala vive no
+     * servidor e em memória, nunca aqui.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeMultiplayerLinkFlow: Flow<WorkoutSessionMultiplayerLinkEntity?> = activeSessionFlow
+        .map { session -> session?.takeIf { it.executionMode == WorkoutExecutionMode.DUO_REMOTE.name }?.id }
+        .distinctUntilChanged()
+        .flatMapLatest { sessionId ->
+            if (sessionId == null) flowOf(null) else dao.getMultiplayerLinkForSessionFlow(sessionId)
+        }
+
     private val _restTimerTarget = MutableStateFlow<Long?>(null)
     val restTimerTarget: Flow<Long?> = _restTimerTarget
     
@@ -718,7 +733,8 @@ class WorkoutEngine(
     suspend fun startSession(
         templateId: Long,
         mode: WorkoutExecutionMode = WorkoutExecutionMode.SOLO,
-        guestDisplayName: String? = null
+        guestDisplayName: String? = null,
+        multiplayer: MultiplayerSessionLink? = null
     ) {
         // Dupla sem convidado nomeado é um pedido inválido — e não uma dupla com "Convidado" nem um
         // solo silencioso (T19.4: process death e reabertura não podem rebaixar a dupla para solo,
@@ -726,6 +742,11 @@ class WorkoutEngine(
         val guestName = guestDisplayName?.trim().orEmpty()
         require(mode != WorkoutExecutionMode.DUO_LOCAL || guestName.isNotEmpty()) {
             "Treino em dupla exige o nome do convidado."
+        }
+        // O mesmo para a dupla à distância (T19.5): `DUO_REMOTE` sem sala, ou sala sem
+        // `DUO_REMOTE`, é um pedido contraditório — nunca um solo com vínculo escondido.
+        require((mode == WorkoutExecutionMode.DUO_REMOTE) == (multiplayer != null)) {
+            "Treino em dupla à distância exige a sala, e só ele a recebe."
         }
 
         val started = sessionLifecycleMutex.withLock {
@@ -738,7 +759,7 @@ class WorkoutEngine(
             val autoCheckIn = settingsManager.autoCheckInFlow.firstOrNull() ?: true
 
             val sessionId = syncMutations.mutate {
-                startSessionWrites(templateId, templateName, startedAt, autoCheckIn, mode, guestName)
+                startSessionWrites(templateId, templateName, startedAt, autoCheckIn, mode, guestName, multiplayer)
             }
             StartedSession(sessionId, startedAt, templateName)
         } ?: return
@@ -752,6 +773,19 @@ class WorkoutEngine(
             )
         )
     }
+
+    /**
+     * A sala a que uma sessão `DUO_REMOTE` pertence, no momento do início (T19.5).
+     *
+     * `accountUid` é a conta com que a sala foi aberta/aceita; é ela que escopa o vínculo depois
+     * de uma troca de conta. Nada aqui é dado de treino.
+     */
+    data class MultiplayerSessionLink(
+        val roomId: String,
+        val accountUid: String,
+        val role: String,
+        val peerDisplayName: String?
+    )
 
     private data class StartedSession(
         val sessionId: Long,
@@ -772,7 +806,8 @@ class WorkoutEngine(
         startedAt: Long,
         autoCheckIn: Boolean,
         mode: WorkoutExecutionMode,
-        guestDisplayName: String
+        guestDisplayName: String,
+        multiplayer: MultiplayerSessionLink?
     ): Long {
         // 1. Create WorkoutSession (Status: IN_PROGRESS)
         val sessionId = dao.insertSession(
@@ -784,6 +819,22 @@ class WorkoutEngine(
                 executionMode = mode.name
             )
         )
+
+        // 1a. Dupla à distância (T19.5): o vínculo com a sala nasce na mesma transação da sessão.
+        // A execução daqui para baixo é a solo — nenhuma tabela de participante, nenhuma série
+        // espelhada: o outro participante está em outro aparelho, com a própria sessão.
+        if (multiplayer != null) {
+            dao.insertMultiplayerLink(
+                WorkoutSessionMultiplayerLinkEntity(
+                    sessionId = sessionId,
+                    roomId = multiplayer.roomId,
+                    accountUid = multiplayer.accountUid,
+                    role = multiplayer.role,
+                    peerDisplayName = multiplayer.peerDisplayName,
+                    createdAt = startedAt
+                )
+            )
+        }
 
         // 1b. Dupla local (T19.4): os dois participantes nascem na mesma transação da sessão. A
         // sessão continua sendo **uma** e do dono; o convidado é identidade local da execução,

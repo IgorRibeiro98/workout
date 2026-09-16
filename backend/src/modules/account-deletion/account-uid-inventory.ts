@@ -115,7 +115,14 @@ export const ACCOUNT_UID_COLUMNS: readonly AccountUidColumn[] = [
   { table: 'social_group_invitations', column: 'recipient_uid', role: 'REFERENCE' },
   { table: 'social_group_checkin_shares', column: 'author_uid', role: 'OWNER' },
 
-  // 12. Perfil social raiz (T17.0). É a origem do `ON DELETE CASCADE` de tudo acima que é social.
+  // 12. Multiplayer remoto (T19.5). A sala é do host; a membership e o evento são da conta que os
+  //     produziu — inclusive numa sala de outra pessoa, que é o rastro que sobrevive quando o
+  //     resto não sobrevive. Nada aqui é treino: o purge apaga coordenação, nunca WorkoutSession.
+  { table: 'multiplayer_rooms', column: 'host_uid', role: 'OWNER' },
+  { table: 'multiplayer_room_members', column: 'member_uid', role: 'OWNER' },
+  { table: 'multiplayer_room_events', column: 'actor_uid', role: 'OWNER' },
+
+  // 13. Perfil social raiz (T17.0). É a origem do `ON DELETE CASCADE` de tudo acima que é social.
   { table: 'social_profiles', column: 'owner_uid', role: 'OWNER' },
 ];
 

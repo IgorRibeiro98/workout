@@ -60,6 +60,7 @@ import com.example.domain.engine.MuscleVisualResolver
 import com.example.domain.engine.RirFormatter
 import com.example.domain.workout.execution.ExerciseExecutionContext
 import com.example.presentation.execution.components.DuoTurnBanner
+import com.example.presentation.execution.components.RemotePeerBanner
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import com.example.ui.components.AppModalBottomSheet
@@ -233,15 +234,15 @@ fun ExecutionScreen(
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
-                                if (state.duo != null) {
+                                if (state.duo != null || state.remote != null) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Surface(
                                         color = Lime400.copy(alpha = 0.15f),
                                         shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.testTag("duo_mode_chip")
+                                        modifier = Modifier.testTag(if (state.remote != null) "remote_mode_chip" else "duo_mode_chip")
                                     ) {
                                         Text(
-                                            text = "DUPLA",
+                                            text = if (state.remote != null) "À DISTÂNCIA" else "DUPLA",
                                             color = Lime400,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -349,6 +350,18 @@ fun ExecutionScreen(
                         turn = state.duoTurn,
                         ownerRestTarget = timerTarget,
                         isExerciseCompleted = state.isExerciseCompleted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                // Dupla à distância (T19.5): o outro aparelho, visto deste. Só leitura — nenhuma
+                // fase, série ou descanso desta tela depende do que está aqui.
+                val remote = state.remote
+                if (remote != null) {
+                    RemotePeerBanner(
+                        remote = remote,
+                        currentCanonicalExerciseId = state.currentResolvedExercise?.canonicalId,
+                        currentExercisePosition = state.currentExerciseIndex + 1,
+                        onLeave = viewModel::leaveMultiplayerRoom
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }

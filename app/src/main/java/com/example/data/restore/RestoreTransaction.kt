@@ -144,6 +144,7 @@ class RestoreTransaction(
     private suspend fun clearPersonalDataset() {
         restoreDao.deleteAllGuestSetLogs()
         restoreDao.deleteAllSessionParticipants()
+        restoreDao.deleteAllMultiplayerLinks()
         restoreDao.deleteAllSetLogs()
         restoreDao.deleteAllExerciseSessions()
         restoreDao.deleteAllWorkoutSessions()

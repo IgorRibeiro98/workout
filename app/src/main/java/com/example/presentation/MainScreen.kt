@@ -117,7 +117,10 @@ fun MainScreen() {
             workoutCheckInPublisher = app.workoutCheckInPublisher,
             socialMediaCache = app.socialMediaCache,
             checkInPhotoSource = app.checkInPhotoSource,
-            socialGroupGateway = app.socialGroupGateway
+            socialGroupGateway = app.socialGroupGateway,
+            multiplayerGateway = app.multiplayerGateway,
+            multiplayerStarter = app.multiplayerStarter,
+            multiplayerCoordinator = app.multiplayerCoordinator
         )
     }
 
@@ -183,6 +186,11 @@ fun MainScreen() {
     // Mudar o escopo desta ViewModel é decisão de quem mantém a tela de execução.
     val executionViewModel: ExecutionViewModel = viewModel(factory = factory)
 
+    // Dupla à distância (T19.5): o coordenador observa a sessão ativa e a conta a partir daqui
+    // (idempotente). Sem backend configurado o gateway responde "não configurado" e ele fica
+    // inerte; sem sessão `DUO_REMOTE`, não faz chamada nenhuma.
+    androidx.compose.runtime.LaunchedEffect(Unit) { app.multiplayerCoordinator.start() }
+
     val navController = rememberNavController()
     val items = remember {
         listOf(
@@ -207,6 +215,7 @@ fun MainScreen() {
             Screen.NotificationPreferences.route to Screen.Today.route,
             Screen.BlockedUsers.route to Screen.Today.route,
             Screen.SharedWorkouts.route to Screen.Today.route,
+            Screen.MultiplayerLobby.route to Screen.Today.route,
             Screen.SocialFeed.route to Screen.Today.route,
             Screen.CheckInDetail.route to Screen.Today.route,
             Screen.Squads.route to Screen.Today.route,
@@ -355,6 +364,11 @@ fun MainScreen() {
                     viewModel = todayViewModel,
                     onNavigateToExecution = {
                         navController.pushOnce(Screen.Execution.route)
+                    },
+                    // Dupla à distância (T19.5): a sala é criada/aceita numa tela própria; a
+                    // execução é a mesma de sempre.
+                    onNavigateToMultiplayer = { templateId ->
+                        navController.pushOnce(Screen.MultiplayerLobby.createRoute(templateId))
                     },
                     onNavigateToProfile = {
                         navController.pushOnce(Screen.Profile.route)
@@ -666,6 +680,30 @@ fun MainScreen() {
                 com.example.presentation.friends.SharedWorkoutsScreen(
                     viewModel = sharedWorkoutsViewModel,
                     onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(
+                route = Screen.MultiplayerLobby.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("templateId") {
+                        type = androidx.navigation.NavType.LongType
+                        defaultValue = -1L
+                    }
+                )
+            ) { backStackEntry ->
+                val templateId = backStackEntry.arguments?.getLong("templateId")?.takeIf { it > 0 }
+                val lobbyViewModel: com.example.presentation.multiplayer.MultiplayerLobbyViewModel =
+                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+                com.example.presentation.multiplayer.MultiplayerLobbyScreen(
+                    viewModel = lobbyViewModel,
+                    templateId = templateId,
+                    onNavigateBack = { navController.popBackStack() },
+                    // A sessão local já existe quando este callback dispara: a execução abre
+                    // sobre ela, e a tela do lobby sai da pilha — voltar da execução cai em "Hoje".
+                    onWorkoutStarted = {
+                        navController.popBackStack()
+                        navController.pushOnce(Screen.Execution.route)
+                    }
                 )
             }
             composable(Screen.SocialFeed.route) {
