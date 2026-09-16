@@ -463,6 +463,14 @@ private fun FriendsEntryPoints(
         modifier = Modifier.semantics { contentDescription = FRIENDS_SUMMARY_DESCRIPTION }
     )
 
+    // T19.1 §6.3 — as mesmas entradas de sempre, agora organizadas por intenção em vez de uma
+    // lista plana. Nenhum destino mudou: só o agrupamento visual.
+    //
+    // T17.8 — o Feed de check-ins. Fica no topo, fora dos grupos: é a entrada mais frequente da
+    // área Social, e não pertence nem a "Pessoas" nem a "Comunidades".
+    Secondary(text = "Feed", onClick = onOpenSocialFeed, enabled = enabled)
+
+    GroupLabel("Pessoas")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Secondary(text = "Amigos", onClick = onOpenFriends, enabled = enabled)
         Secondary(
@@ -476,37 +484,41 @@ private fun FriendsEntryPoints(
         )
     }
     Secondary(text = "Meu código", onClick = onShowFriendCode, enabled = enabled)
-    // T17.2 — o que os amigos veem do meu progresso. Ela fica aqui, e não junto dos interruptores
-    // de privacidade acima, porque é uma tela com estado próprio: interruptores, disponibilidade
-    // por campo e prévia. Espremê-la nesta seção esconderia a parte que mais importa — a diferença
-    // entre "eu permiti" e "o servidor consegue mostrar".
-    Secondary(text = "Compartilhar progresso", onClick = onOpenProgressSharing, enabled = enabled)
-
-    // T17.3 — os desafios, ao lado das outras entradas da área Social. Sem item novo de bottom
-    // navigation: a barra inferior é do núcleo do produto — treinar, histórico, evolução —, e o
-    // social continua sendo uma área dentro do Perfil.
-    Secondary(text = "Desafios", onClick = onOpenChallenges, enabled = enabled)
-
-    // T17.4 — Atividade e ranking semanal entre amigos
+    // T17.4 — Atividade e ranking semanal entre amigos. Fica em "Pessoas": fala sobre os amigos, e
+    // não sobre um grupo nem sobre configuração.
     Secondary(text = "Atividade e Ranking", onClick = onOpenActivity, enabled = enabled)
 
-    // T17.5 — Notificações sociais via push
-    Secondary(text = "Notificações", onClick = onOpenNotificationPreferences, enabled = enabled)
-
-    // T17.6 — Usuários bloqueados
-    Secondary(text = "Usuários bloqueados", onClick = onOpenBlockedUsers, enabled = enabled)
-
-    // T17.7 — Treinos compartilhados
-    Secondary(text = "Treinos compartilhados", onClick = onOpenSharedWorkouts, enabled = enabled)
-
-    // T17.8 — o Feed de check-ins. Ele fica aqui, na área Social, e **não** vira aba nova da
-    // bottom navigation (§83): a barra inferior é do núcleo do produto, e o social continua sendo
-    // opcional. Um item permanente apareceria vazio para quem nunca ativou.
-    Secondary(text = "Feed", onClick = onOpenSocialFeed, enabled = enabled)
-
-    // T17.11 §131 — Squads. Pelo mesmo motivo do Feed: dentro da área Social do Perfil, e **sem**
-    // item novo de bottom navigation. Um grupo privado não é caminho do núcleo do produto.
+    // T17.11 §131 — Squads e T17.3 — Desafios. Comunidades: grupos e competições entre amigos.
+    GroupLabel("Comunidades")
     Secondary(text = "Squads", onClick = onOpenSquads, enabled = enabled)
+    Secondary(text = "Desafios", onClick = onOpenChallenges, enabled = enabled)
+
+    // T17.7 — Treinos compartilhados e T17.2 — Compartilhar progresso. O que o usuário decide
+    // mostrar para os outros, fora do check-in de treino em si.
+    GroupLabel("Compartilhar")
+    Secondary(text = "Treinos compartilhados", onClick = onOpenSharedWorkouts, enabled = enabled)
+    // Ela fica aqui, e não junto dos interruptores de privacidade acima, porque é uma tela com
+    // estado próprio: interruptores, disponibilidade por campo e prévia. Espremê-la nesta seção
+    // esconderia a parte que mais importa — a diferença entre "eu permiti" e "o servidor consegue
+    // mostrar".
+    Secondary(text = "Compartilhar progresso", onClick = onOpenProgressSharing, enabled = enabled)
+
+    // T17.5 — Notificações e T17.6 — Bloqueados. As configurações de privacidade em toggle já
+    // aparecem acima, nesta mesma seção; estas duas são as que abrem tela própria.
+    GroupLabel("Privacidade")
+    Secondary(text = "Notificações", onClick = onOpenNotificationPreferences, enabled = enabled)
+    Secondary(text = "Usuários bloqueados", onClick = onOpenBlockedUsers, enabled = enabled)
+}
+
+@Composable
+private fun GroupLabel(text: String) {
+    Text(
+        text = text,
+        color = TextSecondary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(top = 4.dp)
+    )
 }
 
 @Composable

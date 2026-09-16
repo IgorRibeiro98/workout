@@ -23,7 +23,9 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.evolution.model.achievement.Achievement
 import com.example.feature.evolution.achievements.components.getTierColor
 import com.example.feature.evolution.achievements.components.getTierName
+import com.example.presentation.account.SocialPhase
 import com.example.ui.components.AppModalBottomSheet
+import com.example.ui.components.HubEntryCard
 import com.example.ui.theme.*
 import java.util.Locale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,7 +50,8 @@ fun ProfileScreen(
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
     onNavigateToMissions: () -> Unit,
-    onNavigateToAiCoach: () -> Unit,
+    /** T19.1 — abre o AiHome, que organiza as capacidades do Coach por capacidade. */
+    onNavigateToAiHome: () -> Unit,
     /** Conta Spark (T16.1). `null` quando a identidade online não existe neste build. */
     accountViewModel: com.example.presentation.account.AccountViewModel? = null,
     /** Backup na nuvem (T16.4). `null` quando não há Spark Backend configurado neste build. */
@@ -61,23 +64,8 @@ fun ProfileScreen(
     socialViewModel: com.example.presentation.account.SocialViewModel? = null,
     /** O grafo social (T17.1). `null` mantém o Perfil exatamente como a T17.0 o entregou. */
     friendsViewModel: com.example.presentation.account.FriendsViewModel? = null,
-    onNavigateToFriends: () -> Unit = {},
-    onNavigateToFriendRequests: () -> Unit = {},
-    /** T17.2 — "Compartilhar progresso", dentro da mesma área Social. */
-    onNavigateToProgressSharing: () -> Unit = {},
-    onNavigateToChallenges: () -> Unit = {},
-    /** T17.4 — Atividade e ranking de amigos */
-    onNavigateToActivity: () -> Unit = {},
-    /** T17.5 — Notificações sociais */
-    onNavigateToNotificationPreferences: () -> Unit = {},
-    /** T17.6 — Usuários bloqueados */
-    onNavigateToBlockedUsers: () -> Unit = {},
-    /** T17.7 — Treinos compartilhados */
-    onNavigateToSharedWorkouts: () -> Unit = {},
-    /** T17.8 — Feed de check-ins, dentro da área Social. */
-    onNavigateToSocialFeed: () -> Unit = {},
-    /** T17.11 §131 — Squads, dentro da área Social do Perfil. */
-    onNavigateToSquads: () -> Unit = {}
+    /** T19.1 — abre o SocialHome, que organiza Feed/Pessoas/Comunidades/Compartilhar/Privacidade. */
+    onNavigateToSocialHome: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
@@ -95,9 +83,13 @@ fun ProfileScreen(
     val friendsState = friendsViewModel?.uiState?.collectAsStateWithLifecycle()?.value
 
     // A leitura do grafo acontece quando o Perfil abre **com o perfil social ativo** — é o que
-    // permite mostrar "3 amigos · 1 solicitação pendente" sem entrar na lista. Ela é uma leitura:
-    // não cria relação, não aceita nada e não envia nada. Sem perfil social ativo não há o que
-    // pedir, e nenhuma requisição sai.
+    // permite mostrar "3 amigos · 1 solicitação pendente" no cartão do SocialHome, sem entrar na
+    // lista. Ela é uma leitura: não cria relação, não aceita nada e não envia nada. Sem perfil
+    // social ativo não há o que pedir, e nenhuma requisição sai.
+    //
+    // T19.1 — o `socialViewModel` agora é compartilhado com o SocialHome (mesma instância, criada
+    // em `MainScreen`): abrir o Perfil continua sendo o único gatilho desta leitura, e o SocialHome
+    // reaproveita o resultado sem pedir de novo.
     val isSocialActive = socialState?.profile?.status == com.example.domain.social.SocialProfileStatus.ACTIVE
     androidx.compose.runtime.LaunchedEffect(isSocialActive) {
         if (isSocialActive) friendsViewModel?.open()
@@ -117,7 +109,7 @@ fun ProfileScreen(
         onNavigateToBodyEvolution = onNavigateToBodyEvolution,
         onNavigateToAchievements = onNavigateToAchievements,
         onNavigateToMissions = onNavigateToMissions,
-        onNavigateToAiCoach = onNavigateToAiCoach,
+        onNavigateToAiHome = onNavigateToAiHome,
         onWeeklyGoalChange = viewModel::setWeeklyGoal,
         canExplainProgress = viewModel.canExplainProgress,
         onExplainProgress = viewModel::explainProgress,
@@ -142,39 +134,12 @@ fun ProfileScreen(
         syncState = syncState,
         onSyncNow = { syncViewModel?.syncNow() },
         onResolveConflict = { id, choice -> syncViewModel?.resolveConflict(id, choice) },
+        // T19.1 — o Perfil só lê o estado social para decidir se mostra o cartão "Social" e qual
+        // resumo exibir nele. Ativar, desativar, editar nome e as próprias entradas do grafo social
+        // moraram para o SocialHome: nenhuma dessas ações é mais alcançável a partir daqui.
         socialState = socialState,
-        onSocialActivate = { socialViewModel?.startActivation() },
-        onSocialDisplayNameChange = { value -> socialViewModel?.onDisplayNameChanged(value) },
-        onSocialConfirmActivation = { socialViewModel?.confirmActivation() },
-        onSocialCancelActivation = { socialViewModel?.cancelActivation() },
-        onSocialEditName = { socialViewModel?.startEditingName() },
-        onSocialConfirmName = { socialViewModel?.confirmDisplayName() },
-        onSocialCancelEditName = { socialViewModel?.cancelEditingName() },
-        onSocialFriendRequestsChange = { enabled ->
-            socialViewModel?.setFriendRequestsEnabled(enabled)
-        },
-        onSocialActivitySharingChange = { enabled ->
-            socialViewModel?.setActivitySharingEnabled(enabled)
-        },
-        onSocialFriendRankingParticipationChange = { enabled ->
-            socialViewModel?.setFriendRankingParticipationEnabled(enabled)
-        },
-        onSocialDisable = { socialViewModel?.startDisable() },
-        onSocialConfirmDisable = { socialViewModel?.confirmDisable() },
-        onSocialCancelDisable = { socialViewModel?.cancelDisable() },
-        onSocialEnable = { socialViewModel?.enable() },
-        onSocialRetry = { socialViewModel?.refresh() },
         friendsState = friendsState,
-        onOpenFriends = onNavigateToFriends,
-        onOpenFriendRequests = onNavigateToFriendRequests,
-        onOpenProgressSharing = onNavigateToProgressSharing,
-        onOpenChallenges = onNavigateToChallenges,
-        onOpenActivity = onNavigateToActivity,
-        onOpenNotificationPreferences = onNavigateToNotificationPreferences,
-        onOpenBlockedUsers = onNavigateToBlockedUsers,
-        onOpenSharedWorkouts = onNavigateToSharedWorkouts,
-        onOpenSocialFeed = onNavigateToSocialFeed,
-        onOpenSquads = onNavigateToSquads,
+        onNavigateToSocialHome = onNavigateToSocialHome,
         onDeleteAccount = { accountViewModel?.deleteAccount() }
     )
 
@@ -193,7 +158,7 @@ private fun ProfileScreenContent(
     onNavigateToBodyEvolution: () -> Unit,
     onNavigateToAchievements: () -> Unit,
     onNavigateToMissions: () -> Unit,
-    onNavigateToAiCoach: () -> Unit,
+    onNavigateToAiHome: () -> Unit,
     onWeeklyGoalChange: (Int) -> Unit,
     /** `false` esconde a entrada contextual quando o Coach não está disponível neste build. */
     canExplainProgress: Boolean = false,
@@ -226,40 +191,20 @@ private fun ProfileScreenContent(
         com.example.data.sync.SyncConflictId,
         com.example.data.sync.SyncConflictChoice
     ) -> Unit = { _, _ -> },
-    /** Recursos sociais (T17.0). `null` esconde a seção social inteira. */
+    /**
+     * Recursos sociais (T17.0). `null` esconde o cartão "Social" inteiro.
+     *
+     * T19.1 — o Perfil só lê este estado para decidir se mostra o cartão e o que resumir nele
+     * ("3 amigos", "Conecte-se com amigos"...). Toda ação social de verdade (ativar, entrar no
+     * grafo, editar privacidade) mora no SocialHome, alcançado por [onNavigateToSocialHome].
+     */
     socialState: com.example.presentation.account.SocialUiState? = null,
-    onSocialActivate: () -> Unit = {},
-    onSocialDisplayNameChange: (String) -> Unit = {},
-    onSocialConfirmActivation: () -> Unit = {},
-    onSocialCancelActivation: () -> Unit = {},
-    onSocialEditName: () -> Unit = {},
-    onSocialConfirmName: () -> Unit = {},
-    onSocialCancelEditName: () -> Unit = {},
-    onSocialFriendRequestsChange: (Boolean) -> Unit = {},
-    onSocialActivitySharingChange: (Boolean) -> Unit = {},
-    onSocialFriendRankingParticipationChange: (Boolean) -> Unit = {},
-    onSocialDisable: () -> Unit = {},
-    onSocialConfirmDisable: () -> Unit = {},
-    onSocialCancelDisable: () -> Unit = {},
-    onSocialEnable: () -> Unit = {},
-    onSocialRetry: () -> Unit = {},
+    /** O grafo social (T17.1), só para o resumo do cartão — "3 amigos · 1 solicitação". */
     friendsState: com.example.presentation.account.FriendsUiState? = null,
-    onOpenFriends: () -> Unit = {},
-    onOpenFriendRequests: () -> Unit = {},
-    onOpenProgressSharing: () -> Unit = {},
-    onOpenChallenges: () -> Unit = {},
-    onOpenActivity: () -> Unit = {},
-    onOpenNotificationPreferences: () -> Unit = {},
-    onOpenBlockedUsers: () -> Unit = {},
-    onOpenSharedWorkouts: () -> Unit = {},
-    onOpenSocialFeed: () -> Unit = {},
-    /** T17.11 §131 — Squads, dentro da área Social. */
-    onOpenSquads: () -> Unit = {}
+    /** T19.1 — abre o SocialHome. */
+    onNavigateToSocialHome: () -> Unit = {}
 ) {
     var showGoalBottomSheet by remember { mutableStateOf(false) }
-    // "Meu código" é uma folha sobre o Perfil, e não uma tela: o código já está carregado, e
-    // navegar para mostrar um dado que está na mão seria uma tela sem conteúdo próprio.
-    var isFriendCodeVisible by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -322,7 +267,7 @@ private fun ProfileScreenContent(
             MissionsSection(onClick = onNavigateToMissions)
 
             AiCoachSection(
-                onClick = onNavigateToAiCoach,
+                onClick = onNavigateToAiHome,
                 canExplainProgress = canExplainProgress,
                 onExplainProgress = onExplainProgress
             )
@@ -391,52 +336,22 @@ private fun ProfileScreenContent(
                 )
             }
 
-            // O social fecha o bloco da Conta Spark: ele é a única capacidade aqui que não fala
-            // sobre os dados de treino, e sim sobre identidade pública. Uma seção do Perfil, e não
-            // um item novo de navegação — não existe tela social para navegar até a T17.1.
-            if (socialState != null) {
-                com.example.presentation.account.SocialSection(
+            // T19.1 — o social fecha o bloco da Conta Spark, na mesma posição de sempre: ele é a
+            // única capacidade aqui que não fala sobre os dados de treino, e sim sobre identidade
+            // pública. Mas agora é uma única entrada para o SocialHome, e não mais uma seção
+            // inteira: ativar, editar nome, privacidade e cada tela do grafo social moraram para lá.
+            //
+            // `NotConfigured` continua escondendo o cartão — mesma regra que a T17.0 sempre teve:
+            // sem Spark Backend configurado neste build, não existe recurso social para navegar.
+            if (socialState != null && socialState.phase !is SocialPhase.NotConfigured) {
+                SocialEntrySection(
+                    socialState = socialState,
                     friendsState = friendsState,
-                    onOpenFriends = onOpenFriends,
-                    onOpenRequests = onOpenFriendRequests,
-                    onOpenProgressSharing = onOpenProgressSharing,
-                    onOpenChallenges = onOpenChallenges,
-                    onOpenActivity = onOpenActivity,
-                    onOpenNotificationPreferences = onOpenNotificationPreferences,
-                    onOpenBlockedUsers = onOpenBlockedUsers,
-                    onOpenSharedWorkouts = onOpenSharedWorkouts,
-                    onOpenSocialFeed = onOpenSocialFeed,
-                    onOpenSquads = onOpenSquads,
-                    onShowFriendCode = { isFriendCodeVisible = true },
-                    uiState = socialState,
-                    onActivate = onSocialActivate,
-                    onDisplayNameChange = onSocialDisplayNameChange,
-                    onConfirmActivation = onSocialConfirmActivation,
-                    onCancelActivation = onSocialCancelActivation,
-                    onEditName = onSocialEditName,
-                    onConfirmName = onSocialConfirmName,
-                    onCancelEditName = onSocialCancelEditName,
-                    onFriendRequestsChange = onSocialFriendRequestsChange,
-                    onActivitySharingChange = onSocialActivitySharingChange,
-                    onFriendRankingParticipationChange = onSocialFriendRankingParticipationChange,
-                    onDisable = onSocialDisable,
-                    onConfirmDisable = onSocialConfirmDisable,
-                    onCancelDisable = onSocialCancelDisable,
-                    onEnable = onSocialEnable,
-                    onRetry = onSocialRetry
+                    onClick = onNavigateToSocialHome
                 )
             }
 
             SettingsSection(onClick = onNavigateToSettings)
-        }
-    }
-
-    if (isFriendCodeVisible) {
-        socialState?.profile?.let { profile ->
-            com.example.presentation.friends.MyFriendCodeDialog(
-                friendCode = profile.friendCode,
-                onDismiss = { isFriendCodeVisible = false }
-            )
         }
     }
 
@@ -868,7 +783,7 @@ private fun MissionsSection(onClick: () -> Unit) {
             fontSize = 14.sp
         )
 
-        ProfileNavigationCard(
+        HubEntryCard(
             icon = Icons.Default.Flag,
             title = "Missões e Desafios",
             subtitle = "Objetivos da semana e marcos do seu treino",
@@ -878,10 +793,11 @@ private fun MissionsSection(onClick: () -> Unit) {
 }
 
 /**
- * Porta de entrada do Coach IA.
+ * Porta de entrada do Coach IA — o AiHome (T19.1), que organiza Analisar/Gerar/Adaptar por
+ * capacidade.
  *
- * A análise só acontece dentro da tela do Coach, por toque explícito: navegar até aqui não fala
- * com o modelo.
+ * Nenhuma ação de IA acontece por navegar até aqui: cada capacidade só fala com o provider depois
+ * de um toque explícito, dentro da tela real de destino.
  */
 @Composable
 private fun AiCoachSection(
@@ -897,21 +813,67 @@ private fun AiCoachSection(
             fontSize = 14.sp
         )
 
-        ProfileNavigationCard(
+        HubEntryCard(
             icon = Icons.Default.AutoAwesome,
-            title = "Analisar meu treino",
-            subtitle = "Uma leitura do seu treino a partir do histórico real",
+            title = "Coach IA",
+            subtitle = "Analisar, gerar e adaptar treinos com IA",
             onClick = onClick
         )
 
-        // Entrada contextual sobre os números que esta tela já mostra. Os valores continuam
-        // vindo das autoridades: o Coach lê e explica, nunca recalcula.
+        // Entrada contextual sobre os números que esta tela já mostra. Ela continua aqui, e não no
+        // AiHome (T19.1): o que ela explica são os números de progresso do próprio Perfil, e não
+        // uma capacidade que existe fora dele. Os valores continuam vindo das autoridades: o Coach
+        // lê e explica, nunca recalcula.
         if (canExplainProgress) {
             com.example.presentation.coach.CoachExplanationTrigger(
                 text = "Entender minha evolução",
                 onClick = onExplainProgress
             )
         }
+    }
+}
+
+/**
+ * Porta de entrada do Social — o SocialHome (T19.1), que organiza Feed/Pessoas/Comunidades/
+ * Compartilhar/Privacidade por intenção.
+ *
+ * O resumo do cartão é só leitura do que os ViewModels compartilhados já observam: nenhuma
+ * requisição nasce de mostrar "3 amigos" aqui.
+ */
+@Composable
+private fun SocialEntrySection(
+    socialState: com.example.presentation.account.SocialUiState,
+    friendsState: com.example.presentation.account.FriendsUiState?,
+    onClick: () -> Unit
+) {
+    val subtitle = when {
+        socialState.phase is SocialPhase.Active || socialState.phase is SocialPhase.Saving -> {
+            val count = friendsState?.friendCount ?: 0
+            val pending = friendsState?.incomingCount ?: 0
+            buildString {
+                append(if (count == 1) "1 amigo" else "$count amigos")
+                if (pending > 0) {
+                    append(if (pending == 1) " · 1 solicitação pendente" else " · $pending solicitações pendentes")
+                }
+            }
+        }
+        else -> "Amigos, feed, squads e desafios"
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Social",
+            color = Lime400,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp
+        )
+
+        HubEntryCard(
+            icon = Icons.Default.Group,
+            title = "Social",
+            subtitle = subtitle,
+            onClick = onClick
+        )
     }
 }
 
@@ -928,7 +890,7 @@ private fun BodyEvolutionSection(
             fontSize = 14.sp
         )
 
-        ProfileNavigationCard(
+        HubEntryCard(
             icon = Icons.Default.Straighten,
             title = "Evolução e Medidas Corporais",
             subtitle = if (latestWeightKg != null) {
@@ -951,79 +913,12 @@ private fun SettingsSection(onClick: () -> Unit) {
             fontSize = 14.sp
         )
 
-        ProfileNavigationCard(
+        HubEntryCard(
             icon = Icons.Default.Settings,
             title = "Configurações do Aplicativo",
             subtitle = "Preferências do aplicativo",
             onClick = onClick
         )
-    }
-}
-
-@Composable
-private fun ProfileNavigationCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        color = SurfaceDark,
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, BorderLight),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(LimeTransparent),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = Lime400,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Column {
-                    Text(
-                        text = title,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
-                    Text(
-                        text = subtitle,
-                        color = TextSecondary,
-                        fontSize = 13.sp
-                    )
-                }
-            }
-
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = TextSecondary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
     }
 }
 

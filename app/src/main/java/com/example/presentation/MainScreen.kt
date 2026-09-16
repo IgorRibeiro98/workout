@@ -95,6 +95,7 @@ fun MainScreen() {
             explainCoachDecisionUseCase = app.explainCoachDecisionUseCase,
             authGateway = app.authGateway,
             sparkBackendClient = app.sparkBackendClient,
+            aiCapabilitiesGateway = app.aiCapabilitiesGateway,
             backupRepository = app.backupRepository,
             restoreRepository = app.restoreRepository,
             syncRepository = app.syncRepository,
@@ -152,6 +153,25 @@ fun MainScreen() {
     val socialProfileViewModel: com.example.presentation.account.SocialProfileViewModel =
         viewModel(factory = factory)
 
+    // Capabilities de IA (T19.0), compartilhadas pelas três telas do Coach (Analisar, Gerar,
+    // Adaptar) pelo mesmo motivo das anteriores: uma revogação no servidor precisa refletir nas
+    // três ao mesmo tempo, e um por rota faria a mesma consulta três vezes por sessão.
+    //
+    // Criá-lo aqui não faz requisição nenhuma: o `init` só observa a sessão para invalidar. A
+    // primeira leitura sai de `ensureLoaded()`, que cada tela do Coach chama ao abrir.
+    val aiCapabilitiesViewModel: com.example.presentation.coach.AiCapabilitiesViewModel =
+        viewModel(factory = factory)
+
+    // Recursos sociais (T17.0), compartilhados desde a T19.1 entre o Perfil e o SocialHome: os
+    // dois leem o mesmo perfil social — o Perfil só para decidir se mostra o cartão "Social" e o
+    // resumo nele, o SocialHome para a tela inteira. Uma instância por rota faria o SocialHome
+    // reconsultar o perfil que o Perfil acabou de carregar.
+    //
+    // Criá-lo aqui não faz requisição nenhuma: o `init` só observa a sessão para invalidar. A
+    // primeira leitura sai de abrir o Perfil com o perfil social ativo, como já era antes da T19.1.
+    val socialViewModel: com.example.presentation.account.SocialViewModel =
+        viewModel(factory = factory)
+
     // Medidas corporais: as duas rotas são **a mesma edição**. `BodyEvolutionScreen` chama
     // `initNewMeasurement()`/`loadForEdit()` e só então navega para `AddBodyMeasurement`, que lê o
     // `formState` já preenchido. Uma instância por rota entregaria um formulário vazio.
@@ -203,6 +223,9 @@ fun MainScreen() {
             Screen.AiCoach.route to Screen.Today.route,
             Screen.GenerateWorkout.route to Screen.Today.route,
             Screen.AdaptWorkout.route to Screen.Workouts.route,
+            // T19.1 — os dois hubs são folhas do Perfil, igual a tudo que já apontava para "Hoje".
+            Screen.SocialHome.route to Screen.Today.route,
+            Screen.AiHome.route to Screen.Today.route,
             Screen.Settings.route to Screen.Today.route,
             Screen.Workouts.route to Screen.Workouts.route,
             Screen.ProgramDetails.route to Screen.Workouts.route,
@@ -390,6 +413,7 @@ fun MainScreen() {
                     viewModel = adaptViewModel,
                     templateId = templateId,
                     onNavigateBack = { navController.popBackStack() },
+                    capabilitiesViewModel = aiCapabilitiesViewModel,
                     onSignIn = accountViewModel::signIn,
                     isSignInAvailable = accountState.isSignInAvailable,
                     isSigningIn = accountState.isBusy
@@ -461,52 +485,58 @@ fun MainScreen() {
                 // do trabalho agendado por uma alteração local.
                 val syncViewModel: com.example.presentation.account.SyncViewModel =
                     androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
-                // E para o social (T17.0): criar o ViewModel **lê** o perfil que já existe no
-                // servidor. Ler não cria perfil — `GET /v1/social/me` responde
-                // `{ enabled: false }` sem escrever nada. Ativar exige dois toques explícitos.
-                val socialViewModel: com.example.presentation.account.SocialViewModel =
-                    androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
                 ProfileScreen(
                     viewModel = profileViewModel,
                     accountViewModel = accountViewModel,
                     backupViewModel = backupViewModel,
                     restoreViewModel = restoreViewModel,
                     syncViewModel = syncViewModel,
+                    // T19.1 — instância compartilhada com o SocialHome (hoisted em MainScreen).
                     socialViewModel = socialViewModel,
                     friendsViewModel = friendsViewModel,
-                    onNavigateToFriends = { navController.pushOnce(Screen.Friends.route) },
-                    onNavigateToFriendRequests = {
-                        navController.pushOnce(Screen.FriendRequests.route)
-                    },
-                    onNavigateToProgressSharing = {
-                        navController.pushOnce(Screen.ProgressSharing.route)
-                    },
-                    onNavigateToChallenges = { navController.pushOnce(Screen.Challenges.route) },
-                    onNavigateToActivity = { navController.pushOnce(Screen.Activity.route) },
-                    onNavigateToNotificationPreferences = {
-                        navController.pushOnce(Screen.NotificationPreferences.route)
-                    },
-                    onNavigateToBlockedUsers = {
-                        navController.pushOnce(Screen.BlockedUsers.route)
-                    },
-                    onNavigateToSharedWorkouts = {
-                        navController.pushOnce(Screen.SharedWorkouts.route)
-                    },
-                    onNavigateToSquads = {
-                        navController.pushOnce(Screen.Squads.route)
-                    },
-                    onNavigateToSocialFeed = {
-                        navController.pushOnce(Screen.SocialFeed.route)
-                    },
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToSettings = { navController.pushOnce(Screen.Settings.route) },
                     onNavigateToMissions = { navController.pushOnce(Screen.Missions.route) },
-                    onNavigateToAiCoach = { navController.pushOnce(Screen.AiCoach.route) },
+                    // T19.1 — o Perfil não navega mais direto para as telas do Coach/Social:
+                    // ambas passaram a viver atrás de um hub.
+                    onNavigateToAiHome = { navController.pushOnce(Screen.AiHome.route) },
+                    onNavigateToSocialHome = { navController.pushOnce(Screen.SocialHome.route) },
                     onNavigateToBodyEvolution = { navController.pushOnce(Screen.BodyEvolution.route) },
                     // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
                     onNavigateToAchievements = {
                         navController.pushOnce(Screen.MyEvolution.route)
                     }
+                )
+            }
+            composable(Screen.SocialHome.route) {
+                com.example.presentation.social.SocialHomeScreen(
+                    socialViewModel = socialViewModel,
+                    friendsViewModel = friendsViewModel,
+                    onNavigateBack = { navController.popBackStack() },
+                    onOpenFriends = { navController.pushOnce(Screen.Friends.route) },
+                    onOpenFriendRequests = { navController.pushOnce(Screen.FriendRequests.route) },
+                    onOpenProgressSharing = { navController.pushOnce(Screen.ProgressSharing.route) },
+                    onOpenChallenges = { navController.pushOnce(Screen.Challenges.route) },
+                    onOpenActivity = { navController.pushOnce(Screen.Activity.route) },
+                    onOpenNotificationPreferences = {
+                        navController.pushOnce(Screen.NotificationPreferences.route)
+                    },
+                    onOpenBlockedUsers = { navController.pushOnce(Screen.BlockedUsers.route) },
+                    onOpenSharedWorkouts = { navController.pushOnce(Screen.SharedWorkouts.route) },
+                    onOpenSocialFeed = { navController.pushOnce(Screen.SocialFeed.route) },
+                    onOpenSquads = { navController.pushOnce(Screen.Squads.route) }
+                )
+            }
+            composable(Screen.AiHome.route) {
+                com.example.presentation.coach.AiHomeScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToAnalyze = { navController.pushOnce(Screen.AiCoach.route) },
+                    onNavigateToGenerate = { navController.pushOnce(Screen.GenerateWorkout.route) },
+                    // Adaptar exige um treino específico (`templateId`): o hub não inventa um
+                    // seletor novo — leva para Treinos, de onde a adaptação já é alcançada hoje
+                    // (TemplateDetails → "Adaptar com IA").
+                    onNavigateToAdaptEntry = { navController.pushOnce(Screen.Workouts.route) },
+                    capabilitiesViewModel = aiCapabilitiesViewModel
                 )
             }
             composable(Screen.Friends.route) {
@@ -756,6 +786,7 @@ fun MainScreen() {
                     viewModel = aiCoachViewModel,
                     onNavigateBack = { navController.popBackStack() },
                     onNavigateToGenerateWorkout = { navController.pushOnce(Screen.GenerateWorkout.route) },
+                    capabilitiesViewModel = aiCapabilitiesViewModel,
                     onSignIn = accountViewModel::signIn,
                     isSignInAvailable = accountState.isSignInAvailable,
                     isSigningIn = accountState.isBusy
@@ -774,6 +805,7 @@ fun MainScreen() {
                     onOpenTemplate = { templateId ->
                         navController.pushOnce(Screen.TemplateDetails.createRoute(templateId))
                     },
+                    capabilitiesViewModel = aiCapabilitiesViewModel,
                     onSignIn = accountViewModel::signIn,
                     isSignInAvailable = accountState.isSignInAvailable,
                     isSigningIn = accountState.isBusy

@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.List
@@ -193,6 +194,29 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
     object SquadDetail : Screen("squad/{groupId}", R.string.nav_profile, Icons.Default.Person) {
         fun createRoute(groupId: String) = "squad/$groupId"
     }
+
+    /**
+     * SocialHome (T19.1) — o hub que organiza as funcionalidades sociais por intenção
+     * (Feed, Pessoas, Comunidades, Compartilhar, Privacidade).
+     *
+     * Alcançada a partir do Perfil, e **sem** item novo de bottom navigation, pelo mesmo motivo de
+     * cada rota social anterior: a barra inferior é do núcleo do produto. `titleRes`/`icon` reusam
+     * os do Perfil porque esta rota nunca participa da bottom bar — só o `topLevelDestinationMap`
+     * de `MainScreen` os usaria, e ele mapeia esta rota de volta para "Hoje".
+     *
+     * Ela não é uma nova fonte de estado social: o conteúdo continua vindo dos mesmos
+     * ViewModels/repositories que já serviam essas telas dentro do Perfil.
+     */
+    object SocialHome : Screen("social_home", R.string.nav_profile, Icons.Default.Group)
+
+    /**
+     * AiHome (T19.1) — o hub que organiza as capacidades do Coach IA (analisar, gerar, adaptar).
+     *
+     * Mesma lógica do SocialHome: alcançada a partir do Perfil, sem item novo de bottom navigation,
+     * e sem autoridade própria — cada card navega para a tela real do Coach, que continua sendo
+     * quem valida a capability (T19.0) e fala com o backend.
+     */
+    object AiHome : Screen("ai_home", R.string.nav_ai_coach, Icons.Default.AutoAwesome)
 
     object Execution : Screen("execution", R.string.nav_today, Icons.Default.PlayArrow) // Reuse string for now
     object Summary : Screen("summary/{sessionId}", R.string.nav_today, Icons.Default.PlayArrow) {
