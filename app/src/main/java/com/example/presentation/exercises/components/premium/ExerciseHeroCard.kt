@@ -33,7 +33,13 @@ fun ExerciseHeroCard(
     mediaUrl: String?,
     subtitle: String? = null,
     movementPattern: String? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * A segunda linha do fallback sem mídia. O padrão aponta para as instruções da tela de
+     * detalhes; quem monta o card em outro contexto (a pré-visualização do editor, T19.6) passa
+     * um texto que não prometa conteúdo que não está ali.
+     */
+    missingMediaHint: String = "Use as instruções abaixo para executar com segurança"
 ) {
     val muscleGroup = MuscleVisualResolver.resolveGroup(primaryMuscle)
 
@@ -117,7 +123,7 @@ fun ExerciseHeroCard(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Use as instruções abaixo para executar com segurança",
+                            text = missingMediaHint,
                             color = TextSecondary,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center

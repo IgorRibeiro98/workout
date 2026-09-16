@@ -73,6 +73,7 @@
     <string name="sheet_action_open_template">Abrir treino</string>
     <string name="sheet_action_edit_template_exercise">Editar configurações</string>
     <string name="sheet_action_delete_template_exercise">Remover do treino</string>
+    <string name="sheet_action_preview_template_exercise">Pré-visualizar exercício</string>
     <string name="sheet_action_delete_template">Excluir treino</string>
 
     <!-- T8B Exercise & History BottomSheet Strings -->

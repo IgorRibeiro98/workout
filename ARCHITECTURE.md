@@ -346,6 +346,31 @@ Exercise import code must not silently classify an exercise into an unrelated gr
 
 ## 13. Workout builder and ordering
 
+> **Runtime (verificado em 2026-09-16, T19.6):** não existem grupos de exercícios no código — um
+> `WorkoutTemplate` tem uma lista plana de `WorkoutTemplateExerciseEntity`, e a ordem é a coluna
+> `sortOrder` (`ORDER BY sortOrder`, 0..n-1, normalizada a cada reordenação). O editor real é
+> `TemplateDetailsScreen` + `TemplateDetailsViewModel`, que **persiste cada ação na hora** (não há
+> Save/Cancel: "cancelar" é sair sem ter feito nada). Desde a T19.6 o editor reordena por
+> **arrastar** — long-press em qualquer ponto do card inicia o gesto, o item arrastado é deslocado
+> por `graphicsLayer` no sistema de coordenadas da própria `LazyColumn`, os vizinhos animam com
+> `animateItem`, e o drop entrega **uma** lista de ids à ViewModel
+> (`TemplateDetailsViewModel.reorderExercises`). `TemplateExerciseOrder` (domínio, puro) transforma
+> a ordem pedida em `sortOrder` sem tocar em id, `exerciseId` ou configuração, tolera ids que um
+> sync recriou (T16.3) sem duplicar nem remover, e `WorkoutRepository.updateTemplateExercises`
+> grava tudo numa transação com uma única mutação do agregado `WORKOUT_TEMPLATE`. O estado do
+> gesto (`TemplateExerciseDragState`) é temporário e nunca é persistido; a ordem que a ViewModel
+> projeta enquanto o Room ainda não emitiu (`PendingOrder`) tampouco — ela morre na primeira
+> emissão que a confirma. "Mover para cima/baixo" (action sheet e ações de acessibilidade do card)
+> continua existindo como alternativa ao gesto, pelo mesmo caminho. A **pré-visualização**
+> (`ExercisePreviewSheet`) é um bottom sheet read-only sobre o editor: lê o `ResolvedExercise` já
+> resolvido para a lista (catálogo canônico + override do usuário + mídia por
+> `ExerciseMediaResolver`, respeitando a preferência de GIFs) e a linha do template; não navega,
+> não edita o exercício base nem a configuração, não inventa campo nem mídia (sem asset, o card diz
+> que não há demonstração), e trata um `CUSTOM` com o que ele tiver. Nada disso sai do aparelho:
+> reordenar segue o fluxo de sync que já existia para o template (a `position` do snapshot vem do
+> índice ordenado), e a pré-visualização não fala com backend nenhum. O texto abaixo (grupos,
+> reordenação de grupos) descreve a direção pretendida.
+
 Workout templates must support durable ordering for:
 
 - workout groups;
@@ -716,6 +741,7 @@ persistência do domínio        validação da resposta
 | T19.3 | Program Share: programa inteiro por cópia independente | **implementado** |
 | T19.4 | Treino em dupla local (`DUO_LOCAL`): duas pessoas, um aparelho, uma sessão do dono; convidado sem conta; backend N/A | **implementado** (aparelho real NOT VERIFIED) |
 | T19.5 | Treino em dupla à distância (`DUO_REMOTE`): dois aparelhos, uma sessão em cada, sala no backend que só coordena (HTTP long-polling, sem WebSocket/FCM) | **implementado** (dois aparelhos reais / Cloud Run real NOT VERIFIED) |
+| T19.6 | Workout Editor V2: reordenar exercícios do treino por arrastar (long-press) e pré-visualização read-only do exercício; `sortOrder` continua a única autoridade da ordem; backend N/A, migration N/A | **implementado** (gesto em aparelho real NOT VERIFIED; gesto em Robolectric VERIFIED) |
 
 ### Identidade global dos dados e Outbox (T16.3)
 

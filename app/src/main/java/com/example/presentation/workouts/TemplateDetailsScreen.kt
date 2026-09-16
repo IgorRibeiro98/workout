@@ -5,9 +5,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -18,15 +20,26 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +85,25 @@ fun TemplateDetailsScreen(
     var exerciseToEdit by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
     var activeExerciseActionSheet by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
     var exerciseToDelete by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
+    var exerciseToPreview by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
+
+    // Arrastar para reordenar (T19.6). O estado do gesto é temporário e só existe aqui; no drop,
+    // a ordem vai inteira para a ViewModel, que a persiste em `sortOrder` numa transação só.
+    val listState = rememberLazyListState()
+    val dragState = rememberTemplateExerciseDragState(listState) { orderedIds ->
+        viewModel.reorderExercises(orderedIds)
+    }
+    val haptic = LocalHapticFeedback.current
+    // Durante o gesto (e no instante entre o drop e a ViewModel refletir a ordem), a lista mostra
+    // a ordem do gesto; fora disso, a ordem da ViewModel. Nunca há terceira fonte: só ids.
+    LaunchedEffect(exercises) { dragState.onExercisesChanged(exercises.map { it.templateExercise.id }) }
+    val displayedExercises = dragState.displayedOrder?.let { order ->
+        val byId = exercises.associateBy { it.templateExercise.id }
+        order.mapNotNull { byId[it] } + exercises.filter { it.templateExercise.id !in order }
+    } ?: exercises
+    // O detector de gesto é criado uma vez por item; ele precisa ler a ordem atual, não a da
+    // composição em que nasceu.
+    val displayedIds by rememberUpdatedState(displayedExercises.map { it.templateExercise.id })
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -128,52 +160,117 @@ fun TemplateDetailsScreen(
         }
     ) { innerPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .testTag("template_exercise_list"),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item(key = "header") { Spacer(modifier = Modifier.height(8.dp)) }
             
             if (exercises.isEmpty()) {
-                item {
+                item(key = "empty") {
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         Text("Nenhum exercício neste treino. Toque em + para adicionar.", color = TextSecondary)
                     }
                 }
             }
             
-            items(exercises, key = { it.templateExercise.id }) { templateExerciseDetails ->
+            items(displayedExercises, key = { it.templateExercise.id }) { templateExerciseDetails ->
+                val itemId = templateExerciseDetails.templateExercise.id
+                val isDragged = dragState.draggingId == itemId
+                val displayName = templateExerciseDetails.resolvedExercise.displayName
                 val endAction = SwipeAction(
                     icon = Icons.Default.Delete,
                     label = "Excluir",
                     backgroundColor = Color.Red.copy(alpha = 0.8f),
                     contentColor = Color.White,
-                    onTrigger = { exerciseToDelete = templateExerciseDetails }
+                    // Um item em arraste não pode ser removido no meio do gesto.
+                    onTrigger = { if (!dragState.isDragging) exerciseToDelete = templateExerciseDetails }
                 )
+                val position = displayedExercises.indexOfFirst { it.templateExercise.id == itemId }
+                val accessibilityMoves = buildList {
+                    if (position > 0) add(CustomAccessibilityAction("Mover para cima") {
+                        viewModel.moveExercise(position, position - 1); true
+                    })
+                    if (position in 0 until displayedExercises.size - 1) add(CustomAccessibilityAction("Mover para baixo") {
+                        viewModel.moveExercise(position, position + 1); true
+                    })
+                    add(CustomAccessibilityAction("Pré-visualizar exercício") {
+                        exerciseToPreview = templateExerciseDetails; true
+                    })
+                }
 
                 SwipeActionRow(
                     endAction = endAction,
                     hapticEnabled = hapticEnabled,
-                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // O item arrastado é desenhado por cima dos vizinhos e deslocado no
+                        // mesmo sistema de coordenadas da lista (ARCHITECTURE §13); os outros
+                        // animam para a posição candidata.
+                        .zIndex(if (isDragged) 1f else 0f)
+                        .then(if (isDragged) Modifier else Modifier.animateItem())
+                        .graphicsLayer {
+                            translationY = dragState.translationFor(itemId)
+                            if (isDragged) {
+                                scaleX = 1.02f
+                                scaleY = 1.02f
+                                shadowElevation = 16.dp.toPx()
+                                shape = RoundedCornerShape(16.dp)
+                            }
+                        }
+                        .clip(RoundedCornerShape(16.dp))
                 ) {
                     val group = MuscleVisualResolver.resolveGroup(templateExerciseDetails.resolvedExercise.primaryMuscle)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
-                            .background(SurfaceDark)
-                            .clickable { activeExerciseActionSheet = templateExerciseDetails }
-                            .padding(16.dp),
+                            .background(if (isDragged) SurfaceHighlight else SurfaceDark)
+                            .clickable { if (!dragState.isDragging) activeExerciseActionSheet = templateExerciseDetails }
+                            // Segurar inicia o arraste (PROJECT_RULES §9): o toque simples
+                            // continua abrindo as opções, e o gesto consome os eventos, então
+                            // soltar depois de segurar não vira um clique.
+                            .pointerInput(itemId) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        if (dragState.start(itemId, displayedIds) && hapticEnabled) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        }
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragState.drag(itemId, dragAmount.y)
+                                    },
+                                    onDragEnd = { dragState.end(itemId) },
+                                    onDragCancel = { dragState.cancel(itemId) }
+                                )
+                            }
+                            .semantics { customActions = accessibilityMoves }
+                            .testTag("template_exercise_$itemId")
+                            .padding(start = 4.dp, top = 16.dp, end = 16.dp, bottom = 16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.DragIndicator,
+                            contentDescription = "Segure para mover $displayName",
+                            tint = if (isDragged) Lime400 else TextTertiary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
                         Box(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(BackgroundDark),
+                                .background(BackgroundDark)
+                                .clickable(onClickLabel = "Pré-visualizar exercício") {
+                                    if (!dragState.isDragging) exerciseToPreview = templateExerciseDetails
+                                }
+                                .testTag("template_exercise_preview_$itemId"),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -183,10 +280,10 @@ fun TemplateDetailsScreen(
                                 modifier = Modifier.size(24.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(16.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = templateExerciseDetails.resolvedExercise.displayName,
+                                text = displayName,
                                 color = TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp
@@ -209,13 +306,13 @@ fun TemplateDetailsScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = { activeExerciseActionSheet = templateExerciseDetails }) {
+                        IconButton(onClick = { if (!dragState.isDragging) activeExerciseActionSheet = templateExerciseDetails }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "Opções do exercício", tint = TextSecondary)
                         }
                     }
                 }
             }
-            item { Spacer(modifier = Modifier.height(80.dp)) }
+            item(key = "footer") { Spacer(modifier = Modifier.height(80.dp)) }
         }
     }
 
@@ -443,6 +540,16 @@ fun TemplateDetailsScreen(
             }
             add(
                 ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_preview_template_exercise),
+                    icon = Icons.Default.Visibility,
+                    onClick = {
+                        exerciseToPreview = selectedItem
+                        activeExerciseActionSheet = null
+                    }
+                )
+            )
+            add(
+                ActionItemData(
                     title = stringResource(id = R.string.sheet_action_edit_template_exercise),
                     icon = Icons.Default.Edit,
                     onClick = {
@@ -468,6 +575,16 @@ fun TemplateDetailsScreen(
             title = stringResource(id = R.string.sheet_exercise_options),
             subtitle = selectedItem.resolvedExercise.displayName,
             actions = actions
+        )
+    }
+
+    // Pré-visualização read-only (T19.6): fecha e volta ao editor no mesmo ponto, com qualquer
+    // ordem já pedida intacta — ela vive na ViewModel, não neste sheet.
+    val previewItem = exerciseToPreview
+    if (previewItem != null) {
+        ExercisePreviewSheet(
+            item = previewItem,
+            onDismiss = { exerciseToPreview = null }
         )
     }
 

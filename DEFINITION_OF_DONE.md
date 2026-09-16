@@ -113,7 +113,8 @@ coordena —, sem `TRIO` nem rota; ver
 
 ## 11. Workout builder / drag and drop
 
-When relevant:
+When relevant (o runtime é o editor de treino da T19.6 — lista plana ordenada por `sortOrder`,
+sem grupos; ver `ARCHITECTURE.md §13`):
 
 - [ ] Long press initiates drag without accidental normal click.
 - [ ] Exercise reordering works inside the intended group.
@@ -123,6 +124,9 @@ When relevant:
 - [ ] Surrounding item movement remains stable/readable.
 - [ ] Drop commits the new domain order.
 - [ ] Order persists after leaving/reopening/reloading.
+- [ ] Reordering preserves row ids, `exerciseId` and configuration; nothing is duplicated or removed.
+- [ ] Dropping in the same place writes nothing (no sync mutation).
+- [ ] The exercise preview is read-only, works for `CUSTOM` and without media, and returns to the editor with any pending order intact.
 
 ## 12. Exercise catalog/import
 

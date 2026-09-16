@@ -169,6 +169,17 @@ Current product rules:
 
 ## 9. Drag and drop / reordering rules
 
+> **Runtime (verificado em 2026-09-16, T19.6):** o editor de treino (`TemplateDetailsScreen`)
+> reordena exercícios por arrastar desde a T19.6 — long-press inicia, o drop persiste
+> `WorkoutTemplateExerciseEntity.sortOrder` por `TemplateDetailsViewModel.reorderExercises` →
+> `TemplateExerciseOrder` → `WorkoutRepository.updateTemplateExercises` (transação única, uma
+> mutação de sync). Não existem grupos de exercícios no código; "reordenar grupo" abaixo é direção
+> pretendida. Regras que valem para qualquer mudança nesta área: a ordem visual nunca pode
+> divergir da persistida fora do gesto; reordenar não recria linhas nem muda `exerciseId` ou
+> configuração; soltar na mesma ordem não escreve nada; e a pré-visualização do exercício
+> (`ExercisePreviewSheet`) é leitura — não edita o exercício base, não edita a configuração no
+> treino, não depende de backend e não inventa mídia. Ver `ARCHITECTURE.md §13`.
+
 Workout-building reordering must support persistence and clear feedback.
 
 Required interaction direction:
