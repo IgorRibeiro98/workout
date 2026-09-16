@@ -91,9 +91,12 @@ class SocialViewModelTest {
     }
 
     @Test
-    fun `entrar na conta le o perfil mas nao ativa nada`() = runBlocking {
+    fun `entrar na conta com o Perfil aberto le o perfil mas nao ativa nada`() = runBlocking {
         val auth = FakeAuthGateway()
         val viewModel = viewModel(auth)
+        // O Perfil está aberto (é de dentro dele que se entra na conta): a tela já pediu o estado.
+        viewModel.open()
+        assertEquals("sem conta não há o que ler", 0, gateway.profileCalls)
 
         auth.nextOutcome = AuthOutcome.Success(accountA)
         gateway.currentUid = accountA.uid
@@ -109,11 +112,57 @@ class SocialViewModelTest {
     fun `criar o ViewModel com sessao restaurada nao ativa Social`() = runBlocking {
         gateway.currentUid = accountA.uid
         val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA))
+        viewModel.open()
 
         awaitPhase(viewModel) { it is SocialPhase.NotEnabled }
 
         assertEquals(0, gateway.activateCalls)
         assertNull(gateway.stored(accountA.uid))
+    }
+
+    @Test
+    fun `criar o ViewModel com sessao restaurada nao consulta o servidor ate uma tela abrir`() = runBlocking {
+        // T19.1 — o ViewModel vive em MainScreen: abrir o app não pode custar `GET /v1/social/me` a
+        // quem nunca abre o Social. A fase fica em Loading, sem requisição, até o Perfil/SocialHome.
+        gateway.currentUid = accountA.uid
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA))
+
+        assertEquals(SocialPhase.Loading, viewModel.uiState.value.phase)
+        assertEquals("nenhuma leitura sem tela pedindo o estado", 0, gateway.profileCalls)
+
+        viewModel.open()
+
+        assertEquals(SocialPhase.NotEnabled, awaitPhase(viewModel) { it is SocialPhase.NotEnabled })
+        assertEquals(1, gateway.profileCalls)
+    }
+
+    @Test
+    fun `abrir de novo com o perfil ja lido nao refaz a leitura`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        assertEquals(1, gateway.profileCalls)
+
+        // Perfil → SocialHome: as duas telas chamam `open()`, e só a primeira leitura acontece.
+        viewModel.open()
+        viewModel.open()
+
+        assertEquals("reabrir não é reler — é `refresh()` que força", 1, gateway.profileCalls)
+        assertEquals(SocialPhase.NotEnabled, viewModel.uiState.value.phase)
+    }
+
+    @Test
+    fun `abrir depois de uma leitura inicial offline refaz a leitura`() = runBlocking {
+        gateway.currentUid = accountA.uid
+        gateway.failWith = SocialError.NETWORK
+        val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA))
+        viewModel.open()
+        awaitPhase(viewModel) { it is SocialPhase.Offline }
+
+        // A rede voltou e o usuário abriu o Social de novo: a tela não fica presa no erro antigo.
+        gateway.failWith = null
+        viewModel.open()
+
+        assertEquals(SocialPhase.NotEnabled, awaitPhase(viewModel) { it is SocialPhase.NotEnabled })
+        assertEquals(2, gateway.profileCalls)
     }
 
     @Test
@@ -327,6 +376,7 @@ class SocialViewModelTest {
         gateway.failWith = SocialError.NETWORK
 
         val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA))
+        viewModel.open()
 
         val phase = awaitPhase(viewModel) { it is SocialPhase.Offline } as SocialPhase.Offline
         assertNull(phase.profile)
@@ -339,6 +389,7 @@ class SocialViewModelTest {
         gateway.failWith = SocialError.UNAVAILABLE
 
         val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA))
+        viewModel.open()
 
         val phase = awaitPhase(viewModel) { it is SocialPhase.Error } as SocialPhase.Error
         assertEquals(SocialError.UNAVAILABLE, phase.reason)
@@ -351,6 +402,7 @@ class SocialViewModelTest {
         val auth = FakeAuthGateway(initialAccount = accountA)
         gateway.currentUid = accountA.uid
         val viewModel = viewModel(auth)
+        viewModel.open()
 
         activate(viewModel, "Igor")
         assertEquals("Igor", viewModel.uiState.value.profile?.displayName)
@@ -398,6 +450,7 @@ class SocialViewModelTest {
         val gate = CompletableDeferred<Unit>()
         gateway.gate = gate
         val viewModel = viewModel(auth)
+        viewModel.open()
 
         // A conta troca **durante** a requisição de A.
         gateway.currentUid = accountB.uid
@@ -462,9 +515,11 @@ class SocialViewModelTest {
 
     // ------------------------------------------------------------------ helpers
 
+    /** Conta conectada **e** uma tela aberta pedindo o estado — como o Perfil faz ao abrir. */
     private suspend fun signedIn(account: SparkAccount): SocialViewModel {
         gateway.currentUid = account.uid
         val viewModel = viewModel(FakeAuthGateway(initialAccount = account))
+        viewModel.open()
         awaitPhase(viewModel) { it !is SocialPhase.Loading }
         return viewModel
     }

@@ -312,6 +312,22 @@ aquela capability para aquela conta deliberadamente.
 npm run capabilities:ai -- grant <uid> <capability>
 ```
 
+Contra a **produção** (Neon), o comando é o mesmo `dist/cli/manage-ai-capabilities.js` da imagem —
+só precisa de `DATABASE_URL`, e ela vem do Secret Manager direto para a variável do processo, nunca
+digitada nem gravada em arquivo (o mesmo cuidado de `reconcile-account-deletions` em
+DISASTER_RECOVERY.md):
+
+```bash
+cd backend && npm ci && npm run build
+DATABASE_URL="$(gcloud secrets versions access latest --secret spark-database-url --project "$SPARK_GCP_PROJECT")" \
+  node dist/cli/manage-ai-capabilities.js list <uid>
+```
+
+O `uid` é o Firebase UID da conta (`uidPrefix` aparece no log `ai.entitlement.denied`; o UID
+completo está no Firebase Console → Authentication). Não existe Job de Cloud Run para isto de
+propósito: grant/revoke é ação humana, rara e auditável pelo histórico de quem tinha acesso ao
+secret.
+
 `grant`/`revoke` são idempotentes — repetir não duplica linha nem falha. Capabilities conhecidas:
 `AI_ANALYZE_WORKOUT`, `AI_GENERATE_WORKOUT`, `AI_ADAPT_WORKOUT`, `AI_EXPLAIN`. Isto não substitui
 `AI_ENABLED` nem a quota: os dois continuam funcionando exatamente como antes, e `AI_ENABLED=false`

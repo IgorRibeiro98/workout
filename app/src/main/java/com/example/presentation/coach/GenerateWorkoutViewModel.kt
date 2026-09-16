@@ -66,11 +66,11 @@ class GenerateWorkoutViewModel(
      *
      * Resolvida contra o rascunho atual: se ele foi descartado ou salvo, não há chamada.
      */
-    fun explainDraft() {
+    fun explainDraft(modelAllowed: Boolean = true) {
         val useCase = explainCoachDecision ?: return
         val draft = (_uiState.value.status as? GenerateWorkoutStatus.Draft)?.draft ?: return
         val preferences = draftPreferences ?: return
-        explanations.request { useCase.explainGeneratedWorkout(draft, preferences) }
+        explanations.request { useCase.explainGeneratedWorkout(draft, preferences, modelAllowed) }
     }
 
     fun dismissExplanation() = explanations.dismiss()

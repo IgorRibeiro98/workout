@@ -241,6 +241,20 @@ class SparkBackendAiCoachGatewayTest {
     }
 
     @Test
+    fun `403 com outro code nao vira capability negada — conta excluida nao e falta de entitlement`() = runBlocking {
+        val gateway = gatewayWith(
+            mutableListOf(),
+            status = 403,
+            body = errorEnvelope("ACCOUNT_DELETED")
+        )
+
+        val result = gateway.request(analyzeRequest()) as AiCoachGatewayResult.Error
+
+        assertEquals(AiCoachErrorKind.PROVIDER, result.kind)
+        assertEquals("ACCOUNT_DELETED", result.detail)
+    }
+
+    @Test
     fun `409 vira erro recuperavel do provider`() = runBlocking {
         val gateway = gatewayWith(mutableListOf(), status = 409, body = errorEnvelope("AI_REQUEST_CONFLICT"))
 

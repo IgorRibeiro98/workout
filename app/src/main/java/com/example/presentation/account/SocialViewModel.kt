@@ -26,9 +26,11 @@ import kotlinx.coroutines.launch
  * ## Nada acontece sozinho
  *
  * Não há ativação em `init`, ao abrir a tela, em recomposição ou no listener de login. O que
- * acontece ao observar a sessão é o oposto disso: o app **lê** o perfil que já existe para saber o
- * que mostrar — e uma leitura nunca cria perfil, porque `GET /v1/social/me` responde
- * `{ enabled: false }` sem escrever nada.
+ * acontece ao observar a sessão é só posicionar a fase — e a leitura do perfil que já existe sai de
+ * [open], chamado por quem vai mostrar o estado (o Perfil e o SocialHome, T19.1). Uma leitura nunca
+ * cria perfil, porque `GET /v1/social/me` responde `{ enabled: false }` sem escrever nada — mas ela
+ * também não sai sozinha: este ViewModel vive em `MainScreen` desde a T19.1, e criá-lo ao abrir o
+ * app com sessão restaurada não pode custar uma requisição social a quem nunca abre o Social.
  *
  * Ativar exige dois atos explícitos, nesta ordem: tocar em "Ativar recursos sociais" (que abre a
  * explicação do que será criado) e confirmar.
@@ -77,6 +79,19 @@ class SocialViewModel(
     /** A conta da qual o estado atual fala. `null` = nenhuma. */
     private var currentUid: String? = null
 
+    /**
+     * `true` depois que alguma tela pediu o estado ([open]).
+     *
+     * Antes disso, observar a sessão só posiciona a fase em [SocialPhase.Loading] — nenhuma leitura
+     * sai. É o que impede o app aberto com sessão restaurada de consultar `GET /v1/social/me` sem o
+     * Perfil ou o SocialHome terem sido abertos (T19.1). Depois disso, uma troca de conta lê na hora,
+     * porque há tela mostrando o estado — é o caso de entrar na conta de dentro do próprio Perfil.
+     */
+    private var isOpened = false
+
+    /** `true` enquanto uma leitura do perfil está em voo — distingue "lendo" de "ainda não lido". */
+    private var isReading = false
+
     init {
         viewModelScope.launch {
             // Observar a sessão que já existe é leitura: não abre seletor de contas, não ativa
@@ -101,6 +116,8 @@ class SocialViewModel(
         if (uid == currentUid) return
 
         currentUid = uid
+        // A resposta de uma leitura em voo da conta anterior será descartada em `load` pelo `uid`.
+        isReading = false
         if (uid == null) {
             // Sair da conta apaga o estado social da tela por inteiro — inclusive as folhas
             // abertas e o texto digitado, que pertenciam à conta anterior.
@@ -113,7 +130,29 @@ class SocialViewModel(
             phase = SocialPhase.Loading,
             suggestedDisplayName = suggestion
         )
-        load(uid)
+        // Sem tela pedindo o estado, `Loading` fica parado aqui até [open] — nenhuma requisição sai.
+        if (isOpened) load(uid)
+    }
+
+    /**
+     * Lê o perfil, se ainda não foi lido para esta conta — chamado ao abrir o Perfil ou o SocialHome.
+     *
+     * Idempotente, como `FriendsViewModel.open()`: com o perfil já lido (ou a leitura em voo), reabrir
+     * a tela não refaz a requisição; é [refresh] que força a releitura. Uma leitura inicial que
+     * falhou (offline ou erro, sem perfil conhecido) é refeita — abrir o app sem rede e voltar ao
+     * Social depois não pode deixar a tela presa no erro antigo até um toque em "tentar de novo".
+     */
+    fun open() {
+        isOpened = true
+        val uid = currentUid ?: return
+        if (isReading || _uiState.value.profile != null) return
+        when (_uiState.value.phase) {
+            SocialPhase.Loading, is SocialPhase.Offline, is SocialPhase.Error -> {
+                _uiState.value = _uiState.value.copy(phase = SocialPhase.Loading)
+                load(uid)
+            }
+            else -> Unit
+        }
     }
 
     /** Relê o perfil no servidor. Leitura pura: não cria e não altera nada. */
@@ -125,9 +164,11 @@ class SocialViewModel(
     }
 
     private fun load(uid: String) {
+        isReading = true
         viewModelScope.launch {
             val outcome = gateway.profile()
             if (currentUid != uid) return@launch
+            isReading = false
             _uiState.value = _uiState.value.copy(
                 phase = when (outcome) {
                     is SocialOutcome.Success -> SocialPhase.Active(outcome.profile)
@@ -373,19 +414,8 @@ class SocialViewModel(
         }
     }
 
-    private fun refreshAfterConflict(uid: String) {
-        viewModelScope.launch {
-            val outcome = gateway.profile()
-            if (currentUid != uid) return@launch
-            _uiState.value = _uiState.value.copy(
-                phase = when (outcome) {
-                    is SocialOutcome.Success -> SocialPhase.Active(outcome.profile)
-                    SocialOutcome.NotEnabled -> SocialPhase.NotEnabled
-                    is SocialOutcome.Failure -> failurePhase(outcome.error, profile = null)
-                }
-            )
-        }
-    }
+    /** A releitura depois de um conflito é a mesma leitura de sempre — inclusive para [open] saber que ela está em voo. */
+    private fun refreshAfterConflict(uid: String) = load(uid)
 
     private fun failurePhase(error: SocialError, profile: SocialProfile?): SocialPhase = when (error) {
         SocialError.NOT_CONFIGURED -> SocialPhase.NotConfigured

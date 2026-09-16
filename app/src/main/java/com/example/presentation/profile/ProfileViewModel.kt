@@ -63,8 +63,11 @@ class ProfileViewModel(
      *
      * O recorte enviado é o que a tela já mostra, vindo pronto das autoridades. A IA **explica**
      * estes números; ela não recalcula nível, curva de XP, sequência nem conquista.
+     *
+     * [modelAllowed] é o que a tela sabe da capability `AI_EXPLAIN` (T19.0): `false` quando o
+     * servidor já disse que esta conta não a tem — a explicação sai local, sem chamada.
      */
-    fun explainProgress() {
+    fun explainProgress(modelAllowed: Boolean = true) {
         val useCase = explainCoachDecision ?: return
         val state = _uiState.value
         if (state.isLoading) return
@@ -82,7 +85,8 @@ class ProfileViewModel(
                     unlockedAchievements = state.unlockedAchievements,
                     totalAchievements = state.totalAchievements,
                     personalRecordsCount = state.personalRecordsCount
-                )
+                ),
+                modelAllowed
             )
         }
     }

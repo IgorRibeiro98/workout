@@ -363,6 +363,59 @@ class ExplainCoachDecisionUseCaseTest {
     }
 
     // -------------------------------------------------------------------------------------
+    // T19.0 — AI_EXPLAIN negada para a conta
+    // -------------------------------------------------------------------------------------
+
+    @Test
+    fun `capability negada pelo servidor cai para a explicacao local dizendo que e desta conta`() = runTest {
+        val gateway = FakeAiCoachGateway(
+            explanationResponder = {
+                AiCoachExplanationGatewayResult.Error(AiCoachErrorKind.CAPABILITY_DENIED)
+            }
+        )
+
+        val result = ExplainCoachDecisionUseCase(gateway).explainProgress(progress())
+
+        val explanation = (result as AiCoachExplanationResult.Success).explanation
+        assertEquals(AiCoachExplanationSource.LOCAL, explanation.source)
+        // Negado de propósito não é "agora": a limitação diz que é desta conta.
+        assertTrue(explanation.limitations.any { it.contains("não está disponível para esta conta") })
+        assertTrue(explanation.limitations.none { it.contains("não está disponível agora") })
+    }
+
+    @Test
+    fun `quando a tela ja sabe que AI_EXPLAIN foi negada, nenhuma requisicao sai`() = runTest {
+        val gateway = FakeAiCoachGateway(
+            explanationResponder = { AiCoachExplanationGatewayResult.Success(explanationResponse()) }
+        )
+
+        val result = ExplainCoachDecisionUseCase(gateway)
+            .explainGeneratedWorkout(generatedDraft(), preferences(), modelAllowed = false)
+
+        val explanation = (result as AiCoachExplanationResult.Success).explanation
+        assertEquals("capability negada não dispara operação de IA", 0, gateway.explanationCallCount)
+        assertEquals(AiCoachExplanationSource.LOCAL, explanation.source)
+        assertTrue(explanation.evidenceItems.isNotEmpty())
+        assertTrue(explanation.limitations.any { it.contains("não está disponível para esta conta") })
+    }
+
+    @Test
+    fun `modelAllowed so informa — com true o servidor continua sendo quem autoriza`() = runTest {
+        val gateway = FakeAiCoachGateway(
+            explanationResponder = { AiCoachExplanationGatewayResult.Success(explanationResponse()) }
+        )
+
+        val result = ExplainCoachDecisionUseCase(gateway)
+            .explainGeneratedWorkout(generatedDraft(), preferences(), modelAllowed = true)
+
+        assertEquals(1, gateway.explanationCallCount)
+        assertEquals(
+            AiCoachExplanationSource.MODEL,
+            (result as AiCoachExplanationResult.Success).explanation.source
+        )
+    }
+
+    // -------------------------------------------------------------------------------------
     // 19/20. Cache em memória e invalidação
     // -------------------------------------------------------------------------------------
 

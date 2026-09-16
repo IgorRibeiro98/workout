@@ -53,10 +53,10 @@ class AdaptWorkoutViewModel(
      * deixar de existir. O caso de uso ainda relê o treino e recusa explicar uma proposta montada
      * sobre um estado que já mudou.
      */
-    fun explainChange(changeId: String) {
+    fun explainChange(changeId: String, modelAllowed: Boolean = true) {
         val useCase = explainCoachDecision ?: return
         val draft = (_uiState.value.status as? AdaptWorkoutStatus.Draft)?.draft ?: return
-        explanations.request { useCase.explainAdaptationChange(draft, changeId) }
+        explanations.request { useCase.explainAdaptationChange(draft, changeId, modelAllowed) }
     }
 
     fun dismissExplanation() = explanations.dismiss()

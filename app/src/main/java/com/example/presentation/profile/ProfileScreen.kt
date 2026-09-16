@@ -20,10 +20,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.ai.model.AiCapability
 import com.example.domain.evolution.model.achievement.Achievement
 import com.example.feature.evolution.achievements.components.getTierColor
 import com.example.feature.evolution.achievements.components.getTierName
 import com.example.presentation.account.SocialPhase
+import com.example.presentation.coach.isKnownDenied
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.HubEntryCard
 import com.example.ui.theme.*
@@ -65,9 +67,17 @@ fun ProfileScreen(
     /** O grafo social (T17.1). `null` mantém o Perfil exatamente como a T17.0 o entregou. */
     friendsViewModel: com.example.presentation.account.FriendsViewModel? = null,
     /** T19.1 — abre o SocialHome, que organiza Feed/Pessoas/Comunidades/Compartilhar/Privacidade. */
-    onNavigateToSocialHome: () -> Unit = {}
+    onNavigateToSocialHome: () -> Unit = {},
+    /**
+     * Capabilities de IA (T19.0), só **lidas**: "Entender minha evolução" é `AI_EXPLAIN`, e se o
+     * servidor já disse que esta conta não a tem, a explicação sai local, sem chamada. Abrir o
+     * Perfil não dispara a consulta de capabilities — ela custa uma requisição, e quem nunca usa o
+     * Coach não deve pagá-la aqui; sem o estado carregado, o backend decide na chamada de sempre.
+     */
+    aiCapabilitiesViewModel: com.example.presentation.coach.AiCapabilitiesViewModel? = null
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val aiCapabilitiesState = aiCapabilitiesViewModel?.state?.collectAsStateWithLifecycle()?.value
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
     val accountState = accountViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // Observar o estado é leitura: ele diz o que mostrar, e nenhum backup começa por isso.
@@ -82,14 +92,18 @@ fun ProfileScreen(
     // E para o grafo: observar o estado não carrega nada.
     val friendsState = friendsViewModel?.uiState?.collectAsStateWithLifecycle()?.value
 
+    // T19.1 — o `socialViewModel` é compartilhado com o SocialHome (mesma instância, criada em
+    // `MainScreen`), e criá-lo não lê nada: a leitura do perfil social sai daqui, ao abrir o Perfil
+    // — `open()` é idempotente, então quem já leu não lê de novo, e o SocialHome reaproveita o
+    // resultado. É uma leitura: `GET /v1/social/me` não cria perfil nem ativa nada.
+    androidx.compose.runtime.LaunchedEffect(socialViewModel) {
+        socialViewModel?.open()
+    }
+
     // A leitura do grafo acontece quando o Perfil abre **com o perfil social ativo** — é o que
     // permite mostrar "3 amigos · 1 solicitação pendente" no cartão do SocialHome, sem entrar na
     // lista. Ela é uma leitura: não cria relação, não aceita nada e não envia nada. Sem perfil
     // social ativo não há o que pedir, e nenhuma requisição sai.
-    //
-    // T19.1 — o `socialViewModel` agora é compartilhado com o SocialHome (mesma instância, criada
-    // em `MainScreen`): abrir o Perfil continua sendo o único gatilho desta leitura, e o SocialHome
-    // reaproveita o resultado sem pedir de novo.
     val isSocialActive = socialState?.profile?.status == com.example.domain.social.SocialProfileStatus.ACTIVE
     androidx.compose.runtime.LaunchedEffect(isSocialActive) {
         if (isSocialActive) friendsViewModel?.open()
@@ -112,7 +126,11 @@ fun ProfileScreen(
         onNavigateToAiHome = onNavigateToAiHome,
         onWeeklyGoalChange = viewModel::setWeeklyGoal,
         canExplainProgress = viewModel.canExplainProgress,
-        onExplainProgress = viewModel::explainProgress,
+        onExplainProgress = {
+            viewModel.explainProgress(
+                modelAllowed = aiCapabilitiesState?.isKnownDenied(AiCapability.AI_EXPLAIN) != true
+            )
+        },
         accountState = accountState,
         // A autenticação só começa aqui, no toque. Abrir o Perfil não abre seletor de contas.
         onAccountSignIn = { host -> accountViewModel?.signIn(host) },

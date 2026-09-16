@@ -695,6 +695,7 @@ persistência do domínio        validação da resposta
 | T18.2.1 | Cross-project: projeto GCP de infraestrutura ≠ projeto Firebase | **implementado** (bootstrap real NOT VERIFIED sem gcloud/rede GCP) |
 | T18.3 | DR do PostgreSQL gerenciado e proteção do bucket | **implementado** (DR real VERIFIED em GCP) |
 | T19.0 | ACL/entitlements granular de capabilities de IA por conta | **implementado** |
+| T19.1 | Social Hub + AI Hub: `SocialHome`/`AiHome` atrás do Perfil, bottom navigation inalterada (5 itens) | **implementado** |
 
 ### Identidade global dos dados e Outbox (T16.3)
 

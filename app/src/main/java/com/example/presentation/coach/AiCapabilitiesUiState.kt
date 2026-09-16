@@ -46,3 +46,14 @@ fun AiCapabilitiesUiState.availabilityOf(capability: AiCapability): CoachActionA
 
         AiCapabilitiesUiState.LoadFailed -> CoachActionAvailability.UNKNOWN
     }
+
+/**
+ * `true` só quando o servidor **já respondeu** que esta conta não tem [capability].
+ *
+ * É o que uma tela usa para não disparar uma operação de IA que o backend recusaria — a
+ * explicação do Coach, por exemplo, sai local nesse caso, sem requisição. Carregando, sem conta ou
+ * falha ao carregar são `false`: nesses estados a tela não sabe, e quem decide continua sendo o
+ * backend, a cada chamada real (T19.0).
+ */
+fun AiCapabilitiesUiState.isKnownDenied(capability: AiCapability): Boolean =
+    availabilityOf(capability) == CoachActionAvailability.DENIED

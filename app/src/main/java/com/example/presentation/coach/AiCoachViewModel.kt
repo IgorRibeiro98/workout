@@ -58,11 +58,11 @@ class AiCoachViewModel(
      * O alvo é resolvido por id contra a análise atual; se ela foi refeita ou nunca existiu, não
      * há chamada. Esta explicação é **sempre local**: a recomendação já traz razão e evidência.
      */
-    fun explain(targetId: String) {
+    fun explain(targetId: String, modelAllowed: Boolean = true) {
         val useCase = explainCoachDecision ?: return
         val advice = currentAdvice ?: return
         explanations.request {
-            useCase.explainAnalysisTarget(advice, targetId, exerciseNameResolver)
+            useCase.explainAnalysisTarget(advice, targetId, exerciseNameResolver, modelAllowed)
         }
     }
 

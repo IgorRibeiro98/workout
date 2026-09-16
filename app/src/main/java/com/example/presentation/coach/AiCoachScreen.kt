@@ -87,7 +87,13 @@ fun AiCoachScreen(
         capabilityAvailability = capabilitiesState.availabilityOf(AiCapability.AI_ANALYZE_WORKOUT),
         onRetryCapabilities = { capabilitiesViewModel?.retry() },
         canExplain = viewModel.canExplain,
-        onExplain = viewModel::explain,
+        // "Por quê?" é AI_EXPLAIN, uma capability própria (T19.0): negada, a explicação sai local.
+        onExplain = { targetId ->
+            viewModel.explain(
+                targetId,
+                modelAllowed = !capabilitiesState.isKnownDenied(AiCapability.AI_EXPLAIN)
+            )
+        },
         onSignIn = onSignIn,
         isSignInAvailable = isSignInAvailable,
         isSigningIn = isSigningIn

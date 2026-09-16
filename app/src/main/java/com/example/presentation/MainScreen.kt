@@ -167,8 +167,9 @@ fun MainScreen() {
     // resumo nele, o SocialHome para a tela inteira. Uma instância por rota faria o SocialHome
     // reconsultar o perfil que o Perfil acabou de carregar.
     //
-    // Criá-lo aqui não faz requisição nenhuma: o `init` só observa a sessão para invalidar. A
-    // primeira leitura sai de abrir o Perfil com o perfil social ativo, como já era antes da T19.1.
+    // Criá-lo aqui não faz requisição nenhuma: o `init` só observa a sessão para posicionar e
+    // invalidar o estado. A leitura (`GET /v1/social/me`) sai de `open()`, que o Perfil e o
+    // SocialHome chamam ao abrir — abrir o app com sessão restaurada não consulta o Social.
     val socialViewModel: com.example.presentation.account.SocialViewModel =
         viewModel(factory = factory)
 
@@ -501,6 +502,9 @@ fun MainScreen() {
                     // ambas passaram a viver atrás de um hub.
                     onNavigateToAiHome = { navController.pushOnce(Screen.AiHome.route) },
                     onNavigateToSocialHome = { navController.pushOnce(Screen.SocialHome.route) },
+                    // T19.0 — só leitura, para "Entender minha evolução" (AI_EXPLAIN) não chamar o
+                    // servidor quando ele já disse não. O Perfil não dispara a consulta.
+                    aiCapabilitiesViewModel = aiCapabilitiesViewModel,
                     onNavigateToBodyEvolution = { navController.pushOnce(Screen.BodyEvolution.route) },
                     // As conquistas continuam morando em Evolução: o Perfil só mostra uma prévia.
                     onNavigateToAchievements = {

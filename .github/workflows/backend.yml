@@ -215,7 +215,7 @@ jobs:
             docker run --rm --entrypoint "$tool" spark-backend:ci --version | grep -q '(PostgreSQL) 18\.' \
               || { echo "$tool não é a major 18 na imagem"; exit 1; }
           done
-          for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions; do
+          for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions manage-ai-capabilities; do
             docker run --rm --entrypoint test spark-backend:ci -f "dist/cli/${cli}.js" \
               || { echo "dist/cli/${cli}.js ausente na imagem"; exit 1; }
           done

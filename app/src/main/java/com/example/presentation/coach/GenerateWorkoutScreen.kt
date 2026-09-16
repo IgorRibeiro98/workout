@@ -133,7 +133,12 @@ fun GenerateWorkoutScreen(
             onReset = viewModel::reset,
             onOpenTemplate = onOpenTemplate,
             onNavigateBack = onNavigateBack,
-            onExplainDraft = viewModel::explainDraft,
+            // "Como isso foi decidido?" é AI_EXPLAIN (T19.0): negada, a explicação sai local.
+            onExplainDraft = {
+                viewModel.explainDraft(
+                    modelAllowed = !capabilitiesState.isKnownDenied(AiCapability.AI_EXPLAIN)
+                )
+            },
             canExplain = viewModel.canExplain,
             onSignIn = onSignIn,
             isSignInAvailable = isSignInAvailable,

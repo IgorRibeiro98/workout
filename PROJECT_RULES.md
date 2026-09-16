@@ -1731,14 +1731,37 @@ terceira pergunta, granular por conta e por capability, sem virar plano nem RBAC
   corpo. O corpo de resposta é só `{ capability, allowed }` por capability: sem uid, sem o motivo
   interno da decisão.
 - **O Android nunca é autoridade.** `AiCapabilitiesViewModel` (compartilhado pelas três telas do
-  Coach, como `FriendsViewModel`) só orienta a UX — habilitar/desabilitar uma ação, mostrar uma
-  mensagem. `CoachActionAvailability` distingue `ALLOWED` / `DENIED` / `DETERMINING` (carregando
-  ou sem conta) / `UNKNOWN` (falha ao carregar — nunca interpretada como permissão). O backend
-  valida de novo em toda chamada real, mesmo que este estado diga "permitido": um `403
-  AI_CAPABILITY_DENIED` na chamada em si vira `AiCoachErrorKind.CAPABILITY_DENIED`, um valor
-  próprio, nunca reaproveitando `AUTH_REQUIRED`. Troca de conta invalida o estado antes de
-  qualquer requisição nova, e a resposta de uma consulta iniciada pela conta anterior é descartada
-  se a conta mudou no meio do voo — o mesmo padrão de `FriendsViewModel`.
+  Coach e pelo AiHome, como `FriendsViewModel`) só orienta a UX — habilitar/desabilitar uma ação,
+  mostrar uma mensagem. `CoachActionAvailability` distingue `ALLOWED` / `DENIED` / `DETERMINING`
+  (carregando ou sem conta) / `UNKNOWN` (falha ao carregar). Só `DENIED` desabilita a ação e não
+  navega pelo hub. O backend valida de novo em toda chamada real, mesmo que este estado diga
+  "permitido": um `403` com `code: AI_CAPABILITY_DENIED` na chamada em si vira
+  `AiCoachErrorKind.CAPABILITY_DENIED`, um valor próprio, nunca reaproveitando `AUTH_REQUIRED` —
+  e só com esse `code`: o `403 ACCOUNT_DELETED` do `BearerAuthGuard` não é falta de entitlement e
+  segue no erro genérico. Troca de conta invalida o estado antes de qualquer requisição nova, e a
+  resposta de uma consulta iniciada pela conta anterior é descartada se a conta mudou no meio do
+  voo — o mesmo padrão de `FriendsViewModel`.
+- **`UNKNOWN` não é permissão — e também não é bloqueio no cliente (divergência deliberada da
+  tarefa).** A T19.0 pedia "UNKNOWN → DENY operação online"; no Android, `UNKNOWN` (a consulta de
+  capabilities falhou: rede, `503`, resposta fora do contrato, ou um backend anterior à T19.0 que
+  responde `404`) mostra o aviso "não foi possível confirmar" com "tentar de novo" e **mantém a
+  ação clicável**. O cliente não concede nada com isso: a chamada real continua indo ao backend,
+  que é fail-closed de verdade (`RESOLUTION_FAILED` → `503`, capability desconhecida → `403`).
+  Bloquear no cliente só criaria uma segunda dependência online para o Coach — uma falha
+  transitória da consulta deixaria o Coach inteiro inutilizável até um toque em "tentar de novo",
+  e um app publicado antes do deploy do backend correspondente ficaria sem Coach nenhum. A regra
+  vale por igual nas três telas e no AiHome; o que a UI **nunca** faz é apresentar `UNKNOWN` como
+  "permitido".
+- **`AI_EXPLAIN` também tem cara no cliente.** Os gatilhos de explicação ("Por quê?", "Como isso
+  foi decidido?", "Entender sugestão", "Entender minha evolução") passam ao caso de uso o que a tela
+  sabe (`modelAllowed = !isKnownDenied(AI_EXPLAIN)`): com a capability já negada pelo servidor,
+  `ExplainCoachDecisionUseCase` **não chama o backend** e devolve a explicação local com a limitação
+  "não está disponível para esta conta" — a mesma que um `403 AI_CAPABILITY_DENIED` na chamada
+  produz, e distinta de "não está disponível agora" (provider fora). O Perfil só **lê** esse estado
+  para "Entender minha evolução": abrir o Perfil não dispara a consulta de capabilities — quem
+  nunca usa o Coach não paga por ela; sem o estado carregado, o backend decide na chamada de
+  sempre. A explicação local (a que o app já sabia dar) continua disponível para uma conta sem
+  `AI_EXPLAIN` — negar a capability nega o modelo, não os dados do próprio usuário.
 - **Grant/revoke/list é uma ferramenta operacional, não um endpoint de produto.** `npm run
   capabilities:ai -- grant|revoke|list`, no mesmo padrão dos outros comandos de `backend/src/cli/`
   (`AppConfig.fromEnv()` + `PostgresService`, sem HTTP, sem admin secret). Não existe painel
@@ -1750,8 +1773,45 @@ terceira pergunta, granular por conta e por capability, sem virar plano nem RBAC
   revogação nem uma concessão de conta já excluída.
 - **Testes.** Toda mudança em capabilities/entitlement roda
   `./gradlew :app:testDebugUnitTest --tests "com.example.domain.ai.*" --tests
-  "com.example.data.ai.*" --tests "com.example.presentation.coach.*"` e `npm test` em `backend/`.
-  As duas são offline, usam dublês e não consomem cota.
+  "com.example.data.ai.*" --tests "com.example.presentation.coach.*" --tests
+  "com.example.presentation.profile.*"` e `npm test` em `backend/`. As duas são offline, usam
+  dublês e não consomem cota.
+- **`GET /v1/account/capabilities` responde entitlement, não disponibilidade.** Com
+  `AI_ENABLED=false` ele continua devolvendo `allowed: true` para quem tem entitlement; a operação
+  em si é recusada com `503 AI_PROVIDER_UNAVAILABLE`, como sempre foi. Misturar os dois faria o kill
+  switch parecer revogação — e revogação é decisão por conta, não estado do servidor.
+
+## 13.21 Hubs de Social e Coach IA (T19.1)
+
+A bottom navigation continua com cinco itens (Hoje, Treinos, Exercícios, Histórico, Evolução). Social
+e Coach IA são áreas de primeiro nível **atrás do Perfil**: `SocialHome` (`social_home`) e `AiHome`
+(`ai_home`), alcançadas por uma entrada cada no `ProfileScreen`.
+
+- **Hub é navegação, não domínio.** Nenhuma das duas rotas tem repository, cache ou ViewModel de
+  domínio próprio. `SocialHomeScreen` renderiza o mesmo `SocialSection` que vivia no Perfil, com os
+  mesmos `SocialViewModel`/`FriendsViewModel`; `AiHomeScreen` só navega para `AiCoach`,
+  `GenerateWorkout` e Treinos (Adaptar exige um treino: o hub não inventa um seletor). Social continua
+  server-authoritative; IA continua autorizada pelo backend a cada chamada (§13.20).
+- **Abrir um hub pede só o que ele mostra.** `SocialViewModel` vive em `MainScreen` desde a T19.1
+  (compartilhado entre Perfil e SocialHome), e criá-lo **não lê nada**: `GET /v1/social/me` sai de
+  `SocialViewModel.open()`, chamado por quem mostra o estado — Perfil e SocialHome —, idempotente
+  como `FriendsViewModel.open()` (perfil já lido não é relido; leitura inicial que falhou é refeita;
+  `refresh()` força). Abrir o app com sessão restaurada não consulta o Social. Entrar na conta com o
+  Perfil aberto lê na hora, porque há tela pedindo o estado. Abrir o AiHome não fala com o provider
+  nem com o Gemini — `AiCapabilitiesViewModel.ensureLoaded()` é a única consulta, uma por conta.
+- **"Entender minha evolução" ficou no Perfil, não no AiHome** (divergência deliberada da estrutura
+  sugerida pela tarefa): o que ela explica são os números de progresso da própria tela do Perfil, e
+  não uma capacidade que exista fora dele. Continua sendo `AI_EXPLAIN` (§13.20).
+- **Nada foi removido, nada foi duplicado.** Toda rota social existente continua alcançável pelo
+  SocialHome, agrupada por intenção (Feed · Pessoas · Comunidades · Compartilhar · Privacidade);
+  "Meu código" é um diálogo sobre o hub, não uma rota. `HubEntryCard` é o cartão canônico extraído
+  do Perfil para os três lugares — sem variante nova por tela, sem emoji como ícone.
+- **Back stack previsível.** Tudo é `pushOnce` (`launchSingleTop`); os dois hubs mapeiam para a aba
+  "Hoje" em `topLevelDestinationMap`, como as demais folhas do Perfil. Deep links de notificação
+  continuam apontando para as rotas de sempre (solicitações, squads), que não mudaram.
+- **Account switch.** Nenhum estado novo foi criado, então nada novo precisa ser invalidado: os
+  ViewModels compartilhados já descartam estado e resposta em voo na troca de conta (§13.8 —
+  domínio social —, §13.9 e §13.20).
 
 ## 14. Tests and build are part of implementation
 

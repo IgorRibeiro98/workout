@@ -66,7 +66,8 @@ class ExplainCoachDecisionUseCase(
     suspend fun explainAnalysisTarget(
         advice: AiCoachAdvice,
         targetId: String,
-        exerciseNameResolver: suspend (String) -> String? = { null }
+        exerciseNameResolver: suspend (String) -> String? = { null },
+        modelAllowed: Boolean = true
     ): AiCoachExplanationResult {
         val requestId = requestIdProvider()
         val target = advice.explainableTarget(targetId)
@@ -87,20 +88,22 @@ class ExplainCoachDecisionUseCase(
             target = target,
             exerciseName = exerciseId?.let { exerciseNameResolver(it) }
         )
-        return resolve(requestId, plan)
+        return resolve(requestId, plan, modelAllowed)
     }
 
     /** "Por que esse treino foi montado assim?" sobre a proposta ainda não salva. */
     suspend fun explainGeneratedWorkout(
         draft: GeneratedWorkoutDraft,
-        preferences: WorkoutGenerationPreferences
+        preferences: WorkoutGenerationPreferences,
+        modelAllowed: Boolean = true
     ): AiCoachExplanationResult {
         val requestId = requestIdProvider()
         if (draft.exercises.isEmpty()) return AiCoachExplanationResult.TargetNotFound
 
         return resolve(
             requestId,
-            AiCoachExplanationContextBuilder.forGeneratedWorkout(requestId, draft, preferences)
+            AiCoachExplanationContextBuilder.forGeneratedWorkout(requestId, draft, preferences),
+            modelAllowed
         )
     }
 
@@ -114,7 +117,8 @@ class ExplainCoachDecisionUseCase(
      */
     suspend fun explainAdaptationChange(
         draft: WorkoutAdaptationDraft,
-        changeId: String
+        changeId: String,
+        modelAllowed: Boolean = true
     ): AiCoachExplanationResult {
         val requestId = requestIdProvider()
         val change = draft.change(changeId) ?: return AiCoachExplanationResult.TargetNotFound
@@ -138,14 +142,22 @@ class ExplainCoachDecisionUseCase(
 
         return resolve(
             requestId,
-            AiCoachExplanationContextBuilder.forAdaptationChange(requestId, draft, change, history)
+            AiCoachExplanationContextBuilder.forAdaptationChange(requestId, draft, change, history),
+            modelAllowed
         )
     }
 
     /** "Por que meu Coach diz que estou evoluindo?" sobre os números do Perfil. */
-    suspend fun explainProgress(snapshot: AiProgressSnapshot): AiCoachExplanationResult {
+    suspend fun explainProgress(
+        snapshot: AiProgressSnapshot,
+        modelAllowed: Boolean = true
+    ): AiCoachExplanationResult {
         val requestId = requestIdProvider()
-        return resolve(requestId, AiCoachExplanationContextBuilder.forProgress(requestId, snapshot))
+        return resolve(
+            requestId,
+            AiCoachExplanationContextBuilder.forProgress(requestId, snapshot),
+            modelAllowed
+        )
     }
 
     // -------------------------------------------------------------------------------------
@@ -155,14 +167,26 @@ class ExplainCoachDecisionUseCase(
      *
      * Ordem: dados estruturados existentes -> explicação local -> Gemini somente se agregar
      * valor. E, dentro do caminho do Gemini: cache em memória antes da chamada.
+     *
+     * [modelAllowed] é o que a tela sabe sobre a capability `AI_EXPLAIN` da conta (T19.0): `false`
+     * quando o servidor já respondeu que esta conta não a tem. Nesse caso o modelo não é chamado —
+     * uma requisição que o backend recusaria de graça continua sendo uma requisição inútil — e a
+     * explicação local sai com a limitação certa. É informação, não autoridade: com `true`, o
+     * backend continua autorizando a chamada de novo, e um `403` ali cai no mesmo fallback.
      */
     private suspend fun resolve(
         requestId: String,
-        plan: AiCoachExplanationPlan
+        plan: AiCoachExplanationPlan,
+        modelAllowed: Boolean
     ): AiCoachExplanationResult {
         if (!plan.useModel) {
             // Sem telemetria de provider: nenhuma chamada foi feita.
             return AiCoachExplanationResult.Success(plan.local)
+        }
+
+        if (!modelAllowed) {
+            // Idem: capability negada não dispara operação de IA — e não é falha de provider.
+            return fallback(plan, com.example.domain.ai.model.AiCoachErrorKind.CAPABILITY_DENIED)
         }
 
         cache.get(plan.target)?.let { cached ->
@@ -269,6 +293,11 @@ class ExplainCoachDecisionUseCase(
         com.example.domain.ai.model.AiCoachErrorKind.TIMEOUT ->
             "O Coach IA demorou demais para responder: esta explicação foi montada com os dados " +
                 "que o app já tinha."
+
+        // T19.0 — negado de propósito, e não "agora": entrar de novo ou tentar mais tarde não muda.
+        com.example.domain.ai.model.AiCoachErrorKind.CAPABILITY_DENIED ->
+            "O Coach IA não está disponível para esta conta: esta explicação foi montada com os " +
+                "dados que o app já tinha."
 
         else ->
             "O Coach IA não está disponível agora: esta explicação foi montada com os dados que " +

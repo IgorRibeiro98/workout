@@ -113,7 +113,13 @@ fun AdaptWorkoutScreen(
             onApply = viewModel::apply,
             onReset = viewModel::reset,
             onNavigateBack = onNavigateBack,
-            onExplainChange = viewModel::explainChange,
+            // "Entender sugestão" é AI_EXPLAIN (T19.0): negada, a explicação sai local.
+            onExplainChange = { changeId ->
+                viewModel.explainChange(
+                    changeId,
+                    modelAllowed = !capabilitiesState.isKnownDenied(AiCapability.AI_EXPLAIN)
+                )
+            },
             canExplain = viewModel.canExplain,
             onSignIn = onSignIn,
             isSignInAvailable = isSignInAvailable,

@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.domain.social.SocialProfileStatus
 import com.example.presentation.account.FriendsViewModel
 import com.example.presentation.account.SocialSection
 import com.example.presentation.account.SocialViewModel
@@ -44,10 +46,11 @@ import com.example.ui.theme.TextPrimary
  *
  * Esta tela **não** é uma nova fonte de estado social: todo o conteúdo continua vindo de
  * [SocialViewModel] e [FriendsViewModel], os mesmos que já serviam essas telas dentro do Perfil
- * (T17.0/T17.1). Abrir este hub não dispara nenhuma requisição por si só — [SocialSection] só lê o
- * que os ViewModels já observam; quem inicia uma leitura de rede é sempre o toque do usuário ou o
- * `LaunchedEffect` que o Perfil já tinha (abrir com perfil social ativo carrega o resumo do
- * grafo), preservado aqui pela mesma instância compartilhada de ViewModel.
+ * (T17.0/T17.1). Abrir este hub pede exatamente o que ele mostra, e nada além: o perfil social
+ * (`open()`, idempotente — quem veio do Perfil já o tem lido) e, com o perfil ativo, o resumo do
+ * grafo para os contadores de Pessoas. As duas são leituras; nenhuma cria, aceita ou envia nada.
+ * O hub não depende de o Perfil ter sido aberto antes — um atalho futuro direto para aqui chega
+ * com o mesmo conteúdo.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +71,12 @@ fun SocialHomeScreen(
 ) {
     val socialState by socialViewModel.uiState.collectAsStateWithLifecycle()
     val friendsState = friendsViewModel?.uiState?.collectAsStateWithLifecycle()?.value
+
+    LaunchedEffect(socialViewModel) { socialViewModel.open() }
+    val isSocialActive = socialState.profile?.status == SocialProfileStatus.ACTIVE
+    LaunchedEffect(isSocialActive) {
+        if (isSocialActive) friendsViewModel?.open()
+    }
     // "Meu código" é uma folha sobre este hub, e não uma tela: o código já está carregado, e
     // navegar para mostrar um dado que está na mão seria uma navegação sem conteúdo próprio.
     var isFriendCodeVisible by remember { mutableStateOf(false) }

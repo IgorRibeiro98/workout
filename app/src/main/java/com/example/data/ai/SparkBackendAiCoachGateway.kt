@@ -249,7 +249,8 @@ class SparkBackendAiCoachGateway(
         resultSerializer: KSerializer<T>
     ): CallOutcome<T> {
         if (response.code != HTTP_OK && response.code != HTTP_CREATED) {
-            return CallOutcome.Failure(errorKindOf(response.code), errorCodeOf(response.body))
+            val errorCode = errorCodeOf(response.body)
+            return CallOutcome.Failure(errorKindOf(response.code, errorCode), errorCode)
         }
 
         val envelope = try {
@@ -304,17 +305,26 @@ class SparkBackendAiCoachGateway(
      * quando existe, o `code` do envelope — que é vocabulário do Spark, não do provider.
      */
     /**
-     * Status HTTP → [AiCoachErrorKind].
+     * Status HTTP (e, num caso, o `code` do envelope) → [AiCoachErrorKind].
      *
-     * `HTTP_FORBIDDEN` (T19.0) é `AI_CAPABILITY_DENIED`: conta autenticada, sem entitlement para a
-     * capability desta operação. `AI_ENTITLEMENT_UNAVAILABLE` — o servidor não conseguiu decidir —
-     * chega como `503`, e cai deliberadamente no mesmo [AiCoachErrorKind.UNAVAILABLE] de sempre:
-     * para o app, "não deu para confirmar" e "está fora do ar agora" pedem a mesma reação.
+     * `403` só é [AiCoachErrorKind.CAPABILITY_DENIED] quando o envelope diz `AI_CAPABILITY_DENIED`
+     * (T19.0): conta autenticada, sem entitlement para a capability desta operação. O mesmo status
+     * é a resposta do `BearerAuthGuard` para uma conta excluída (`ACCOUNT_DELETED`), e essa não é
+     * uma negação por capability — dizer "esta conta não tem acesso a esta funcionalidade" para
+     * ela seria mentir sobre a causa; qualquer outro `403` segue no genérico de antes da T19.0.
+     * `AI_ENTITLEMENT_UNAVAILABLE` — o servidor não conseguiu decidir — chega como `503`, e cai
+     * deliberadamente no mesmo [AiCoachErrorKind.UNAVAILABLE] de sempre: para o app, "não deu para
+     * confirmar" e "está fora do ar agora" pedem a mesma reação.
      */
-    private fun errorKindOf(code: Int): AiCoachErrorKind = when (code) {
+    private fun errorKindOf(code: Int, errorCode: String?): AiCoachErrorKind = when (code) {
         HTTP_UNAUTHORIZED -> AiCoachErrorKind.AUTH_REQUIRED
         HTTP_BAD_REQUEST -> AiCoachErrorKind.INVALID_RESPONSE
-        HTTP_FORBIDDEN -> AiCoachErrorKind.CAPABILITY_DENIED
+        HTTP_FORBIDDEN ->
+            if (errorCode == CODE_CAPABILITY_DENIED) {
+                AiCoachErrorKind.CAPABILITY_DENIED
+            } else {
+                AiCoachErrorKind.PROVIDER
+            }
         HTTP_CONFLICT -> AiCoachErrorKind.PROVIDER
         HTTP_UNPROCESSABLE -> AiCoachErrorKind.INVALID_RESPONSE
         HTTP_TOO_MANY_REQUESTS -> AiCoachErrorKind.RATE_LIMITED
@@ -339,6 +349,8 @@ class SparkBackendAiCoachGateway(
 
     companion object {
         const val COACH_PATH = "v1/ai/coach"
+        /** O `code` do envelope de erro que distingue entitlement negado de qualquer outro `403`. */
+        const val CODE_CAPABILITY_DENIED = "AI_CAPABILITY_DENIED"
 
         const val HTTP_OK = 200
         const val HTTP_CREATED = 201
