@@ -28,14 +28,36 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.engine.RirFormatter
 import com.example.ui.theme.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Battery1Bar
+import androidx.compose.material.icons.filled.Battery3Bar
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatteryUnknown
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.ui.graphics.vector.ImageVector
 
 data class RirOption(
     val value: Int,
-    val emoji: String,
+    val icon: ImageVector,
     val displayLabel: String,
     val rirLabel: String,
     val isFailure: Boolean = false
 )
+
+/**
+ * O ícone de esforço de um RIR (T19.7B) — a única tabela, usada pelo seletor, pelo resumo da
+ * série e pela ajuda.
+ *
+ * A metáfora é reserva: RIR 0 é a falha (fogo, a linguagem que o app já usava), e de 1 em diante
+ * o que resta na "bateria" cresce — 1 barra, 3 barras, cheia para 3+.
+ */
+fun rirEffortIcon(rir: Int?): ImageVector = when {
+    rir == null -> Icons.Filled.BatteryUnknown
+    rir <= 0 -> Icons.Filled.LocalFireDepartment
+    rir == 1 -> Icons.Filled.Battery1Bar
+    rir == 2 -> Icons.Filled.Battery3Bar
+    else -> Icons.Filled.BatteryFull
+}
 
 @Composable
 fun RirSelector(
@@ -45,10 +67,10 @@ fun RirSelector(
 ) {
     val options = remember {
         listOf(
-            RirOption(value = 0, emoji = "🔥", displayLabel = "Falha", rirLabel = "RIR 0", isFailure = true),
-            RirOption(value = 1, emoji = "😤", displayLabel = "M. pesado", rirLabel = "RIR 1"),
-            RirOption(value = 2, emoji = "💪", displayLabel = "Pesado", rirLabel = "RIR 2"),
-            RirOption(value = 3, emoji = "🙂", displayLabel = "Controlado", rirLabel = "RIR 3+")
+            RirOption(value = 0, icon = rirEffortIcon(0), displayLabel = "Falha", rirLabel = "RIR 0", isFailure = true),
+            RirOption(value = 1, icon = rirEffortIcon(1), displayLabel = "M. pesado", rirLabel = "RIR 1"),
+            RirOption(value = 2, icon = rirEffortIcon(2), displayLabel = "Pesado", rirLabel = "RIR 2"),
+            RirOption(value = 3, icon = rirEffortIcon(3), displayLabel = "Controlado", rirLabel = "RIR 3+")
         )
     }
 
@@ -72,8 +94,9 @@ fun RirSelector(
             RirHelpLabel(text = "ESFORÇO / RIR")
 
             if (currentRir == 0) {
-                Text(
-                    text = "🔥 Até a falha (RIR 0)",
+                IconLabel(
+                    icon = rirEffortIcon(0),
+                    text = "Até a falha (RIR 0)",
                     color = Color(0xFFFFB74D),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Black
@@ -81,7 +104,8 @@ fun RirSelector(
             } else if (currentRir != null) {
                 val effortName = RirFormatter.formatEffort(currentRir) ?: ""
                 val secRir = RirFormatter.formatSecondaryRir(currentRir)
-                Text(
+                IconLabel(
+                    icon = rirEffortIcon(currentRir),
                     text = "$effortName ($secRir)",
                     color = TextPrimary,
                     fontSize = 12.sp,
@@ -141,7 +165,7 @@ fun RirSelector(
                         .height(54.dp)
                         .graphicsLayer(scaleX = optionScale, scaleY = optionScale)
                         .semantics {
-                            contentDescription = "${option.emoji} ${option.displayLabel}, ${option.rirLabel}${if (isSelected) ", selecionado" else ""}"
+                            contentDescription = "${option.displayLabel}, ${option.rirLabel}${if (isSelected) ", selecionado" else ""}"
                         }
                         .clickable {
                             onRirSelected(if (isSelected) null else option.value)
@@ -157,12 +181,13 @@ fun RirSelector(
                             .fillMaxSize()
                             .padding(2.dp)
                     ) {
-                        Text(
-                            text = "${option.emoji} ${option.displayLabel}",
+                        IconLabel(
+                            icon = option.icon,
+                            text = option.displayLabel,
                             color = textColor,
                             fontSize = 11.sp,
                             fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold,
-                            textAlign = TextAlign.Center,
+                            iconSize = 14.dp,
                             maxLines = 1
                         )
                         Text(

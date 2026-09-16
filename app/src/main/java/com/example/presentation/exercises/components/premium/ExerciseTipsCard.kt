@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import org.json.JSONArray
+import com.example.ui.components.IconLabel
+import com.example.ui.theme.Lime400
 
 /**
  * O JSON do catálogo premium é conteúdo do app, e uma falha aqui é um defeito de conteúdo — não
@@ -51,7 +53,7 @@ fun ExerciseTipsCard(tipsJson: String?) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             tipsData.forEach { data ->
                 Column {
-                    if (data.first.isNotEmpty()) Text("💡 ${data.first}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    if (data.first.isNotEmpty()) IconLabel(icon = Icons.Default.Lightbulb, text = data.first, color = TextPrimary, fontSize = 14.sp, iconTint = Lime400)
                     if (data.second.isNotEmpty()) Text(data.second, color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp, start = if(data.first.isNotEmpty()) 20.dp else 0.dp))
                 }
             }

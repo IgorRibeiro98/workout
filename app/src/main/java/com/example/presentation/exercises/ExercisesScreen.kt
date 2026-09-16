@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.domain.engine.ExerciseSearchEngine
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.domain.engine.MuscleNormalizer
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.AppModalBottomSheet
@@ -239,7 +240,7 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(filteredExercises, key = { it.id }) { exercise ->
-                        val group = MuscleVisualResolver.resolveGroup(exercise.primaryMuscle)
+                        val visual = ExerciseVisualResolver.resolve(exercise)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -253,13 +254,13 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                                 modifier = Modifier
                                     .size(44.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(group.color.copy(alpha = 0.15f)),
+                                    .background(visual.color.copy(alpha = 0.15f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = group.icon,
-                                    contentDescription = null,
-                                    tint = group.color,
+                                    imageVector = visual.icon,
+                                    contentDescription = visual.equipmentFamily.displayName,
+                                    tint = visual.color,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -276,7 +277,7 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
                                     if (!exercise.primaryMuscle.isNullOrEmpty()) {
                                         Text(
                                             text = exercise.primaryMuscle,
-                                            color = group.color,
+                                            color = visual.color,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Medium
                                         )
@@ -443,78 +444,17 @@ fun ExercisesScreen(viewModel: ExercisesViewModel, onExerciseClick: (Long, Strin
         }
     }
 
-    // Add New Exercise Bottom Sheet
+    // Criar exercício CUSTOM (T19.7C): o mesmo formulário da edição, só com o que o exercício É.
     if (showAddSheet) {
-        var name by remember { mutableStateOf("") }
-        var muscle by remember { mutableStateOf("") }
-        var equipment by remember { mutableStateOf("") }
-
-        AppModalBottomSheet(
-            onDismissRequest = { showAddSheet = false },
-            title = "Novo Exercício",
-            subtitle = "Cadastrar exercício personalizado"
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Nome do Exercício") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Lime400,
-                        unfocusedBorderColor = BorderLight,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    )
-                )
-                OutlinedTextField(
-                    value = muscle,
-                    onValueChange = { muscle = it },
-                    label = { Text("Músculo Principal (ex: Peitoral)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Lime400,
-                        unfocusedBorderColor = BorderLight,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    )
-                )
-                OutlinedTextField(
-                    value = equipment,
-                    onValueChange = { equipment = it },
-                    label = { Text("Equipamento (ex: Halteres, Barra, Máquina)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Lime400,
-                        unfocusedBorderColor = BorderLight,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    )
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        if (name.isNotBlank()) {
-                            viewModel.addExercise(name, muscle, equipment.takeIf { it.isNotBlank() })
-                            showAddSheet = false
-                        }
-                    },
-                    enabled = name.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                ) {
-                    Text("SALVAR EXERCÍCIO", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                }
+        com.example.presentation.exercises.components.CustomExerciseFormSheet(
+            title = "Novo exercício",
+            subtitle = "Criado por você — fica no seu catálogo e sobrevive às atualizações do Spark",
+            saveLabel = "SALVAR EXERCÍCIO",
+            onDismiss = { showAddSheet = false },
+            onSave = { name, muscle, equipment, description ->
+                viewModel.addExercise(name, muscle, equipment, description)
             }
-        }
+        )
     }
 }
 

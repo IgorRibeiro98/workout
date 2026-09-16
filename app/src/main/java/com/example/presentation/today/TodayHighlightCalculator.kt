@@ -1,5 +1,7 @@
 package com.example.presentation.today
 
+import com.example.domain.model.IconKeys
+
 import com.example.data.local.PRType
 import com.example.data.local.PersonalRecordEntity
 import java.util.Calendar
@@ -69,8 +71,8 @@ object TodayHighlightCalculator {
      */
     fun buildHighlight(streakWeeks: Int, recentMilestone: String?): TodayHighlight? {
         return when {
-            recentMilestone != null -> TodayHighlight(emoji = "🏆", text = recentMilestone)
-            streakWeeks >= MIN_STREAK_WEEKS -> TodayHighlight(emoji = "🔥", text = "$streakWeeks semanas treinando")
+            recentMilestone != null -> TodayHighlight(iconKey = IconKeys.TROPHY, text = recentMilestone)
+            streakWeeks >= MIN_STREAK_WEEKS -> TodayHighlight(iconKey = IconKeys.FIRE, text = "$streakWeeks semanas treinando")
             else -> null
         }
     }

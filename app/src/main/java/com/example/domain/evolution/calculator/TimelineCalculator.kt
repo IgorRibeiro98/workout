@@ -1,5 +1,7 @@
 package com.example.domain.evolution.calculator
 
+import com.example.domain.model.IconKeys
+
 import com.example.domain.evolution.model.EvolutionSnapshot
 import com.example.domain.evolution.model.timeline.EvolutionTimelineEvent
 import com.example.domain.evolution.model.timeline.TimelineEventCategory
@@ -32,7 +34,7 @@ object TimelineCalculator {
                     date = snapshot.firstWorkoutDate ?: baseDate,
                     title = "Primeiro treino",
                     description = "Você completou seu primeiro treino e iniciou sua jornada.",
-                    icon = "🏋️",
+                    icon = IconKeys.WORKOUT,
                     category = TimelineEventCategory.TRAINING
                 )
             )
@@ -45,7 +47,7 @@ object TimelineCalculator {
                     date = snapshot.tenthWorkoutDate ?: baseDate,
                     title = "10 treinos realizados",
                     description = "Você alcançou a marca de 10 treinos!",
-                    icon = "🏋️",
+                    icon = IconKeys.WORKOUT,
                     category = TimelineEventCategory.TRAINING
                 )
             )
@@ -58,7 +60,7 @@ object TimelineCalculator {
                     date = snapshot.fiftiethWorkoutDate ?: baseDate,
                     title = "50 treinos realizados",
                     description = "Você alcançou a marca de 50 treinos!",
-                    icon = "🏋️",
+                    icon = IconKeys.WORKOUT,
                     category = TimelineEventCategory.TRAINING
                 )
             )
@@ -71,7 +73,7 @@ object TimelineCalculator {
                     date = snapshot.hundredthWorkoutDate ?: baseDate,
                     title = "100 treinos realizados",
                     description = "Marca incrível de 100 treinos concluídos!",
-                    icon = "🏋️",
+                    icon = IconKeys.WORKOUT,
                     category = TimelineEventCategory.TRAINING
                 )
             )
@@ -86,7 +88,7 @@ object TimelineCalculator {
                     date = pr.achievedAt,
                     title = titleText,
                     description = "${pr.exerciseName}\n${pr.maxWeight.toInt()}kg x ${pr.repetitions}",
-                    icon = "🏆",
+                    icon = IconKeys.TROPHY,
                     category = TimelineEventCategory.PERFORMANCE
                 )
             )
@@ -113,7 +115,7 @@ object TimelineCalculator {
         val currentWeight = bodySummary?.currentWeight
         if (bodySummary != null && initialWeight != null && currentWeight != null && variation != null && variation != 0f) {
             val isLoss = variation < 0
-            val icon = if (isLoss) "📉" else "📈"
+            val icon = if (isLoss) IconKeys.TREND_DOWN else IconKeys.TREND_UP
             events.add(
                 EvolutionTimelineEvent(
                     id = "event_body_evolution_summary",
@@ -136,7 +138,7 @@ object TimelineCalculator {
                     date = m.date,
                     title = "Nova medição registrada",
                     description = descLines.joinToString("\n"),
-                    icon = "📏",
+                    icon = IconKeys.RULER,
                     category = TimelineEventCategory.BODY
                 )
             )

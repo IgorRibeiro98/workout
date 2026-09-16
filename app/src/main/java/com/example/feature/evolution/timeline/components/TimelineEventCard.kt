@@ -30,6 +30,9 @@ import com.example.ui.theme.TextTertiary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.ui.components.semanticIcon
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
 
 @Composable
 fun TimelineEventCard(
@@ -55,10 +58,13 @@ fun TimelineEventCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = event.icon,
-                    fontSize = 18.sp,
-                    modifier = Modifier.padding(end = 8.dp)
+                Icon(
+                    imageVector = semanticIcon(event.icon),
+                    contentDescription = null,
+                    tint = Lime400,
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(20.dp)
                 )
 
                 Text(

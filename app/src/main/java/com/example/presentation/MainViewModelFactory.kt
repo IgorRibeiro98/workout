@@ -617,7 +617,7 @@ class MainViewModelFactory(
         }
         if (modelClass.isAssignableFrom(com.example.presentation.exercises.ExerciseDetailsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return com.example.presentation.exercises.ExerciseDetailsViewModel(workoutEngine, repository.dao, settingsManager) as T
+            return com.example.presentation.exercises.ExerciseDetailsViewModel(workoutEngine, repository, settingsManager) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.workouts.ProgramDetailsViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")

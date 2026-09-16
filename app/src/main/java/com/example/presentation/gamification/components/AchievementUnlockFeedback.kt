@@ -23,6 +23,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.EmojiEvents
+import com.example.ui.components.semanticIcon
+import com.example.ui.components.IconLabel
 
 @Composable
 fun AchievementUnlockFeedback(
@@ -60,17 +64,17 @@ fun AchievementUnlockFeedback(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Column {
-                Text(
-                    text = "🏆 CONQUISTA DESBLOQUEADA",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f)
+                IconLabel(
+                    icon = Icons.Filled.EmojiEvents,
+                    text = "CONQUISTA DESBLOQUEADA",
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f),
+                    fontSize = MaterialTheme.typography.labelSmall.fontSize
                 )
-                Text(
-                    text = "$icon $title",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                IconLabel(
+                    icon = semanticIcon(icon),
+                    text = title,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    fontSize = MaterialTheme.typography.titleMedium.fontSize
                 )
                 Text(
                     text = description,

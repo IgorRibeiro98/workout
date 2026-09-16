@@ -22,6 +22,9 @@ import com.example.presentation.exercises.PremiumExerciseInfo
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.theme.*
 import org.json.JSONArray
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,7 +131,13 @@ fun ExerciseQuickInfoSheet(
                                         modifier = Modifier.padding(vertical = 4.dp),
                                         verticalAlignment = Alignment.Top
                                     ) {
-                                        Text("⚠ ", color = Red500)
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = Red500,
+                                            modifier = Modifier.size(16.dp).padding(end = 2.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
                                         Text(text = point, color = TextPrimary, fontSize = 14.sp)
                                     }
                                 }

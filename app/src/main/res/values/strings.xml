@@ -35,8 +35,8 @@
 
     <string name="rir_failure_short">Falha</string>
     <string name="rir_failure">Até a falha</string>
-    <string name="rir_failure_full">🔥 Até a falha</string>
-    <string name="rir_failure_chip">🔥 FALHA</string>
+    <string name="rir_failure_full">Até a falha</string>
+    <string name="rir_failure_chip">FALHA</string>
     <string name="rir_failure_accessibility">Até a falha, RIR zero</string>
     <string name="rir_label">RIR (Reps em Reserva)</string>
     <string name="rir_effort_label">ESFORÇO (RIR)</string>
@@ -49,8 +49,8 @@
     <string name="sync_restore_last_desc">Recuperar carga e repetições da última execução concluída</string>
     <string name="sync_no_previous_workout">Nenhum treino anterior encontrado.</string>
     <string name="sync_no_pending_sets">Nenhuma série pendente para sincronizar.</string>
-    <string name="sync_applied_success">✓ Valores aplicados a %1$d séries.</string>
-    <string name="sync_restored_success">✓ Valores do último treino restaurados em %1$d séries.</string>
+    <string name="sync_applied_success">Valores aplicados a %1$d séries.</string>
+    <string name="sync_restored_success">Valores do último treino restaurados em %1$d séries.</string>
     <string name="sync_button_apply">APLICAR</string>
     <string name="sync_button_restore">RESTAURAR</string>
     <string name="sync_action_label">Sincronizar</string>
@@ -81,7 +81,6 @@
     <string name="sheet_action_filter">Filtrar</string>
     <string name="sheet_action_clear_filters">Limpar filtros</string>
     <string name="sheet_action_apply_filters">APLICAR FILTROS</string>
-    <string name="sheet_action_edit_exercise">Editar informações</string>
     <string name="sheet_action_set_photo">Definir foto personalizada</string>
     <string name="sheet_action_remove_photo">Remover foto personalizada</string>
     <string name="sheet_action_delete_exercise">Excluir exercício</string>

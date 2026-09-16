@@ -32,6 +32,10 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material3.Icon
 
 @Composable
 fun TimelineSection(
@@ -66,10 +70,13 @@ fun TimelineSection(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "📍",
-                fontSize = 20.sp,
-                modifier = Modifier.padding(end = 8.dp)
+            Icon(
+                imageVector = Icons.Filled.Place,
+                contentDescription = null,
+                tint = Lime400,
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(22.dp)
             )
             Text(
                 text = "Minha Jornada",
@@ -133,9 +140,11 @@ fun TimelineSection(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text(
-                            text = "🚀",
-                            fontSize = 32.sp
+                        Icon(
+                            imageVector = Icons.Filled.RocketLaunch,
+                            contentDescription = null,
+                            tint = Lime400,
+                            modifier = Modifier.size(36.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(

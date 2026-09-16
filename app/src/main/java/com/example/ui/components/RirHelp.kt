@@ -78,9 +78,11 @@ fun RirInfoDialog(onDismiss: () -> Unit) {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        RirFormatter.HELP_SCALE.forEach { (level, meaning) ->
+                        // A escala é listada da falha (RIR 0) para cima, na mesma ordem dos ícones.
+                        RirFormatter.HELP_SCALE.forEachIndexed { rir, (level, meaning) ->
                             Column {
-                                Text(
+                                IconLabel(
+                                    icon = rirEffortIcon(rir),
                                     text = level,
                                     color = TextPrimary,
                                     fontSize = 13.sp,

@@ -30,6 +30,9 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import com.example.ui.components.IconLabel
 
 /**
  * Comemoração de missão concluída.
@@ -69,11 +72,11 @@ fun MissionCompletionFeedback(
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Column {
-                Text(
-                    text = "✅ MISSÃO CONCLUÍDA",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Lime400
+                IconLabel(
+                    icon = Icons.Filled.CheckCircle,
+                    text = "MISSÃO CONCLUÍDA",
+                    color = Lime400,
+                    fontSize = MaterialTheme.typography.labelSmall.fontSize
                 )
                 Text(
                     text = title,

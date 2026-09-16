@@ -77,6 +77,21 @@ The local PT-BR canonical catalog is the primary exercise source.
 
 External sources such as ExerciseDB or YouTube are complementary only. Import/update operations must preserve user customizations and historical references.
 
+Desde a T19.7 (2026-09-16) — ver [`docs/architecture/exercise-catalog.md`](docs/architecture/exercise-catalog.md):
+
+- ícone e cor de exercício saem de **um** lugar, `ExerciseVisualResolver` (ícone = família de
+  equipamento, cor = grupo muscular, fallback neutro); nenhuma tela faz o próprio `when`, e
+  nenhuma coluna de aparência é persistida;
+- exercício canônico (`canonicalId`) não é editado nem excluído pelo CRUD — o usuário personaliza
+  por cima (override); `CUSTOM` (`isUserCreated` + `syncId`) é editável e excluível pela regra
+  "usado em treino recusa, com histórico arquiva, sem referência apaga";
+- só o nome é obrigatório num `CUSTOM`, e a validação da UI é a mesma do repositório
+  (`CustomExerciseFields`);
+- séries, repetições, descanso e carga são de `WorkoutTemplateExercise` e não entram no
+  formulário de exercício;
+- ícones funcionais da UI são vetoriais (Material); o domínio carrega chaves (`IconKeys`), nunca
+  emoji. Emoji de conteúdo (reações sociais, legendas, comentários) não é ícone e não muda.
+
 ### Templates vs execution history
 
 Keep planned workout configuration separate from executed workout history.

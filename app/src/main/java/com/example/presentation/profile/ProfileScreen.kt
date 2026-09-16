@@ -31,6 +31,14 @@ import com.example.ui.components.HubEntryCard
 import com.example.ui.theme.*
 import java.util.Locale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Bolt
+import com.example.ui.components.semanticIcon
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.vector.ImageVector
 
 private val PtBr = Locale("pt", "BR")
 
@@ -486,14 +494,14 @@ private fun StatsGrid(uiState: ProfileUiState) {
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             StatCard(
-                emoji = "🔥",
+                icon = Icons.Filled.LocalFireDepartment,
                 value = "${uiState.streakWeeks}",
                 unit = if (uiState.streakWeeks == 1) "semana" else "semanas",
                 label = "Sequência",
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                emoji = "🏋️",
+                icon = Icons.Filled.FitnessCenter,
                 value = formatInt(uiState.completedWorkouts),
                 unit = null,
                 label = "Treinos",
@@ -508,14 +516,14 @@ private fun StatsGrid(uiState: ProfileUiState) {
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             StatCard(
-                emoji = "🏆",
+                icon = Icons.Filled.EmojiEvents,
                 value = "${uiState.unlockedAchievements} / ${uiState.totalAchievements}",
                 unit = null,
                 label = "Conquistas",
                 modifier = Modifier.weight(1f)
             )
             StatCard(
-                emoji = "⚡",
+                icon = Icons.Filled.Bolt,
                 value = formatInt(uiState.personalRecordsCount),
                 unit = null,
                 label = "Recordes",
@@ -527,7 +535,7 @@ private fun StatsGrid(uiState: ProfileUiState) {
 
 @Composable
 private fun StatCard(
-    emoji: String,
+    icon: ImageVector,
     value: String,
     unit: String?,
     label: String,
@@ -549,7 +557,12 @@ private fun StatCard(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(text = emoji, fontSize = 18.sp)
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = Lime400,
+                    modifier = Modifier.size(20.dp)
+                )
                 Text(
                     text = value,
                     color = TextPrimary,
@@ -661,7 +674,12 @@ private fun AchievementPreviewRow(achievement: Achievement) {
                 .border(1.dp, tierColor.copy(alpha = 0.6f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Text(text = achievement.icon, fontSize = 18.sp)
+            Icon(
+                imageVector = semanticIcon(achievement.icon),
+                contentDescription = null,
+                tint = tierColor,
+                modifier = Modifier.size(20.dp)
+            )
         }
 
         Column(modifier = Modifier.weight(1f)) {

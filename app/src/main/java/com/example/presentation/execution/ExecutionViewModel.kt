@@ -568,7 +568,7 @@ class ExecutionViewModel(
                 val diffStr = if (diff % 1f == 0f) "+${diff.toInt()}kg" else "+${diff}kg"
                 SetCompletionFeedback(
                     type = FeedbackType.NEW_RECORD,
-                    title = "🔥 Novo recorde!",
+                    title = "Novo recorde!",
                     subtitle = "$diffStr comparado ao melhor histórico"
                 )
             }
@@ -578,7 +578,7 @@ class ExecutionViewModel(
                 val diffStr = if (diff % 1f == 0f) "+${diff.toInt()}kg" else "+${diff}kg"
                 SetCompletionFeedback(
                     type = FeedbackType.PROGRESSION,
-                    title = "🚀 Evolução de carga!",
+                    title = "Evolução de carga!",
                     subtitle = "↑ $diffStr desde o último treino"
                 )
             }
@@ -587,7 +587,7 @@ class ExecutionViewModel(
                 val diffReps = setLog.repetitions - lastPerf.reps
                 SetCompletionFeedback(
                     type = FeedbackType.PROGRESSION,
-                    title = "💪 Evolução!",
+                    title = "Evolução!",
                     subtitle = "↑ +$diffReps reps comparado ao último treino"
                 )
             }
@@ -595,7 +595,7 @@ class ExecutionViewModel(
             currentContext?.isFirstTime == true || (lastPerf == null && pr == null) -> {
                 SetCompletionFeedback(
                     type = FeedbackType.FIRST_TIME,
-                    title = "Histórico iniciado ✨",
+                    title = "Histórico iniciado",
                     subtitle = "Primeira execução deste exercício"
                 )
             }
@@ -604,7 +604,7 @@ class ExecutionViewModel(
             (targetWeight > 0f && setLog.weight >= targetWeight) -> {
                 SetCompletionFeedback(
                     type = FeedbackType.GOAL_ACHIEVED,
-                    title = "Prescrição atingida 💪",
+                    title = "Prescrição atingida",
                     subtitle = "Dentro da faixa esperada"
                 )
             }

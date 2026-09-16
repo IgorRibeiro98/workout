@@ -63,6 +63,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.rememberRelativeNow
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 
 const val SOCIAL_FEED_SCREEN_DESCRIPTION = "Feed de check-ins dos amigos"
 
@@ -70,7 +71,7 @@ const val SOCIAL_FEED_SCREEN_DESCRIPTION = "Feed de check-ins dos amigos"
 const val SOCIAL_FEED_EMPTY_MESSAGE = "Nenhum check-in compartilhado recentemente."
 
 /** O que um card de check-in diz sobre o **treino**. Nada além disto atravessa a fronteira. */
-const val SOCIAL_FEED_CHECKIN_LABEL = "💪 Concluiu um treino"
+const val SOCIAL_FEED_CHECKIN_LABEL = "Concluiu um treino"
 
 /**
  * O emoji de cada reação (T17.9 §61).
@@ -534,7 +535,12 @@ internal fun ReactionBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "💬", fontSize = 14.sp)
+            Icon(
+                imageVector = Icons.Outlined.ChatBubbleOutline,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
             Text(text = "$commentCount", color = TextSecondary, fontSize = 13.sp)
         }
     }

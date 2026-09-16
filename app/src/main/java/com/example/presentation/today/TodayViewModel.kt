@@ -34,7 +34,8 @@ data class SequenceItemData(
  * the most the screen shows about the past, and only when there is something real to show.
  */
 data class TodayHighlight(
-    val emoji: String,
+    /** Chave de `IconKeys` (T19.7B); a tela resolve no vetor. */
+    val iconKey: String,
     val text: String
 )
 

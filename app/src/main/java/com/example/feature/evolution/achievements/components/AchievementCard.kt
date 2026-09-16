@@ -40,6 +40,9 @@ import com.example.ui.theme.TextTertiary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.ui.components.semanticIcon
+import com.example.domain.model.IconKeys
+import androidx.compose.material3.Icon
 
 fun getTierColor(tier: AchievementTier): Color {
     return when (tier) {
@@ -102,9 +105,11 @@ fun AchievementCard(
                     .border(1.dp, if (isUnlocked) tierColor else Color.Transparent, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = if (isUnlocked) achievement.icon else "🔒",
-                    fontSize = 22.sp
+                Icon(
+                    imageVector = semanticIcon(if (isUnlocked) achievement.icon else IconKeys.LOCK),
+                    contentDescription = if (isUnlocked) null else "Bloqueada",
+                    tint = if (isUnlocked) tierColor else TextSecondary.copy(alpha = 0.6f),
+                    modifier = Modifier.size(24.dp)
                 )
             }
 

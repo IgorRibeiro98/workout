@@ -40,6 +40,8 @@ import java.util.Locale
 import com.example.presentation.gamification.components.XpProgressBar
 import com.example.presentation.gamification.components.XpGainAnimation
 import com.example.domain.gamification.model.XpTransaction
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.LocalFireDepartment
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -312,11 +314,13 @@ fun TodayScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = group.icon,
-                                            contentDescription = null,
-                                            tint = group.color,
-                                            modifier = Modifier.size(14.dp)
+                                        // Cor = grupo muscular (T19.7A); um músculo sozinho não
+                                        // tem ícone, porque o ícone responde ao equipamento.
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(group.color)
                                         )
                                         Text(
                                             text = muscle,
@@ -491,11 +495,11 @@ fun TodayScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (streak > 0) {
-                        Text(
-                            text = "🔥 $streak ${if (streak == 1) "semana consistente" else "semanas consistentes"}",
+                        IconLabel(
+                            icon = Icons.Default.LocalFireDepartment,
+                            text = "$streak ${if (streak == 1) "semana consistente" else "semanas consistentes"}",
                             color = Orange400,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 15.sp
                         )
                     } else {
                         Text(
@@ -542,8 +546,9 @@ fun TodayScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (isGoalCompleted) {
-                        Text(
-                            text = "✓ Meta da semana concluída",
+                        IconLabel(
+                            icon = Icons.Default.CheckCircle,
+                            text = "Meta da semana concluída",
                             color = Lime400,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -589,7 +594,12 @@ fun TodayScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(text = highlight.emoji, fontSize = 24.sp)
+                    Icon(
+                        imageVector = com.example.ui.components.semanticIcon(highlight.iconKey),
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier.size(24.dp)
+                    )
                     Text(
                         text = highlight.text,
                         color = TextPrimary,

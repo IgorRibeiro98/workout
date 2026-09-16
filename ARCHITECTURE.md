@@ -327,6 +327,22 @@ Normal mode may expose richer context.
 
 ## 12. Exercise catalog
 
+> **Runtime (verificado em 2026-09-16, T19.7):** o modelo real é `ExerciseEntity` (Room,
+> `exercises`), com `canonicalId` como identidade do catálogo canônico e `syncId` +
+> `isUserCreated` como identidade e marcador de um `CUSTOM`. A **taxonomia visual** é derivada e
+> centralizada em `ExerciseVisualResolver`: o **ícone** responde ao equipamento
+> (`EquipmentFamily` — peso livre, máquina, cabo/elástico, peso corporal, com fallback neutro
+> "equipamento não informado") e a **cor** ao grupo muscular (`MuscleGroup`, via
+> `MuscleVisualResolver`, com `FULL_BODY` cinza como fallback). Nada disso é persistido — não
+> existe coluna `icon`/`color`, e o grupo muscular não tem mais ícone próprio. O CRUD distingue
+> canônico (só personalização por override; nunca editado nem excluído) de `CUSTOM` (nome
+> obrigatório, músculo/equipamento/descrição opcionais; exclusão recusada se um treino usa,
+> arquivada — `active = false` — se há histórico, apagada só sem referência). Séries, reps,
+> descanso e carga continuam em `WorkoutTemplateExerciseEntity`. Emojis funcionais escritos
+> pelo app (conquistas, timeline, RIR, cards) viraram ícones vetoriais; reações sociais e texto
+> do usuário não foram tocados. Detalhes em
+> [`docs/architecture/exercise-catalog.md`](docs/architecture/exercise-catalog.md).
+
 The canonical exercise catalog is local and PT-BR.
 
 External data/media sources are optional enrichment.

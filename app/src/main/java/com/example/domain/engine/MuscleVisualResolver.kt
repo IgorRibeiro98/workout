@@ -1,17 +1,16 @@
 package com.example.domain.engine
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Accessibility
-import androidx.compose.material.icons.filled.DirectionsRun
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.SportsGymnastics
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import com.example.ui.theme.Emerald500
-import com.example.ui.theme.Lime400
 import java.text.Normalizer
 
+/**
+ * Grupo muscular — a dimensão que a **cor** de um exercício representa (T19.7A).
+ *
+ * Deriva de `ExerciseEntity.primaryMuscle` por [MuscleVisualResolver.resolveGroup]. O grupo não
+ * tem ícone: desde a T19.7 o ícone de um exercício responde ao equipamento
+ * ([EquipmentFamily], via [ExerciseVisualResolver]), e um chip de músculo sozinho usa só a cor.
+ * [FULL_BODY] é o fallback neutro (cinza) para músculo ausente ou não reconhecido.
+ */
 enum class MuscleGroup(
     val displayName: String,
     val color: Color
@@ -29,17 +28,7 @@ enum class MuscleGroup(
     FOREARMS("Antebraço", Color(0xFFA78BFA)),     // Violet
     TRAPS("Trapézio", Color(0xFFF472B6)),        // Pink
     CARDIO("Cardio", Color(0xFFFACC15)),         // Yellow
-    FULL_BODY("Geral", Color(0xFF94A3B8));       // Slate
-
-    val icon: ImageVector
-        get() = when (this) {
-            CHEST -> Icons.Default.FitnessCenter
-            BACK -> Icons.Default.Shield
-            SHOULDERS -> Icons.Default.SportsGymnastics
-            QUADS, HAMSTRINGS, GLUTES, CALVES -> Icons.Default.DirectionsRun
-            BICEPS, TRICEPS, FOREARMS, TRAPS -> Icons.Default.FitnessCenter
-            CORE, CARDIO, FULL_BODY -> Icons.Default.Accessibility
-        }
+    FULL_BODY("Geral", Color(0xFF94A3B8))        // Slate — fallback neutro
 }
 
 object MuscleVisualResolver {

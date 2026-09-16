@@ -20,7 +20,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.domain.engine.MuscleVisualResolver
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -41,7 +41,7 @@ fun ExerciseHeroCard(
      */
     missingMediaHint: String = "Use as instruções abaixo para executar com segurança"
 ) {
-    val muscleGroup = MuscleVisualResolver.resolveGroup(primaryMuscle)
+    val visual = ExerciseVisualResolver.resolve(primaryMuscle, equipment)
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -103,13 +103,13 @@ fun ExerciseHeroCard(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(CircleShape)
-                                .background(muscleGroup.color.copy(alpha = 0.15f)),
+                                .background(visual.color.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = muscleGroup.icon,
-                                contentDescription = null,
-                                tint = muscleGroup.color,
+                                imageVector = visual.icon,
+                                contentDescription = visual.equipmentFamily.displayName,
+                                tint = visual.color,
                                 modifier = Modifier.size(30.dp)
                             )
                         }

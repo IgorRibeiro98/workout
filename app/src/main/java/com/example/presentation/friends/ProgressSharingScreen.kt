@@ -44,6 +44,11 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.FitnessCenter
+import com.example.ui.components.IconLabel
+import com.example.ui.components.semanticIcon
+import androidx.compose.ui.graphics.vector.ImageVector
 
 const val PROGRESS_SHARING_TITLE = "Compartilhar progresso"
 const val PROGRESS_SHARING_DESCRIPTION = "Configurações de compartilhamento de progresso"
@@ -336,21 +341,31 @@ private fun PreviewCard(profile: FriendSocialProfile) {
                 }
                 profile.sharedProgress.consistencyStreak?.let {
                     PreviewRow(
-                        label = "🔥 Consistência",
+                        label = "Consistência",
+                        icon = Icons.Filled.LocalFireDepartment,
                         value = if (it == 1) "1 semana" else "$it semanas"
                     )
                 }
                 profile.sharedProgress.weeklyWorkoutCount?.let {
                     PreviewRow(
-                        label = "🏋️ Esta semana",
+                        label = "Esta semana",
+                        icon = Icons.Filled.FitnessCenter,
                         value = if (it == 1) "1 treino" else "$it treinos"
                     )
                 }
-                val labels = profile.sharedProgress.highlightedAchievementIds.mapNotNull(::achievementLabel)
-                if (labels.isNotEmpty()) {
+                val highlighted = profile.sharedProgress.highlightedAchievementIds
+                    .mapNotNull { id -> achievementLabel(id)?.let { title -> achievementIconKey(id) to title } }
+                if (highlighted.isNotEmpty()) {
                     Text(text = "Conquistas", color = TextSecondary, fontSize = 14.sp)
-                    labels.forEach { label ->
-                        Text(text = label, color = TextPrimary, fontSize = 14.sp)
+                    highlighted.forEach { (iconKey, title) ->
+                        IconLabel(
+                            icon = semanticIcon(iconKey),
+                            text = title,
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Normal,
+                            iconTint = Lime400
+                        )
                     }
                 }
             }
@@ -359,13 +374,17 @@ private fun PreviewCard(profile: FriendSocialProfile) {
 }
 
 @Composable
-private fun PreviewRow(label: String, value: String) {
+private fun PreviewRow(label: String, value: String, icon: ImageVector? = null) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = TextSecondary, fontSize = 14.sp)
+        if (icon != null) {
+            IconLabel(icon = icon, text = label, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Normal)
+        } else {
+            Text(text = label, color = TextSecondary, fontSize = 14.sp)
+        }
         Text(text = value, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
     }
 }

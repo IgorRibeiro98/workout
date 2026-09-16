@@ -291,13 +291,13 @@ class T1267ClosureTest {
     // ---------------------------------------------------------------------------------------
 
     @Test
-    fun `rotulo de esforco nao duplica o emoji da falha`() {
-        assertEquals("🔥 Até a falha", RirFormatter.formatEffort(0))
-        assertEquals("🔥 Falha", RirFormatter.formatEffort(0, short = true))
-        assertEquals("😤 Muito pesado", RirFormatter.formatEffort(1))
-        assertEquals("💪 Pesado", RirFormatter.formatEffort(2))
-        assertEquals("🙂 Controlado", RirFormatter.formatEffort(3))
-        assertEquals("🙂 Controlado", RirFormatter.formatEffort(9))
+    fun `rotulo de esforco e texto puro, sem emoji embutido`() {
+        assertEquals("Até a falha", RirFormatter.formatEffort(0))
+        assertEquals("Falha", RirFormatter.formatEffort(0, short = true))
+        assertEquals("Muito pesado", RirFormatter.formatEffort(1))
+        assertEquals("Pesado", RirFormatter.formatEffort(2))
+        assertEquals("Controlado", RirFormatter.formatEffort(3))
+        assertEquals("Controlado", RirFormatter.formatEffort(9))
         assertNull(RirFormatter.formatEffort(null))
     }
 
@@ -374,11 +374,11 @@ class T1267ClosureTest {
     @Test
     fun `hoje mostra um unico destaque e nada quando nao ha novidade`() {
         val record = TodayHighlightCalculator.buildHighlight(streakWeeks = 5, recentMilestone = "Novo recorde de carga: 100 kg")
-        assertEquals("🏆", record?.emoji)
+        assertEquals(com.example.domain.model.IconKeys.TROPHY, record?.iconKey)
         assertTrue(record!!.text.contains("recorde"))
 
         val streak = TodayHighlightCalculator.buildHighlight(streakWeeks = 4, recentMilestone = null)
-        assertEquals("🔥", streak?.emoji)
+        assertEquals(com.example.domain.model.IconKeys.FIRE, streak?.iconKey)
         assertEquals("4 semanas treinando", streak?.text)
 
         // Uma semana isolada ainda não é uma sequência digna de destaque.

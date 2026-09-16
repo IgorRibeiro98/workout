@@ -53,6 +53,7 @@ import com.example.ui.theme.Lime400
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.compose.material.icons.filled.Check
 
 /**
  * "Treinar em dupla à distância" (T19.5).
@@ -335,7 +336,7 @@ private fun FriendRow(friend: Friend, selected: Boolean, onClick: () -> Unit) {
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
-            if (selected) Text("✓", color = Lime400, fontWeight = FontWeight.Black)
+            if (selected) Icon(imageVector = Icons.Default.Check, contentDescription = "Selecionado", tint = Lime400, modifier = Modifier.size(18.dp))
         }
     }
 }

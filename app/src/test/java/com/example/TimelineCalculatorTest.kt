@@ -88,7 +88,7 @@ class TimelineCalculatorTest {
             id = "first_workout",
             title = "Primeiro Treino",
             description = "Completou o primeiro treino",
-            icon = "🏋️",
+            icon = com.example.domain.model.IconKeys.WORKOUT,
             category = AchievementCategory.TRAINING,
             unlockedAt = 1710000000000L,
             progress = 1.0f,

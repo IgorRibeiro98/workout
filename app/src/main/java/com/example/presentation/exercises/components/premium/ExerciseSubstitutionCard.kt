@@ -14,6 +14,9 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.Lime400
 import com.example.ui.theme.Red500
 import org.json.JSONArray
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Block
 
 @Composable
 fun ExerciseSubstitutionCard(
@@ -32,7 +35,7 @@ fun ExerciseSubstitutionCard(
                 val list = parseJsonArray(sameMovement)
                 if (list.isNotEmpty()) {
                     Column {
-                        Text("🔄 Mesmo movimento", color = Lime400, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        IconLabel(icon = Icons.Default.SwapHoriz, text = "Mesmo movimento", color = Lime400, fontSize = 14.sp)
                         list.forEach { item ->
                             Text("• $item", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
                         }
@@ -43,7 +46,7 @@ fun ExerciseSubstitutionCard(
                 val list = parseJsonArray(sameMuscle)
                 if (list.isNotEmpty()) {
                     Column {
-                        Text("💪 Mesmo grupo muscular", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        IconLabel(icon = Icons.Default.FitnessCenter, text = "Mesmo grupo muscular", color = TextPrimary, fontSize = 14.sp)
                         list.forEach { item ->
                             Text("• $item", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
                         }
@@ -54,7 +57,7 @@ fun ExerciseSubstitutionCard(
                 val list = parseJsonArray(notRecommended)
                 if (list.isNotEmpty()) {
                     Column {
-                        Text("❌ Não recomendado", color = Red500, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        IconLabel(icon = Icons.Default.Block, text = "Não recomendado", color = Red500, fontSize = 14.sp)
                         list.forEach { item ->
                             Text("• $item", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
                         }

@@ -785,6 +785,17 @@ interface WorkoutDao {
     suspend fun countTemplateReferencesToExercise(exerciseId: Long): Int
 
     /**
+     * Quantas execuções do histórico apontam para este exercício (T19.7C).
+     *
+     * `exercise_sessions` **não** tem chave estrangeira para `exercises`: o histórico carrega
+     * `exerciseNameSnapshot` e sobrevive ao exercício — mas `personal_records` cascateia, e um
+     * hard delete apagaria recordes de treinos já feitos. Quem exclui um `CUSTOM` pergunta aqui
+     * antes e, havendo histórico, arquiva (`active = 0`) em vez de apagar.
+     */
+    @Query("SELECT COUNT(*) FROM exercise_sessions WHERE plannedExerciseId = :exerciseId OR actualExerciseId = :exerciseId")
+    suspend fun countSessionReferencesToExercise(exerciseId: Long): Int
+
+    /**
      * Quantas alterações locais pendentes existem nos treinos de um programa (T16.7).
      *
      * Apagar um programa leva os treinos junto (cascade). Se algum deles tiver alteração local que

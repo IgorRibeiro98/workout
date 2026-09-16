@@ -34,6 +34,7 @@ import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.util.Locale
+import com.example.ui.components.IconLabel
 
 @Composable
 fun HabitSummaryCard(
@@ -160,8 +161,9 @@ fun HabitSummaryCard(
                     Column(
                         modifier = Modifier.padding(12.dp)
                     ) {
-                        Text(
-                            text = "🔥 $streak",
+                        IconLabel(
+                            icon = Icons.Filled.LocalFireDepartment,
+                            text = "$streak",
                             color = Orange400,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold

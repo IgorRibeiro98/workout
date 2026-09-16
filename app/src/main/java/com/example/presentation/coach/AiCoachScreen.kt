@@ -51,6 +51,9 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.PriorityHigh
+import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Prova de integração do Coach IA: um botão explícito, um resumo e as sugestões.
@@ -281,7 +284,7 @@ private fun AdviceSection(
             state.positiveSignals.forEach { observation ->
                 ObservationCard(
                     observation = observation,
-                    marker = "✓",
+                    marker = Icons.Default.Check,
                     markerColor = Lime400,
                     canExplain = canExplain,
                     onExplain = onExplain
@@ -294,7 +297,7 @@ private fun AdviceSection(
             state.attentionPoints.forEach { observation ->
                 ObservationCard(
                     observation = observation,
-                    marker = "!",
+                    marker = Icons.Default.PriorityHigh,
                     markerColor = Orange400,
                     canExplain = canExplain,
                     onExplain = onExplain
@@ -386,7 +389,7 @@ private fun AiDataQualityLevel.accentColor(): Color = when (this) {
 @Composable
 private fun ObservationCard(
     observation: AiObservationUi,
-    marker: String,
+    marker: ImageVector,
     markerColor: Color,
     canExplain: Boolean,
     onExplain: (String) -> Unit
@@ -394,7 +397,7 @@ private fun ObservationCard(
     Card {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                Text(text = marker, color = markerColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Icon(imageVector = marker, contentDescription = null, tint = markerColor, modifier = Modifier.size(16.dp))
                 Text(
                     text = observation.title,
                     color = TextPrimary,

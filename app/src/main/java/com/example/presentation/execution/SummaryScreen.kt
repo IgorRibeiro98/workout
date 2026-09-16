@@ -23,6 +23,9 @@ import com.example.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 
 /**
  * O resumo do treino recém-concluído.
@@ -95,11 +98,11 @@ fun SummaryScreen(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "⚡ Você adaptou a ordem dos exercícios neste treino.",
+                            IconLabel(
+                                icon = Icons.Default.Bolt,
+                                text = "Você adaptou a ordem dos exercícios neste treino.",
                                 color = Color(0xFFF59E0B),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                fontSize = 13.sp
                             )
                         }
                     }

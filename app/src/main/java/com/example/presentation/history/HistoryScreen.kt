@@ -47,6 +47,8 @@ import com.example.ui.theme.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.text.SimpleDateFormat
 import java.util.*
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.Place
 
 // Formatadores criados uma vez, e não a cada composição/linha da lista: construir um
 // `SimpleDateFormat` custa parsing de padrão e lookup de símbolos, e o Histórico os construía em
@@ -960,10 +962,12 @@ fun SessionDetailsCard(
                 )
                 val gymName = summary.checkIn?.gymName
                 if (!gymName.isNullOrBlank()) {
-                    Text(
-                        text = "📍 $gymName",
+                    IconLabel(
+                        icon = Icons.Default.Place,
+                        text = gymName,
                         color = Lime400,
-                        fontSize = 12.sp
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Normal
                     )
                 }
             }
@@ -1120,11 +1124,13 @@ private fun MuscleDistributionRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = group.icon,
-                        contentDescription = null,
-                        tint = group.color,
-                        modifier = Modifier.size(20.dp)
+                    // Cor = grupo muscular (T19.7A); o ícone de exercício responde ao equipamento,
+                    // e uma linha de distribuição por músculo não tem equipamento.
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(group.color)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(

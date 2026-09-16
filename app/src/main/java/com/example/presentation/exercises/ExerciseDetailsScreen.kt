@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,9 +52,13 @@ import com.example.data.local.ExerciseUserOverrideEntity
 import com.example.data.local.PRType
 import com.example.domain.engine.ExerciseMediaResolver
 import com.example.domain.engine.ExerciseVideoRegistry
-import com.example.domain.engine.MuscleVisualResolver
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.ui.theme.*
 import com.example.presentation.exercises.components.premium.*
+import com.example.presentation.exercises.components.CustomExerciseFormSheet
+import com.example.presentation.exercises.components.ExerciseSemanticsRow
+import com.example.presentation.exercises.components.exerciseOriginLabel
+import com.example.data.repository.CustomExerciseDeleteResult
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 import java.text.SimpleDateFormat
@@ -101,6 +106,27 @@ fun ExerciseDetailsScreen(
     }
     var showActionSheet by remember { mutableStateOf(false) }
     var showEditOverrideSheet by remember { mutableStateOf(false) }
+    var showEditCustomSheet by remember { mutableStateOf(false) }
+    var showDeleteCustomSheet by remember { mutableStateOf(false) }
+    val isCustom = resolvedExercise?.isUserCreated == true
+
+    // Exclusão de CUSTOM (T19.7C): apagado ou arquivado fecha a tela; ainda usado em treino só avisa.
+    val deleteResult by viewModel.deleteResult.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(deleteResult) {
+        when (val result = deleteResult) {
+            null -> Unit
+            is CustomExerciseDeleteResult.UsedByTemplates -> {
+                viewModel.consumeDeleteResult()
+                snackbarHostState.showSnackbar(usedByTemplatesMessage(result.count))
+            }
+            CustomExerciseDeleteResult.NotCustom -> viewModel.consumeDeleteResult()
+            CustomExerciseDeleteResult.Archived, CustomExerciseDeleteResult.Deleted -> {
+                viewModel.consumeDeleteResult()
+                onNavigateBack()
+            }
+        }
+    }
 
     val resolvedName = resolvedExercise?.displayName ?: exerciseName
     val resolvedNotes = resolvedExercise?.notes
@@ -114,20 +140,23 @@ fun ExerciseDetailsScreen(
     val substitutionGroup = resolvedExercise?.substitutionGroup
 
 
-    val muscleGroup = MuscleVisualResolver.resolveGroup(primaryMuscle)
+    val visual = ExerciseVisualResolver.resolve(primaryMuscle, equipment, exerciseInfo?.isBodyweight == true)
     val curatedVideo = ExerciseVideoRegistry.getVideoForExercise(context, exerciseInfo?.canonicalId, exerciseInfo?.slug, resolvedName)
 
     var showInlineVideo by remember { mutableStateOf(false) }
 
-    if (showActionSheet || showEditOverrideSheet) {
+    if (showActionSheet || showEditOverrideSheet || showEditCustomSheet || showDeleteCustomSheet) {
         BackHandler {
             showActionSheet = false
             showEditOverrideSheet = false
+            showEditCustomSheet = false
+            showDeleteCustomSheet = false
         }
     }
 
     Scaffold(
         containerColor = BackgroundDark,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { 
@@ -171,6 +200,17 @@ fun ExerciseDetailsScreen(
                     mediaUrl = resolvedMedia?.mediaUri,
                     movementPattern = movementPattern
                 )
+            }
+
+            // Legenda da taxonomia (T19.7A) e origem (T19.7C): ícone = equipamento, cor = músculo,
+            // e se o exercício é do catálogo ou seu.
+            if (resolvedExercise != null) {
+                item {
+                    ExerciseSemanticsRow(
+                        visual = visual,
+                        origin = exerciseOriginLabel(isCustom)
+                    )
+                }
             }
             
             // ABOUT
@@ -488,7 +528,7 @@ fun ExerciseDetailsScreen(
                 }
 
                 items(alternatives, key = { it.id }) { alt ->
-                    val altMuscle = MuscleVisualResolver.resolveGroup(alt.primaryMuscle)
+                    val altVisual = ExerciseVisualResolver.resolve(alt)
                     Surface(
                         color = SurfaceDark,
                         shape = RoundedCornerShape(12.dp),
@@ -506,7 +546,7 @@ fun ExerciseDetailsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Icon(altMuscle.icon, contentDescription = null, tint = altMuscle.color, modifier = Modifier.size(18.dp))
+                                Icon(altVisual.icon, contentDescription = altVisual.equipmentFamily.displayName, tint = altVisual.color, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(alt.displayName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -593,18 +633,30 @@ fun ExerciseDetailsScreen(
         }
     }
 
-    // Contextual Options ActionBottomSheet
+    // Opções por origem (T19.7C). Canônico: o catálogo não muda, o que o usuário edita é a
+    // personalização por cima dele. CUSTOM: a linha é do usuário — edita e exclui.
     if (showActionSheet) {
         val actions = mutableListOf<ActionItemData>()
 
-        actions.add(
-            ActionItemData(
-                title = stringResource(id = R.string.sheet_action_edit_exercise),
-                subtitle = "Personalizar nome, notas e descanso",
-                icon = Icons.Default.Edit,
-                onClick = { showEditOverrideSheet = true }
+        if (isCustom) {
+            actions.add(
+                ActionItemData(
+                    title = "Editar exercício",
+                    subtitle = "Nome, músculo, equipamento e descrição",
+                    icon = Icons.Default.Edit,
+                    onClick = { showEditCustomSheet = true }
+                )
             )
-        )
+        } else {
+            actions.add(
+                ActionItemData(
+                    title = "Personalizar",
+                    subtitle = "Nome exibido, notas e descanso — o catálogo Spark não muda",
+                    icon = Icons.Default.Edit,
+                    onClick = { showEditOverrideSheet = true }
+                )
+            )
+        }
 
         actions.add(
             ActionItemData(
@@ -630,12 +682,78 @@ fun ExerciseDetailsScreen(
             )
         }
 
+        if (isCustom) {
+            actions.add(
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_delete_exercise),
+                    subtitle = "Recusado se um treino ainda usa; arquivado se há histórico",
+                    icon = Icons.Default.Delete,
+                    destructive = true,
+                    onClick = { showDeleteCustomSheet = true }
+                )
+            )
+        }
+
         ActionBottomSheet(
             onDismissRequest = { showActionSheet = false },
             title = stringResource(id = R.string.sheet_exercise_options),
             subtitle = resolvedName,
             actions = actions
         )
+    }
+
+    // Editar CUSTOM (T19.7C): os valores efetivos entram no formulário — inclusive um nome ou
+    // notas que um override antigo tenha sobreposto — e voltam para a linha ao salvar.
+    if (showEditCustomSheet && isCustom) {
+        CustomExerciseFormSheet(
+            title = "Editar exercício",
+            subtitle = "Criado por você",
+            saveLabel = "SALVAR ALTERAÇÕES",
+            initialName = resolvedName,
+            initialMuscle = primaryMuscle ?: "",
+            initialEquipment = equipment ?: "",
+            initialDescription = resolvedNotes ?: "",
+            onDismiss = { showEditCustomSheet = false },
+            onSave = { name, muscle, equipmentValue, description ->
+                viewModel.updateCustomExercise(exerciseId, name, muscle, equipmentValue, description)
+            }
+        )
+    }
+
+    if (showDeleteCustomSheet && isCustom) {
+        AppModalBottomSheet(
+            onDismissRequest = { showDeleteCustomSheet = false },
+            title = "Excluir exercício?",
+            subtitle = resolvedName
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = DELETE_CUSTOM_EXPLANATION,
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+                Button(
+                    onClick = {
+                        showDeleteCustomSheet = false
+                        viewModel.deleteCustomExercise(exerciseId)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Red500, contentColor = TextPrimary),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("custom_exercise_delete_confirm")
+                ) {
+                    Text("EXCLUIR", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+                TextButton(
+                    onClick = { showDeleteCustomSheet = false },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("CANCELAR", color = TextSecondary, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
     }
 
     // Edit Custom Override Bottom Sheet
@@ -646,14 +764,19 @@ fun ExerciseDetailsScreen(
 
         AppModalBottomSheet(
             onDismissRequest = { showEditOverrideSheet = false },
-            title = "Personalizar Exercício",
-            subtitle = resolvedName
+            title = "Personalizar exercício",
+            subtitle = "$resolvedName • Catálogo Spark"
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "O exercício do catálogo continua o mesmo. O que você muda aqui vale só para você, por cima dele.",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
                 OutlinedTextField(
                     value = editName,
                     onValueChange = { editName = it },
-                    label = { Text("Nome Personalizado") },
+                    label = { Text("Nome exibido") },
                     placeholder = { Text(exerciseInfo?.name ?: "") },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Lime400,
@@ -679,8 +802,11 @@ fun ExerciseDetailsScreen(
                 OutlinedTextField(
                     value = editRestSeconds,
                     onValueChange = { editRestSeconds = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Descanso Padrão (segundos)") },
+                    label = { Text("Descanso padrão (segundos)") },
                     placeholder = { Text("90") },
+                    // Não é o descanso do treino: esse fica em cada linha do editor. Este só
+                    // vale quando a execução não tem um treino definindo o descanso.
+                    supportingText = { Text("Usado só quando o treino não define o descanso deste exercício.", color = TextSecondary, fontSize = 11.sp) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Lime400,
                         unfocusedBorderColor = BorderLight,
@@ -718,3 +844,13 @@ fun ExerciseDetailsScreen(
         }
     }
 }
+
+/** Por que a exclusão de um `CUSTOM` pode recusar ou arquivar — ver `WorkoutRepository.deleteExercise`. */
+const val DELETE_CUSTOM_EXPLANATION =
+    "Se algum treino ainda usa este exercício, a exclusão é recusada: remova-o dos treinos primeiro. " +
+        "Se ele já foi executado, sai do catálogo mas o histórico e os recordes continuam. " +
+        "Sem treino nem histórico, é apagado de vez."
+
+fun usedByTemplatesMessage(count: Int): String =
+    if (count == 1) "Não dá para excluir: 1 treino ainda usa este exercício."
+    else "Não dá para excluir: $count treinos ainda usam este exercício."

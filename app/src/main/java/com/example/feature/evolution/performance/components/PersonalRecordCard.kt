@@ -42,6 +42,7 @@ import java.text.DecimalFormatSymbols
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.ui.components.IconLabel
 
 @Composable
 fun PersonalRecordCard(
@@ -112,11 +113,11 @@ fun PersonalRecordCard(
                         .background(Color(0xFF2A230D))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text(
-                        text = "🏆 PRs",
+                    IconLabel(
+                        icon = Icons.Filled.EmojiEvents,
+                        text = "PRs",
                         color = Color(0xFFFFD700),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 11.sp
                     )
                 }
             }
@@ -193,9 +194,11 @@ private fun PersonalRecordItem(
                         .background(Color(0xFF26200A)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "🏆",
-                        fontSize = 14.sp
+                    Icon(
+                        imageVector = Icons.Filled.EmojiEvents,
+                        contentDescription = null,
+                        tint = Color(0xFFFFD700),
+                        modifier = Modifier.size(16.dp)
                     )
                 }
 

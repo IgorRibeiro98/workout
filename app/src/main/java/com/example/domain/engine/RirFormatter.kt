@@ -14,19 +14,19 @@ object RirFormatter {
      * selector and any other list share one ordering.
      */
     private val effortLabels: List<Pair<Int, String>> = listOf(
-        0 to "🔥 Até a falha",
-        1 to "😤 Muito pesado",
-        2 to "💪 Pesado",
-        3 to "🙂 Controlado",
-        4 to "🙂 Controlado"
+        0 to "Até a falha",
+        1 to "Muito pesado",
+        2 to "Pesado",
+        3 to "Controlado",
+        4 to "Controlado"
     )
 
     private val shortEffortLabels: Map<Int, String> = mapOf(
-        0 to "🔥 Falha",
-        1 to "😤 M. pesado",
-        2 to "💪 Pesado",
-        3 to "🙂 Controlado",
-        4 to "🙂 Controlado"
+        0 to "Falha",
+        1 to "M. pesado",
+        2 to "Pesado",
+        3 to "Controlado",
+        4 to "Controlado"
     )
 
     /** Secondary label displaying the technical RIR value */
@@ -53,7 +53,8 @@ object RirFormatter {
     fun formatEffort(rir: Int?, short: Boolean = false): String? {
         if (rir == null) return null
         val bucket = rir.coerceIn(0, 4)
-        // The labels already carry their own emoji; prefixing another one produced "🔥 🔥 Falha".
+        // Texto puro desde a T19.7B: o ícone de esforço é vetorial e vive na UI (`rirEffortIcon`),
+        // ao lado do rótulo — nunca dentro dele, senão cada tela o repetia ("🔥 🔥 Falha").
         return if (short) shortEffortLabels[bucket] else effortLabels.firstOrNull { it.first == bucket }?.second
     }
 
@@ -65,7 +66,7 @@ object RirFormatter {
     fun formatRir(rir: Int?, full: Boolean = false): String? {
         if (rir == null) return null
         return when {
-            rir == 0 -> if (full) "🔥 Até a falha" else "🔥 Falha"
+            rir == 0 -> if (full) "Até a falha" else "Falha"
             rir >= 4 -> "RIR 4+"
             else -> "RIR $rir"
         }
@@ -89,13 +90,13 @@ object RirFormatter {
 
     /** Effort scale explained one line per level, hardest first. */
     val HELP_SCALE: List<Pair<String, String>> = listOf(
-        "🔥 Falha (RIR 0)" to "Não conseguiria mais nenhuma repetição.",
-        "😤 Muito pesado (RIR 1)" to "Conseguiria apenas mais 1 repetição.",
-        "💪 Pesado (RIR 2)" to "Conseguiria mais 2 repetições com boa técnica.",
-        "🙂 Controlado (RIR 3+)" to "Conseguiria 3 ou mais — aquecimento ou reserva alta."
+        "Falha (RIR 0)" to "Não conseguiria mais nenhuma repetição.",
+        "Muito pesado (RIR 1)" to "Conseguiria apenas mais 1 repetição.",
+        "Pesado (RIR 2)" to "Conseguiria mais 2 repetições com boa técnica.",
+        "Controlado (RIR 3+)" to "Conseguiria 3 ou mais — aquecimento ou reserva alta."
     )
 
-    /** Closing hint that connects the emoji scale to the number stored in the log. */
+    /** Closing hint that connects the effort scale to the number stored in the log. */
     const val HELP_FOOTNOTE =
         "Você escolhe pelo esforço; o número (RIR) fica registrado junto como informação complementar."
 }

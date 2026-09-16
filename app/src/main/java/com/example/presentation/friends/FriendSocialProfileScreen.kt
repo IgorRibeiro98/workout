@@ -52,6 +52,11 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.FitnessCenter
+import com.example.ui.components.IconLabel
+import com.example.ui.components.semanticIcon
+import androidx.compose.ui.graphics.vector.ImageVector
 
 const val FRIEND_PROFILE_DESCRIPTION = "Perfil social do amigo"
 const val NO_SHARED_PROGRESS_MESSAGE =
@@ -388,23 +393,33 @@ private fun SharedProgressCard(profile: FriendSocialProfile) {
                 // "semanas", e nunca "dias": a consistência do Spark é **semanal**, e traduzir o
                 // conceito na UI social faria o mesmo número significar outra coisa (§20/§21).
                 ProgressRow(
-                    label = "🔥 Consistência",
+                    label = "Consistência",
+                    icon = Icons.Filled.LocalFireDepartment,
                     value = if (weeks == 1) "1 semana" else "$weeks semanas"
                 )
             }
             profile.sharedProgress.weeklyWorkoutCount?.let { count ->
                 ProgressRow(
-                    label = "🏋️ Esta semana",
+                    label = "Esta semana",
+                    icon = Icons.Filled.FitnessCenter,
                     value = if (count == 1) "1 treino" else "$count treinos"
                 )
             }
             // T19.2C — as conquistas que o servidor consegue **verificar** (treino, consistência,
             // corpo). Ids que este APK não conhece são omitidos; uma lista vazia não desenha seção.
-            val labels = profile.sharedProgress.highlightedAchievementIds.mapNotNull(::achievementLabel)
-            if (labels.isNotEmpty()) {
+            val highlighted = profile.sharedProgress.highlightedAchievementIds
+                .mapNotNull { id -> achievementLabel(id)?.let { title -> achievementIconKey(id) to title } }
+            if (highlighted.isNotEmpty()) {
                 Text(text = "Conquistas", color = TextSecondary, fontSize = 14.sp)
-                labels.forEach { label ->
-                    Text(text = label, color = TextPrimary, fontSize = 14.sp)
+                highlighted.forEach { (iconKey, title) ->
+                    IconLabel(
+                        icon = semanticIcon(iconKey),
+                        text = title,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Normal,
+                        iconTint = Lime400
+                    )
                 }
             }
         }
@@ -412,13 +427,17 @@ private fun SharedProgressCard(profile: FriendSocialProfile) {
 }
 
 @Composable
-private fun ProgressRow(label: String, value: String) {
+private fun ProgressRow(label: String, value: String, icon: ImageVector? = null) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = TextSecondary, fontSize = 14.sp)
+        if (icon != null) {
+            IconLabel(icon = icon, text = label, color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Normal)
+        } else {
+            Text(text = label, color = TextSecondary, fontSize = 14.sp)
+        }
         Text(text = value, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
     }
 }

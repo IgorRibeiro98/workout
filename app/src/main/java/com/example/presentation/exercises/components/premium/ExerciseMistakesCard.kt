@@ -12,6 +12,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import org.json.JSONArray
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
 
 /**
  * O JSON do catálogo premium é conteúdo do app, e uma falha aqui é um defeito de conteúdo — não
@@ -57,9 +60,9 @@ fun ExerciseMistakesCard(mistakesJson: String?) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             mistakesData.forEach { data ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (data.first.isNotEmpty()) Text("❌ ${data.first}", color = Red500, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    if (data.first.isNotEmpty()) IconLabel(icon = Icons.Default.Cancel, text = data.first, color = Red500, fontSize = 14.sp)
                     if (data.second.isNotEmpty()) Text("Motivo: ${data.second}", color = TextSecondary, fontSize = 13.sp, modifier = Modifier.padding(start = 20.dp))
-                    if (data.third.isNotEmpty()) Text("✅ ${data.third}", color = Lime400, fontWeight = FontWeight.Medium, fontSize = 13.sp, modifier = Modifier.padding(start = 20.dp, top = 4.dp))
+                    if (data.third.isNotEmpty()) IconLabel(icon = Icons.Default.CheckCircle, text = data.third, color = Lime400, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 20.dp, top = 4.dp))
                 }
             }
         }

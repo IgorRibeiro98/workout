@@ -7,16 +7,48 @@ import com.example.data.local.ExerciseEntity
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.ExerciseUserOverrideEntity
 import com.example.data.local.PersonalRecordEntity
-import com.example.data.local.WorkoutDao
+import com.example.data.repository.CustomExerciseDeleteResult
+import com.example.data.repository.CustomExerciseFields
+import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class ExerciseDetailsViewModel(
     private val workoutEngine: WorkoutEngine,
-    private val workoutDao: WorkoutDao,
+    private val repository: WorkoutRepository,
     val settingsManager: SettingsManager
 ) : ViewModel() {
+
+    private val workoutDao = repository.dao
+
+    /**
+     * Resultado da última exclusão pedida nesta tela (T19.7C). A UI consome e limpa com
+     * [consumeDeleteResult]; `Deleted`/`Archived` fecham a tela, `UsedByTemplates` só avisa.
+     */
+    private val _deleteResult = MutableStateFlow<CustomExerciseDeleteResult?>(null)
+    val deleteResult: StateFlow<CustomExerciseDeleteResult?> = _deleteResult.asStateFlow()
+
+    fun canSaveCustom(name: String): Boolean = CustomExerciseFields.isValidName(name)
+
+    /** Edita a linha de um `CUSTOM`; para um canônico não faz nada (ver [WorkoutRepository.updateCustomExercise]). */
+    fun updateCustomExercise(exerciseId: Long, name: String, muscle: String?, equipment: String?, description: String?) {
+        if (!canSaveCustom(name)) return
+        viewModelScope.launch {
+            repository.updateCustomExercise(exerciseId, name, muscle, equipment, description)
+        }
+    }
+
+    fun deleteCustomExercise(exerciseId: Long) {
+        viewModelScope.launch {
+            val exercise = workoutDao.getExerciseById(exerciseId) ?: return@launch
+            _deleteResult.value = repository.deleteExercise(exercise)
+        }
+    }
+
+    fun consumeDeleteResult() {
+        _deleteResult.value = null
+    }
 
     val showGifs = settingsManager.showGifsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)

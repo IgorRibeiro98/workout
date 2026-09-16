@@ -63,6 +63,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Close
 
 /** As ações da tela, agrupadas para a assinatura do conteúdo continuar legível. */
 internal data class GenerateWorkoutActions(
@@ -408,11 +409,11 @@ private fun CandidateSection(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = if (excluded) "✕" else "•",
-                                    color = if (excluded) Red400 else Lime400,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                Icon(
+                                    imageVector = if (excluded) Icons.Default.Close else Icons.Default.CheckCircle,
+                                    contentDescription = if (excluded) "Excluído" else "Incluído",
+                                    tint = if (excluded) Red400 else Lime400,
+                                    modifier = Modifier.size(16.dp)
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(

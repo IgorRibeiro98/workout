@@ -353,7 +353,7 @@ class ProfileViewModelTest {
                 id = "ach_$index",
                 title = "Conquista $index",
                 description = "Descrição $index",
-                icon = "🏆",
+                icon = com.example.domain.model.IconKeys.TROPHY,
                 tier = AchievementTier.BRONZE,
                 category = AchievementCategory.TRAINING,
                 unlockedAt = if (index < unlocked) 1_000L + index else null,

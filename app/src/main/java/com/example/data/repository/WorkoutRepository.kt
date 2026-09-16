@@ -49,28 +49,113 @@ class WorkoutRepository(
      *
      * O `syncId` é explícito aqui porque a coluna é anulável: o catálogo canônico continua sem
      * `syncId`, com `canonicalId` como identidade.
+     *
+     * O único campo obrigatório é o nome — a mesma regra que a entidade impõe (`name` não é
+     * anulável; todo o resto é). Músculo, equipamento e descrição em branco viram `null`, e não
+     * `""`: o resolver visual e os filtros do catálogo tratam os dois como "não informado", e o
+     * agregado `CUSTOM_EXERCISE` já viaja com esses campos anuláveis (T16.3).
      */
-    suspend fun addExercise(name: String, muscle: String, equipment: String? = null) {
+    suspend fun addExercise(
+        name: String,
+        muscle: String? = null,
+        equipment: String? = null,
+        description: String? = null
+    ): Long {
         val exercise = ExerciseEntity(
-            name = name,
-            primaryMuscle = muscle,
-            equipment = equipment,
+            name = CustomExerciseFields.requireName(name),
+            primaryMuscle = CustomExerciseFields.optional(muscle),
+            equipment = CustomExerciseFields.optional(equipment),
+            description = CustomExerciseFields.optional(description),
             isUserCreated = true,
             syncId = SyncIds.random()
         )
-        syncMutations.mutate {
-            dao.insertExercise(exercise)
+        return syncMutations.mutate {
+            val id = dao.insertExercise(exercise)
             exercise.syncId?.let { upsert(SyncEntityType.CUSTOM_EXERCISE, it) }
+            id
         }
     }
 
-    suspend fun deleteExercise(exercise: ExerciseEntity) {
-        // Exercício canônico não é apagado por aqui, e continua não sendo: a regra de domínio vem
-        // antes da mutação, então uma tentativa recusada não registra intenção de sync nenhuma.
-        if (!exercise.isUserCreated) return
-        syncMutations.mutate {
-            dao.deleteExercise(exercise)
-            exercise.syncId?.let { delete(SyncEntityType.CUSTOM_EXERCISE, it) }
+    /**
+     * Edita os campos base de um exercício **criado pelo usuário** (T19.7C).
+     *
+     * Um exercício canônico não passa por aqui: o catálogo é do manifesto versionado, e o que o
+     * usuário pode mudar nele é o override (`exercise_user_overrides`), não a linha. Um `CUSTOM`
+     * é dele — nome, músculo, equipamento e descrição são a própria linha, e a edição registra
+     * uma mutação do agregado `CUSTOM_EXERCISE` como qualquer outra.
+     *
+     * Se existia um override sobre este `CUSTOM` (o caminho antigo de "personalizar" servia para
+     * qualquer exercício), `displayName` e `notes` dele são limpos: o nome e a descrição agora
+     * vivem na linha, e um override sobreposto faria a edição "não pegar". Foto e descanso
+     * padrão do override continuam.
+     *
+     * @return `false` quando o exercício não é `CUSTOM`; nada é escrito e nada é registrado.
+     */
+    suspend fun updateCustomExercise(
+        exerciseId: Long,
+        name: String,
+        muscle: String?,
+        equipment: String?,
+        description: String?
+    ): Boolean {
+        val validName = CustomExerciseFields.requireName(name)
+        return syncMutations.mutate {
+            val existing = dao.getExerciseById(exerciseId) ?: return@mutate false
+            if (!existing.isUserCreated || existing.syncId == null) return@mutate false
+            dao.updateExercise(
+                existing.copy(
+                    name = validName,
+                    primaryMuscle = CustomExerciseFields.optional(muscle),
+                    equipment = CustomExerciseFields.optional(equipment),
+                    description = CustomExerciseFields.optional(description)
+                )
+            )
+            dao.getOverrideForExercise(exerciseId)?.let { override ->
+                if (override.displayName != null || override.notes != null) {
+                    dao.insertOrUpdateOverride(
+                        override.copy(displayName = null, notes = null, updatedAt = System.currentTimeMillis())
+                    )
+                }
+            }
+            upsert(SyncEntityType.CUSTOM_EXERCISE, existing.syncId)
+            true
+        }
+    }
+
+    /**
+     * Exclui um exercício criado pelo usuário respeitando quem ainda aponta para ele (T19.7C).
+     *
+     * - Canônico: recusado ([CustomExerciseDeleteResult.NotCustom]). A regra de domínio vem antes
+     *   da mutação, então uma tentativa recusada não registra intenção de sync nenhuma.
+     * - Usado em algum treino: recusado ([CustomExerciseDeleteResult.UsedByTemplates]). É o mesmo
+     *   guard que o sync já aplica a uma exclusão vinda da nuvem
+     *   (`countTemplateReferencesToExercise`, T16.7); a chave estrangeira é `RESTRICT` e o banco
+     *   recusaria de qualquer jeito — aqui a recusa tem motivo legível.
+     * - Com histórico: **arquivado** ([CustomExerciseDeleteResult.Archived]) — `active = false`,
+     *   que some do catálogo e do seletor, mas mantém a linha para o histórico, os recordes
+     *   (`personal_records` cascateia num delete) e as sessões antigas. `active` já faz parte do
+     *   agregado `CUSTOM_EXERCISE`, então o outro aparelho arquiva também.
+     * - Sem referência nenhuma: apagado de verdade ([CustomExerciseDeleteResult.Deleted]), com
+     *   tombstone para a nuvem.
+     */
+    suspend fun deleteExercise(exercise: ExerciseEntity): CustomExerciseDeleteResult {
+        if (!exercise.isUserCreated) return CustomExerciseDeleteResult.NotCustom
+        return syncMutations.mutate {
+            val current = dao.getExerciseById(exercise.id)
+                ?: return@mutate CustomExerciseDeleteResult.Deleted
+            if (!current.isUserCreated) return@mutate CustomExerciseDeleteResult.NotCustom
+            val templateRefs = dao.countTemplateReferencesToExercise(current.id)
+            if (templateRefs > 0) {
+                return@mutate CustomExerciseDeleteResult.UsedByTemplates(templateRefs)
+            }
+            if (dao.countSessionReferencesToExercise(current.id) > 0) {
+                dao.updateExercise(current.copy(active = false))
+                current.syncId?.let { upsert(SyncEntityType.CUSTOM_EXERCISE, it) }
+                return@mutate CustomExerciseDeleteResult.Archived
+            }
+            dao.deleteExercise(current)
+            current.syncId?.let { delete(SyncEntityType.CUSTOM_EXERCISE, it) }
+            CustomExerciseDeleteResult.Deleted
         }
     }
 
@@ -305,4 +390,34 @@ class WorkoutRepository(
             upsert(SyncEntityType.WORKOUT_TEMPLATE) { dao.getTemplateSyncId(templateExercise.templateId) }
         }
     }
+}
+
+/** O que aconteceu com um pedido de exclusão de exercício `CUSTOM` — ver [WorkoutRepository.deleteExercise]. */
+sealed class CustomExerciseDeleteResult {
+    /** Não era `CUSTOM`; nada mudou. */
+    data object NotCustom : CustomExerciseDeleteResult()
+
+    /** Ainda aparece em [count] linhas de treino; nada mudou. */
+    data class UsedByTemplates(val count: Int) : CustomExerciseDeleteResult()
+
+    /** Tem histórico: saiu do catálogo (`active = false`), a linha ficou. */
+    data object Archived : CustomExerciseDeleteResult()
+
+    /** Apagado. */
+    data object Deleted : CustomExerciseDeleteResult()
+}
+
+/**
+ * A validação de campos de um exercício `CUSTOM` — a mesma para criar e editar, e a mesma que a
+ * UI usa para habilitar o botão: obrigatório é só o nome.
+ */
+object CustomExerciseFields {
+    fun isValidName(name: String?): Boolean = !name.isNullOrBlank()
+
+    fun requireName(name: String): String {
+        require(isValidName(name)) { "Nome do exercício é obrigatório." }
+        return name.trim()
+    }
+
+    fun optional(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
 }

@@ -12,6 +12,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import org.json.JSONArray
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Place
 
 /**
  * O JSON do catálogo premium é conteúdo do app, e uma falha aqui é um defeito de conteúdo — não
@@ -77,7 +80,7 @@ fun ExerciseSafetyCard(
 
             if (attentionData.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("⚠ Atenção", color = Amber500, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    IconLabel(icon = Icons.Default.Warning, text = "Atenção", color = Amber500, fontSize = 14.sp)
                     attentionData.forEach { data ->
                         Column {
                             if (data.first.isNotEmpty()) Text("• ${data.first}", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
@@ -92,7 +95,7 @@ fun ExerciseSafetyCard(
                     Text("Desconfortos comuns", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     discomfortsData.forEach { data ->
                         Column {
-                            if (data.first.isNotEmpty()) Text("📍 ${data.first}", color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            if (data.first.isNotEmpty()) IconLabel(icon = Icons.Default.Place, text = data.first, color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                             if (data.second.isNotEmpty()) Text("Causa: ${data.second}", color = TextSecondary, fontSize = 13.sp, modifier = Modifier.padding(start = 20.dp))
                             if (data.third.isNotEmpty()) Text("Ajuste: ${data.third}", color = Lime400, fontSize = 13.sp, modifier = Modifier.padding(start = 20.dp))
                         }

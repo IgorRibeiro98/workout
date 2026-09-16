@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
-import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -23,7 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.domain.engine.MuscleVisualResolver
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.ui.theme.*
 
 @Composable
@@ -36,7 +35,7 @@ fun ExerciseMediaCompact(
     modifier: Modifier = Modifier,
     nameEn: String? = null
 ) {
-    val muscleGroup = MuscleVisualResolver.resolveGroup(primaryMuscle)
+    val visual = ExerciseVisualResolver.resolve(primaryMuscle, equipment)
 
     Column(
         modifier = modifier
@@ -124,13 +123,13 @@ fun ExerciseMediaCompact(
                         modifier = Modifier
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(muscleGroup.color.copy(alpha = 0.15f)),
+                            .background(visual.color.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = muscleGroup.icon,
-                            contentDescription = null,
-                            tint = muscleGroup.color,
+                            imageVector = visual.icon,
+                            contentDescription = visual.equipmentFamily.displayName,
+                            tint = visual.color,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -181,10 +180,10 @@ fun ExerciseMediaCompact(
                         modifier = Modifier
                             .size(8.dp)
                             .clip(CircleShape)
-                            .background(muscleGroup.color)
+                            .background(visual.color)
                     )
                     Text(
-                        text = muscleGroup.displayName,
+                        text = visual.muscleGroup.displayName,
                         color = TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -202,8 +201,8 @@ fun ExerciseMediaCompact(
                         modifier = Modifier.padding(horizontal = 6.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.FitnessCenter,
-                            contentDescription = null,
+                            imageVector = visual.icon,
+                            contentDescription = visual.equipmentFamily.displayName,
                             tint = TextSecondary,
                             modifier = Modifier.size(13.dp)
                         )

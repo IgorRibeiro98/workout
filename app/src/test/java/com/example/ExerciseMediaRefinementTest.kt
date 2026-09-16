@@ -22,15 +22,15 @@ class ExerciseMediaRefinementTest {
     }
 
     @Test
-    fun `test muscle visual resolver provides valid fallback colors and icons`() {
+    fun `test muscle visual resolver provides valid colors`() {
+        // Desde a T19.7A o grupo muscular só tem cor: o ícone de um exercício responde ao
+        // equipamento (`ExerciseVisualResolver`).
         val legsGroup = MuscleVisualResolver.resolveGroup("quadriceps")
         assertNotNull(legsGroup.color)
-        assertNotNull(legsGroup.icon)
         assertEquals("Quadríceps", legsGroup.displayName)
 
         val shouldersGroup = MuscleVisualResolver.resolveGroup("shoulders")
         assertNotNull(shouldersGroup.color)
-        assertNotNull(shouldersGroup.icon)
         assertEquals("Ombros", shouldersGroup.displayName)
     }
 

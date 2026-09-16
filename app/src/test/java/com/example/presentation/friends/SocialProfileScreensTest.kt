@@ -69,8 +69,8 @@ class SocialProfileScreensTest {
 
         composeRule.onNodeWithText("14").assertIsDisplayed()
         // Nada sobre os campos ausentes: nem rótulo, nem "privado", nem traço.
-        composeRule.onNodeWithText("🔥 Consistência").assertDoesNotExist()
-        composeRule.onNodeWithText("🏋️ Esta semana").assertDoesNotExist()
+        composeRule.onNodeWithText("Consistência").assertDoesNotExist()
+        composeRule.onNodeWithText("Esta semana").assertDoesNotExist()
         composeRule.onNodeWithText("privado", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("—").assertDoesNotExist()
     }
@@ -218,7 +218,7 @@ class SocialProfileScreensTest {
 
         composeRule.onNodeWithText("3 treinos").assertIsDisplayed()
         // Ligado sem dado não aparece na prévia — que é justamente o que ela existe para revelar.
-        composeRule.onNodeWithText("🔥 Consistência").assertDoesNotExist()
+        composeRule.onNodeWithText("Consistência").assertDoesNotExist()
     }
 
     // ------------------------------------------------------------------ apoio

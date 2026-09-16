@@ -56,7 +56,7 @@ import com.example.components.workout.execution.WorkoutProgressHeader
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SetLogEntity
 import com.example.data.local.WorkoutParticipantRole
-import com.example.domain.engine.MuscleVisualResolver
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.domain.engine.RirFormatter
 import com.example.domain.workout.execution.ExerciseExecutionContext
 import com.example.presentation.execution.components.DuoTurnBanner
@@ -69,6 +69,9 @@ import com.example.ui.components.RirSelector
 import com.example.ui.components.SyncExerciseSheet
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.NotificationsActive
 
 sealed interface WorkoutSheet {
     data object OptionsMenu : WorkoutSheet
@@ -256,11 +259,11 @@ fun ExecutionScreen(
                                         color = Color(0xFFF59E0B).copy(alpha = 0.2f),
                                         shape = RoundedCornerShape(12.dp)
                                     ) {
-                                        Text(
-                                            text = "⚡ Ordem adaptada",
+                                        IconLabel(
+                                            icon = Icons.Default.Bolt,
+                                            text = "Ordem adaptada",
                                             color = Color(0xFFF59E0B),
                                             fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
                                     }
@@ -1715,7 +1718,7 @@ fun FocusedRestView(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Série concluída ✓",
+                            text = "Série concluída",
                             color = Lime400,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
@@ -1733,12 +1736,21 @@ fun FocusedRestView(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                text = if (isFinishedAlertState) "DESCANSO CONCLUÍDO! 🔔" else if (isPreparingNextExercise) "PREPARANDO PRÓXIMO EXERCÍCIO" else "TEMPO DE DESCANSO",
-                color = if (isFinishedAlertState) Emerald500 else Lime400,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
+            if (isFinishedAlertState) {
+                IconLabel(
+                    icon = Icons.Default.NotificationsActive,
+                    text = "DESCANSO CONCLUÍDO!",
+                    color = Emerald500,
+                    fontSize = 16.sp
+                )
+            } else {
+                Text(
+                    text = if (isPreparingNextExercise) "PREPARANDO PRÓXIMO EXERCÍCIO" else "TEMPO DE DESCANSO",
+                    color = Lime400,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -1902,7 +1914,7 @@ fun FocusedExerciseTransitionView(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Série concluída ✓",
+                        text = "Série concluída",
                         color = Lime400,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
@@ -2048,7 +2060,7 @@ fun FocusedWorkoutCompleteView(
         ) {
             Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Lime400, modifier = Modifier.size(88.dp))
             Spacer(modifier = Modifier.height(20.dp))
-            Text("Treino finalizado 🎉", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+            Text("Treino finalizado", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
             Spacer(modifier = Modifier.height(8.dp))
             Text("Resumo do treino", color = Lime400, fontSize = 18.sp, fontWeight = FontWeight.Bold)
 
@@ -2209,19 +2221,25 @@ fun AllSetsBottomSheet(
                                     )
 
                                     if (rirRpeEnabled) {
-                                        val effortText = when (setLog.rir) {
-                                            0 -> "🔥 Falha (RIR 0)"
-                                            1 -> "😤 Muito pesado (RIR 1)"
-                                            2 -> "💪 Pesado (RIR 2)"
-                                            3 -> "🙂 Controlado (RIR 3+)"
-                                            else -> "Sem esforço registrado"
+                                        val effortText = RirFormatter.formatEffort(setLog.rir)
+                                            ?.let { "$it (${RirFormatter.formatSecondaryRir(setLog.rir)})" }
+                                        val effortColor = if (setLog.rir == 0) Color(0xFFFFB74D) else if (setLog.rir != null) Lime400 else TextSecondary.copy(alpha = 0.6f)
+                                        if (effortText != null) {
+                                            com.example.ui.components.IconLabel(
+                                                icon = com.example.ui.components.rirEffortIcon(setLog.rir),
+                                                text = effortText,
+                                                color = effortColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "Sem esforço registrado",
+                                                color = effortColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Normal
+                                            )
                                         }
-                                        Text(
-                                            text = effortText,
-                                            color = if (setLog.rir == 0) Color(0xFFFFB74D) else if (setLog.rir != null) Lime400 else TextSecondary.copy(alpha = 0.6f),
-                                            fontSize = 12.sp,
-                                            fontWeight = if (setLog.rir != null) FontWeight.SemiBold else FontWeight.Normal
-                                        )
                                     }
                                 }
                             }
@@ -2738,7 +2756,7 @@ fun AlternativesBottomSheet(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(alternatives, key = { it.id }) { alt ->
-                    val altGroup = MuscleVisualResolver.resolveGroup(alt.primaryMuscle ?: "")
+                    val altVisual = ExerciseVisualResolver.resolve(alt)
                     Surface(
                         color = BackgroundDark,
                         shape = RoundedCornerShape(12.dp),
@@ -2749,7 +2767,7 @@ fun AlternativesBottomSheet(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(altGroup.icon, contentDescription = null, tint = altGroup.color, modifier = Modifier.size(32.dp))
+                            Icon(altVisual.icon, contentDescription = altVisual.equipmentFamily.displayName, tint = altVisual.color, modifier = Modifier.size(32.dp))
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(alt.displayName, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)

@@ -35,6 +35,9 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.SurfaceHighlight
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.EmojiEvents
+import com.example.ui.components.IconLabel
 
 @Composable
 fun StreakCard(
@@ -128,11 +131,11 @@ fun StreakCard(
                             fontSize = 12.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "🔥 $currentStreak ${if (currentStreak == 1) "semana" else "semanas"}",
+                        IconLabel(
+                            icon = Icons.Filled.LocalFireDepartment,
+                            text = "$currentStreak ${if (currentStreak == 1) "semana" else "semanas"}",
                             color = Orange400,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 17.sp
                         )
                     }
                 }
@@ -154,11 +157,11 @@ fun StreakCard(
                             fontSize = 12.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "🏆 $longestStreak ${if (longestStreak == 1) "semana" else "semanas"}",
+                        IconLabel(
+                            icon = Icons.Filled.EmojiEvents,
+                            text = "$longestStreak ${if (longestStreak == 1) "semana" else "semanas"}",
                             color = Amber500,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 17.sp
                         )
                     }
                 }

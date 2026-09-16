@@ -116,9 +116,11 @@ fun ConsistencyCard(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text(
-                                text = "🔥",
-                                fontSize = 14.sp
+                            Icon(
+                                imageVector = Icons.Filled.LocalFireDepartment,
+                                contentDescription = null,
+                                tint = Orange400,
+                                modifier = Modifier.size(16.dp)
                             )
                             Text(
                                 text = "$currentStreak dias",

@@ -44,10 +44,13 @@ import com.example.ui.theme.SurfaceDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.IconLabel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 
 const val SHARE_CHECKIN_CTA_LABEL = "Compartilhar check-in"
 const val SHARE_CHECKIN_SECTION_DESCRIPTION = "Compartilhar check-in do treino com amigos"
-const val SHARE_CHECKIN_SHARED_LABEL = "Check-in compartilhado ✓"
+const val SHARE_CHECKIN_SHARED_LABEL = "Check-in compartilhado"
 
 // --- T17.9 ---------------------------------------------------------------------------------
 
@@ -121,11 +124,11 @@ fun ShareCheckInSection(
                 border = BorderStroke(1.dp, Lime400),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
+                IconLabel(
+                    icon = Icons.Default.CheckCircle,
                     text = SHARE_CHECKIN_SHARED_LABEL,
                     color = Lime400,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                 )
             }

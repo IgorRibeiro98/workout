@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import com.example.domain.engine.ExerciseSearchEngine
+import com.example.domain.engine.ExerciseVisualResolver
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.ui.components.SwipeAction
 import com.example.ui.components.SwipeActionRow
@@ -224,7 +225,7 @@ fun TemplateDetailsScreen(
                         }
                         .clip(RoundedCornerShape(16.dp))
                 ) {
-                    val group = MuscleVisualResolver.resolveGroup(templateExerciseDetails.resolvedExercise.primaryMuscle)
+                    val visual = ExerciseVisualResolver.resolve(templateExerciseDetails.resolvedExercise)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -274,9 +275,9 @@ fun TemplateDetailsScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = group.icon,
-                                contentDescription = null,
-                                tint = group.color,
+                                imageVector = visual.icon,
+                                contentDescription = visual.equipmentFamily.displayName,
+                                tint = visual.color,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -415,7 +416,7 @@ fun TemplateDetailsScreen(
                 ) {
                     items(filteredCatalog, key = { it.id }) { ex ->
                         val isSelected = selectedExerciseIds.contains(ex.id)
-                        val group = MuscleVisualResolver.resolveGroup(ex.primaryMuscle)
+                        val visual = ExerciseVisualResolver.resolve(ex)
 
                         Surface(
                             color = if (isSelected) Lime400.copy(alpha = 0.15f) else BackgroundDark,
@@ -442,9 +443,9 @@ fun TemplateDetailsScreen(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = group.icon,
-                                        contentDescription = null,
-                                        tint = group.color,
+                                        imageVector = visual.icon,
+                                        contentDescription = visual.equipmentFamily.displayName,
+                                        tint = visual.color,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }

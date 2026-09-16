@@ -108,7 +108,12 @@ const val LEVEL_SHARING_NOTE =
  * O servidor envia só o id (`first_workout`); o título e o ícone são os do catálogo deste APK. Um
  * id que este APK não conhece não vira "conquista desconhecida" — ele é omitido, porque a lista
  * é de destaques e não de lacunas.
+ *
+ * Desde a T19.7B o rótulo é só o título; o ícone vem como chave de `IconKeys` em
+ * [achievementIconKey], e a tela o desenha como vetor em vez de emoji na string.
  */
 fun achievementLabel(achievementId: String): String? =
-    com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(achievementId)
-        ?.let { "${it.icon} ${it.title}" }
+    com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(achievementId)?.title
+
+fun achievementIconKey(achievementId: String): String? =
+    com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(achievementId)?.icon

@@ -48,6 +48,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.EmojiEvents
+import com.example.ui.components.semanticIcon
+import com.example.domain.model.IconKeys
+import androidx.compose.material3.Icon
 
 @Composable
 fun AchievementSection(
@@ -93,10 +98,13 @@ fun AchievementSection(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "🏆",
-                        fontSize = 22.sp,
-                        modifier = Modifier.padding(end = 8.dp)
+                    Icon(
+                        imageVector = Icons.Filled.EmojiEvents,
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier
+                            .size(24.dp)
+                            .padding(end = 4.dp)
                     )
                     Text(
                         text = "Conquistas",
@@ -292,9 +300,11 @@ private fun AchievementDetailBottomSheet(
                     .border(2.dp, if (isUnlocked) tierColor else Color.White.copy(alpha = 0.1f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = if (isUnlocked) achievement.icon else "🔒",
-                    fontSize = 36.sp
+                Icon(
+                    imageVector = semanticIcon(if (isUnlocked) achievement.icon else IconKeys.LOCK),
+                    contentDescription = if (isUnlocked) null else "Bloqueada",
+                    tint = if (isUnlocked) tierColor else TextSecondary.copy(alpha = 0.6f),
+                    modifier = Modifier.size(36.dp)
                 )
             }
 
@@ -492,7 +502,12 @@ fun NextAchievementCard(
                         .background(SurfaceDark),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = achievement.icon, fontSize = 22.sp)
+                    Icon(
+                        imageVector = semanticIcon(achievement.icon),
+                        contentDescription = null,
+                        tint = Lime400,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -465,7 +466,7 @@ private fun SelectionMark(selected: Boolean) {
         contentAlignment = Alignment.Center
     ) {
         if (selected) {
-            Text(text = "✓", color = BackgroundDark, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = BackgroundDark, modifier = Modifier.size(16.dp))
         }
     }
 }
