@@ -6,9 +6,13 @@ import com.example.data.datastore.SettingsManager
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SessionWithDetails
 import com.example.data.local.SetLogEntity
+import com.example.data.local.WorkoutGuestSetLogEntity
+import com.example.data.local.WorkoutParticipantRole
 import com.example.domain.engine.SyncResult
 import com.example.domain.engine.WorkoutEngine
 import com.example.service.WorkoutNotificationManager
+import com.example.domain.workout.execution.DuoExecution
+import com.example.domain.workout.execution.DuoTurn
 import com.example.domain.workout.execution.ExerciseExecutionStatus
 import com.example.domain.workout.execution.WorkoutExerciseExecution
 import com.example.domain.workout.execution.WorkoutExecutionOrderManager
@@ -64,10 +68,49 @@ data class ExecutionState(
      * temporizador automático usava no mesmo instante.
      */
     val restSecondsBetweenSets: Int = DEFAULT_REST_BETWEEN_SETS_SECONDS,
-    val restSecondsAfterExercise: Int = DEFAULT_REST_AFTER_EXERCISE_SECONDS
+    val restSecondsAfterExercise: Int = DEFAULT_REST_AFTER_EXERCISE_SECONDS,
+    /**
+     * A dimensão de participante (T19.4): `null` em sessão solo — e é o `null` que mantém cada
+     * regra abaixo idêntica ao que era antes da dupla.
+     */
+    val duo: DuoExecution? = null,
+    /**
+     * O prazo de descanso do participante **da vez**: o temporizador do aparelho para o dono, o
+     * `restEndsAt` do convidado para o convidado. Em sessão solo é o próprio temporizador. É o
+     * que a tela de descanso conta, e `isResting` é derivado dele no instante da emissão.
+     */
+    val currentParticipantRestTarget: Long? = null
 ) {
     val currentExercise: ExerciseSessionWithSets?
         get() = sessionWithDetails?.exercises?.getOrNull(currentExerciseIndex)
+
+    /**
+     * "Este exercício ainda tem série a fazer?" — a **única** definição, para os dois participantes.
+     *
+     * Em solo é a regra de sempre: sem série, ou com série do dono não concluída. Em dupla o
+     * exercício também está pendente enquanto o convidado tiver série por fazer. Todo cursor,
+     * transição e conclusão desta tela passa por aqui, e é assim que a dupla não ganhou uma
+     * segunda máquina de estados: ganhou uma dimensão a mais no mesmo predicado.
+     */
+    fun isPending(exercise: ExerciseSessionWithSets): Boolean =
+        exercise.sets.isEmpty() ||
+            exercise.sets.any { !it.completed } ||
+            duo?.hasPendingGuestSets(exercise) == true
+
+    /** De quem é a vez no exercício em foco (T19.4) — `null` em solo ou com o exercício concluído pelos dois. */
+    val duoTurn: DuoTurn?
+        get() {
+            val d = duo ?: return null
+            val exercise = currentExercise ?: return null
+            return d.turnFor(exercise)
+        }
+
+    /**
+     * O participante da vez. Em solo, e quando o exercício em foco está concluído pelos dois, é o
+     * dono: é ele quem descansa entre exercícios e quem abre o próximo.
+     */
+    val currentParticipantRole: WorkoutParticipantRole
+        get() = duoTurn?.role ?: WorkoutParticipantRole.OWNER
 
     val isLastExercise: Boolean
         get() = currentExerciseIndex >= (sessionWithDetails?.exercises?.size ?: 1) - 1
@@ -85,7 +128,7 @@ data class ExecutionState(
             val exercises = sessionWithDetails?.exercises ?: return false
             if (exercises.isEmpty()) return false
             return exercises.withIndex().none { (idx, ex) ->
-                idx != currentExerciseIndex && (ex.sets.isEmpty() || ex.sets.any { !it.completed })
+                idx != currentExerciseIndex && isPending(ex)
             }
         }
 
@@ -99,11 +142,11 @@ data class ExecutionState(
         get() = activeSetIndex?.let { currentExercise?.sets?.getOrNull(it) }
 
     val isExerciseCompleted: Boolean
-        get() = currentExercise?.sets?.isNotEmpty() == true && currentExercise?.sets?.all { it.completed } == true
+        get() = currentExercise?.let { it.sets.isNotEmpty() && !isPending(it) } == true
 
     val isAllExercisesCompleted: Boolean
         get() = sessionWithDetails?.exercises?.isNotEmpty() == true &&
-                sessionWithDetails.exercises.all { ex -> ex.sets.isNotEmpty() && ex.sets.all { it.completed } }
+                sessionWithDetails.exercises.none { ex -> isPending(ex) }
 
     val isOrderAdapted: Boolean
         get() = sessionWithDetails?.exercises?.any { it.exerciseSession.executionOrder != it.exerciseSession.plannedOrder } == true
@@ -116,12 +159,12 @@ data class ExecutionState(
             // First search forward from current index
             val forward = (cur + 1 until exercises.size).asSequence()
                 .map { exercises[it] }
-                .firstOrNull { it.sets.isEmpty() || it.sets.any { s -> !s.completed } }
+                .firstOrNull { isPending(it) }
             if (forward != null) return forward
             // Then wrap around to earlier exercises if pending
             return (0 until cur).asSequence()
                 .map { exercises[it] }
-                .firstOrNull { it.sets.isEmpty() || it.sets.any { s -> !s.completed } }
+                .firstOrNull { isPending(it) }
         }
 
     val exerciseExecutions: List<WorkoutExerciseExecution>
@@ -129,7 +172,7 @@ data class ExecutionState(
             val totalSets = ex.sets.size
             val completedCount = ex.sets.count { it.completed }
             val status = when {
-                totalSets > 0 && completedCount == totalSets -> ExerciseExecutionStatus.COMPLETED
+                totalSets > 0 && !isPending(ex) -> ExerciseExecutionStatus.COMPLETED
                 idx == currentExerciseIndex || completedCount > 0 -> ExerciseExecutionStatus.IN_PROGRESS
                 else -> ExerciseExecutionStatus.PENDING
             }
@@ -228,7 +271,8 @@ class ExecutionViewModel(
     /** A sessão ativa já ordenada, com o índice do exercício em foco resolvido. */
     private data class SessionSnapshot(
         val session: SessionWithDetails? = null,
-        val currentIndex: Int = 0
+        val currentIndex: Int = 0,
+        val duo: DuoExecution? = null
     ) {
         val currentExercise: ExerciseSessionWithSets?
             get() = session?.exercises?.getOrNull(currentIndex)
@@ -259,8 +303,9 @@ class ExecutionViewModel(
      */
     private val sessionSnapshot: Flow<SessionSnapshot> = combine(
         workoutEngine.activeSessionWithDetailsFlow,
+        workoutEngine.activeDuoExecutionFlow,
         _currentExerciseSessionId
-    ) { raw, trackedId ->
+    ) { raw, duo, trackedId ->
         // Normaliza a sessão **uma vez**, aqui: exercícios em ordem de execução e séries em ordem
         // de domínio. `@Relation` não ordena (ver `ExerciseSessionWithSets.sortedSets`), e daqui
         // para baixo tudo — `activeSetIndex`, "Série N de M", a folha de todas as séries, o card
@@ -282,12 +327,16 @@ class ExecutionViewModel(
                     ?.let { id -> exercises.indexOfFirst { it.exerciseSession.id == id } }
                     ?: -1
                 // Sem exercício fixado — abertura do app, ou uma sessão nova — o foco nasce no
-                // primeiro exercício com série pendente, que é onde o usuário parou.
+                // primeiro exercício com série pendente, que é onde o usuário parou. Numa dupla,
+                // "pendente" inclui a série do convidado: é o que faz a reabertura cair na vez
+                // certa, e não na do dono.
                 if (tracked >= 0) tracked
-                else exercises.indexOfFirst { ex -> ex.sets.any { !it.completed } }.takeIf { it >= 0 } ?: 0
+                else exercises.indexOfFirst { ex ->
+                    ex.sets.any { !it.completed } || duo?.hasPendingGuestSets(ex) == true
+                }.takeIf { it >= 0 } ?: 0
             }
         }
-        SessionSnapshot(session, index)
+        SessionSnapshot(session, index, duo)
     }.onEach { snapshot ->
         // Fixa o exercício derivado. É o que impede o foco de "andar sozinho": sem isto, concluir
         // a última série do exercício 1 faria o índice derivado pular para o 2 e a fase de
@@ -348,7 +397,8 @@ class ExecutionViewModel(
             currentResolvedExercise = resolved,
             exerciseExecutionContext = context.context,
             restSecondsBetweenSets = context.rest.betweenSets,
-            restSecondsAfterExercise = context.rest.afterExercise
+            restSecondsAfterExercise = context.rest.afterExercise,
+            duo = snapshot.duo
         )
     }
 
@@ -358,9 +408,17 @@ class ExecutionViewModel(
         _setFeedback,
         _pendingMoveConfirmation
     ) { baseState, timerTarget, feedback, pendingMove ->
-        val isTimerActive = timerTarget != null && timerTarget > System.currentTimeMillis()
+        // O descanso que conta é o do participante da vez (T19.4). Em solo, e na vez do dono, é o
+        // temporizador do aparelho; na vez do convidado é o `restEndsAt` dele. O descanso do outro
+        // participante continua correndo por timestamp — só não é ele que decide a fase.
+        val restTarget = when (baseState.currentParticipantRole) {
+            WorkoutParticipantRole.OWNER -> timerTarget
+            WorkoutParticipantRole.GUEST -> baseState.duo?.guest?.restEndsAt
+        }
+        val isTimerActive = restTarget != null && restTarget > System.currentTimeMillis()
         baseState.copy(
             isResting = isTimerActive,
+            currentParticipantRestTarget = restTarget,
             lastSetFeedback = feedback,
             pendingMoveConfirmation = pendingMove
         )
@@ -438,15 +496,14 @@ class ExecutionViewModel(
         val exercises = state.value.sessionWithDetails?.exercises ?: return
         if (exercises.isEmpty()) return
 
-        val cur = state.value.currentExerciseIndex
+        val current = state.value
+        val cur = current.currentExerciseIndex
         // 1. Search forward from cur + 1 for next pending/incomplete exercise
         val nextPendingIndex = (cur + 1 until exercises.size).firstOrNull { idx ->
-            val ex = exercises[idx]
-            ex.sets.isEmpty() || ex.sets.any { !it.completed }
+            current.isPending(exercises[idx])
         } ?: (0 until cur).firstOrNull { idx ->
             // 2. Wrap around from beginning if earlier exercises are pending
-            val ex = exercises[idx]
-            ex.sets.isEmpty() || ex.sets.any { !it.completed }
+            current.isPending(exercises[idx])
         } ?: (cur + 1).takeIf { it in exercises.indices } // 3. Fallback to immediate next
 
         if (nextPendingIndex != null) {
@@ -564,6 +621,52 @@ class ExecutionViewModel(
     fun uncompleteSet(setLog: SetLogEntity) {
         launchGuarded {
             workoutEngine.updateSet(setLog.copy(completed = false, finishedAt = null))
+        }
+    }
+
+    // ---- Treino em dupla local (T19.4): a vez do convidado -----------------------------------
+    //
+    // A identidade da série do convidado vem **na intenção** (`guestSet`), capturada pela tela no
+    // momento da composição — nunca é lida de `state.value` na hora do toque. É o que impede um
+    // toque duplo, ou uma recomposição atrasada, de gravar a série do convidado no dono (ou o
+    // contrário) depois que a vez já virou.
+
+    /** Edita a série do convidado com os valores que a tela devolveu na projeção `SetLogEntity`. */
+    fun updateGuestSet(guestSet: WorkoutGuestSetLogEntity, edited: SetLogEntity) {
+        launchGuarded {
+            workoutEngine.updateGuestSet(guestSet.withValuesFrom(edited))
+        }
+    }
+
+    fun completeGuestSet(guestSet: WorkoutGuestSetLogEntity, edited: SetLogEntity) {
+        val duo = state.value.duo
+        val nextRole = state.value.duoTurn?.takeIf { it.guestSet?.setNumber == guestSet.setNumber }?.nextRole
+        val feedback = SetCompletionFeedback(
+            type = FeedbackType.NORMAL,
+            title = "Série de ${duo?.guestLabel ?: "convidado"} registrada",
+            // O convidado não tem histórico nem recorde no Spark: o retorno é só a vez que vem.
+            subtitle = nextRole?.let { "Próximo: ${duo?.label(it) ?: it.name}" }
+        )
+        _setFeedback.value = feedback
+
+        launchGuarded {
+            workoutEngine.completeGuestSet(guestSet.withValuesFrom(edited))
+            kotlinx.coroutines.delay(3500)
+            if (_setFeedback.value == feedback) {
+                _setFeedback.value = null
+            }
+        }
+    }
+
+    fun adjustGuestRest(participantId: Long, seconds: Int) {
+        launchGuarded {
+            workoutEngine.adjustGuestRest(participantId, seconds)
+        }
+    }
+
+    fun skipGuestRest(participantId: Long) {
+        launchGuarded {
+            workoutEngine.skipGuestRest(participantId)
         }
     }
 

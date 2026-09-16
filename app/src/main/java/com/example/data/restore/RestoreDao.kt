@@ -38,6 +38,16 @@ interface RestoreDao {
     // são separadas em vez de um `deleteEverything()` porque cada uma nomeia exatamente o que
     // remove — e porque a transação que as usa precisa poder ser lida de cima a baixo.
 
+    // As duas tabelas da dupla local (T19.4) são estado operacional da execução, não dado do
+    // backup: o snapshot nunca as contém, e um restore as apaga junto com as sessões a que
+    // pertencem. Ficam listadas aqui pelo mesmo motivo das outras — para que a lista do que sai
+    // do aparelho seja lida de cima a baixo, sem depender do cascade.
+    @Query("DELETE FROM workout_guest_set_logs")
+    suspend fun deleteAllGuestSetLogs()
+
+    @Query("DELETE FROM workout_session_participants")
+    suspend fun deleteAllSessionParticipants()
+
     @Query("DELETE FROM set_logs")
     suspend fun deleteAllSetLogs()
 

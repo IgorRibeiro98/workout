@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +58,7 @@ fun TodayScreen(
     var showSwapSheet by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showWeeklyGoalSheet by remember { mutableStateOf(false) }
+    var showDuoStartSheet by remember { mutableStateOf(false) }
 
     val activeXpGains = remember { mutableStateListOf<XpTransaction>() }
 
@@ -177,6 +179,16 @@ fun TodayScreen(
                             fontWeight = FontWeight.Black,
                             lineHeight = 32.sp
                         )
+                        if (state.activeSession?.executionMode == com.example.data.local.WorkoutExecutionMode.DUO_LOCAL.name) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Treino em dupla",
+                                color = BackgroundDark.copy(alpha = 0.7f),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.testTag("today_active_duo_label")
+                            )
+                        }
                         Spacer(modifier = Modifier.height(32.dp))
                         Button(
                             onClick = onNavigateToExecution,
@@ -332,6 +344,26 @@ fun TodayScreen(
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Text("INICIAR TREINO", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    }
+
+                    // Treino em dupla local (T19.4). Solo continua sendo o toque único acima; a
+                    // dupla é uma escolha explícita, e nenhuma configuração é imposta a quem não
+                    // a pediu. Duas pessoas, um aparelho, uma sessão — o convidado não tem conta.
+                    TextButton(
+                        onClick = { showDuoStartSheet = true },
+                        enabled = templateToStart != null && !isStarting,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .testTag("today_start_duo_button")
+                    ) {
+                        Text(
+                            "TREINAR EM DUPLA",
+                            color = if (templateToStart != null && !isStarting) Lime400 else TextSecondary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            letterSpacing = 1.sp
+                        )
                     }
                 }
             }
@@ -733,6 +765,73 @@ fun TodayScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Treino em dupla local (T19.4): só o nome do convidado. Sem conta, sem código de amigo, sem
+    // rede — o nome é rótulo da execução, e a sessão continua sendo do dono do aparelho.
+    if (showDuoStartSheet) {
+        var guestName by rememberSaveable { mutableStateOf("") }
+        val templateToStart = state.nextTemplate
+        val canStart = templateToStart != null && guestName.isNotBlank() && !isStarting
+
+        AppModalBottomSheet(
+            onDismissRequest = { showDuoStartSheet = false },
+            title = "Treinar em dupla",
+            subtitle = "Duas pessoas, um aparelho, alternando séries"
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Você faz a série e, em seguida, quem treina com você faz a mesma série. " +
+                        "O descanso de cada um conta separadamente. O treino fica registrado só para você.",
+                    color = TextSecondary,
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                OutlinedTextField(
+                    value = guestName,
+                    onValueChange = { if (it.length <= 40) guestName = it },
+                    label = { Text("Nome de quem treina com você") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("duo_guest_name_field"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedBorderColor = Lime400,
+                        unfocusedBorderColor = BorderLight,
+                        focusedLabelColor = Lime400,
+                        unfocusedLabelColor = TextSecondary
+                    )
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        if (templateToStart != null) {
+                            showDuoStartSheet = false
+                            viewModel.startWorkout(
+                                templateId = templateToStart.id,
+                                mode = com.example.data.local.WorkoutExecutionMode.DUO_LOCAL,
+                                guestDisplayName = guestName.trim()
+                            )
+                        }
+                    },
+                    enabled = canStart,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Lime400,
+                        contentColor = BackgroundDark
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .testTag("duo_start_button"),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("INICIAR EM DUPLA", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }

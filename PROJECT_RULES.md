@@ -127,6 +127,12 @@ Do not create a second ETA calculator or a second recovery clock.
 
 ## 7. Party / multiplayer rules
 
+> **Runtime (verificado em 2026-09-16):** o que existe é o treino em dupla **local** da T19.4 —
+> `WorkoutExecutionMode.SOLO` / `DUO_LOCAL` — descrito em §13.24 e em
+> [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md). Não existe
+> `TRIO`, rota de party, `PartyRouteBuilder` nem sessão remota; as regras abaixo valem como direção
+> e são satisfeitas pelo runtime da dupla local onde se aplicam.
+
 Party mode is optional. Solo must remain a first-class path.
 
 Persistent configuration must not say DUO/TRIO while execution silently starts as SOLO.
@@ -1957,6 +1963,36 @@ Documento canônico: `docs/architecture/workout-sharing.md`.
   "com.example.presentation.friends.ShareWorkout*" --tests
   "com.example.data.local.AppDatabaseMigration37To38Test" --tests
   "com.example.data.social.SocialBoundaryInspectionTest"`. As duas são offline.
+
+## 13.24 Treino em dupla local: uma sessão, dois participantes (T19.4)
+
+Contrato completo em [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md).
+As regras que não podem ser quebradas:
+
+- **Uma engine, uma sessão.** `DUO_LOCAL` é `WorkoutEngine` + `ExecutionViewModel` com uma
+  dimensão de participante — nunca uma `DuoWorkoutEngine`, uma segunda máquina de estados ou uma
+  `WorkoutSession` por participante. A sessão é **do dono**, com o `syncId` de sempre.
+- **Solo é o caminho canônico e não lê nada da dupla.** `ExecutionState.duo == null` mantém cada
+  regra da tela idêntica; `activeDuoExecutionFlow` é `null` constante numa sessão `SOLO`. Toda
+  sessão anterior à T19.4 é `SOLO` pelo `DEFAULT` da migração 38 → 39.
+- **O convidado é identidade local, sem conta.** `workout_session_participants.id` é a identidade
+  técnica; `displayName` é rótulo. Nada de `socialId`, Firebase UID, `friendCode` ou e-mail.
+- **A série do convidado nunca entra em `set_logs`.** Ela vive em `workout_guest_set_logs`, que
+  PR, XP, estatística, histórico, sync, backup e export **não leem** — é por construção, e não por
+  filtro, que o dono não recebe recompensa dobrada e que nada do convidado sai do aparelho.
+- **Participante atual é derivado do persistido.** `DuoTurnResolver`: menor série pendente entre
+  os dois, dono antes do convidado. Nunca por índice visual, paridade ou posição de lista. Uma
+  morte de processo entre a série do dono e a do convidado reabre na vez do convidado.
+- **"Pendente" tem uma definição só.** `ExecutionState.isPending(exercício)` — e em dupla inclui
+  o convidado. Não reescreva `sets.any { !it.completed }` em nenhum cursor novo.
+- **Dois relógios, os dois por timestamp.** Dono: temporizador do aparelho (DataStore), com a
+  notificação e a restauração de sempre. Convidado: `restEndsAt` na linha dele. O descanso de um
+  nunca pausa, pisa ou substitui o do outro; a fase `RESTING` é a do participante da vez.
+- **A identidade da série vai na intenção.** `completeGuestSet(guestSet, edited)` recebe a linha
+  do convidado capturada na composição; nunca decida o participante lendo `state.value` no toque.
+- **Sessão concluída não recebe série**, nem do dono nem do convidado.
+- **Backend N/A.** Nenhum endpoint, migration ou DTO muda por causa da dupla local; T19.5 é outra
+  tarefa.
 
 ## 14. Tests and build are part of implementation
 

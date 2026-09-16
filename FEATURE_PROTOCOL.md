@@ -61,7 +61,8 @@ Examples:
 Before designing a new component/service, search for an existing owner.
 
 Examples (os quatro primeiros descrevem o desenho pretendido e **não existem no código hoje**,
-verificado em 2026-09-05 — confirme no repositório antes de assumir que um deles é reutilizável):
+verificado em 2026-09-16 — confirme no repositório antes de assumir que um deles é reutilizável;
+a alternância da dupla local existe como `DuoTurnResolver`, T19.4):
 
 - workout progression -> persisted route/navigation;
 - recovery -> `RecoveryTimeCalculator`;

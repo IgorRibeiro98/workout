@@ -175,7 +175,13 @@ data class WorkoutSessionEntity(
      * imutável; o `syncId` é justamente o que permite ao servidor reconhecer a mesma sessão em vez
      * de duplicá-la.
      */
-    val syncId: String = SyncIds.random()
+    val syncId: String = SyncIds.random(),
+    /**
+     * `SOLO` ou `DUO_LOCAL` (T19.4). Sessões anteriores à T19.4 são `SOLO` pelo `DEFAULT` da
+     * migração 38 → 39. Não faz parte do agregado de sync nem do backup: é modo de execução deste
+     * aparelho, e o convidado de uma dupla nunca sai dele.
+     */
+    val executionMode: String = WorkoutExecutionMode.SOLO.name
 )
 
 @Entity(

@@ -187,9 +187,12 @@ If legacy states remain internally for migration, do not expose or expand them w
 
 ## 7. Recovery/rest architecture
 
-> **Status (verificado em 2026-09-05): não implementado.** `RecoveryTimeCalculator` não existe no
+> **Status (verificado em 2026-09-16): não implementado.** `RecoveryTimeCalculator` não existe no
 > código. O descanso hoje é controlado pelo estado de timer do `ExecutionViewModel` com os
-> valores persistidos em `SettingsManager` (`restTimerDeadline`, `defaultRestSeconds`).
+> valores persistidos em `SettingsManager` (`restTimerDeadline`, `defaultRestSeconds`). Desde a
+> T19.4 o convidado de uma dupla local tem o próprio prazo, por timestamp, em
+> `workout_session_participants.restEndsAt` — dois relógios, nenhum deles em estado de tela
+> ([`docs/architecture/duo-local-execution.md` §5](docs/architecture/duo-local-execution.md)).
 
 Recovery timing should be centralized.
 
@@ -236,8 +239,13 @@ A fresh session must get a fresh `workoutStartedAt`.
 
 ## 9. Party route architecture
 
-> **Status (verificado em 2026-09-05): não implementado.** `PartyRouteBuilder` não existe no
-> código.
+> **Status (verificado em 2026-09-16): não implementado como descrito.** `PartyRouteBuilder`,
+> rotas e nós continuam **não existindo** no código. O que existe desde a **T19.4** é o treino em
+> dupla **local** — `SOLO` / `DUO_LOCAL` — como uma dimensão de participante sobre a execução
+> atual (`WorkoutEngine` + `ExecutionViewModel`), sem rota, sem segunda engine e sem `TRIO`. O
+> contrato do runtime implementado está em
+> [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md); o texto
+> abaixo é a direção pretendida antiga, mantida como referência, e não prova de que algo existe.
 
 Relevant concept:
 
@@ -697,6 +705,9 @@ persistência do domínio        validação da resposta
 | T19.0 | ACL/entitlements granular de capabilities de IA por conta | **implementado** |
 | T19.1 | Social Hub + AI Hub: `SocialHome`/`AiHome` atrás do Perfil, bottom navigation inalterada (5 itens) | **implementado** |
 | T19.2 | Social Progress V2: consistência, nível e conquistas derivados no servidor de fatos sincronizados + parâmetros declarados; `UNSUPPORTED` eliminado onde há autoridade remota | **implementado** (produção NOT VERIFIED até o deploy) |
+| T19.3 | Program Share: programa inteiro por cópia independente | **implementado** |
+| T19.4 | Treino em dupla local (`DUO_LOCAL`): duas pessoas, um aparelho, uma sessão do dono; convidado sem conta; backend N/A | **implementado** (aparelho real NOT VERIFIED) |
+| T19.5 | Multiplayer remoto | não iniciado |
 
 ### Identidade global dos dados e Outbox (T16.3)
 

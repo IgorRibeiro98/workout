@@ -55,9 +55,11 @@ import com.example.components.workout.execution.WorkoutActionButton
 import com.example.components.workout.execution.WorkoutProgressHeader
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SetLogEntity
+import com.example.data.local.WorkoutParticipantRole
 import com.example.domain.engine.MuscleVisualResolver
 import com.example.domain.engine.RirFormatter
 import com.example.domain.workout.execution.ExerciseExecutionContext
+import com.example.presentation.execution.components.DuoTurnBanner
 import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import com.example.ui.components.AppModalBottomSheet
@@ -231,6 +233,22 @@ fun ExecutionScreen(
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                                if (state.duo != null) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        color = Lime400.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.testTag("duo_mode_chip")
+                                    ) {
+                                        Text(
+                                            text = "DUPLA",
+                                            color = Lime400,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                                 if (state.isOrderAdapted) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Surface(
@@ -321,100 +339,141 @@ fun ExecutionScreen(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
-            Crossfade(
-                targetState = state.phase,
-                animationSpec = tween(durationMillis = AppMotion.Normal, easing = AppMotion.StandardEasing),
-                label = "FocusModePhaseTransition"
-            ) { phase ->
-                when (phase) {
-                    ExecutionPhase.RESTING -> {
-                        val isPreparingNext = state.isExerciseCompleted
-                        val nextExSession = if (isPreparingNext) {
-                            state.nextPendingExercise
-                        } else {
-                            null
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Dupla local (T19.4): quem está na vez e o descanso de quem espera, acima de qualquer
+                // fase. A vez vem do domínio (`state.duoTurn`), nunca de posição na tela.
+                val duo = state.duo
+                if (duo != null) {
+                    DuoTurnBanner(
+                        duo = duo,
+                        turn = state.duoTurn,
+                        ownerRestTarget = timerTarget,
+                        isExerciseCompleted = state.isExerciseCompleted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Crossfade(
+                    targetState = state.phase,
+                    animationSpec = tween(durationMillis = AppMotion.Normal, easing = AppMotion.StandardEasing),
+                    label = "FocusModePhaseTransition",
+                    modifier = Modifier.weight(1f)
+                ) { phase ->
+                    when (phase) {
+                        ExecutionPhase.RESTING -> {
+                            val isPreparingNext = state.isExerciseCompleted
+                            val nextExSession = if (isPreparingNext) {
+                                state.nextPendingExercise
+                            } else {
+                                null
+                            }
+                            // O descanso mostrado é o do participante da vez (T19.4). Quem descansa é
+                            // decidido **aqui, na composição**, e os toques levam essa decisão consigo:
+                            // um "pular" atrasado nunca pula o descanso do outro participante.
+                            val restingTurn = state.duoTurn
+                            val restingGuestId = state.duo?.guest?.id
+                                ?.takeIf { restingTurn?.role == WorkoutParticipantRole.GUEST }
+                            val restingSet = if (restingGuestId != null) {
+                                restingTurn?.guestSet?.asSetLogProjection()
+                            } else {
+                                state.activeSet
+                            }
+                            val restingSetIndex = if (restingGuestId != null) (restingTurn?.setIndex ?: 0) else (state.activeSetIndex ?: 0)
+                            FocusedRestView(
+                                targetTime = state.currentParticipantRestTarget,
+                                onAdd15s = {
+                                    if (restingGuestId != null) viewModel.adjustGuestRest(restingGuestId, 15)
+                                    else viewModel.adjustRestTimer(15)
+                                },
+                                onAdd30s = {
+                                    if (restingGuestId != null) viewModel.adjustGuestRest(restingGuestId, 30)
+                                    else viewModel.adjustRestTimer(30)
+                                },
+                                onSkip = {
+                                    if (restingGuestId != null) viewModel.skipGuestRest(restingGuestId)
+                                    else viewModel.skipRestTimer()
+                                    if (isPreparingNext) {
+                                        viewModel.nextExercise()
+                                    }
+                                },
+                                isPreparingNextExercise = isPreparingNext,
+                                nextExerciseName = if (isPreparingNext) {
+                                    nextExSession?.exerciseSession?.exerciseNameSnapshot ?: "Próximo Exercício"
+                                } else {
+                                    currentEx.exerciseSession.exerciseNameSnapshot
+                                },
+                                nextMachineLabel = if (isPreparingNext) nextExSession?.exerciseSession?.machineLabelSnapshot else null,
+                                nextSetIndex = if (isPreparingNext) 1 else (restingSetIndex + 1),
+                                nextSetWeight = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.weight ?: 0f) else (restingSet?.weight ?: 0f),
+                                nextSetReps = if (isPreparingNext) {
+                                    val firstSet = nextExSession?.sets?.firstOrNull()
+                                    if (firstSet?.isDurationMode == true) firstSet.durationSeconds ?: firstSet.repetitions else firstSet?.repetitions ?: 0
+                                } else {
+                                    val actSet = restingSet
+                                    if (actSet?.isDurationMode == true) actSet.durationSeconds ?: actSet.repetitions else actSet?.repetitions ?: 0
+                                },
+                                isDurationMode = if (isPreparingNext) {
+                                    nextExSession?.sets?.firstOrNull()?.isDurationMode == true
+                                } else {
+                                    restingSet?.isDurationMode == true
+                                },
+                                totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
+                                hapticEnabled = hapticEnabled,
+                                soundEnabled = soundEnabled,
+                                timerNotificationEnabled = timerNotificationEnabled
+                            )
                         }
-                        FocusedRestView(
-                            targetTime = timerTarget,
-                            onAdd15s = { viewModel.adjustRestTimer(15) },
-                            onAdd30s = { viewModel.adjustRestTimer(30) },
-                            onSkip = {
-                                viewModel.skipRestTimer()
-                                if (isPreparingNext) {
-                                    viewModel.nextExercise()
-                                }
-                            },
-                            isPreparingNextExercise = isPreparingNext,
-                            nextExerciseName = if (isPreparingNext) {
-                                nextExSession?.exerciseSession?.exerciseNameSnapshot ?: "Próximo Exercício"
-                            } else {
-                                currentEx.exerciseSession.exerciseNameSnapshot
-                            },
-                            nextMachineLabel = if (isPreparingNext) nextExSession?.exerciseSession?.machineLabelSnapshot else null,
-                            nextSetIndex = if (isPreparingNext) 1 else ((state.activeSetIndex ?: 0) + 1),
-                            nextSetWeight = if (isPreparingNext) (nextExSession?.sets?.firstOrNull()?.weight ?: 0f) else (state.activeSet?.weight ?: 0f),
-                            nextSetReps = if (isPreparingNext) {
-                                val firstSet = nextExSession?.sets?.firstOrNull()
-                                if (firstSet?.isDurationMode == true) firstSet.durationSeconds ?: firstSet.repetitions else firstSet?.repetitions ?: 0
-                            } else {
-                                val actSet = state.activeSet
-                                if (actSet?.isDurationMode == true) actSet.durationSeconds ?: actSet.repetitions else actSet?.repetitions ?: 0
-                            },
-                            isDurationMode = if (isPreparingNext) {
-                                nextExSession?.sets?.firstOrNull()?.isDurationMode == true
-                            } else {
-                                state.activeSet?.isDurationMode == true
-                            },
-                            totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
-                            hapticEnabled = hapticEnabled,
-                            soundEnabled = soundEnabled,
-                            timerNotificationEnabled = timerNotificationEnabled
-                        )
-                    }
-                    ExecutionPhase.ACTIVE_SET -> {
-                        HorizontalPager(
-                            state = pagerState,
-                            modifier = Modifier.fillMaxSize()
-                        ) { page ->
-                            if (page == state.currentExerciseIndex) {
-                                val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
-                                if (activeSet != null) {
+                        ExecutionPhase.ACTIVE_SET -> {
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxSize()
+                            ) { page ->
+                                val turn = state.duoTurn
+                                val guestTurnSet = turn?.takeIf { it.role == WorkoutParticipantRole.GUEST }?.guestSet
+                                if (page == state.currentExerciseIndex && guestTurnSet != null && duo != null) {
+                                    // A vez do convidado (T19.4): a mesma tela de série, sobre a linha
+                                    // dele. A identidade da série (`guestTurnSet`) é capturada aqui e
+                                    // vai dentro de cada intenção — a tela nunca devolve uma série do
+                                    // convidado para `completeSet`, que é o caminho do dono.
                                     AnimatedContent(
-                                        targetState = state.activeSetIndex ?: 0,
+                                        targetState = "guest-${guestTurnSet.exerciseSessionId}-${guestTurnSet.setNumber}",
                                         transitionSpec = {
                                             (fadeIn(animationSpec = tween(250, easing = AppMotion.StandardEasing)) +
                                              scaleIn(initialScale = 0.96f, animationSpec = tween(250, easing = AppMotion.StandardEasing))) togetherWith
                                             (fadeOut(animationSpec = tween(200, easing = AppMotion.DecelerateEasing)) +
                                              scaleOut(targetScale = 1.03f, animationSpec = tween(200, easing = AppMotion.DecelerateEasing)))
                                         },
-                                        label = "ActiveSetTransition"
+                                        label = "GuestActiveSetTransition"
                                     ) { _ ->
                                         FocusedActiveSetView(
                                             currentEx = currentEx,
-                                            activeSet = activeSet,
-                                            activeSetIndex = state.activeSetIndex ?: 0,
+                                            activeSet = guestTurnSet.asSetLogProjection(),
+                                            activeSetIndex = turn.setIndex,
                                             totalSets = currentEx.sets.size,
+                                            completedSetsCount = duo.guestSetsFor(currentEx.exerciseSession.id).count { it.completed },
                                             currentExerciseIndex = state.currentExerciseIndex,
                                             totalExercises = session.exercises.size,
                                             resolvedExercise = state.currentResolvedExercise,
                                             premiumInfo = premiumInfo,
-                                            previousExecutionSets = state.previousExecutionSets,
-                                            exerciseExecutionContext = state.exerciseExecutionContext,
+                                            // O convidado não tem histórico nem recorde no Spark.
+                                            previousExecutionSets = emptyList(),
+                                            exerciseExecutionContext = null,
                                             lastSetFeedback = state.lastSetFeedback,
-                                            isLastExercise = state.isLastPendingExercise,
+                                            isLastExercise = state.isLastPendingExercise && turn.isLastTurnOfExercise,
+                                            participantKey = "guest-${guestTurnSet.participantId}",
+                                            participantLabel = duo.guestLabel,
                                             rirRpeEnabled = rirRpeEnabled,
                                             hapticEnabled = hapticEnabled,
                                             soundEnabled = soundEnabled,
                                             timerNotificationEnabled = timerNotificationEnabled,
                                             showGifs = showGifs,
-                                            showCoachTip = showCoachTip,
+                                            showCoachTip = false,
                                             isOrderAdapted = state.isOrderAdapted,
-                                            onUpdateSet = { viewModel.updateSet(it) },
+                                            onUpdateSet = { viewModel.updateGuestSet(guestTurnSet, it) },
                                             onCompleteSet = {
                                                 if (hapticEnabled) {
                                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                                 }
-                                                viewModel.completeSet(it)
+                                                viewModel.completeGuestSet(guestTurnSet, it)
                                             },
                                             onDismissFeedback = { viewModel.dismissFeedback() },
                                             onOpenDirectInput = { config -> directInputConfig = config },
@@ -426,60 +485,120 @@ fun ExecutionScreen(
                                             onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
                                             onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
                                             onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync },
-                                            onReplicateCurrentSet = { setLog ->
-                                                viewModel.updateSet(setLog)
-                                                viewModel.replicateCurrentSet { result ->
-                                                    coroutineScope.launch {
-                                                        snackbarHostState.showSnackbar("Séries sincronizadas: ${result.updatedCount} séries atualizadas")
+                                            // "Sincronizar séries" replica a série do **dono** para as
+                                            // próximas dele; na vez do convidado só grava a edição dele.
+                                            onReplicateCurrentSet = { viewModel.updateGuestSet(guestTurnSet, it) }
+                                        )
+                                    }
+                                } else if (page == state.currentExerciseIndex) {
+                                    val activeSet = state.activeSet ?: currentEx.sets.firstOrNull()
+                                    if (activeSet != null) {
+                                        AnimatedContent(
+                                            targetState = state.activeSetIndex ?: 0,
+                                            transitionSpec = {
+                                                (fadeIn(animationSpec = tween(250, easing = AppMotion.StandardEasing)) +
+                                                 scaleIn(initialScale = 0.96f, animationSpec = tween(250, easing = AppMotion.StandardEasing))) togetherWith
+                                                (fadeOut(animationSpec = tween(200, easing = AppMotion.DecelerateEasing)) +
+                                                 scaleOut(targetScale = 1.03f, animationSpec = tween(200, easing = AppMotion.DecelerateEasing)))
+                                            },
+                                            label = "ActiveSetTransition"
+                                        ) { _ ->
+                                            FocusedActiveSetView(
+                                                currentEx = currentEx,
+                                                activeSet = activeSet,
+                                                activeSetIndex = state.activeSetIndex ?: 0,
+                                                totalSets = currentEx.sets.size,
+                                                currentExerciseIndex = state.currentExerciseIndex,
+                                                totalExercises = session.exercises.size,
+                                                resolvedExercise = state.currentResolvedExercise,
+                                                premiumInfo = premiumInfo,
+                                                previousExecutionSets = state.previousExecutionSets,
+                                                exerciseExecutionContext = state.exerciseExecutionContext,
+                                                lastSetFeedback = state.lastSetFeedback,
+                                                // Numa dupla a última série do dono não fecha o
+                                                // exercício: o convidado ainda vem (T19.4).
+                                                isLastExercise = state.isLastPendingExercise && (turn?.isLastTurnOfExercise ?: true),
+                                                participantKey = duo?.let { "owner-${it.owner.id}" },
+                                                participantLabel = duo?.ownerLabel,
+                                                rirRpeEnabled = rirRpeEnabled,
+                                                hapticEnabled = hapticEnabled,
+                                                soundEnabled = soundEnabled,
+                                                timerNotificationEnabled = timerNotificationEnabled,
+                                                showGifs = showGifs,
+                                                showCoachTip = showCoachTip,
+                                                isOrderAdapted = state.isOrderAdapted,
+                                                onUpdateSet = { viewModel.updateSet(it) },
+                                                onCompleteSet = {
+                                                    if (hapticEnabled) {
+                                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    }
+                                                    viewModel.completeSet(it)
+                                                },
+                                                onDismissFeedback = { viewModel.dismissFeedback() },
+                                                onOpenDirectInput = { config -> directInputConfig = config },
+                                                onOpenExerciseSelector = { activeSheet = WorkoutSheet.ExercisesList },
+                                                onOpenQuickInfo = { activeSheet = WorkoutSheet.QuickInfo },
+                                                onOpenFullDetails = openFullDetails,
+                                                onNextExercise = { viewModel.nextExercise() },
+                                                onPreviousExercise = { viewModel.previousExercise() },
+                                                onViewAllSets = { activeSheet = WorkoutSheet.AllSets },
+                                                onViewLastWorkout = { activeSheet = WorkoutSheet.LastWorkout },
+                                                onOpenSyncSheet = { activeSheet = WorkoutSheet.Sync },
+                                                onReplicateCurrentSet = { setLog ->
+                                                    viewModel.updateSet(setLog)
+                                                    viewModel.replicateCurrentSet { result ->
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar("Séries sincronizadas: ${result.updatedCount} séries atualizadas")
+                                                        }
                                                     }
                                                 }
-                                            }
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    val adjacentEx = session.exercises.getOrNull(page)
+                                    if (adjacentEx != null) {
+                                        AdjacentExercisePreview(
+                                            exercise = adjacentEx,
+                                            index = page,
+                                            total = session.exercises.size
                                         )
                                     }
                                 }
-                            } else {
-                                val adjacentEx = session.exercises.getOrNull(page)
-                                if (adjacentEx != null) {
-                                    AdjacentExercisePreview(
-                                        exercise = adjacentEx,
-                                        index = page,
-                                        total = session.exercises.size
-                                    )
-                                }
                             }
                         }
-                    }
-                    ExecutionPhase.EXERCISE_TRANSITION -> {
-                        val nextExSession = state.nextPendingExercise
-                        // O descanso recomendado vem do motor (`resolveRestRecommendation`), que é
-                        // quem o temporizador automático também consulta. Esta tela calculava a
-                        // sua própria versão — o snapshot do próximo exercício, com um `90` escrito
-                        // à mão — e por isso recomendava 60 s onde o automático usava 120 s.
-                        val recRest = state.restSecondsAfterExercise
-                        FocusedExerciseTransitionView(
-                            completedExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
-                            completedSetsCount = currentEx.sets.count { it.completed },
-                            totalSetsCount = currentEx.sets.size,
-                            nextExerciseName = nextExSession?.exerciseSession?.exerciseNameSnapshot,
-                            nextMachineLabel = nextExSession?.exerciseSession?.machineLabelSnapshot,
-                            nextPrimaryMuscle = nextExSession?.exerciseSession?.primaryMuscleSnapshot,
-                            recommendedRestSeconds = recRest,
-                            onStartRest = { duration ->
-                                viewModel.startRestTimer(duration)
-                            },
-                            onStartNext = { viewModel.nextExercise() }
-                        )
-                    }
-                    ExecutionPhase.WORKOUT_COMPLETE -> {
-                        FocusedWorkoutCompleteView(
-                            sessionName = session.session.templateNameSnapshot ?: "Treino",
-                            totalExercises = session.exercises.size,
-                            totalCompletedSets = session.exercises.sumOf { ex -> ex.sets.count { it.completed } },
-                            onFinishWorkout = {
-                                viewModel.finishSession()
-                                onFinish(session.session.id)
-                            }
-                        )
+                        ExecutionPhase.EXERCISE_TRANSITION -> {
+                            val nextExSession = state.nextPendingExercise
+                            // O descanso recomendado vem do motor (`resolveRestRecommendation`), que é
+                            // quem o temporizador automático também consulta. Esta tela calculava a
+                            // sua própria versão — o snapshot do próximo exercício, com um `90` escrito
+                            // à mão — e por isso recomendava 60 s onde o automático usava 120 s.
+                            val recRest = state.restSecondsAfterExercise
+                            FocusedExerciseTransitionView(
+                                completedExerciseName = currentEx.exerciseSession.exerciseNameSnapshot,
+                                completedSetsCount = currentEx.sets.count { it.completed },
+                                totalSetsCount = currentEx.sets.size,
+                                nextExerciseName = nextExSession?.exerciseSession?.exerciseNameSnapshot,
+                                nextMachineLabel = nextExSession?.exerciseSession?.machineLabelSnapshot,
+                                nextPrimaryMuscle = nextExSession?.exerciseSession?.primaryMuscleSnapshot,
+                                recommendedRestSeconds = recRest,
+                                onStartRest = { duration ->
+                                    viewModel.startRestTimer(duration)
+                                },
+                                onStartNext = { viewModel.nextExercise() }
+                            )
+                        }
+                        ExecutionPhase.WORKOUT_COMPLETE -> {
+                            FocusedWorkoutCompleteView(
+                                sessionName = session.session.templateNameSnapshot ?: "Treino",
+                                totalExercises = session.exercises.size,
+                                totalCompletedSets = session.exercises.sumOf { ex -> ex.sets.count { it.completed } },
+                                onFinishWorkout = {
+                                    viewModel.finishSession()
+                                    onFinish(session.session.id)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -861,6 +980,15 @@ fun FocusedActiveSetView(
     exerciseExecutionContext: ExerciseExecutionContext? = null,
     lastSetFeedback: com.example.presentation.execution.SetCompletionFeedback? = null,
     isLastExercise: Boolean = false,
+    /**
+     * Dupla local (T19.4). `participantKey` entra nas chaves de `remember`: a série 2 do dono e a
+     * série 2 do convidado têm ids distintos em tabelas distintas, e sem a chave os valores
+     * editados de um vazariam para a roda do outro quando a vez vira. `participantLabel` nomeia
+     * quem conclui no botão; `completedSetsCount` é a contagem **desse** participante.
+     */
+    participantKey: Any? = null,
+    participantLabel: String? = null,
+    completedSetsCount: Int = currentEx.sets.count { it.completed },
     rirRpeEnabled: Boolean,
     hapticEnabled: Boolean,
     // Vêm do ViewModel (auditoria 2026-09-12). Esta tela abria o DataStore dentro da composição,
@@ -890,9 +1018,9 @@ fun FocusedActiveSetView(
     val equipment = resolvedExercise?.rawExercise?.equipment ?: currentEx.exerciseSession.machineLabelSnapshot
     val difficulty = resolvedExercise?.rawExercise?.difficulty
 
-    var currentWeight by remember(activeSet.id) { mutableFloatStateOf(activeSet.weight) }
-    var currentReps by remember(activeSet.id) { mutableIntStateOf(activeSet.repetitions) }
-    var currentRir by remember(activeSet.id) { mutableStateOf(activeSet.rir) }
+    var currentWeight by remember(activeSet.id, participantKey) { mutableFloatStateOf(activeSet.weight) }
+    var currentReps by remember(activeSet.id, participantKey) { mutableIntStateOf(activeSet.repetitions) }
+    var currentRir by remember(activeSet.id, participantKey) { mutableStateOf(activeSet.rir) }
     var showReplicateConfirmDialog by remember { mutableStateOf(false) }
 
     // Sincroniza **só** quando a série em foco muda (auditoria 2026-09-12).
@@ -902,7 +1030,7 @@ fun FocusedActiveSetView(
     // na tela, e se o segundo `onValueSettled` ainda não tivesse disparado, o valor do usuário era
     // simplesmente perdido. O `remember(activeSet.id)` logo acima já garante o valor inicial
     // correto ao trocar de série; este efeito cobre a troca sem recriação do composable.
-    LaunchedEffect(activeSet.id) {
+    LaunchedEffect(activeSet.id, participantKey) {
         currentWeight = activeSet.weight
         currentReps = activeSet.repetitions
         currentRir = activeSet.rir
@@ -923,14 +1051,14 @@ fun FocusedActiveSetView(
     // composição, então uma prancha em 00:45/01:00 voltava a 00:00 ao girar o aparelho. O descanso
     // sobrevive porque o alvo está persistido no motor; aqui a âncora é local, e o mínimo é não
     // perdê-la numa mudança de configuração.
-    var isLiveTimerRunning by rememberSaveable(activeSet.id) { mutableStateOf(false) }
-    var elapsedSeconds by rememberSaveable(activeSet.id) { mutableIntStateOf(0) }
-    var timerFinished by rememberSaveable(activeSet.id) { mutableStateOf(false) }
+    var isLiveTimerRunning by rememberSaveable(activeSet.id, participantKey) { mutableStateOf(false) }
+    var elapsedSeconds by rememberSaveable(activeSet.id, participantKey) { mutableIntStateOf(0) }
+    var timerFinished by rememberSaveable(activeSet.id, participantKey) { mutableStateOf(false) }
 
     val timerContext = androidx.compose.ui.platform.LocalContext.current
     val timerHaptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
-    LaunchedEffect(isLiveTimerRunning, activeSet.id) {
+    LaunchedEffect(isLiveTimerRunning, activeSet.id, participantKey) {
         if (!isLiveTimerRunning) return@LaunchedEffect
         // O relógio de parede é a referência: o cronômetro não perde tempo em recomposições
         // nem quando a tela fica sem atualizar, e uma pausa retoma exatamente de onde parou.
@@ -966,6 +1094,9 @@ fun FocusedActiveSetView(
 
     val actionButtonText = when {
         isLastExercise && activeSetIndex == totalSets - 1 -> "CONCLUIR TREINO"
+        // Em dupla o botão diz quem conclui: a mesma série pertence a dois participantes, e
+        // "ir para próximo" só vale quando os dois terminaram o exercício.
+        participantLabel != null -> "CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets · $participantLabel"
         activeSetIndex == totalSets - 1 -> "CONCLUIR E IR PARA PRÓXIMO"
         isDurationMode -> "CONCLUIR SÉRIE (${recordedDurationValue}s)"
         else -> "CONCLUIR SÉRIE ${activeSetIndex + 1}/$totalSets"
@@ -1082,7 +1213,7 @@ fun FocusedActiveSetView(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "SÉRIE ${activeSetIndex + 1} DE $totalSets (${currentEx.sets.count { it.completed }}/$totalSets)",
+                                text = "SÉRIE ${activeSetIndex + 1} DE $totalSets ($completedSetsCount/$totalSets)",
                                 color = Lime400,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold

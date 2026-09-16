@@ -355,6 +355,90 @@ interface WorkoutDao {
     @Update
     suspend fun updateSetLog(setLog: SetLogEntity)
 
+    // ---- Treino em dupla local (T19.4) ------------------------------------------------------
+    //
+    // Nada da execução solo passa por aqui: `WorkoutEngine` só consulta estas tabelas quando a
+    // sessão ativa é `DUO_LOCAL`, e nenhuma leitura de histórico, PR, estatística, sync ou backup
+    // as toca. É por construção — e não por filtro — que o convidado não vira histórico.
+
+    @Insert
+    suspend fun insertSessionParticipant(participant: WorkoutSessionParticipantEntity): Long
+
+    @Query("SELECT * FROM workout_session_participants WHERE id = :participantId LIMIT 1")
+    suspend fun getSessionParticipantById(participantId: Long): WorkoutSessionParticipantEntity?
+
+    @Query("SELECT * FROM workout_session_participants WHERE sessionId = :sessionId ORDER BY position ASC")
+    suspend fun getSessionParticipants(sessionId: Long): List<WorkoutSessionParticipantEntity>
+
+    @Query("SELECT * FROM workout_session_participants WHERE sessionId = :sessionId ORDER BY position ASC")
+    fun getSessionParticipantsFlow(sessionId: Long): Flow<List<WorkoutSessionParticipantEntity>>
+
+    /** Os convidados da sessão a que o exercício pertence — vazio numa sessão solo. */
+    @Query(
+        """
+        SELECT p.* FROM workout_session_participants p
+        INNER JOIN exercise_sessions es ON es.sessionId = p.sessionId
+        WHERE es.id = :exerciseSessionId AND p.role = 'GUEST'
+        ORDER BY p.position ASC
+        """
+    )
+    suspend fun getGuestParticipantsForExerciseSession(exerciseSessionId: Long): List<WorkoutSessionParticipantEntity>
+
+    @Query("UPDATE workout_session_participants SET restEndsAt = :restEndsAt WHERE id = :participantId")
+    suspend fun updateParticipantRestEndsAt(participantId: Long, restEndsAt: Long?)
+
+    @Query("UPDATE workout_session_participants SET restEndsAt = NULL WHERE sessionId = :sessionId")
+    suspend fun clearParticipantRests(sessionId: Long)
+
+    @Insert
+    suspend fun insertGuestSetLogs(guestSets: List<WorkoutGuestSetLogEntity>)
+
+    @Update
+    suspend fun updateGuestSetLog(guestSet: WorkoutGuestSetLogEntity)
+
+    @Query("SELECT * FROM workout_guest_set_logs WHERE id = :id LIMIT 1")
+    suspend fun getGuestSetLogById(id: Long): WorkoutGuestSetLogEntity?
+
+    @Query(
+        """
+        SELECT * FROM workout_guest_set_logs
+        WHERE participantId IN (SELECT id FROM workout_session_participants WHERE sessionId = :sessionId)
+        ORDER BY exerciseSessionId ASC, setNumber ASC, id ASC
+        """
+    )
+    fun getGuestSetLogsForSessionFlow(sessionId: Long): Flow<List<WorkoutGuestSetLogEntity>>
+
+    @Query(
+        """
+        SELECT * FROM workout_guest_set_logs
+        WHERE participantId = :participantId AND exerciseSessionId = :exerciseSessionId
+        ORDER BY setNumber ASC, id ASC
+        """
+    )
+    suspend fun getGuestSetLogsForExerciseSession(participantId: Long, exerciseSessionId: Long): List<WorkoutGuestSetLogEntity>
+
+    /** "Algum convidado ainda tem série pendente neste treino?" — zero numa sessão solo. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM workout_guest_set_logs
+        WHERE completed = 0
+          AND participantId IN (SELECT id FROM workout_session_participants WHERE sessionId = :sessionId)
+        """
+    )
+    suspend fun countIncompleteGuestSetsForSession(sessionId: Long): Int
+
+    /** O mesmo, para um convidado num exercício: "este convidado acabou este exercício?". */
+    @Query(
+        """
+        SELECT COUNT(*) FROM workout_guest_set_logs
+        WHERE completed = 0 AND participantId = :participantId AND exerciseSessionId = :exerciseSessionId
+        """
+    )
+    suspend fun countIncompleteGuestSetsForExerciseSession(participantId: Long, exerciseSessionId: Long): Int
+
+    @Query("DELETE FROM workout_guest_set_logs WHERE exerciseSessionId = :exerciseSessionId AND setNumber = :setNumber")
+    suspend fun deleteGuestSetLogsForSet(exerciseSessionId: Long, setNumber: Int)
+
     @Update
     suspend fun updateSetLogs(setLogs: List<SetLogEntity>)
 

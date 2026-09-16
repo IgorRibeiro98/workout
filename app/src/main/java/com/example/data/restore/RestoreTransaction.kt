@@ -142,6 +142,8 @@ class RestoreTransaction(
      * explícita é o que faz esta função ser legível como uma lista do que sai do aparelho.
      */
     private suspend fun clearPersonalDataset() {
+        restoreDao.deleteAllGuestSetLogs()
+        restoreDao.deleteAllSessionParticipants()
         restoreDao.deleteAllSetLogs()
         restoreDao.deleteAllExerciseSessions()
         restoreDao.deleteAllWorkoutSessions()

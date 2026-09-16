@@ -3,6 +3,7 @@ package com.example.presentation.today
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.datastore.SettingsManager
+import com.example.data.local.WorkoutExecutionMode
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutSessionEntity
 import com.example.data.local.WorkoutTemplateEntity
@@ -325,12 +326,18 @@ class TodayViewModel(
      * empilhava duas rotas de execução, e um erro ao criar a sessão levava o usuário para uma tela
      * de treino que não existia.
      */
-    fun startWorkout(templateId: Long) {
+    fun startWorkout(
+        templateId: Long,
+        mode: WorkoutExecutionMode = WorkoutExecutionMode.SOLO,
+        guestDisplayName: String? = null
+    ) {
         if (_isStartingWorkout.value) return
         _isStartingWorkout.value = true
         viewModelScope.launch {
             try {
-                workoutEngine.startSession(templateId)
+                // Solo e dupla passam pelo **mesmo** início (T19.4): a mesma trava contra o toque
+                // duplo, a mesma transação, a mesma sessão única do dono.
+                workoutEngine.startSession(templateId, mode, guestDisplayName)
                 _events.tryEmit(TodayEvent.WorkoutStarted)
             } catch (e: CancellationException) {
                 throw e

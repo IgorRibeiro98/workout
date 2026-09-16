@@ -7,6 +7,7 @@ import com.example.data.sync.SyncMutationCoordinator
 import com.example.domain.gamification.GamificationEventPublisher
 import com.example.domain.gamification.GamificationEvents
 import com.example.domain.gamification.model.GamificationEvent
+import com.example.domain.workout.execution.DuoExecution
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -59,6 +60,27 @@ class WorkoutEngine(
     val activeSessionFlow: Flow<WorkoutSessionEntity?> = dao.getActiveSessionFlow()
     val activeSessionWithDetailsFlow: Flow<SessionWithDetails?> = dao.getActiveSessionWithDetailsFlow()
     val activeCheckInFlow: Flow<CheckInEntity?> = dao.getActiveCheckInFlow()
+
+    /**
+     * A dimensão de participante da sessão ativa (T19.4) — `null` numa sessão solo.
+     *
+     * O `flatMapLatest` sobre o modo é o que mantém o solo como caminho simples: numa sessão
+     * `SOLO` as tabelas de participante nunca são consultadas, e o fluxo é uma constante `null`.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeDuoExecutionFlow: Flow<DuoExecution?> = activeSessionFlow
+        .map { session -> session?.takeIf { it.executionMode == WorkoutExecutionMode.DUO_LOCAL.name }?.id }
+        .distinctUntilChanged()
+        .flatMapLatest { sessionId ->
+            if (sessionId == null) {
+                flowOf(null)
+            } else {
+                combine(
+                    dao.getSessionParticipantsFlow(sessionId),
+                    dao.getGuestSetLogsForSessionFlow(sessionId)
+                ) { participants, guestSets -> DuoExecution.from(participants, guestSets) }
+            }
+        }
 
     private val _restTimerTarget = MutableStateFlow<Long?>(null)
     val restTimerTarget: Flow<Long?> = _restTimerTarget
@@ -435,10 +457,15 @@ class WorkoutEngine(
      * 4. Settings.defaultRestSeconds
      */
     suspend fun updateSet(setLog: SetLogEntity) {
-        dao.updateSetLog(setLog)
         if (setLog.completed) {
             val exSession = dao.getExerciseSessionById(setLog.exerciseSessionId)
             val sessionId = exSession?.sessionId
+            // Uma sessão que já virou histórico não recebe série (T19.4 §10, "finish vs pending UI
+            // event"): um toque em "concluir série" que chegue depois de "finalizar" — ou depois
+            // de um cancelamento — é descartado em vez de reescrever uma sessão `COMPLETED`.
+            val session = sessionId?.let { dao.getSessionById(it) }
+            if (session != null && session.status != SessionStatus.IN_PROGRESS.name) return
+            dao.updateSetLog(setLog)
 
             // Duas contagens no lugar do grafo inteiro da sessão (auditoria 2026-09-12).
             //
@@ -455,11 +482,21 @@ class WorkoutEngine(
             val pendingExercises = sessionId?.let {
                 dao.countPendingExerciseSessions(it, setLog.id)
             }
-            val isEntireWorkoutCompleted = pendingExercises == 0
+            // Numa dupla (T19.4) o treino só acaba quando o convidado também acabou. Em sessão solo
+            // a contagem não é feita: o modo é lido da sessão já carregada acima.
+            val pendingGuestSets = if (session?.executionMode == WorkoutExecutionMode.DUO_LOCAL.name) {
+                dao.countIncompleteGuestSetsForSession(session.id)
+            } else {
+                0
+            }
+            val isEntireWorkoutCompleted = pendingExercises == 0 && pendingGuestSets == 0
 
             if (isEntireWorkoutCompleted) {
                 // Entire workout completed! No rest timer should start. Cancel any active timer.
                 skipRestTimer()
+                if (session?.executionMode == WorkoutExecutionMode.DUO_LOCAL.name) {
+                    dao.clearParticipantRests(session.id)
+                }
                 return
             }
 
@@ -487,7 +524,84 @@ class WorkoutEngine(
                     timerType = if (isCurrentExerciseCompleted) "REST_EXERCISE" else "REST_SET"
                 )
             }
+        } else {
+            dao.updateSetLog(setLog)
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Treino em dupla local (T19.4): o convidado
+    // ---------------------------------------------------------------------------------------
+    //
+    // Nada aqui cria uma segunda engine: a série do convidado passa pelas **mesmas** regras da
+    // série do dono — recomendação de descanso única (`resolveRestRecommendation`), preferência
+    // de temporizador automático, "o treino acabou?" contando os dois participantes. O que muda
+    // é só onde a série é gravada (`workout_guest_set_logs`) e onde o descanso vive
+    // (`workout_session_participants.restEndsAt`), porque nenhum dos dois pode contaminar o
+    // histórico, o PR, o XP nem o sync do dono.
+
+    /** Edita carga/repetições da série do convidado sem concluí-la. */
+    suspend fun updateGuestSet(guestSet: WorkoutGuestSetLogEntity) {
+        val participant = dao.getSessionParticipantById(guestSet.participantId) ?: return
+        val session = dao.getSessionById(participant.sessionId) ?: return
+        if (session.status != SessionStatus.IN_PROGRESS.name) return
+        writeGuestSet(guestSet.copy(completed = false, finishedAt = null))
+    }
+
+    /**
+     * Conclui a série do convidado e inicia o descanso **dele** — o do dono, se estiver correndo,
+     * continua correndo: são dois relógios, os dois por timestamp.
+     */
+    suspend fun completeGuestSet(guestSet: WorkoutGuestSetLogEntity) {
+        val participant = dao.getSessionParticipantById(guestSet.participantId) ?: return
+        val session = dao.getSessionById(participant.sessionId) ?: return
+        if (session.status != SessionStatus.IN_PROGRESS.name) return
+
+        writeGuestSet(guestSet.copy(completed = true, finishedAt = System.currentTimeMillis()))
+
+        // `excludingSetId = 0`: nenhuma série do dono está no meio de uma escrita aqui.
+        val pendingOwner = dao.countPendingExerciseSessions(session.id, excludingSetId = 0L)
+        val pendingGuest = dao.countIncompleteGuestSetsForSession(session.id)
+        if (pendingOwner == 0 && pendingGuest == 0) {
+            skipRestTimer()
+            dao.clearParticipantRests(session.id)
+            return
+        }
+
+        val autoTimer = settingsManager.autoRestTimerOnSetFlow.firstOrNull() ?: true
+        if (!autoTimer) return
+
+        val exSession = dao.getExerciseSessionById(guestSet.exerciseSessionId)
+        val guestFinishedExercise =
+            dao.countIncompleteGuestSetsForExerciseSession(participant.id, guestSet.exerciseSessionId) == 0
+        val recommendation = resolveRestRecommendation(
+            actualExerciseId = exSession?.actualExerciseId,
+            restDurationSecondsSnapshot = exSession?.restDurationSecondsSnapshot
+        )
+        val restSeconds = if (guestFinishedExercise) recommendation.afterExercise else recommendation.betweenSets
+        dao.updateParticipantRestEndsAt(participant.id, System.currentTimeMillis() + restSeconds * 1000L)
+    }
+
+    /** Grava a linha do convidado — inserindo a transitória (`id = 0`) que o resolvedor sintetiza. */
+    private suspend fun writeGuestSet(guestSet: WorkoutGuestSetLogEntity) {
+        if (guestSet.id == 0L) {
+            dao.insertGuestSetLogs(listOf(guestSet))
+        } else {
+            dao.updateGuestSetLog(guestSet)
+        }
+    }
+
+    /** Estende o descanso do convidado; sem descanso em andamento não inventa um (mesma regra de [adjustRestTimer]). */
+    suspend fun adjustGuestRest(participantId: Long, secondsToAdd: Int): Long {
+        val participant = dao.getSessionParticipantById(participantId) ?: return NO_ACTIVE_REST_TIMER
+        val current = participant.restEndsAt ?: return NO_ACTIVE_REST_TIMER
+        val newTarget = (current + secondsToAdd * 1000L).coerceAtLeast(System.currentTimeMillis())
+        dao.updateParticipantRestEndsAt(participantId, newTarget)
+        return newTarget
+    }
+
+    suspend fun skipGuestRest(participantId: Long) {
+        dao.updateParticipantRestEndsAt(participantId, null)
     }
 
     suspend fun updateExistingWorkoutsRestDuration(newRestSeconds: Int) {
@@ -505,10 +619,28 @@ class WorkoutEngine(
                 completed = false
             )
         ))
+        // Numa dupla (T19.4) a série nova existe para os dois: o espelho do convidado nasce junto.
+        // Em sessão solo a consulta devolve vazio e nada mais acontece.
+        val guests = dao.getGuestParticipantsForExerciseSession(exerciseSessionId)
+        if (guests.isNotEmpty()) {
+            dao.insertGuestSetLogs(
+                guests.map { guest ->
+                    WorkoutGuestSetLogEntity(
+                        participantId = guest.id,
+                        exerciseSessionId = exerciseSessionId,
+                        setNumber = setNumber,
+                        repetitions = repetitions,
+                        weight = weight
+                    )
+                }
+            )
+        }
     }
 
     suspend fun removeSet(setLog: SetLogEntity) {
         dao.deleteSetLog(setLog)
+        // O espelho do convidado sai junto (T19.4); em sessão solo não há linha e o DELETE é vazio.
+        dao.deleteGuestSetLogsForSet(setLog.exerciseSessionId, setLog.setNumber)
     }
 
     suspend fun getAlternativesForExercise(exerciseId: Long): List<ExerciseEntity> {
@@ -583,7 +715,19 @@ class WorkoutEngine(
      * gamificação é publicado **depois** do commit — antes dele, "treino iniciado" seria um fato
      * sobre uma sessão que ainda pode não existir.
      */
-    suspend fun startSession(templateId: Long) {
+    suspend fun startSession(
+        templateId: Long,
+        mode: WorkoutExecutionMode = WorkoutExecutionMode.SOLO,
+        guestDisplayName: String? = null
+    ) {
+        // Dupla sem convidado nomeado é um pedido inválido — e não uma dupla com "Convidado" nem um
+        // solo silencioso (T19.4: process death e reabertura não podem rebaixar a dupla para solo,
+        // e o início também não).
+        val guestName = guestDisplayName?.trim().orEmpty()
+        require(mode != WorkoutExecutionMode.DUO_LOCAL || guestName.isNotEmpty()) {
+            "Treino em dupla exige o nome do convidado."
+        }
+
         val started = sessionLifecycleMutex.withLock {
             // Prevent concurrent overlapping sessions
             if (dao.getActiveSession() != null) return@withLock null
@@ -594,7 +738,7 @@ class WorkoutEngine(
             val autoCheckIn = settingsManager.autoCheckInFlow.firstOrNull() ?: true
 
             val sessionId = syncMutations.mutate {
-                startSessionWrites(templateId, templateName, startedAt, autoCheckIn)
+                startSessionWrites(templateId, templateName, startedAt, autoCheckIn, mode, guestName)
             }
             StartedSession(sessionId, startedAt, templateName)
         } ?: return
@@ -626,7 +770,9 @@ class WorkoutEngine(
         templateId: Long,
         templateName: String,
         startedAt: Long,
-        autoCheckIn: Boolean
+        autoCheckIn: Boolean,
+        mode: WorkoutExecutionMode,
+        guestDisplayName: String
     ): Long {
         // 1. Create WorkoutSession (Status: IN_PROGRESS)
         val sessionId = dao.insertSession(
@@ -634,9 +780,34 @@ class WorkoutEngine(
                 templateId = templateId,
                 startedAt = startedAt,
                 status = SessionStatus.IN_PROGRESS.name,
-                templateNameSnapshot = templateName
+                templateNameSnapshot = templateName,
+                executionMode = mode.name
             )
         )
+
+        // 1b. Dupla local (T19.4): os dois participantes nascem na mesma transação da sessão. A
+        // sessão continua sendo **uma** e do dono; o convidado é identidade local da execução,
+        // sem conta, e o espelho das séries dele é criado junto com cada `set_logs` abaixo.
+        val guestParticipantId = if (mode == WorkoutExecutionMode.DUO_LOCAL) {
+            dao.insertSessionParticipant(
+                WorkoutSessionParticipantEntity(
+                    sessionId = sessionId,
+                    role = WorkoutParticipantRole.OWNER.name,
+                    displayName = null,
+                    position = 0
+                )
+            )
+            dao.insertSessionParticipant(
+                WorkoutSessionParticipantEntity(
+                    sessionId = sessionId,
+                    role = WorkoutParticipantRole.GUEST.name,
+                    displayName = guestDisplayName,
+                    position = 1
+                )
+            )
+        } else {
+            null
+        }
 
         // Auto Check-in Logic
         if (autoCheckIn) {
@@ -722,6 +893,20 @@ class WorkoutEngine(
                 }
             }
             dao.insertSetLogs(setsToCreate)
+
+            if (guestParticipantId != null) {
+                dao.insertGuestSetLogs(
+                    setsToCreate.map { set ->
+                        WorkoutGuestSetLogEntity(
+                            participantId = guestParticipantId,
+                            exerciseSessionId = exSessionId,
+                            setNumber = set.setNumber,
+                            weight = set.weight,
+                            repetitions = set.repetitions
+                        )
+                    }
+                )
+            }
         }
 
         return sessionId
@@ -762,6 +947,9 @@ class WorkoutEngine(
                 // `docs/architecture/sync-protocol.md`.
                 upsert(SyncEntityType.WORKOUT_SESSION, session.syncId)
             }
+            if (session.executionMode == WorkoutExecutionMode.DUO_LOCAL.name) {
+                dao.clearParticipantRests(session.id)
+            }
         }
         skipRestTimer()
 
@@ -787,6 +975,9 @@ class WorkoutEngine(
                     status = SessionStatus.CANCELLED.name
                 )
             )
+            if (session.executionMode == WorkoutExecutionMode.DUO_LOCAL.name) {
+                dao.clearParticipantRests(session.id)
+            }
         }
         skipRestTimer()
     }

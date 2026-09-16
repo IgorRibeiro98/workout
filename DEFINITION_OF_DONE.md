@@ -95,7 +95,8 @@ When relevant:
 
 ## 10. Party mode
 
-When relevant:
+When relevant (o runtime hoje é o treino em dupla **local** da T19.4 — `SOLO` / `DUO_LOCAL`, sem
+`TRIO` nem rota; ver [`docs/architecture/duo-local-execution.md`](docs/architecture/duo-local-execution.md)):
 
 - [ ] Participant count comes from configuration/session state.
 - [ ] Participant names/order are not hardcoded.

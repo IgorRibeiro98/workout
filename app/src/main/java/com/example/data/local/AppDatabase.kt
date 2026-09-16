@@ -45,9 +45,11 @@ import kotlinx.coroutines.launch
         com.example.data.sync.EntitySyncMetadataEntity::class,
         com.example.data.sync.SyncCursorEntity::class,
         com.example.data.sync.SyncConflictEntity::class,
-        WorkoutShareImportReceiptEntity::class
+        WorkoutShareImportReceiptEntity::class,
+        WorkoutSessionParticipantEntity::class,
+        WorkoutGuestSetLogEntity::class
     ],
-    version = 38,
+    version = 39,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -77,7 +79,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 38
+        const val SCHEMA_VERSION: Int = 39
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -189,6 +191,81 @@ abstract class AppDatabase : RoomDatabase() {
          * A recriação segue a ordem que o Room valida na abertura: tabela nova, cópia, `DROP`,
          * `RENAME`. A chave primária continua sendo `shareId`.
          */
+        /**
+         * T19.4 — treino em dupla local.
+         *
+         * Aditiva: uma coluna com `DEFAULT` e duas tabelas novas. Nenhuma linha existente muda de
+         * significado — toda sessão anterior passa a dizer `executionMode = 'SOLO'`, que é o que
+         * ela sempre foi. `set_logs` não é tocada: a série do convidado vive em
+         * `workout_guest_set_logs`, e é por isso que PR, XP, sync, backup e histórico continuam
+         * lendo exatamente o que liam.
+         *
+         * O `DEFAULT 'SOLO'` existe para o `ADD COLUMN NOT NULL` e é o modo implícito das sessões
+         * antigas. O Room não valida `defaultValue` de coluna que a entidade não declara com
+         * `@ColumnInfo(defaultValue = ...)` (mesmo precedente da T16.3 com `syncId`).
+         *
+         * Os `CREATE TABLE`/`CREATE INDEX` são os que o KSP gerou em `schemas/39.json`: divergir
+         * deles faz a validação do Room reprovar a migração na abertura.
+         */
+        val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `workout_sessions` ADD COLUMN `executionMode` TEXT NOT NULL DEFAULT 'SOLO'"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_session_participants` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sessionId` INTEGER NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `displayName` TEXT,
+                        `position` INTEGER NOT NULL,
+                        `restEndsAt` INTEGER,
+                        FOREIGN KEY(`sessionId`) REFERENCES `workout_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_session_participants_sessionId` " +
+                        "ON `workout_session_participants` (`sessionId`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_session_participants_sessionId_position` " +
+                        "ON `workout_session_participants` (`sessionId`, `position`)"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_guest_set_logs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `participantId` INTEGER NOT NULL,
+                        `exerciseSessionId` INTEGER NOT NULL,
+                        `setNumber` INTEGER NOT NULL,
+                        `weight` REAL NOT NULL,
+                        `repetitions` INTEGER NOT NULL,
+                        `completed` INTEGER NOT NULL,
+                        `finishedAt` INTEGER,
+                        `rir` INTEGER,
+                        `durationSeconds` INTEGER,
+                        FOREIGN KEY(`participantId`) REFERENCES `workout_session_participants`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`exerciseSessionId`) REFERENCES `exercise_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_guest_set_logs_participantId` " +
+                        "ON `workout_guest_set_logs` (`participantId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_guest_set_logs_exerciseSessionId` " +
+                        "ON `workout_guest_set_logs` (`exerciseSessionId`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_guest_set_logs_participantId_exerciseSessionId_setNumber` " +
+                        "ON `workout_guest_set_logs` (`participantId`, `exerciseSessionId`, `setNumber`)"
+                )
+            }
+        }
+
         val MIGRATION_37_38 = object : Migration(37, 38) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -866,7 +943,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39
                 )
                 .addCallback(DatabaseCallback())
                 .build()
