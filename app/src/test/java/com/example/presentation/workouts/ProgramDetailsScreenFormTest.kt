@@ -174,9 +174,13 @@ class ProgramDetailsScreenFormTest {
         composeRule.onNodeWithTag(dayTag(DayOfWeek.THURSDAY)).performClick()
         composeRule.onNodeWithText("Nenhum dia selecionado", substring = true).assertExists()
         composeRule.onNodeWithTag("template_form_submit").performClick()
-        waitUntilIdling { daysOf(existingId).isEmpty() }
+        // Espera pelo mesmo `Flow` que a tela observa — não pela leitura direta do banco
+        // (`daysOf`), que é uma consulta independente e pode ver o `DELETE` antes da
+        // recomposição, causando falha intermitente só no CI.
+        waitUntilIdling { viewModel.templates.value.single { it.template.id == existingId }.scheduledDays.isEmpty() }
 
         assertEquals("o mesmo treino, sem dia", 1, viewModel.templates.value.size)
+        assertEquals("persistiu sem dia", emptyList<DayOfWeek>(), daysOf(existingId))
         composeRule.onNodeWithText("Seg · Qui").assertDoesNotExist()
 
         // Reabrir mostra o que está persistido agora: nenhum dia ligado.
