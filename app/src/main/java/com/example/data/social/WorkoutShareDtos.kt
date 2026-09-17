@@ -10,6 +10,7 @@ import com.example.domain.social.WorkoutShareItem
 import com.example.domain.social.WorkoutShareKind
 import com.example.domain.social.WorkoutShareOtherUser
 import com.example.domain.social.WorkoutShareStatus
+import com.example.domain.workout.template.WeekdaySchedule
 import kotlinx.serialization.Serializable
 
 /**
@@ -96,11 +97,21 @@ data class SharedProgramSnapshotDto(
     }
 }
 
+/**
+ * Um treino dentro de um programa compartilhado, como viaja (T19.3, T19.8).
+ *
+ * `scheduledDays` é a forma atual: nomes canônicos de `java.time.DayOfWeek`, sem repetição.
+ * `dayOfWeek` é a forma **anterior à T19.8** — um dia só, como rótulo — que uma oferta criada
+ * antes da atualização (ou por um aparelho ainda não atualizado) ainda traz. O app lê as duas e
+ * escreve só a nova; o servidor aceita as duas por isso mesmo. Um valor desconhecido em qualquer
+ * das duas vira "sem dia", nunca um dia inventado.
+ */
 @Serializable
 data class SharedProgramTemplateSnapshotDto(
     val name: String,
     val shortIdentifier: String? = null,
     val orderInProgram: Int,
+    val scheduledDays: List<String>? = null,
     val dayOfWeek: String? = null,
     val exercises: List<SharedExerciseSnapshotDto> = emptyList()
 ) {
@@ -108,7 +119,9 @@ data class SharedProgramTemplateSnapshotDto(
         name = name,
         shortIdentifier = shortIdentifier,
         orderInProgram = orderInProgram,
-        dayOfWeek = dayOfWeek,
+        scheduledDays = scheduledDays
+            ?.let { names -> WeekdaySchedule.parseCanonical(names) ?: emptyList() }
+            ?: listOfNotNull(WeekdaySchedule.fromLegacyLabel(dayOfWeek)),
         exercises = exercises.map { it.toDomain() }
     )
 
@@ -118,7 +131,7 @@ data class SharedProgramTemplateSnapshotDto(
                 name = domain.name,
                 shortIdentifier = domain.shortIdentifier,
                 orderInProgram = domain.orderInProgram,
-                dayOfWeek = domain.dayOfWeek,
+                scheduledDays = WeekdaySchedule.names(domain.scheduledDays),
                 exercises = domain.exercises.map { SharedExerciseSnapshotDto.fromDomain(it) }
             )
     }

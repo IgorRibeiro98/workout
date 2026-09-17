@@ -92,7 +92,7 @@ schema estrito daquele tipo — campo desconhecido é erro, não é ignorado.
 | `entityType` | v | Origem local | Identidade portátil |
 | --- | --- | --- | --- |
 | `WORKOUT_PROGRAM` | 1 | `workout_programs` | `syncId` (UUID) |
-| `WORKOUT_TEMPLATE` | 1 | `workout_templates` + `workout_template_exercises` | `syncId` (UUID) |
+| `WORKOUT_TEMPLATE` | **2** (1 ainda aceita) | `workout_templates` + `workout_template_schedules` + `workout_template_exercises` | `syncId` (UUID) |
 | `WORKOUT_SESSION` | 1 | `workout_sessions` + `exercise_sessions` + `set_logs`, **só `COMPLETED`** | `syncId` (UUID) |
 | `CUSTOM_EXERCISE` | 1 | `exercises` com `isUserCreated = 1` | `syncId` (UUID) |
 | `BODY_MEASUREMENT` | 1 | `body_measurements` | `syncId` (UUID) |
@@ -103,6 +103,14 @@ schema estrito daquele tipo — campo desconhecido é erro, não é ignorado.
 
 Os seis primeiros são exatamente os `SyncEntityType` da T16.3 e reusam
 `SyncAggregateSnapshotBuilder` — não existe um segundo serializador de treino no Spark.
+
+**`WORKOUT_TEMPLATE` v2 (T19.8, 2026-09-16).** O treino passou a ter 0..N dias da semana:
+`scheduledDays` é uma lista de nomes canônicos de `java.time.DayOfWeek`, sem repetição
+(`["MONDAY", "THURSDAY"]`; `[]` é "sem dia fixo"). A v1 tinha `dayOfWeek: string | null` (um dia,
+texto livre — o app gravava o rótulo `"Seg"`). O Android escreve só v2 e lê v1 e v2
+(`WorkoutTemplatePayloadCompat`); o servidor aceita `[1, 2]`, cada versão com uma forma só
+(`dayOfWeek` na v2 e `scheduledDays` na v1 são recusados). Um backup guardado antes da T19.8
+continua restaurável — é o que `backup-v1-legacy-template.json` prova nos dois lados.
 
 Os três últimos **não** produzem entrada de Outbox (a matriz da T16.3 já os marcava como "T16.4"):
 eles entram no snapshot completo e ficam **fora** do sync incremental, que o servidor recusa
@@ -315,6 +323,7 @@ proteção — o servidor não pode supor que só o APK oficial faz requisiçõe
 | `backup-v1-invalid-id.json` | `syncId` de item que não é identidade portátil |
 | `backup-v1-duplicate-item.json` | `(entityType, syncId)` repetido |
 | `backup-v1-invalid-reference.json` | treino que referencia um `CUSTOM_EXERCISE` ausente do snapshot |
+| `backup-v1-legacy-template.json` | treino `WORKOUT_TEMPLATE` **v1** (`dayOfWeek: "Seg"`): aceito pelos dois lados, e o restore o lê como `[MONDAY]` (T19.8) |
 | `backup-v1-unsupported-version.json` | `backupSchemaVersion` desconhecida |
 
 As quatro últimas precisam ser **recusadas** pelos dois lados — pelo validador do servidor

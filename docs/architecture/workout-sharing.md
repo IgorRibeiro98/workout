@@ -95,9 +95,14 @@ o que importar — em vez de decodificar um programa como um treino sem exercíc
 
 ```text
 programa   name, description
-treino     name, shortIdentifier, orderInProgram, dayOfWeek
+treino     name, shortIdentifier, orderInProgram, scheduledDays
 exercício  canonicalExerciseId, sortOrder, targetSets, minReps, maxReps, restDurationSeconds
 ```
+
+`scheduledDays` (T19.8) são os 0..N dias da semana do treino, como nomes canônicos de
+`java.time.DayOfWeek` (`["MONDAY", "THURSDAY"]`; `[]` é "sem dia fixo"). Um app anterior à
+T19.8 ainda manda `dayOfWeek` (um dia, como rótulo); o servidor aceita **uma** das duas formas por
+treino, e o app lê as duas — ver `docs/architecture/workout-scheduling.md`.
 
 ### O que nunca viaja — em nenhum nível
 

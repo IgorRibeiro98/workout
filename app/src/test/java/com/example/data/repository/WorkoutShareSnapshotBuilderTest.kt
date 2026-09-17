@@ -4,6 +4,9 @@ import com.example.data.local.ExerciseEntity
 import com.example.data.local.TemplateExerciseWithDetails
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.local.WorkoutTemplateScheduleEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
+import java.time.DayOfWeek
 import com.example.data.local.WorkoutTemplateExerciseEntity
 import com.example.domain.social.WorkoutShareContent
 import kotlinx.serialization.encodeToString
@@ -162,15 +165,18 @@ class WorkoutShareSnapshotBuilderTest {
         syncId = "prog-sync-777"
     )
 
-    private fun template(id: Long, name: String, short: String, order: Int, day: String? = null) =
-        WorkoutTemplateEntity(
-            id = id,
-            programId = 7L,
-            name = name,
-            shortIdentifier = short,
-            orderInProgram = order,
-            dayOfWeek = day,
-            syncId = "tmpl-sync-$id"
+    private fun template(id: Long, name: String, short: String, order: Int, days: List<DayOfWeek> = emptyList()) =
+        WorkoutTemplateWithSchedule(
+            template = WorkoutTemplateEntity(
+                id = id,
+                programId = 7L,
+                name = name,
+                shortIdentifier = short,
+                orderInProgram = order,
+                syncId = "tmpl-sync-$id"
+            ),
+            // Fora de ordem de propósito: o snapshot normaliza para a ordem da semana.
+            schedules = days.reversed().map { WorkoutTemplateScheduleEntity(id, it.name) }
         )
 
     @Test
@@ -182,14 +188,14 @@ class WorkoutShareSnapshotBuilderTest {
         // Os treinos chegam fora de ordem e com posições esparsas (5, 2, 9): a ordem relativa é o
         // que viaja, normalizada em 0..n-1.
         val templates = listOf(
-            template(30L, "Legs", "C", 9, day = "Sex") to listOf(
+            template(30L, "Legs", "C", 9, days = listOf(DayOfWeek.FRIDAY)) to listOf(
                 TemplateExerciseWithDetails(createTemplateExercise(3L, sortOrder = 0), squat)
             ),
-            template(10L, "Push", "A", 2, day = "Seg") to listOf(
+            template(10L, "Push", "A", 2, days = listOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY)) to listOf(
                 TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 1), bench),
                 TemplateExerciseWithDetails(createTemplateExercise(2L, sortOrder = 0), row)
             ),
-            template(20L, "Pull", "B", 5, day = " ") to listOf(
+            template(20L, "Pull", "B", 5) to listOf(
                 TemplateExerciseWithDetails(createTemplateExercise(2L, sortOrder = 0), row)
             )
         )
@@ -207,7 +213,11 @@ class WorkoutShareSnapshotBuilderTest {
         assertEquals(listOf("Push", "Pull", "Legs"), snapshot.templates.map { it.name })
         assertEquals(listOf(0, 1, 2), snapshot.templates.map { it.orderInProgram })
         assertEquals(listOf("A", "B", "C"), snapshot.templates.map { it.shortIdentifier })
-        assertEquals(listOf("Seg", null, "Sex"), snapshot.templates.map { it.dayOfWeek })
+        // Os dias viajam canônicos, na ordem da semana, e um treino pode ter mais de um (T19.8).
+        assertEquals(
+            listOf(listOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY), emptyList(), listOf(DayOfWeek.FRIDAY)),
+            snapshot.templates.map { it.scheduledDays }
+        )
         assertEquals(
             listOf("catalog-row", "catalog-bench-press"),
             snapshot.templates[0].exercises.map { it.canonicalExerciseId }

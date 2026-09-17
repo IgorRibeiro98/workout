@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BACKUP_ENTITY_TYPES, type BackupEntityType } from './backup.contract';
 import { BACKUP_LIMITS } from './backup.limits';
+import { WEEKDAY_NAMES } from '../../common/weekday';
 
 /**
  * O registry de agregados de backup (T16.4).
@@ -74,7 +75,12 @@ const workoutTemplateExerciseSchema = z
   })
   .strict();
 
-const workoutTemplateSchema = z
+/**
+ * `WORKOUT_TEMPLATE` v1: um dia só, `dayOfWeek` como texto livre (o app gravava o rótulo de tela).
+ * Continua aceito para que um aparelho ainda não atualizado siga sincronizando e para que um
+ * backup antigo continue válido — mas nenhum cliente da T19.8 em diante escreve nesta versão.
+ */
+const workoutTemplateSchemaV1 = z
   .object({
     syncId: identifier,
     programSyncId: identifier.nullish(),
@@ -82,6 +88,28 @@ const workoutTemplateSchema = z
     shortIdentifier: nullableText,
     orderInProgram: z.number().int(),
     dayOfWeek: nullableText,
+    exercises: z.array(workoutTemplateExerciseSchema).max(L.maxCollectionSize),
+  })
+  .strict();
+
+/**
+ * `WORKOUT_TEMPLATE` v2 (T19.8): **0..N** dias da semana em `scheduledDays`, nomes canônicos, sem
+ * repetição. Vazio é "sem dia fixo". `dayOfWeek` não existe mais nesta versão — um payload que o
+ * traga é recusado pelo `.strict()`, e não interpretado.
+ */
+const workoutTemplateSchemaV2 = z
+  .object({
+    syncId: identifier,
+    programSyncId: identifier.nullish(),
+    name: text,
+    shortIdentifier: nullableText,
+    orderInProgram: z.number().int(),
+    scheduledDays: z
+      .array(z.enum(WEEKDAY_NAMES))
+      .max(WEEKDAY_NAMES.length)
+      .refine((days) => new Set(days).size === days.length, {
+        message: 'scheduledDays não pode repetir um dia',
+      }),
     exercises: z.array(workoutTemplateExerciseSchema).max(L.maxCollectionSize),
   })
   .strict();
@@ -231,7 +259,13 @@ export type IdentityKind = 'UUID' | 'EXERCISE_REF' | 'WEEK' | 'SINGLETON';
 export interface BackupEntityDefinition {
   readonly entityType: BackupEntityType;
   readonly supportedSchemaVersions: readonly number[];
+  /** O schema da versão **atual** do payload. */
   readonly schema: z.ZodType;
+  /**
+   * Schemas das versões anteriores ainda aceitas, por número. Uma versão listada em
+   * [supportedSchemaVersions] sem entrada aqui é validada por [schema].
+   */
+  readonly legacySchemas?: Readonly<Record<number, z.ZodType>>;
   readonly identity: IdentityKind;
 }
 
@@ -244,8 +278,9 @@ const DEFINITIONS: Record<BackupEntityType, BackupEntityDefinition> = {
   },
   WORKOUT_TEMPLATE: {
     entityType: 'WORKOUT_TEMPLATE',
-    supportedSchemaVersions: [1],
-    schema: workoutTemplateSchema,
+    supportedSchemaVersions: [1, 2],
+    schema: workoutTemplateSchemaV2,
+    legacySchemas: { 1: workoutTemplateSchemaV1 },
     identity: 'UUID',
   },
   WORKOUT_SESSION: {
@@ -299,6 +334,14 @@ export const BackupEntityRegistry = {
 
   definitionOf(entityType: BackupEntityType): BackupEntityDefinition {
     return DEFINITIONS[entityType];
+  },
+
+  /**
+   * O schema que valida um payload declarado naquela `entitySchemaVersion`. Quem chama já conferiu
+   * que a versão está em `supportedSchemaVersions`; uma versão fora dela nunca chega aqui.
+   */
+  schemaFor(definition: BackupEntityDefinition, entitySchemaVersion: number): z.ZodType {
+    return definition.legacySchemas?.[entitySchemaVersion] ?? definition.schema;
   },
 };
 

@@ -51,7 +51,7 @@ código do montador de snapshot.
 | Dado / agregado | Backup? | Motivo | ID portátil | Schema version | Estratégia de restore (T16.5) |
 | --- | --- | --- | --- | --- | --- |
 | `workout_programs` | **BACKUP** | criado pelo usuário, insuperável se perdido | `syncId` (UUID) | `entitySchemaVersion` 1 | recriar por `syncId` |
-| `workout_templates` (+ `workout_template_exercises`) | **BACKUP** | idem; filhos viajam no snapshot da raiz | `syncId` da raiz | 1 | recriar o agregado inteiro |
+| `workout_templates` (+ `workout_template_schedules`, `workout_template_exercises`) | **BACKUP** | idem; filhos viajam no snapshot da raiz | `syncId` da raiz | 2 (T19.8; v1 ainda lida) | recriar o agregado inteiro |
 | `workout_sessions` `COMPLETED` (+ `exercise_sessions`, `set_logs`) | **BACKUP** | histórico do que aconteceu | `syncId` da raiz | 1 | inserir se ausente; divergência = conflito de integridade, nunca sobrescrita |
 | `workout_sessions` `PLANNED` | **DERIVED** | derivável do template e da agenda | — | — | não restaura (não entra no snapshot) |
 | `workout_sessions` `IN_PROGRESS` / `PAUSED` | **LOCAL_ONLY** | execução **neste** aparelho; sincronizar faria dois aparelhos disputarem o mesmo cursor | — | — | não restaura |
@@ -109,7 +109,7 @@ identidade global, é serializada inteira e produz **uma** mutação.
 | Agregado | Raiz (tabela) | Filhos | Identidade | Gera Outbox | Estratégia futura |
 | --- | --- | --- | --- | --- | --- |
 | `WORKOUT_PROGRAM` | `workout_programs` | — | `syncId` | sim | snapshot |
-| `WORKOUT_TEMPLATE` | `workout_templates` | `workout_template_exercises` (ordem + configuração de séries) | `syncId` da raiz | sim | snapshot do treino inteiro |
+| `WORKOUT_TEMPLATE` | `workout_templates` | `workout_template_schedules` (0..N dias da semana, T19.8) + `workout_template_exercises` (ordem + configuração de séries) | `syncId` da raiz | sim | snapshot do treino inteiro |
 | `WORKOUT_SESSION` | `workout_sessions` | `exercise_sessions` → `set_logs` | `syncId` da raiz | sim, ao concluir | snapshot histórico **imutável** quando `COMPLETED` |
 | `CUSTOM_EXERCISE` | `exercises` com `isUserCreated = 1` | — | `syncId` | sim | snapshot |
 | `BODY_MEASUREMENT` | `body_measurements` | — | `syncId` | sim | snapshot |

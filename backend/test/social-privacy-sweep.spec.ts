@@ -186,7 +186,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
               name: 'Push',
               shortIdentifier: 'A',
               orderInProgram: 0,
-              dayOfWeek: 'Seg',
+              scheduledDays: ['MONDAY', 'THURSDAY'],
               exercises: [
                 {
                   canonicalExerciseId: 'supino-reto-barra',
@@ -427,6 +427,7 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       'exercises',
       'name',
       'orderInProgram',
+      'scheduledDays',
       'shortIdentifier',
     ];
     expect(Object.keys(template).filter((key) => !allowedTemplateKeys.includes(key))).toEqual([]);

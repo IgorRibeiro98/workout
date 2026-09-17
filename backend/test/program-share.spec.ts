@@ -33,7 +33,8 @@ const PROGRAM: WorkoutProgramShareSnapshotV1 = {
       name: 'Push',
       shortIdentifier: 'A',
       orderInProgram: 0,
-      dayOfWeek: 'Seg',
+      // T19.8: dois dias no mesmo treino, na forma canônica.
+      scheduledDays: ['MONDAY', 'THURSDAY'],
       exercises: [
         exercise('canonical:supino-reto-barra', 0),
         exercise('canonical:desenvolvimento-halteres', 1),
@@ -187,6 +188,28 @@ describe('Program Shares: compartilhamento de programa completo (T19.3)', () => 
       templateCount: 3,
       exerciseCount: 6,
     });
+  });
+
+  it('a agenda de cada treino volta como foi enviada: vários dias, nenhum dia, ou a forma anterior à T19.8', async () => {
+    const { socialB } = await friends();
+    const legacy = {
+      ...PROGRAM,
+      templates: [
+        PROGRAM.templates[0],
+        { ...PROGRAM.templates[1], dayOfWeek: 'Ter' },
+        { ...PROGRAM.templates[2], scheduledDays: [] },
+      ],
+    };
+
+    const created = await shareProgram(socialB, 'req-days', legacy).expect(201);
+
+    const templates = created.body.programSnapshot.templates as Array<Record<string, unknown>>;
+    expect(templates[0].scheduledDays).toEqual(['MONDAY', 'THURSDAY']);
+    expect(templates[0]).not.toHaveProperty('dayOfWeek');
+    // Um app anterior à T19.8 ainda manda um dia como rótulo; o servidor guarda verbatim.
+    expect(templates[1].dayOfWeek).toBe('Ter');
+    expect(templates[1]).not.toHaveProperty('scheduledDays');
+    expect(templates[2].scheduledDays).toEqual([]);
   });
 
   it('um treino avulso continua listado como WORKOUT_TEMPLATE, com templateCount 1 (T17.7)', async () => {
@@ -383,8 +406,24 @@ describe('Program Shares: compartilhamento de programa completo (T19.3)', () => 
     ['nome vazio', { ...PROGRAM, name: '   ' }],
     ['descrição longa', { ...PROGRAM, description: 'x'.repeat(501) }],
     [
-      'dia da semana longo',
-      { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], dayOfWeek: 'x'.repeat(33) }] },
+      'dia da semana longo (forma anterior à T19.8)',
+      { ...PROGRAM, templates: [{ ...PROGRAM.templates[1], dayOfWeek: 'x'.repeat(33) }] },
+    ],
+    [
+      'scheduledDays com rótulo em vez do nome canônico',
+      { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], scheduledDays: ['Seg'] }] },
+    ],
+    [
+      'scheduledDays com dia repetido',
+      { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], scheduledDays: ['MONDAY', 'MONDAY'] }] },
+    ],
+    [
+      'scheduledDays que não é lista',
+      { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], scheduledDays: 'MONDAY' }] },
+    ],
+    [
+      'dayOfWeek e scheduledDays no mesmo treino',
+      { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], dayOfWeek: 'Seg' }] },
     ],
     [
       'ordem negativa',

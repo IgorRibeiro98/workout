@@ -71,6 +71,7 @@
     <string name="sheet_action_activate_program">Ativar como programa atual</string>
     <string name="sheet_action_delete_program">Excluir programa</string>
     <string name="sheet_action_open_template">Abrir treino</string>
+    <string name="sheet_action_edit_template">Editar treino</string>
     <string name="sheet_action_edit_template_exercise">Editar configurações</string>
     <string name="sheet_action_delete_template_exercise">Remover do treino</string>
     <string name="sheet_action_preview_template_exercise">Pré-visualizar exercício</string>

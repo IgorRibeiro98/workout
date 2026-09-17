@@ -75,6 +75,7 @@ describe('Fixtures compartilhadas do contrato', () => {
       'backup-v1-duplicate-item.json',
       'backup-v1-invalid-id.json',
       'backup-v1-invalid-reference.json',
+      'backup-v1-legacy-template.json',
       'backup-v1-minimal.json',
       'backup-v1-unsupported-version.json',
     ]);
@@ -87,6 +88,17 @@ describe('Fixtures compartilhadas do contrato', () => {
       [...BACKUP_ENTITY_TYPES].sort(),
     );
     expect(snapshot.backupSchemaVersion).toBe(BACKUP_SCHEMA_VERSION);
+  });
+
+  it('a fixture com treino v1 continua aceita — um backup anterior à T19.8 não vira lixo', () => {
+    const snapshot = validateBackupRequest(fixtureText('backup-v1-legacy-template'));
+
+    const template = snapshot.items.find((item) => item.entityType === 'WORKOUT_TEMPLATE');
+    expect(template?.entitySchemaVersion).toBe(1);
+    expect(template?.canonicalPayload).toContain('"dayOfWeek":"Seg"');
+    expect(snapshot.payloadHash).toBe(
+      '20b3d56a772a68adad03e3c640b2ac48dc834d46129ff564d89c873a4ba53119',
+    );
   });
 
   it('a fixture mínima é válida e não tem item', () => {
@@ -116,11 +128,11 @@ describe('Fixtures compartilhadas do contrato', () => {
       '4caa9793e9441f2f23a7874c19bda66b6e11b79dc9ca89c74e5f8bd802dd58fd',
     );
     expect(validateBackupRequest(fixtureText('backup-v1-complete')).payloadHash).toBe(
-      '432b0f20b96d3b1ba21a38ba554ff5fde6e0bc04bdca732d352494ff9dac3d9a',
+      '68167f9672b0677dc62b5e8446f616ec89ca1b5b8325edd1b53b9794d2fda184',
     );
     // E continuam sendo o SHA-256 da forma canônica, não um valor guardado em outro lugar.
     expect(sha256Hex(canonicalize(fixtureText('backup-v1-complete')))).toBe(
-      '432b0f20b96d3b1ba21a38ba554ff5fde6e0bc04bdca732d352494ff9dac3d9a',
+      '68167f9672b0677dc62b5e8446f616ec89ca1b5b8325edd1b53b9794d2fda184',
     );
   });
 });

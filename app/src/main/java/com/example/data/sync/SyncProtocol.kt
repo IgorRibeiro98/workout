@@ -58,8 +58,24 @@ object SyncProtocol {
      */
     const val MAX_PULL_PAGES_PER_CYCLE: Int = 50
 
-    /** As versões de payload que este app sabe aplicar, por agregado. */
+    /**
+     * A versão de payload base dos agregados — a que todos falavam até a T19.8, e a que uma
+     * exclusão (sem payload) continua declarando no envelope.
+     */
     const val SUPPORTED_ENTITY_SCHEMA_VERSION: Int = 1
+
+    /**
+     * As versões de payload que este app sabe **ler**, por agregado.
+     *
+     * `WORKOUT_TEMPLATE` evoluiu para a v2 na T19.8 (dias da semana múltiplos) e continua lendo a
+     * v1 — de um aparelho ainda não atualizado ou de uma cópia remota guardada antes. A escrita é
+     * sempre na versão atual do DTO (`SyncAggregateSnapshotBuilder`).
+     */
+    fun readableEntitySchemaVersions(type: SyncEntityType): Set<Int> = when (type) {
+        SyncEntityType.WORKOUT_TEMPLATE ->
+            com.example.data.sync.dto.WorkoutTemplateSyncDto.READABLE_SCHEMA_VERSIONS
+        else -> setOf(SUPPORTED_ENTITY_SCHEMA_VERSION)
+    }
 }
 
 /**

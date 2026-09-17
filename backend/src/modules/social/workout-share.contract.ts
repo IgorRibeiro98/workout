@@ -73,14 +73,20 @@ export interface WorkoutTemplateShareSnapshotV1 {
 /**
  * Um treino **dentro** de um programa compartilhado (T19.3).
  *
- * É o mesmo conteúdo portável do treino avulso, mais a posição no programa e o dia sugerido — os
- * dois campos estruturais que o `WorkoutTemplate` tem por pertencer a um programa. Nada de
+ * É o mesmo conteúdo portável do treino avulso, mais a posição no programa e os dias da semana —
+ * os dois campos estruturais que o `WorkoutTemplate` tem por pertencer a um programa. Nada de
  * carga, nota, máquina, `localId`, `syncId` ou `programId`.
+ *
+ * `scheduledDays` (T19.8) são **0..N** dias, nomes canônicos de `java.time.DayOfWeek`, sem
+ * repetição; vazio é "sem dia fixo". `dayOfWeek` é a forma anterior à T19.8 — um dia só, como
+ * rótulo — que um app ainda não atualizado continua enviando; o servidor aceita **uma** das duas
+ * formas por treino, nunca as duas, e guarda o snapshot verbatim.
  */
 export interface SharedProgramTemplateV1 {
   readonly name: string;
   readonly shortIdentifier?: string | null;
   readonly orderInProgram: number;
+  readonly scheduledDays?: readonly string[];
   readonly dayOfWeek?: string | null;
   readonly exercises: SharedExerciseV1[];
 }

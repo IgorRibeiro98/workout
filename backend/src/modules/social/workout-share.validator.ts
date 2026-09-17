@@ -77,6 +77,7 @@ const PROGRAM_TEMPLATE_FIELDS = [
   'name',
   'shortIdentifier',
   'orderInProgram',
+  'scheduledDays',
   'dayOfWeek',
   'exercises',
 ] as const;

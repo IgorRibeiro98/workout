@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.TemplateExerciseWithDetails
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
+import java.time.DayOfWeek
 import com.example.data.local.WorkoutTemplateExerciseEntity
 import com.example.data.repository.WorkoutRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,12 +59,25 @@ class TemplateDetailsViewModel(
 
     private val _pendingOrder = MutableStateFlow<PendingOrder?>(null)
 
+    /**
+     * O treino com os dias dele, **reativo** (T19.8): editar o cabeçalho pela tela do programa ou
+     * receber uma alteração pelo sync reflete aqui sem reabrir a tela.
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    val template: StateFlow<WorkoutTemplateEntity?> = _templateId
+    private val templateWithSchedule: StateFlow<WorkoutTemplateWithSchedule?> = _templateId
         .flatMapLatest { id ->
-            if (id != -1L) flowOf(repository.getTemplate(id)) else flowOf(null)
+            if (id != -1L) repository.getTemplateWithSchedule(id) else flowOf(null)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val template: StateFlow<WorkoutTemplateEntity?> = templateWithSchedule
+        .map { it?.template }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Os dias da semana do treino, na ordem da semana; vazio é "sem dia fixo". */
+    val scheduledDays: StateFlow<List<DayOfWeek>> = templateWithSchedule
+        .map { it?.scheduledDays ?: emptyList() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val persistedExercises: Flow<List<TemplateExerciseWithDetails>> = _templateId

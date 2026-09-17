@@ -76,7 +76,7 @@ class FakeSparkSyncServer {
             ownerUid = ownerUid,
             entityType = entityType.name,
             entitySyncId = entitySyncId,
-            entitySchemaVersion = 1,
+            entitySchemaVersion = stored.schemaVersion,
             serverRevision = stored.revision,
             deleted = stored.deleted,
             payloadHash = if (stored.deleted) null else stored.hash,
@@ -133,7 +133,10 @@ class FakeSparkSyncServer {
 
         val type = SyncEntityType.entries.firstOrNull { it.name == mutation.entityType }
             ?: return rejected(mutation, SyncMutationStatus.UNSUPPORTED, "UNKNOWN_ENTITY_TYPE")
-        if (mutation.entitySchemaVersion != 1) {
+        // O mesmo registry do servidor real (`backup-entity.registry.ts`): `WORKOUT_TEMPLATE`
+        // aceita v1 e v2 desde a T19.8; todo o resto, só a v1.
+        val supportedVersions = if (type == SyncEntityType.WORKOUT_TEMPLATE) setOf(1, 2) else setOf(1)
+        if (mutation.entitySchemaVersion !in supportedVersions) {
             return rejected(
                 mutation,
                 SyncMutationStatus.UNSUPPORTED,
@@ -261,6 +264,7 @@ class FakeSparkSyncServer {
         entities[EntityKey(ownerUid, type.name, mutation.entitySyncId)] = StoredEntity(
             revision = revision,
             lastSequence = sequence,
+            schemaVersion = mutation.entitySchemaVersion,
             payloadText = canonical,
             hash = hash,
             deleted = deleted
@@ -319,6 +323,7 @@ class FakeSparkSyncServer {
     private data class StoredEntity(
         val revision: Long,
         val lastSequence: Long,
+        val schemaVersion: Int,
         val payloadText: String?,
         val hash: String,
         val deleted: Boolean = false

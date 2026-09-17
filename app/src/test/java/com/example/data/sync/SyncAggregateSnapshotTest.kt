@@ -72,10 +72,11 @@ class SyncAggregateSnapshotTest {
             programId = programId,
             name = "Peito + Costas",
             shortIdentifier = "B",
-            orderInProgram = 1,
-            dayOfWeek = "MONDAY"
+            orderInProgram = 1
         )
         val templateId = dao.insertTemplate(template)
+        // Fora da ordem da semana de propósito: o payload sai canônico (T19.8).
+        dao.replaceSchedulesForTemplate(templateId, listOf("THURSDAY", "MONDAY"))
 
         val canonicalId = dao.insertExercise(
             ExerciseEntity(name = "Supino Reto", canonicalId = "canonical.supino", isUserCreated = false)
@@ -111,6 +112,9 @@ class SyncAggregateSnapshotTest {
         assertEquals(program.syncId, dto.programSyncId)
         assertEquals("Peito + Costas", dto.name)
         assertEquals(1, dto.orderInProgram)
+        // v2 (T19.8): os dias viajam canônicos, na ordem da semana; `dayOfWeek` não existe mais.
+        assertEquals(listOf("MONDAY", "THURSDAY"), dto.scheduledDays)
+        assertFalse(envelope.payload.jsonObject.keys.contains("dayOfWeek"))
 
         // Ordem preservada e explícita: o canônico (sortOrder 10) vem antes do personalizado (20).
         assertEquals(listOf(0, 1), dto.exercises.map { it.position })

@@ -240,11 +240,13 @@ class RestoreTransaction(
                     name = dto.name,
                     shortIdentifier = dto.shortIdentifier,
                     orderInProgram = dto.orderInProgram,
-                    dayOfWeek = dto.dayOfWeek,
                     syncId = dto.syncId
                 )
             )
             ids[dto.syncId] = templateId
+            // Os dias da semana (T19.8) já chegam canônicos e sem repetição do leitor; um backup
+            // v1 chega aqui com o dia único convertido, e sem dia chega com a lista vazia.
+            workoutDao.replaceSchedulesForTemplate(templateId, dto.scheduledDays)
 
             dto.exercises.sortedBy { it.position }.forEach { entry ->
                 val exerciseId = resolveExercise(plan, customExerciseIds, entry.exercise)

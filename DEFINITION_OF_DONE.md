@@ -46,6 +46,9 @@ When the task touches durable or active-workout state:
 - [ ] Reopening/reloading reproduces the expected state.
 - [ ] Existing historical workout sessions remain valid.
 - [ ] Template edits do not mutate historical sessions.
+- [ ] (T19.8) A template's weekly schedule is `0..N` rows of `workout_template_schedules` on the
+      **same** template — never a template per day, never a concatenated string, never UI-only
+      state; editing the schedule leaves `orderInProgram`, `syncId` and sessions untouched.
 
 ## 6. Workout start/configuration
 

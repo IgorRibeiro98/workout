@@ -5,7 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
+import com.example.domain.workout.template.WeekdaySchedule
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import java.time.DayOfWeek
 import com.example.ui.theme.*
 import com.example.ui.components.SwipeAction
 import com.example.ui.components.SwipeActionRow
@@ -59,9 +65,11 @@ fun ProgramDetailsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
     
-    var showAddTemplateDialog by remember { mutableStateOf(false) }
+    // O formulário de criar/editar treino vive na ViewModel (T19.8): o rascunho sobrevive à
+    // recomposição e a validação é a do domínio.
+    val templateForm by viewModel.templateForm.collectAsStateWithLifecycle()
     var templateToDelete by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
-    var activeTemplateForSheet by remember { mutableStateOf<WorkoutTemplateEntity?>(null) }
+    var activeTemplateForSheet by remember { mutableStateOf<WorkoutTemplateWithSchedule?>(null) }
 
     Scaffold(
         containerColor = BackgroundDark,
@@ -97,7 +105,7 @@ fun ProgramDetailsScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { showAddTemplateDialog = true },
+                onClick = { viewModel.openCreateTemplateForm() },
                 containerColor = Lime400,
                 contentColor = BackgroundDark
             ) {
@@ -160,7 +168,8 @@ fun ProgramDetailsScreen(
                         }
                     }
                 } else {
-                    items(templates, key = { it.id }) { template ->
+                    items(templates, key = { it.template.id }) { item ->
+                        val template = item.template
                         val endAction = SwipeAction(
                             icon = Icons.Default.Delete,
                             label = "Excluir",
@@ -200,14 +209,15 @@ fun ProgramDetailsScreen(
                                 Spacer(modifier = Modifier.width(16.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(text = template.name, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                                    val dayOfWeek = template.dayOfWeek
-                                    if (!dayOfWeek.isNullOrBlank()) {
+                                    // Os dias do treino (T19.8): `Seg · Qui` para um treino que
+                                    // acontece duas vezes na semana; nada quando não tem dia fixo.
+                                    WeekdaySchedule.formatShort(item.scheduledDays)?.let { days ->
                                         Spacer(modifier = Modifier.height(2.dp))
-                                        Text(text = dayOfWeek, color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                        Text(text = days, color = Lime400, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(onClick = { activeTemplateForSheet = template }) {
+                                    IconButton(onClick = { activeTemplateForSheet = item }) {
                                         Icon(Icons.Default.MoreVert, contentDescription = "Opções do treino", tint = TextSecondary)
                                     }
                                     Icon(Icons.Default.ChevronRight, contentDescription = "Abrir", tint = TextSecondary)
@@ -243,7 +253,7 @@ fun ProgramDetailsScreen(
 
     val sheetTemplate = activeTemplateForSheet
     if (sheetTemplate != null) {
-        val template = sheetTemplate
+        val template = sheetTemplate.template
         ActionBottomSheet(
             onDismissRequest = { activeTemplateForSheet = null },
             title = stringResource(id = R.string.sheet_template_options),
@@ -253,6 +263,12 @@ fun ProgramDetailsScreen(
                     title = stringResource(id = R.string.sheet_action_open_template),
                     icon = Icons.Default.ChevronRight,
                     onClick = { onTemplateClick(template.id) }
+                ),
+                // Editar nome, sigla e dias (T19.8) — o mesmo template, em todos os dias dele.
+                ActionItemData(
+                    title = stringResource(id = R.string.sheet_action_edit_template),
+                    icon = Icons.Default.Edit,
+                    onClick = { viewModel.openEditTemplateForm(sheetTemplate) }
                 ),
                 ActionItemData(
                     title = stringResource(id = R.string.sheet_action_delete_template),
@@ -282,76 +298,116 @@ fun ProgramDetailsScreen(
         )
     }
 
-    if (showAddTemplateDialog) {
-        var name by remember { mutableStateOf("") }
-        var shortId by remember { mutableStateOf("") }
-        var selectedDay by remember { mutableStateOf("Nenhum") }
-        val days = listOf("Nenhum", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
-        
-        AlertDialog(
-            onDismissRequest = { showAddTemplateDialog = false },
-            title = { Text("Novo Treino", color = TextPrimary) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = shortId,
-                        onValueChange = { shortId = it },
-                        label = { Text("Sigla (ex: A, B)") },
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = BackgroundDark,
-                            unfocusedContainerColor = BackgroundDark,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        )
-                    )
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Nome (ex: Peito e Tríceps)") },
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = BackgroundDark,
-                            unfocusedContainerColor = BackgroundDark,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        )
-                    )
-                    Text("Dia da semana sugerido:", color = TextSecondary, fontSize = 12.sp)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(days, key = { it }) { day ->
-                            val isSelected = day == selectedDay
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Lime400 else BackgroundDark)
-                                    .clickable { selectedDay = day }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = day,
-                                    color = if (isSelected) BackgroundDark else TextSecondary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
+    val form = templateForm
+    if (form != null) {
+        TemplateFormDialog(
+            form = form,
+            onNameChanged = viewModel::onTemplateNameChanged,
+            onShortIdChanged = viewModel::onTemplateShortIdChanged,
+            onToggleDay = viewModel::toggleTemplateDay,
+            onSubmit = viewModel::submitTemplateForm,
+            onDismiss = viewModel::dismissTemplateForm
+        )
+    }
+}
+
+/**
+ * O formulário de treino (T19.8): criar e editar são o **mesmo** diálogo.
+ *
+ * Obrigatório é o que o domínio exige (`WorkoutTemplateFields`): só o nome, marcado com `*`. Sigla
+ * e dias são opcionais e não parecem obrigatórios. Os dias são chips de seleção múltipla, sem um
+ * "Nenhum" concorrente — nenhum chip ligado **é** "sem dia fixo", e a legenda diz isso.
+ */
+@Composable
+private fun TemplateFormDialog(
+    form: TemplateFormState,
+    onNameChanged: (String) -> Unit,
+    onShortIdChanged: (String) -> Unit,
+    onToggleDay: (DayOfWeek) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val fieldColors = TextFieldDefaults.colors(
+        focusedContainerColor = BackgroundDark,
+        unfocusedContainerColor = BackgroundDark,
+        errorContainerColor = BackgroundDark,
+        focusedTextColor = TextPrimary,
+        unfocusedTextColor = TextPrimary,
+        errorTextColor = TextPrimary
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (form.isEditing) "Editar Treino" else "Novo Treino", color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = form.name,
+                    onValueChange = onNameChanged,
+                    label = { Text("Nome *") },
+                    placeholder = { Text("ex: Peito e Tríceps") },
+                    singleLine = true,
+                    isError = form.nameError,
+                    supportingText = if (form.nameError) {
+                        { Text("Informe o nome do treino.") }
+                    } else null,
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth().testTag("template_form_name")
+                )
+                OutlinedTextField(
+                    value = form.shortId,
+                    onValueChange = onShortIdChanged,
+                    label = { Text("Sigla") },
+                    placeholder = { Text("ex: A, B") },
+                    singleLine = true,
+                    colors = fieldColors,
+                    modifier = Modifier.fillMaxWidth().testTag("template_form_short_id")
+                )
+                Text("Dias da semana", color = TextSecondary, fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    DayOfWeek.entries.forEach { day ->
+                        val isSelected = day in form.scheduledDays
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) Lime400 else BackgroundDark)
+                                .toggleable(
+                                    value = isSelected,
+                                    role = Role.Checkbox,
+                                    onValueChange = { onToggleDay(day) }
                                 )
-                            }
+                                .padding(vertical = 8.dp)
+                                .testTag("template_form_day_${day.name}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = WeekdaySchedule.shortLabel(day),
+                                color = if (isSelected) BackgroundDark else TextSecondary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (name.isNotBlank()) {
-                        val dayVal = if (selectedDay != "Nenhum") selectedDay else null
-                        viewModel.createTemplate(name, shortId, dayVal)
-                        showAddTemplateDialog = false
-                    }
-                }) { Text("Criar", color = Lime400, fontWeight = FontWeight.Bold) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddTemplateDialog = false }) { Text("Cancelar", color = TextSecondary) }
-            },
-            containerColor = SurfaceDark
-        )
-    }
+                Text(
+                    text = if (form.scheduledDays.isEmpty()) "Nenhum dia selecionado: treino sem dia fixo."
+                    else "Campos com * são obrigatórios.",
+                    color = TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSubmit, modifier = Modifier.testTag("template_form_submit")) {
+                Text(if (form.isEditing) "Salvar" else "Criar", color = Lime400, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar", color = TextSecondary) }
+        },
+        containerColor = SurfaceDark
+    )
 }

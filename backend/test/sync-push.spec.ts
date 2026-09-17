@@ -10,6 +10,7 @@ import {
   pushBody,
   sessionPayload,
   templatePayload,
+  templatePayloadV2,
   uuid,
 } from './support/sync-fixtures';
 
@@ -413,6 +414,97 @@ describe('Sync push (/v1/sync/push)', () => {
 
     expect(response.body.results[0].status).toBe('UNSUPPORTED');
     expect(response.body.results[0].reason).toBe('UNSUPPORTED_ENTITY_SCHEMA_VERSION');
+  });
+
+  // ------------------------------------------------------------ WORKOUT_TEMPLATE v1 / v2 (T19.8)
+
+  it('treino v2 com vários dias da semana é aceito e devolvido verbatim', async () => {
+    const syncId = uuid();
+    const payload = templatePayloadV2(syncId, 'Treino A', ['MONDAY', 'THURSDAY']);
+    const response = await push(
+      pushBody([
+        { entityType: 'WORKOUT_TEMPLATE', entitySyncId: syncId, entitySchemaVersion: 2, payload },
+      ]),
+    );
+
+    expect(response.body.results[0].status).toBe('APPLIED');
+
+    const pull = await request(server())
+      .get('/v1/sync/pull?cursor=0&limit=10')
+      .set('Authorization', `Bearer ${TOKEN_A}`)
+      .expect(200);
+    const change = pull.body.changes.find(
+      (c: { entitySyncId: string }) => c.entitySyncId === syncId,
+    );
+    expect(change.entitySchemaVersion).toBe(2);
+    expect(change.payload.scheduledDays).toEqual(['MONDAY', 'THURSDAY']);
+    expect(change.payload).not.toHaveProperty('dayOfWeek');
+  });
+
+  it('treino v2 sem dia nenhum é válido: lista vazia, não ausência', async () => {
+    const syncId = uuid();
+    const response = await push(
+      pushBody([
+        {
+          entityType: 'WORKOUT_TEMPLATE',
+          entitySyncId: syncId,
+          entitySchemaVersion: 2,
+          payload: templatePayloadV2(syncId, 'Treino livre', []),
+        },
+      ]),
+    );
+    expect(response.body.results[0].status).toBe('APPLIED');
+  });
+
+  it('treino v1 (um dia como rótulo) continua aceito: aparelho antigo não para de sincronizar', async () => {
+    const syncId = uuid();
+    const response = await push(
+      pushBody([
+        {
+          entityType: 'WORKOUT_TEMPLATE',
+          entitySyncId: syncId,
+          entitySchemaVersion: 1,
+          payload: templatePayload(syncId, 'Treino antigo', { dayOfWeek: 'Seg' }),
+        },
+      ]),
+    );
+    expect(response.body.results[0].status).toBe('APPLIED');
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['rótulo de tela em vez do nome canônico', { scheduledDays: ['Seg'] }],
+    ['dia repetido', { scheduledDays: ['MONDAY', 'MONDAY'] }],
+    ['dayOfWeek na v2', { scheduledDays: [], dayOfWeek: 'Seg' }],
+    ['scheduledDays ausente na v2', { scheduledDays: undefined }],
+    ['scheduledDays que não é lista', { scheduledDays: 'MONDAY' }],
+  ])('treino v2 é recusado com %s', async (_label, overrides) => {
+    const syncId = uuid();
+    const payload: Record<string, unknown> = { ...templatePayloadV2(syncId), ...overrides };
+    if (overrides.scheduledDays === undefined && 'scheduledDays' in overrides) {
+      delete payload.scheduledDays;
+    }
+    const response = await push(
+      pushBody([
+        { entityType: 'WORKOUT_TEMPLATE', entitySyncId: syncId, entitySchemaVersion: 2, payload },
+      ]),
+    );
+    expect(response.body.results[0].status).toBe('INVALID');
+    expect(response.body.results[0].reason).toBe('INVALID_PAYLOAD');
+  });
+
+  it('scheduledDays declarado como v1 é recusado: cada versão tem uma forma só', async () => {
+    const syncId = uuid();
+    const response = await push(
+      pushBody([
+        {
+          entityType: 'WORKOUT_TEMPLATE',
+          entitySyncId: syncId,
+          entitySchemaVersion: 1,
+          payload: { ...templatePayload(syncId), scheduledDays: ['MONDAY'] },
+        },
+      ]),
+    );
+    expect(response.body.results[0].status).toBe('INVALID');
   });
 
   it('identidade que não corresponde ao payload é recusada sem aproximação', async () => {

@@ -11,6 +11,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { SparkLogger } from '../../common/logger';
 import { CLOCK, Clock } from '../../common/clock';
+import { isCanonicalWeekdayList } from '../../common/weekday';
 import { BlockRepository } from './block.repository';
 import { NotificationRepository } from './notification.repository';
 import {
@@ -647,6 +648,22 @@ export class WorkoutShareService {
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
           message: `dayOfWeek inválido no treino [${tIdx}].`,
         });
+      }
+      // T19.8: os dias da semana, na forma canônica. `dayOfWeek` (um dia, rótulo) é a forma de um
+      // app anterior; as duas juntas não descrevem nenhuma versão do Spark e são recusadas.
+      if (template.scheduledDays !== undefined) {
+        if (template.dayOfWeek != null) {
+          throw new BadRequestException({
+            code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+            message: `Treino [${tIdx}] traz dayOfWeek e scheduledDays ao mesmo tempo.`,
+          });
+        }
+        if (!isCanonicalWeekdayList(template.scheduledDays)) {
+          throw new BadRequestException({
+            code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+            message: `scheduledDays inválido no treino [${tIdx}].`,
+          });
+        }
       }
       rejectForbiddenKeys(template, where);
       if (

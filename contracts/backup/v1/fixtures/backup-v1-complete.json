@@ -155,10 +155,9 @@
       "syncId": "6d4c2b90-8e17-4a35-bf62-0c9d1e5a7b38"
     },
     {
-      "entitySchemaVersion": 1,
+      "entitySchemaVersion": 2,
       "entityType": "WORKOUT_TEMPLATE",
       "payload": {
-        "dayOfWeek": "MONDAY",
         "exercises": [
           {
             "exercise": {
@@ -192,6 +191,10 @@
         "name": "Treino A",
         "orderInProgram": 0,
         "programSyncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95",
+        "scheduledDays": [
+          "MONDAY",
+          "THURSDAY"
+        ],
         "shortIdentifier": "A",
         "syncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
       },

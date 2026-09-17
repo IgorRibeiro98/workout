@@ -5,6 +5,9 @@ import com.example.data.local.WorkoutDao
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.local.WorkoutTemplateExerciseEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
+import com.example.domain.workout.template.WeekdaySchedule
+import java.time.DayOfWeek
 import kotlinx.coroutines.flow.Flow
 import com.example.data.remote.ExerciseRemoteDataSource
 import com.example.data.remote.NetworkExerciseRemoteDataSource
@@ -208,19 +211,87 @@ class WorkoutRepository(
         return dao.getTemplatesForProgram(programId)
     }
 
-    /** Devolve o id gerado pelo Room, para quem precisa continuar montando o treino recém-criado. */
-    suspend fun addTemplate(programId: Long, name: String, shortId: String, order: Int, dayOfWeek: String? = null): Long {
+    /** Os treinos do programa **com** os dias da semana de cada um (T19.8), na ordem do programa. */
+    fun getTemplatesWithScheduleForProgram(programId: Long): Flow<List<WorkoutTemplateWithSchedule>> =
+        dao.getTemplatesWithScheduleForProgram(programId)
+
+    fun getTemplateWithSchedule(templateId: Long): Flow<WorkoutTemplateWithSchedule?> =
+        dao.getTemplateWithScheduleFlow(templateId)
+
+    /** Os dias em que o treino acontece, na ordem da semana; vazio é "sem dia fixo". */
+    suspend fun getTemplateScheduledDays(templateId: Long): List<DayOfWeek> =
+        WeekdaySchedule.normalize(
+            dao.getSchedulesForTemplate(templateId).mapNotNull { row ->
+                DayOfWeek.entries.firstOrNull { it.name == row.dayOfWeek }
+            }
+        )
+
+    /**
+     * Cria um treino com a agenda semanal dele, numa transação só (T19.8).
+     *
+     * A validação é a mesma que a tela mostra ([WorkoutTemplateFields]): só o nome é obrigatório;
+     * a sigla em branco vira `null` (a entidade e todos os contratos já a tratam como opcional).
+     * [scheduledDays] vazio é um treino sem dia fixo — estado válido, e não erro. Dia repetido é
+     * impossível por construção: a agenda é normalizada aqui e a chave primária composta da tabela
+     * recusaria de qualquer forma.
+     *
+     * Devolve o id gerado pelo Room, para quem precisa continuar montando o treino recém-criado.
+     */
+    suspend fun addTemplate(
+        programId: Long,
+        name: String,
+        shortId: String?,
+        order: Int,
+        scheduledDays: Collection<DayOfWeek> = emptyList()
+    ): Long {
         val template = WorkoutTemplateEntity(
             programId = programId,
-            name = name,
-            shortIdentifier = shortId,
-            orderInProgram = order,
-            dayOfWeek = dayOfWeek
+            name = WorkoutTemplateFields.requireName(name),
+            shortIdentifier = WorkoutTemplateFields.optionalShortIdentifier(shortId),
+            orderInProgram = order
         )
+        val days = WeekdaySchedule.names(scheduledDays)
         return syncMutations.mutate {
             val id = dao.insertTemplate(template)
+            dao.replaceSchedulesForTemplate(id, days)
             upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
             id
+        }
+    }
+
+    /**
+     * Edita o cabeçalho do treino — nome, sigla e dias da semana — sem tocar em exercícios,
+     * `orderInProgram` nem `syncId` (T19.8).
+     *
+     * É o **mesmo** template em todos os dias: mudar a agenda de `[MONDAY, THURSDAY]` para
+     * `[TUESDAY, FRIDAY]` substitui as linhas de agenda dessa raiz, e o histórico de sessões que
+     * a referenciam por `templateId` não é reinterpretado. Nada mudou → nada é escrito e nenhuma
+     * mutação de sync é registrada. Uma mutação só quando muda: o agregado é o treino inteiro.
+     */
+    suspend fun updateTemplateHeader(
+        templateId: Long,
+        name: String,
+        shortId: String?,
+        scheduledDays: Collection<DayOfWeek>
+    ) {
+        val validName = WorkoutTemplateFields.requireName(name)
+        val validShortId = WorkoutTemplateFields.optionalShortIdentifier(shortId)
+        val days = WeekdaySchedule.names(scheduledDays)
+        syncMutations.mutate {
+            val existing = dao.getTemplateById(templateId) ?: return@mutate
+            val currentDays = dao.getSchedulesForTemplate(templateId).map { it.dayOfWeek }.sorted()
+            val headerChanged = existing.name != validName || existing.shortIdentifier != validShortId
+            val scheduleChanged = currentDays != days.sorted()
+            if (!headerChanged && !scheduleChanged) return@mutate
+
+            if (headerChanged) {
+                // `copy` sobre a linha lida: `syncId`, `programId` e `orderInProgram` ficam como estão.
+                dao.updateTemplate(existing.copy(name = validName, shortIdentifier = validShortId))
+            }
+            if (scheduleChanged) {
+                dao.replaceSchedulesForTemplate(templateId, days)
+            }
+            upsert(SyncEntityType.WORKOUT_TEMPLATE, existing.syncId)
         }
     }
 
@@ -242,10 +313,12 @@ class WorkoutRepository(
     suspend fun addTemplateWithExercises(
         template: WorkoutTemplateEntity,
         exercises: List<WorkoutTemplateExerciseEntity>,
+        scheduledDays: Collection<DayOfWeek> = emptyList(),
         andThen: suspend (templateId: Long) -> Unit = {}
     ): Long = syncMutations.mutate {
         val templateId = dao.insertTemplate(template)
         exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+        dao.replaceSchedulesForTemplate(templateId, WeekdaySchedule.names(scheduledDays))
         andThen(templateId)
         upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
         templateId
@@ -270,13 +343,14 @@ class WorkoutRepository(
      */
     suspend fun addProgramWithTemplates(
         program: WorkoutProgramEntity,
-        templates: List<Pair<WorkoutTemplateEntity, List<WorkoutTemplateExerciseEntity>>>,
+        templates: List<NewTemplate>,
         andThen: suspend (programId: Long) -> Unit = {}
     ): Long = syncMutations.mutate {
         val programId = dao.insertProgram(program.copy(isCurrent = false))
-        val templateSyncIds = templates.map { (template, exercises) ->
+        val templateSyncIds = templates.map { (template, exercises, scheduledDays) ->
             val templateId = dao.insertTemplate(template.copy(programId = programId))
             exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+            dao.replaceSchedulesForTemplate(templateId, WeekdaySchedule.names(scheduledDays))
             template.syncId
         }
         andThen(programId)
@@ -411,6 +485,36 @@ sealed class CustomExerciseDeleteResult {
  * A validação de campos de um exercício `CUSTOM` — a mesma para criar e editar, e a mesma que a
  * UI usa para habilitar o botão: obrigatório é só o nome.
  */
+/**
+ * Um treino a ser criado junto com um programa ([WorkoutRepository.addProgramWithTemplates]):
+ * cabeçalho, exercícios e os dias da semana (T19.8). `programId` da entidade é ignorado — o do
+ * programa recém-criado é que vale.
+ */
+data class NewTemplate(
+    val template: WorkoutTemplateEntity,
+    val exercises: List<WorkoutTemplateExerciseEntity>,
+    val scheduledDays: List<DayOfWeek> = emptyList()
+)
+
+/**
+ * As regras dos campos do cabeçalho de um treino (T19.8) — as **mesmas** para a tela e para o
+ * repositório, para que o asterisco do formulário corresponda ao que o domínio de fato exige.
+ *
+ * Obrigatório: só o nome (`workout_templates.name NOT NULL`). Sigla é opcional (`shortIdentifier`
+ * anulável na entidade, no sync, no backup e no compartilhamento) e em branco vira `null`, não
+ * `""`. Dias da semana são opcionais: nenhum dia é "sem dia fixo".
+ */
+object WorkoutTemplateFields {
+    fun isValidName(name: String?): Boolean = !name.isNullOrBlank()
+
+    fun requireName(name: String): String {
+        require(isValidName(name)) { "Nome do treino é obrigatório." }
+        return name.trim()
+    }
+
+    fun optionalShortIdentifier(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
+}
+
 object CustomExerciseFields {
     fun isValidName(name: String?): Boolean = !name.isNullOrBlank()
 

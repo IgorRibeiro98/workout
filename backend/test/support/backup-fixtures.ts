@@ -26,6 +26,7 @@ export type BackupFixtureName =
   | 'backup-v1-invalid-id'
   | 'backup-v1-duplicate-item'
   | 'backup-v1-invalid-reference'
+  | 'backup-v1-legacy-template'
   | 'backup-v1-unsupported-version';
 
 /** O texto cru da fixture — é o que o cliente enviaria, e é sobre ele que o hash é calculado. */

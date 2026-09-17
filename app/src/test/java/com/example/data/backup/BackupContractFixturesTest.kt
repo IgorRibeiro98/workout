@@ -6,6 +6,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -93,9 +94,24 @@ class BackupContractFixturesTest {
             hashOfFixture("backup-v1-minimal")
         )
         assertEquals(
-            "432b0f20b96d3b1ba21a38ba554ff5fde6e0bc04bdca732d352494ff9dac3d9a",
+            "68167f9672b0677dc62b5e8446f616ec89ca1b5b8325edd1b53b9794d2fda184",
             hashOfFixture("backup-v1-complete")
         )
+    }
+
+    @Test
+    fun `a fixture com treino v1 tem o hash que o backend calcula, e continua legivel`() {
+        assertEquals(
+            "20b3d56a772a68adad03e3c640b2ac48dc834d46129ff564d89c873a4ba53119",
+            hashOfFixture("backup-v1-legacy-template")
+        )
+        val snapshot = json.decodeFromString(
+            BackupSnapshotDto.serializer(),
+            BackupContractFixtures.text("backup-v1-legacy-template")
+        )
+        val template = snapshot.items.single { it.entityType == BackupEntityType.WORKOUT_TEMPLATE.name }
+        assertEquals(1, template.entitySchemaVersion)
+        assertTrue(template.entitySchemaVersion in BackupEntityType.WORKOUT_TEMPLATE.readableSchemaVersions)
     }
 
     @Test

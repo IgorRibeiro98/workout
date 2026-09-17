@@ -152,6 +152,56 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
     suspend fun getTemplatesForProgramSync(programId: Long): List<WorkoutTemplateEntity>
 
+    // ---- Dias da semana (T19.8) ----------------------------------------------------------
+    //
+    // A agenda semanal mora em `workout_template_schedules`, uma linha por (treino, dia). Quem
+    // precisa do treino **com** os dias lê a relação; quem só precisa do cabeçalho continua
+    // lendo `workout_templates`. A ordem dos treinos continua sendo `orderInProgram` — a agenda
+    // nunca reordena o programa.
+
+    @Transaction
+    @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
+    fun getTemplatesWithScheduleForProgram(programId: Long): Flow<List<WorkoutTemplateWithSchedule>>
+
+    @Transaction
+    @Query("SELECT * FROM workout_templates WHERE programId = :programId ORDER BY orderInProgram ASC")
+    suspend fun getTemplatesWithScheduleForProgramSync(programId: Long): List<WorkoutTemplateWithSchedule>
+
+    @Transaction
+    @Query("SELECT * FROM workout_templates WHERE id = :templateId LIMIT 1")
+    fun getTemplateWithScheduleFlow(templateId: Long): Flow<WorkoutTemplateWithSchedule?>
+
+    @Query("SELECT * FROM workout_template_schedules WHERE templateId = :templateId")
+    suspend fun getSchedulesForTemplate(templateId: Long): List<WorkoutTemplateScheduleEntity>
+
+    /**
+     * `IGNORE`, e não `REPLACE`: a chave primária composta já diz que (treino, dia) é único, e
+     * inserir o mesmo dia duas vezes é um no-op — nunca uma segunda linha.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSchedules(schedules: List<WorkoutTemplateScheduleEntity>)
+
+    @Query("DELETE FROM workout_template_schedules WHERE templateId = :templateId")
+    suspend fun deleteSchedulesForTemplate(templateId: Long)
+
+    @Query("SELECT COUNT(*) FROM workout_template_schedules")
+    suspend fun countSchedules(): Int
+
+    /**
+     * Substitui a agenda do treino pela lista dada — o **estado final**, e não um delta.
+     *
+     * Apagar e inserir dentro da mesma transação é o que garante que `[MONDAY, THURSDAY]` →
+     * `[TUESDAY, FRIDAY]` não deixa linha órfã e que salvar a mesma lista duas vezes produz as
+     * mesmas linhas. Quem chama já normalizou os dias (`WeekdaySchedule.names`).
+     */
+    @Transaction
+    suspend fun replaceSchedulesForTemplate(templateId: Long, dayNames: List<String>) {
+        deleteSchedulesForTemplate(templateId)
+        if (dayNames.isNotEmpty()) {
+            insertSchedules(dayNames.map { WorkoutTemplateScheduleEntity(templateId, it) })
+        }
+    }
+
     /** Insere um treino novo. Sem `REPLACE`, pelo mesmo motivo de [insertProgram]. */
     @Insert
     suspend fun insertTemplate(template: WorkoutTemplateEntity): Long

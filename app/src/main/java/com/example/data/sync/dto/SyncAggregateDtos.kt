@@ -93,10 +93,18 @@ data class WorkoutTemplateExerciseSyncDto(
 )
 
 /**
- * O agregado `WORKOUT_TEMPLATE` inteiro: raiz + exercícios + ordem + configuração.
+ * O agregado `WORKOUT_TEMPLATE` inteiro: raiz + dias da semana + exercícios + ordem + configuração.
  *
  * Um snapshot, e não quatro mutações independentes. Renomear o treino, mover um exercício e mudar
  * a carga de uma série produzem todos o mesmo push: "este treino agora é assim".
+ *
+ * ## v2 (T19.8)
+ *
+ * `scheduledDays` carrega os **0..N** dias da semana do treino como nomes canônicos de
+ * `java.time.DayOfWeek` (`["MONDAY", "THURSDAY"]`), na ordem da semana, sem repetição. Vazio é
+ * "sem dia fixo". A v1 tinha `dayOfWeek: String?` — um dia só, guardando o rótulo de tela
+ * (`"Seg"`); este app continua **lendo** a v1 (aparelho ainda não atualizado, backup antigo,
+ * cópia remota guardada num conflito) por [WorkoutTemplatePayloadCompat], mas só **escreve** v2.
  */
 @Serializable
 data class WorkoutTemplateSyncDto(
@@ -105,10 +113,17 @@ data class WorkoutTemplateSyncDto(
     val name: String,
     val shortIdentifier: String? = null,
     val orderInProgram: Int = 0,
-    val dayOfWeek: String? = null,
+    val scheduledDays: List<String> = emptyList(),
     val exercises: List<WorkoutTemplateExerciseSyncDto> = emptyList()
 ) {
-    companion object { const val SCHEMA_VERSION = 1 }
+    companion object {
+        const val SCHEMA_VERSION = 2
+
+        /** A versão anterior à T19.8, que este app ainda lê e nunca mais escreve. */
+        const val LEGACY_SCHEMA_VERSION = 1
+
+        val READABLE_SCHEMA_VERSIONS: Set<Int> = setOf(LEGACY_SCHEMA_VERSION, SCHEMA_VERSION)
+    }
 }
 
 @Serializable

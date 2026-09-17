@@ -206,7 +206,10 @@ export function validateMutation(mutation: ParsedMutation): MutationVerdict {
     return reject(SYNC_MUTATION_REASONS.PAYLOAD_TOO_LARGE, false);
   }
 
-  const payload = definition.schema.safeParse(mutation.payload);
+  const payload = BackupEntityRegistry.schemaFor(
+    definition,
+    mutation.entitySchemaVersion,
+  ).safeParse(mutation.payload);
   if (!payload.success) {
     return reject(SYNC_MUTATION_REASONS.INVALID_PAYLOAD, false);
   }

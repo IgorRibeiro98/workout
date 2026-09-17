@@ -48,9 +48,10 @@ import kotlinx.coroutines.launch
         WorkoutShareImportReceiptEntity::class,
         WorkoutSessionParticipantEntity::class,
         WorkoutGuestSetLogEntity::class,
-        WorkoutSessionMultiplayerLinkEntity::class
+        WorkoutSessionMultiplayerLinkEntity::class,
+        WorkoutTemplateScheduleEntity::class
     ],
-    version = 40,
+    version = 41,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -80,7 +81,7 @@ abstract class AppDatabase : RoomDatabase() {
          * literal da anotação. **Não** é `backupSchemaVersion`, que é a versão do formato de
          * backup e evolui por conta própria (`contracts/backup/v1/README.md`).
          */
-        const val SCHEMA_VERSION: Int = 39
+        const val SCHEMA_VERSION: Int = 41
 
         /**
          * T16.3 — identidade global dos dados pessoais + Outbox transacional.
@@ -219,6 +220,89 @@ abstract class AppDatabase : RoomDatabase() {
          *
          * O `CREATE TABLE`/`CREATE INDEX` é o que o KSP gerou em `schemas/40.json`.
          */
+        /**
+         * Agenda semanal do treino (T19.8): `WorkoutTemplate` passa a ter **0..N** dias.
+         *
+         * A coluna `workout_templates.dayOfWeek` (um dia, e guardando o rótulo de tela `Seg`..`Dom`)
+         * é substituída pela tabela `workout_template_schedules`, uma linha por (treino, dia), com
+         * o nome canônico de `java.time.DayOfWeek`. A chave primária composta é o que torna um dia
+         * repetido impossível no banco.
+         *
+         * Dado existente: cada template com `dayOfWeek` reconhecível vira **uma** linha de agenda
+         * ([WeekdaySchedule.fromLegacyLabel] entende os rótulos que o formulário gravava e as
+         * variantes que um JSON importado pode trazer); `NULL`, vazio e texto que não é dia viram
+         * zero linhas — "sem dia fixo", que é um estado válido, e não um dia inventado.
+         *
+         * Remover a coluna exige recriar `workout_templates` (SQLite do Android não tem
+         * `DROP COLUMN` garantido): cria-se a tabela nova sem a coluna, copiam-se as linhas com o
+         * **mesmo `id`** — `workout_template_exercises.templateId`, `workout_sessions.templateId` e a
+         * agenda recém-criada continuam apontando para o mesmo treino —, apaga-se a antiga e
+         * renomeia-se. As chaves estrangeiras dos filhos referenciam a tabela pelo nome, e o Room
+         * roda migrações com `foreign_keys` desligado (só liga em `onOpen`), então o `DROP` não
+         * cascateia; o teste da migração prova que exercícios, sessões e agenda sobrevivem.
+         *
+         * Os `CREATE TABLE`/`CREATE INDEX` são os que o KSP gerou em `schemas/41.json`.
+         */
+        val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_template_schedules` (
+                        `templateId` INTEGER NOT NULL,
+                        `dayOfWeek` TEXT NOT NULL,
+                        PRIMARY KEY(`templateId`, `dayOfWeek`),
+                        FOREIGN KEY(`templateId`) REFERENCES `workout_templates`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_template_schedules_templateId` " +
+                        "ON `workout_template_schedules` (`templateId`)"
+                )
+
+                // O rótulo legado vira o dia canônico **antes** de a coluna desaparecer. A leitura
+                // é por cursor para que o mapeamento seja o mesmo que o app usa em qualquer outra
+                // fronteira — e não uma segunda tabela de rótulos escrita em SQL.
+                db.query("SELECT id, dayOfWeek FROM workout_templates WHERE dayOfWeek IS NOT NULL").use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val templateId = cursor.getLong(0)
+                        val day = com.example.domain.workout.template.WeekdaySchedule
+                            .fromLegacyLabel(cursor.getString(1)) ?: continue
+                        db.execSQL(
+                            "INSERT OR IGNORE INTO `workout_template_schedules` (`templateId`, `dayOfWeek`) VALUES (?, ?)",
+                            arrayOf<Any>(templateId, day.name)
+                        )
+                    }
+                }
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_templates_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `programId` INTEGER NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `shortIdentifier` TEXT,
+                        `orderInProgram` INTEGER NOT NULL,
+                        `syncId` TEXT NOT NULL,
+                        FOREIGN KEY(`programId`) REFERENCES `workout_programs`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "INSERT INTO `workout_templates_new` (`id`, `programId`, `name`, `shortIdentifier`, `orderInProgram`, `syncId`) " +
+                        "SELECT `id`, `programId`, `name`, `shortIdentifier`, `orderInProgram`, `syncId` FROM `workout_templates`"
+                )
+                db.execSQL("DROP TABLE `workout_templates`")
+                db.execSQL("ALTER TABLE `workout_templates_new` RENAME TO `workout_templates`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_templates_programId` ON `workout_templates` (`programId`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_templates_syncId` ON `workout_templates` (`syncId`)"
+                )
+            }
+        }
+
         val MIGRATION_39_40 = object : Migration(39, 40) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -979,7 +1063,7 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40, MIGRATION_40_41
                 )
                 .addCallback(DatabaseCallback())
                 .build()

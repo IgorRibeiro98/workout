@@ -3,6 +3,7 @@ package com.example.data.repository
 import com.example.data.local.TemplateExerciseWithDetails
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
 import com.example.domain.social.SharedExerciseSnapshot
 import com.example.domain.social.SharedProgramSnapshot
 import com.example.domain.social.SharedProgramTemplateSnapshot
@@ -59,7 +60,7 @@ class WorkoutShareSnapshotBuilder {
      */
     fun buildProgramSnapshot(
         program: WorkoutProgramEntity,
-        templates: List<Pair<WorkoutTemplateEntity, List<TemplateExerciseWithDetails>>>
+        templates: List<Pair<WorkoutTemplateWithSchedule, List<TemplateExerciseWithDetails>>>
     ): SnapshotBuildResult {
         if (templates.isEmpty()) {
             return SnapshotBuildResult.Blocked(listOf("O programa precisa ter pelo menos um treino para ser compartilhado."))
@@ -68,9 +69,9 @@ class WorkoutShareSnapshotBuilder {
         val reasons = mutableListOf<String>()
         templates.forEach { (template, exercises) ->
             if (exercises.isEmpty()) {
-                reasons.add("O treino \"${template.name}\" não tem exercícios. Adicione exercícios ou remova o treino do programa.")
+                reasons.add("O treino \"${template.template.name}\" não tem exercícios. Adicione exercícios ou remova o treino do programa.")
             } else {
-                customExerciseReason(exercises, owner = "O treino \"${template.name}\"")?.let { reasons.add(it) }
+                customExerciseReason(exercises, owner = "O treino \"${template.template.name}\"")?.let { reasons.add(it) }
             }
         }
         if (reasons.isNotEmpty()) {
@@ -82,15 +83,17 @@ class WorkoutShareSnapshotBuilder {
             name = program.name,
             description = program.description?.takeIf { it.isNotBlank() },
             templates = templates
-                .sortedBy { (template, _) -> template.orderInProgram }
+                .sortedBy { (template, _) -> template.template.orderInProgram }
                 .mapIndexed { index, (template, exercises) ->
                     SharedProgramTemplateSnapshot(
-                        name = template.name,
-                        shortIdentifier = template.shortIdentifier,
+                        name = template.template.name,
+                        shortIdentifier = template.template.shortIdentifier,
                         // A posição viaja normalizada (0..n-1): é a ordem que importa, não o
                         // valor que o Room do remetente guardava.
                         orderInProgram = index,
-                        dayOfWeek = template.dayOfWeek?.takeIf { it.isNotBlank() },
+                        // Os dias da semana são estruturais (T19.8): a cópia nasce com a mesma
+                        // agenda, em forma canônica.
+                        scheduledDays = template.scheduledDays,
                         exercises = exerciseSnapshots(exercises)
                     )
                 }

@@ -7,6 +7,7 @@ import com.example.data.local.WorkoutExecutionMode
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutSessionEntity
 import com.example.data.local.WorkoutTemplateEntity
+import com.example.data.local.WorkoutTemplateWithSchedule
 import com.example.data.repository.WorkoutRepository
 import com.example.domain.engine.WorkoutEngine
 import com.example.domain.evolution.model.consistency.ConsistencyProgress
@@ -41,11 +42,15 @@ data class TodayHighlight(
 
 data class TodayState(
     val nextTemplate: WorkoutTemplateEntity? = null,
+    /** Os dias da semana do treino sugerido/escolhido (T19.8); vazio é "sem dia fixo". */
+    val nextTemplateDays: List<java.time.DayOfWeek> = emptyList(),
+    /** Por que a sugestão é a que é — agendado para hoje, ou próximo da sequência. */
+    val suggestionReason: TodaySuggestionReason = TodaySuggestionReason.SEQUENCE,
     val nextTemplateExerciseCount: Int = 0,
     val predominantMuscles: List<String> = emptyList(),
     val weeklyCompleted: Int = 0,
     val weeklyGoal: Int = 3,
-    val allTemplates: List<WorkoutTemplateEntity> = emptyList(),
+    val allTemplates: List<WorkoutTemplateWithSchedule> = emptyList(),
     val activeSession: WorkoutSessionEntity? = null,
     val activeCheckIn: com.example.data.local.CheckInEntity? = null,
     val lastSession: WorkoutSessionEntity? = null,
@@ -152,6 +157,21 @@ class TodayViewModel(
         }
     }.distinctUntilChanged()
 
+    /**
+     * A data de hoje, reavaliada sozinha (T19.8) — pelo mesmo motivo do [weekStartFlow]: o Hoje
+     * sugere o treino agendado para o dia atual, e o app aberto na virada da meia-noite precisa
+     * trocar de dia sem que alguém mate o processo.
+     */
+    private val todayFlow: Flow<java.time.LocalDate> = flow {
+        while (true) {
+            val zone = java.time.ZoneId.systemDefault()
+            val today = java.time.LocalDate.now(zone)
+            emit(today)
+            val untilTomorrow = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - System.currentTimeMillis()
+            delay(untilTomorrow.coerceIn(1_000L, WEEK_RECHECK_CAP_MILLIS))
+        }
+    }.distinctUntilChanged()
+
     init {
         loadTodayData()
     }
@@ -185,7 +205,8 @@ class TodayViewModel(
                 repository.dao.getAllCompletedSessionsWithDetailsFlow(),
                 repository.dao.getRecentPRsFlow(),
                 bodyMeasurementsFlow,
-                consistencyProgressFlow
+                consistencyProgressFlow,
+                todayFlow
             ) { args ->
                 val program = args[0] as WorkoutProgramEntity?
                 val weeklyCount = args[1] as Int
@@ -198,6 +219,7 @@ class TodayViewModel(
                 val recentPRs = args[8] as List<com.example.data.local.PersonalRecordEntity>
                 val bodyMeasurements = args[9] as List<com.example.data.local.BodyMeasurementEntity>
                 val consistencyProgress = args[10] as ConsistencyProgress?
+                val today = args[11] as java.time.LocalDate
 
                 val totalWorkouts = completedSessions.size
                 val timestamps = completedSessions.map { it.session.startedAt }
@@ -226,25 +248,27 @@ class TodayViewModel(
                 val weeklyVolume = stats.volume.toFloat()
 
                 if (program != null) {
-                    val templates = repository.getTemplatesForProgram(program.id).first()
+                    val templates = repository.getTemplatesWithScheduleForProgram(program.id).first()
                     val lastSession = repository.getLastCompletedSession()
-                    
-                    var nextTemplate: WorkoutTemplateEntity? = templates.firstOrNull()
-                    var nextTemplateIndex = 0
-                    
-                    if (lastSession != null && lastSession.templateId != null && templates.isNotEmpty()) {
-                        val lastIndex = templates.indexOfFirst { it.id == lastSession.templateId }
-                        if (lastIndex != -1) {
-                            nextTemplateIndex = (lastIndex + 1) % templates.size
-                            nextTemplate = templates[nextTemplateIndex]
-                        }
-                    }
-                    
+
+                    // A regra é uma só e mora em `TodayTemplateSelector` (T19.8): treino agendado
+                    // para hoje vence a sequência; a escolha manual vence as duas. A sequência é
+                    // montada em torno da **sugestão**, não da escolha manual — é assim que a tela
+                    // sabe dizer "treino selecionado" em vez de "próximo".
+                    val selection = TodayTemplateSelector.select(
+                        templates = templates,
+                        lastCompletedTemplateId = lastSession?.templateId,
+                        today = today.dayOfWeek,
+                        overrideTemplateId = overrideTemplateId
+                    )
+                    val nextTemplate = selection?.next?.template
+                    val nextTemplateIndex = selection?.suggestedIndex ?: 0
+
                     val sequenceList = mutableListOf<SequenceItemData>()
                     if (templates.isNotEmpty()) {
                         for (i in -1..2) {
                             val idx = (nextTemplateIndex + i + templates.size) % templates.size
-                            val template = templates[idx]
+                            val template = templates[idx].template
                             sequenceList.add(
                                 SequenceItemData(
                                     template = template,
@@ -254,14 +278,7 @@ class TodayViewModel(
                             )
                         }
                     }
-                    
-                    if (overrideTemplateId != null) {
-                        val overrideTpl = templates.find { it.id == overrideTemplateId }
-                        if (overrideTpl != null) {
-                            nextTemplate = overrideTpl
-                        }
-                    }
-                    
+
                     var exerciseCount = 0
                     var predominantMuscles = emptyList<String>()
                     if (nextTemplate != null) {
@@ -274,6 +291,8 @@ class TodayViewModel(
                     
                     _state.value = TodayState(
                         nextTemplate = nextTemplate,
+                        nextTemplateDays = selection?.next?.scheduledDays ?: emptyList(),
+                        suggestionReason = selection?.suggestedReason ?: TodaySuggestionReason.SEQUENCE,
                         nextTemplateExerciseCount = exerciseCount,
                         predominantMuscles = predominantMuscles,
                         weeklyCompleted = effectiveWeeklyCompleted,

@@ -1,11 +1,15 @@
 package com.example.data.local
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.PrimaryKey
+import androidx.room.Relation
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.example.data.sync.SyncIds
+import com.example.domain.workout.template.WeekdaySchedule
+import java.time.DayOfWeek
 import java.util.Date
 
 @Entity(
@@ -107,7 +111,6 @@ data class WorkoutTemplateEntity(
     val name: String,
     val shortIdentifier: String? = null,
     val orderInProgram: Int = 0,
-    val dayOfWeek: String? = null,
     /**
      * Identidade global do treino (T16.3) — raiz do agregado `WORKOUT_TEMPLATE`.
      *
@@ -116,6 +119,41 @@ data class WorkoutTemplateEntity(
      */
     val syncId: String = SyncIds.random()
 )
+
+/**
+ * Um dia da semana em que o treino costuma acontecer (T19.8).
+ *
+ * Um treino tem **0..N** linhas aqui: nenhuma é "sem dia fixo", uma é o comportamento anterior à
+ * T19.8, várias é o mesmo treino repetido na semana — sem duplicar o `WorkoutTemplateEntity`. A
+ * chave primária composta é o que torna um dia repetido **impossível** no banco, e não só evitado
+ * pela tela. A coluna `dayOfWeek` guarda o nome canônico de `java.time.DayOfWeek`
+ * (`MONDAY`..`SUNDAY`), nunca o rótulo de tela.
+ *
+ * Não tem `syncId`: viaja dentro do snapshot do treino, como os exercícios dele.
+ */
+@Entity(
+    tableName = "workout_template_schedules",
+    primaryKeys = ["templateId", "dayOfWeek"],
+    foreignKeys = [ForeignKey(entity = WorkoutTemplateEntity::class, parentColumns = ["id"], childColumns = ["templateId"], onDelete = ForeignKey.CASCADE)],
+    indices = [androidx.room.Index("templateId")]
+)
+data class WorkoutTemplateScheduleEntity(
+    val templateId: Long,
+    val dayOfWeek: String
+)
+
+/** Um treino com os dias em que acontece — a leitura que a lista de treinos, o Hoje e o sync fazem. */
+data class WorkoutTemplateWithSchedule(
+    @Embedded val template: WorkoutTemplateEntity,
+    @Relation(parentColumn = "id", entityColumn = "templateId")
+    val schedules: List<WorkoutTemplateScheduleEntity>
+) {
+    /** Os dias na ordem da semana; vazio é "sem dia fixo". */
+    val scheduledDays: List<DayOfWeek>
+        get() = WeekdaySchedule.normalize(
+            schedules.mapNotNull { row -> DayOfWeek.entries.firstOrNull { it.name == row.dayOfWeek } }
+        )
+}
 
 @Entity(
     tableName = "workout_template_exercises",

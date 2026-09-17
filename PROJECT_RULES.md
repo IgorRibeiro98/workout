@@ -330,8 +330,8 @@ regras abaixo são o que impede que ele comece a enviar por acidente.
   já cobriu, **depois** da confirmação do servidor. Desde a **T16.6** ela também é a fila do push
   incremental — que igualmente só a libera com confirmação. O que continua proibido é o que a
   regra sempre quis dizer: trabalho **periódico**, polling e retry automático de recusa. Ver §13.4.
-- **Migrations.** Room é `version = 38` (37 na auditoria de 2026-09-12, 36 na T17.7, 35 na T16.7,
-  34 na T16.6, 33 na T16.5) com schema exportado versionado em `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da
+- **Migrations.** Room é `version = 41` (40 na T19.5, 39 na T19.4, 38 na T19.3, 37 na auditoria de
+  2026-09-12, 36 na T17.7, 35 na T16.7, 34 na T16.6, 33 na T16.5) com schema exportado versionado em `app/schemas`. Toda mudança de schema precisa de migration explícita e teste com banco da
   versão anterior; `fallbackToDestructiveMigration` é proibido.
 - **Logs.** Nada de payload de Outbox em log. Metadata técnica apenas (tipo, operação, id
   abreviado).
@@ -1941,7 +1941,8 @@ Documento canônico: `docs/architecture/workout-sharing.md`.
   proíbe. O discriminador do corpo é o campo presente (`snapshot` **ou** `programSnapshot`); um
   `shareType` no corpo recusa a requisição inteira.
 - **Snapshot imutável, portável e mínimo.** Programa: `name`, `description`. Treino: `name`,
-  `shortIdentifier`, `orderInProgram`, `dayOfWeek`. Exercício: `canonicalExerciseId`, `sortOrder`,
+  `shortIdentifier`, `orderInProgram`, `scheduledDays` (T19.8; `dayOfWeek` só chega de um app
+  anterior, e o servidor aceita **uma** das duas formas por treino). Exercício: `canonicalExerciseId`, `sortOrder`,
   `targetSets`, `minReps`, `maxReps`, `restDurationSeconds`. **Nunca:** `plannedWeight`,
   `machineLabel`, `notes`, `localId`, `syncId`, `programId`, `templateId`, `isCurrent`,
   `externalId`, sessão, PR, carga realizada, histórico, XP, medida, uid, e-mail. O servidor recusa
@@ -2074,6 +2075,45 @@ As regras que não podem ser quebradas:
   `backend/` e `./gradlew :app:testDebugUnitTest --tests "com.example.domain.multiplayer.*"
   --tests "com.example.data.multiplayer.*" --tests "com.example.presentation.multiplayer.*"`.
   As duas são offline e usam dublê de autenticação e de servidor.
+
+## 13.26 Agenda semanal do treino: 0..N dias, um treino só (T19.8)
+
+Contrato completo em [`docs/architecture/workout-scheduling.md`](docs/architecture/workout-scheduling.md).
+As regras que não podem ser quebradas:
+
+- **Um treino é uma entidade, em qualquer número de dias.** A agenda é `workout_template_schedules`
+  (`templateId`, `dayOfWeek`, chave primária composta, cascade). "Treino A" em segunda e quinta é
+  **um** `WorkoutTemplateEntity`; duplicar o treino por dia, concatenar dias numa string, guardar
+  JSON/bitmask ou manter a seleção só na tela é bloqueante.
+- **Zero dias é estado válido**: nenhuma linha, "sem dia fixo". Não existe valor `NONE`, nem
+  chip/radio "Nenhum" — nenhum dia selecionado **é** sem dia. Dia repetido é impossível pelo banco.
+- **Valor canônico é `java.time.DayOfWeek.name`.** `Seg`/`Qui` é rótulo (`WeekdaySchedule`),
+  nunca identidade nem contrato. A coluna `workout_templates.dayOfWeek` não existe mais; a
+  migração 40 → 41 converteu o rótulo antigo (`WeekdaySchedule.fromLegacyLabel`) e o que não era
+  dia virou "sem dia" — nunca um dia inventado.
+- **Agenda ≠ ordem ≠ histórico.** Não altera `orderInProgram`; não reescreve nem reinterpreta
+  `WorkoutSession` (a sessão aponta para o treino por `templateId` e guarda os próprios snapshots).
+- **Obrigatoriedade é a do domínio.** `WorkoutTemplateFields`: só o nome. A tela marca `*`
+  exatamente nisso; sigla em branco vira `null`; dias são opcionais. Não duplicar validação no
+  Compose.
+- **Editar é o mesmo caminho para todos os dias.** `updateTemplateHeader` troca nome, sigla e
+  agenda da raiz — sem tocar exercícios, `syncId` ou ordem —, substitui a agenda inteira (nunca
+  delta, nunca linha órfã) e registra **uma** mutação do agregado, nenhuma quando nada mudou.
+- **Hoje:** treino agendado para o dia vence a sequência; sem agenda, a sequência de sempre;
+  escolha manual vence as duas (`TodayTemplateSelector`). Nada de "perdeu segunda → terça",
+  recorrência, calendário ou sessão automática.
+- **Fronteiras.** `WORKOUT_TEMPLATE` é **v2** (`scheduledDays`), escrita sempre v2 e lida v1 e v2
+  por uma fronteira só (`WorkoutTemplatePayloadCompat`); o servidor aceita `[1, 2]`, cada versão
+  com uma forma só. Apply remoto e restore substituem a agenda inteira — replay não duplica dia.
+  Program Share envia `scheduledDays`, lê `dayOfWeek` de oferta antiga; o treino avulso (T17.7)
+  continua sem dia. Backup anterior à T19.8 continua restaurável (fixture
+  `backup-v1-legacy-template`).
+- **Testes.** Toda mudança na agenda roda `./gradlew :app:testDebugUnitTest --tests
+  "com.example.domain.workout.template.*" --tests "com.example.data.repository.WorkoutRepositorySchedule*"
+  --tests "com.example.data.local.AppDatabaseMigration40To41Test" --tests "com.example.data.sync.*"
+  --tests "com.example.data.restore.*" --tests "com.example.presentation.workouts.ProgramDetails*"
+  --tests "com.example.presentation.today.TodayTemplateSelectorTest"` e, no backend,
+  `npm test -- test/sync-push.spec.ts test/backup-contract.spec.ts test/program-share.spec.ts`.
 
 ## 14. Tests and build are part of implementation
 

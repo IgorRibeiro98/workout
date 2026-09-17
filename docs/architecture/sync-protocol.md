@@ -373,6 +373,12 @@ a versão da API HTTP, nem a versão do banco Room, nem uma versão de formato d
 contrato daquele payload, para que o formato de um treino possa evoluir sem depender do número da
 tabela local.
 
+**Versões em uso.** Todo agregado está na v1, exceto `WORKOUT_TEMPLATE`, que desde a T19.8 é
+**v2** (`scheduledDays`: 0..N dias da semana canônicos, no lugar do `dayOfWeek` único da v1). O app
+escreve só v2 e lê v1 e v2 por uma fronteira só (`WorkoutTemplatePayloadCompat`); o servidor aceita
+`[1, 2]`. Um cliente anterior à T19.8 que receba uma mudança v2 pausa naquele ponto e pede
+atualização — o comportamento abaixo, sem exceção. Ver `workout-scheduling.md`.
+
 **Compatibilidade.** A evolução é controlada, não tolerante: um `entityType` desconhecido, um
 `exerciseId` que não resolve ou um campo obrigatório ausente são **recusados**, não preenchidos com
 padrão. Nos dois sentidos: o servidor recusa no push, e o cliente recusa no pull — `Json` estrito,

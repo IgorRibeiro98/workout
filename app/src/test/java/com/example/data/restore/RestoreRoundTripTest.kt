@@ -159,6 +159,14 @@ class RestoreRoundTripTest {
         )
         assertEquals(62.5f, exercises[0].templateExercise.plannedWeight)
         assertEquals("Banco 3", exercises[0].templateExercise.machineLabel)
+
+        // Os dois dias do treino voltam no **mesmo** treino (T19.8) — nem perdidos, nem duplicados.
+        assertEquals(
+            listOf(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.THURSDAY),
+            target.workoutDao().getTemplatesWithScheduleForProgramSync(template.programId)
+                .single { it.template.syncId == RestoreDatasetFixture.TEMPLATE_A_SYNC_ID }
+                .scheduledDays
+        )
     }
 
     @Test

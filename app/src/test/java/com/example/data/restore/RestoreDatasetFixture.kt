@@ -101,10 +101,11 @@ object RestoreDatasetFixture {
                 name = "Treino A",
                 shortIdentifier = "A",
                 orderInProgram = 0,
-                dayOfWeek = "MONDAY",
                 syncId = TEMPLATE_A_SYNC_ID
             )
         )
+        // Dois dias no mesmo treino (T19.8): o backup carrega os dois, e o restore os devolve.
+        dao.replaceSchedulesForTemplate(templateAId, listOf("MONDAY", "THURSDAY"))
         // Ordem não trivial de propósito: o personalizado no meio, e a inserção fora da ordem final.
         dao.insertTemplateExercise(
             WorkoutTemplateExerciseEntity(

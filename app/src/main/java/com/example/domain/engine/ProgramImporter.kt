@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
 import com.example.data.local.*
+import com.example.domain.workout.template.WeekdaySchedule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONException
@@ -126,14 +127,18 @@ class ProgramImporter(
                     val wObj = workoutsArr.getJSONObject(i)
                     val wName = wObj.optString("name", "Treino ${i + 1}")
                     val shortCode = wObj.optString("shortCode").takeIf { it.isNotBlank() }
-                    val dayOfWeek = wObj.optString("dayOfWeek").takeIf { it.isNotBlank() }
+                    // Dias da semana (T19.8): `scheduledDays` (nomes canônicos) ou, num manifesto
+                    // antigo, `dayOfWeek` (um rótulo). O que não descreve um dia vira "sem dia".
+                    val scheduledDays = wObj.optJSONArray("scheduledDays")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { WeekdaySchedule.fromLegacyLabel(arr.optString(it)) }
+                    } ?: listOfNotNull(WeekdaySchedule.fromLegacyLabel(wObj.optString("dayOfWeek")))
 
                     // Check if template with same name in program exists
                     val existingTemplates = dao.getTemplatesForProgramSync(programId)
                     val existingTpl = existingTemplates.firstOrNull { it.name == wName }
 
                     val templateId = if (existingTpl != null) {
-                        dao.updateTemplate(existingTpl.copy(shortIdentifier = shortCode, dayOfWeek = dayOfWeek, orderInProgram = i))
+                        dao.updateTemplate(existingTpl.copy(shortIdentifier = shortCode, orderInProgram = i))
                         // Clear old template exercises to re-import freshly
                         dao.deleteTemplateExercisesForTemplate(existingTpl.id)
                         existingTpl.id
@@ -143,11 +148,11 @@ class ProgramImporter(
                                 programId = programId,
                                 name = wName,
                                 shortIdentifier = shortCode,
-                                orderInProgram = i,
-                                dayOfWeek = dayOfWeek
+                                orderInProgram = i
                             )
                         )
                     }
+                    dao.replaceSchedulesForTemplate(templateId, WeekdaySchedule.names(scheduledDays))
                     workoutsCount++
 
                     val exArr = wObj.optJSONArray("exercises")

@@ -86,9 +86,14 @@ Typical concerns:
 - exercises/order;
 - target sets/reps/load configuration;
 - metadata;
-- defaults.
+- defaults;
+- **weekly schedule (T19.8):** `0..N` weekdays in `workout_template_schedules` — `[]` is "no fixed
+  day", `[MONDAY, THURSDAY]` is the **same** template twice a week. Canonical value is
+  `java.time.DayOfWeek`; the old single `dayOfWeek` column no longer exists. See
+  [`docs/architecture/workout-scheduling.md`](docs/architecture/workout-scheduling.md).
 
 Changing a template affects future/planned executions and must not mutate historical sessions.
+The schedule never changes `orderInProgram` and never reinterprets a `WorkoutSession`.
 
 ### WorkoutSession
 

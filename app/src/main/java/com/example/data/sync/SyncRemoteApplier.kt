@@ -18,6 +18,7 @@ import com.example.data.sync.dto.CustomExerciseSyncDto
 import com.example.data.sync.dto.ExerciseRefDto
 import com.example.data.sync.dto.WorkoutProgramSyncDto
 import com.example.data.sync.dto.WorkoutSessionSyncDto
+import com.example.data.sync.dto.WorkoutTemplatePayloadCompat
 import com.example.data.sync.dto.WorkoutTemplateSyncDto
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -186,7 +187,7 @@ class SyncRemoteApplier(
     private fun decode(change: SyncChangeDto): DecodedChange? {
         val type = SyncEntityType.entries.firstOrNull { it.name == change.entityType } ?: return null
         val operation = SyncOperation.entries.firstOrNull { it.name == change.operation } ?: return null
-        if (change.entitySchemaVersion != SyncProtocol.SUPPORTED_ENTITY_SCHEMA_VERSION) return null
+        if (change.entitySchemaVersion !in SyncProtocol.readableEntitySchemaVersions(type)) return null
         if (change.entitySyncId.isBlank()) return null
 
         if (operation == SyncOperation.DELETE) {
@@ -202,7 +203,8 @@ class SyncRemoteApplier(
                 SyncEntityType.WORKOUT_PROGRAM ->
                     json.decodeFromJsonElement(WorkoutProgramSyncDto.serializer(), body)
                 SyncEntityType.WORKOUT_TEMPLATE ->
-                    json.decodeFromJsonElement(WorkoutTemplateSyncDto.serializer(), body)
+                    // v1 e v2 (T19.8): a fronteira de versão é uma só, e a saída é sempre o DTO atual.
+                    WorkoutTemplatePayloadCompat.decode(json, change.entitySchemaVersion, body)
                 SyncEntityType.WORKOUT_SESSION ->
                     json.decodeFromJsonElement(WorkoutSessionSyncDto.serializer(), body)
                 SyncEntityType.CUSTOM_EXERCISE ->
@@ -676,7 +678,6 @@ class SyncRemoteApplier(
                     name = dto.name,
                     shortIdentifier = dto.shortIdentifier,
                     orderInProgram = dto.orderInProgram,
-                    dayOfWeek = dto.dayOfWeek,
                     syncId = dto.syncId
                 )
             )
@@ -686,12 +687,16 @@ class SyncRemoteApplier(
                     programId = programId,
                     name = dto.name,
                     shortIdentifier = dto.shortIdentifier,
-                    orderInProgram = dto.orderInProgram,
-                    dayOfWeek = dto.dayOfWeek
+                    orderInProgram = dto.orderInProgram
                 )
             )
             existing.id
         }
+
+        // Os dias da semana são parte do snapshot (T19.8) e são substituídos inteiros, como os
+        // exercícios: o estado final é o que o payload diz, e nunca a soma com o que havia. É isso
+        // que faz o replay do mesmo payload produzir as mesmas linhas.
+        workoutDao.replaceSchedulesForTemplate(templateId, dto.scheduledDays)
 
         // O agregado é um snapshot: os exercícios do treino são substituídos inteiros. Tentar
         // casar linha a linha exigiria identidade em filhos que deliberadamente não a têm (T16.3).

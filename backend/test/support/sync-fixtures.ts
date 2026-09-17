@@ -48,6 +48,23 @@ export function programPayload(syncId: string, name = 'Programa A'): Record<stri
   };
 }
 
+/**
+ * `WORKOUT_TEMPLATE` v2 (T19.8): `scheduledDays` com 0..N dias canônicos no lugar de `dayOfWeek`.
+ * É o que todo app da T19.8 em diante escreve; a v1 abaixo continua nos testes porque o servidor
+ * continua aceitando-a de aparelhos ainda não atualizados.
+ */
+export function templatePayloadV2(
+  syncId: string,
+  name = 'Treino A',
+  scheduledDays: string[] = ['MONDAY', 'THURSDAY'],
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const { dayOfWeek: _legacy, ...v1 } = templatePayload(syncId, name);
+  void _legacy;
+  return { ...v1, scheduledDays, ...overrides };
+}
+
+/** `WORKOUT_TEMPLATE` v1: um dia só, `dayOfWeek` como texto (anterior à T19.8). */
 export function templatePayload(
   syncId: string,
   name = 'Treino A',

@@ -213,8 +213,16 @@ class WorkoutRepositoryProgramTest {
         val programId = repository.addProgramWithTemplates(
             program = program,
             templates = listOf(
-                push to listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0)),
-                pull to listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0))
+                NewTemplate(
+                    push,
+                    listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0)),
+                    // Dois dias no mesmo treino (T19.8): a cópia nasce com a agenda inteira.
+                    listOf(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.THURSDAY)
+                ),
+                NewTemplate(
+                    pull,
+                    listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId, sortOrder = 0))
+                )
             )
         ) { id -> seenProgramId = id }
 
@@ -225,6 +233,11 @@ class WorkoutRepositoryProgramTest {
         val templates = database.workoutDao().getTemplatesForProgramSync(programId)
         assertEquals(listOf("Push", "Pull"), templates.map { it.name })
         assertEquals(listOf(programId, programId), templates.map { it.programId })
+        val withSchedule = database.workoutDao().getTemplatesWithScheduleForProgramSync(programId)
+        assertEquals(
+            listOf(listOf(java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.THURSDAY), emptyList()),
+            withSchedule.map { it.scheduledDays }
+        )
 
         // A Outbox: o programa primeiro, depois cada treino — a ordem em que o outro aparelho
         // consegue aplicar (o treino referencia o programa por syncId).
@@ -251,14 +264,18 @@ class WorkoutRepositoryProgramTest {
             repository.addProgramWithTemplates(
                 program = com.example.data.local.WorkoutProgramEntity(name = "PPL"),
                 templates = listOf(
-                    com.example.data.local.WorkoutTemplateEntity(programId = 0, name = "Push", orderInProgram = 0) to
-                        listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId))
+                    NewTemplate(
+                        com.example.data.local.WorkoutTemplateEntity(programId = 0, name = "Push", orderInProgram = 0),
+                        listOf(com.example.data.local.WorkoutTemplateExerciseEntity(templateId = 0, exerciseId = exerciseId)),
+                        listOf(java.time.DayOfWeek.MONDAY)
+                    )
                 )
             ) { error("recibo indisponível") }
         }
 
         assertTrue(failed.isFailure)
         assertEquals(0, database.workoutDao().countPrograms())
+        assertEquals("a agenda também é desfeita", 0, database.workoutDao().countSchedules())
         assertTrue(database.syncOutboxDao().pendingFor(ownerUid).isEmpty())
     }
 }

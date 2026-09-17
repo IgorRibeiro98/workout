@@ -63,13 +63,22 @@ object BackupContract {
  * está registrado como pendência em `ARCHITECTURE.md`.
  */
 enum class BackupEntityType(
-    /** A versão do payload **daquele agregado**, independente do envelope. */
+    /** A versão do payload **daquele agregado**, independente do envelope — a que o app escreve. */
     val schemaVersion: Int,
     /** O agregado equivalente da Outbox, quando existe. */
-    val syncEntityType: SyncEntityType?
+    val syncEntityType: SyncEntityType?,
+    /**
+     * As versões que o restore ainda sabe ler. Por padrão, só a atual; `WORKOUT_TEMPLATE` lê
+     * também a v1 (T19.8), porque um backup guardado antes da mudança continua sendo restaurável.
+     */
+    val readableSchemaVersions: Set<Int> = setOf(schemaVersion)
 ) {
     WORKOUT_PROGRAM(1, SyncEntityType.WORKOUT_PROGRAM),
-    WORKOUT_TEMPLATE(1, SyncEntityType.WORKOUT_TEMPLATE),
+    WORKOUT_TEMPLATE(
+        com.example.data.sync.dto.WorkoutTemplateSyncDto.SCHEMA_VERSION,
+        SyncEntityType.WORKOUT_TEMPLATE,
+        com.example.data.sync.dto.WorkoutTemplateSyncDto.READABLE_SCHEMA_VERSIONS
+    ),
     WORKOUT_SESSION(1, SyncEntityType.WORKOUT_SESSION),
     CUSTOM_EXERCISE(1, SyncEntityType.CUSTOM_EXERCISE),
     BODY_MEASUREMENT(1, SyncEntityType.BODY_MEASUREMENT),

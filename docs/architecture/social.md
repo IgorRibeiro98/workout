@@ -259,9 +259,14 @@ treino avulso (`WORKOUT_TEMPLATE`) ou um programa inteiro (`WORKOUT_PROGRAM`), n
 
 ```text
 programa   name, description
-treino     name, shortIdentifier, orderInProgram, dayOfWeek
+treino     name, shortIdentifier, orderInProgram, scheduledDays
 exercício  canonicalExerciseId, sortOrder, targetSets, minReps, maxReps, restDurationSeconds
 ```
+
+`scheduledDays` (T19.8) são os 0..N dias da semana do treino, como nomes canônicos de
+`java.time.DayOfWeek` (`["MONDAY", "THURSDAY"]`; `[]` é "sem dia fixo"). Um app anterior à
+T19.8 ainda manda `dayOfWeek` (um dia, como rótulo); o servidor aceita **uma** das duas formas por
+treino, e o app lê as duas — ver `docs/architecture/workout-scheduling.md`.
 
 Nunca: carga, histórico, notas, número de máquina, `localId`, `syncId`, `isCurrent`, uid. Exercício
 **CUSTOM** bloqueia o compartilhamento — do treino, ou do programa inteiro — fail-closed, decidido

@@ -1,0 +1,55 @@
+{
+  "backupSchemaVersion": 1,
+  "capturedAt": 1788700000000,
+  "clientBackupId": "7a1c9e33-5b2d-4f60-8e14-2c9b7d5a3f08",
+  "deviceId": "b1d4a6f2-7c33-4a51-9f0e-2d5c8b7a1e44",
+  "items": [
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WORKOUT_PROGRAM",
+      "payload": {
+        "contentVersion": 0,
+        "description": "Divisão de quatro dias",
+        "externalId": null,
+        "isCurrent": true,
+        "name": "Programa Hipertrofia",
+        "syncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95"
+      },
+      "syncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95"
+    },
+    {
+      "entitySchemaVersion": 1,
+      "entityType": "WORKOUT_TEMPLATE",
+      "payload": {
+        "dayOfWeek": "Seg",
+        "exercises": [
+          {
+            "exercise": {
+              "id": "supino-reto-barra",
+              "kind": "CANONICAL"
+            },
+            "machineLabel": null,
+            "maxReps": 12,
+            "minReps": 8,
+            "notes": null,
+            "plannedWeight": 60.0,
+            "position": 0,
+            "restDurationSeconds": 90,
+            "targetSets": 4
+          }
+        ],
+        "name": "Treino A",
+        "orderInProgram": 0,
+        "programSyncId": "0b8e5f27-9c14-4a63-b7d0-3e6a1c8f2d95",
+        "shortIdentifier": "A",
+        "syncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
+      },
+      "syncId": "e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10"
+    }
+  ],
+  "source": {
+    "appVersionCode": 1,
+    "appVersionName": "1.0",
+    "databaseVersion": 32
+  }
+}

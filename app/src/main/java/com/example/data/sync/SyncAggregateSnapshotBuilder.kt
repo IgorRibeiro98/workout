@@ -14,6 +14,8 @@ import com.example.data.sync.dto.WorkoutProgramSyncDto
 import com.example.data.sync.dto.WorkoutSessionSyncDto
 import com.example.data.sync.dto.WorkoutTemplateExerciseSyncDto
 import com.example.data.sync.dto.WorkoutTemplateSyncDto
+import com.example.domain.workout.template.WeekdaySchedule
+import java.time.DayOfWeek
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -114,7 +116,13 @@ class SyncAggregateSnapshotBuilder(
                 name = template.name,
                 shortIdentifier = template.shortIdentifier,
                 orderInProgram = template.orderInProgram,
-                dayOfWeek = template.dayOfWeek,
+                // Os dias viajam na forma canônica e na ordem da semana (T19.8): o payload de
+                // `[MONDAY, THURSDAY]` é o mesmo texto em qualquer aparelho, e o hash fecha.
+                scheduledDays = WeekdaySchedule.names(
+                    workoutDao.getSchedulesForTemplate(template.id).mapNotNull { row ->
+                        DayOfWeek.entries.firstOrNull { it.name == row.dayOfWeek }
+                    }
+                ),
                 exercises = exercises
             )
         )

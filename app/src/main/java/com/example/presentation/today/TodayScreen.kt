@@ -40,6 +40,7 @@ import java.util.Locale
 import com.example.presentation.gamification.components.XpProgressBar
 import com.example.presentation.gamification.components.XpGainAnimation
 import com.example.domain.gamification.model.XpTransaction
+import com.example.domain.workout.template.WeekdaySchedule
 import com.example.ui.components.IconLabel
 import androidx.compose.material.icons.filled.LocalFireDepartment
 
@@ -246,7 +247,11 @@ fun TodayScreen(
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = if (isCustomSwap) "TREINO SELECIONADO" else "PRÓXIMO DA SEQUÊNCIA",
+                            text = when {
+                                isCustomSwap -> "TREINO SELECIONADO"
+                                state.suggestionReason == TodaySuggestionReason.SCHEDULED_TODAY -> "TREINO DE HOJE"
+                                else -> "PRÓXIMO DA SEQUÊNCIA"
+                            },
                             color = Lime400,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Black,
@@ -273,7 +278,9 @@ fun TodayScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     val estTime = state.estimatedMinutes
-                    val dayLabel = state.nextTemplate?.dayOfWeek?.let { "$it · " } ?: ""
+                    // Todos os dias do treino (T19.8): `Seg · Qui · ` quando ele acontece duas
+                    // vezes na semana; nada quando não tem dia fixo.
+                    val dayLabel = WeekdaySchedule.formatShort(state.nextTemplateDays)?.let { "$it · " } ?: ""
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -749,7 +756,8 @@ fun TodayScreen(
                 Text("Escolher outro treino para hoje", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
-                    items(state.allTemplates, key = { it.id }) { tpl ->
+                    items(state.allTemplates, key = { it.template.id }) { item ->
+                        val tpl = item.template
                         val isSuggested = state.sequence.find { it.isCurrent }?.template?.id == tpl.id
                         Row(
                             modifier = Modifier
@@ -773,8 +781,16 @@ fun TodayScreen(
                             Spacer(modifier = Modifier.width(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(tpl.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                WeekdaySchedule.formatShort(item.scheduledDays)?.let { days ->
+                                    Text(days, color = TextSecondary, fontSize = 12.sp)
+                                }
                                 if (isSuggested) {
-                                    Text("Sugerido (próximo da sequência)", color = Lime400, fontSize = 12.sp)
+                                    Text(
+                                        if (state.suggestionReason == TodaySuggestionReason.SCHEDULED_TODAY) "Sugerido (agendado para hoje)"
+                                        else "Sugerido (próximo da sequência)",
+                                        color = Lime400,
+                                        fontSize = 12.sp
+                                    )
                                 }
                             }
                         }

@@ -236,6 +236,9 @@ class SyncConflictResolver(
 
         return try {
             transactions.runInTransaction {
+                // O conflito guarda a cópia remota sem a versão de payload dela. A versão base é
+                // legível para todo agregado, e a fronteira de versão de `WORKOUT_TEMPLATE`
+                // (T19.8) reconhece a forma do payload — v1 ou v2 — independentemente do número.
                 val written = applier.writeRemoteAggregate(
                     type,
                     conflict.entitySyncId,

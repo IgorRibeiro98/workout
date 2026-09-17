@@ -47,6 +47,7 @@ import com.example.ui.theme.*
 import com.example.domain.engine.ExerciseSearchEngine
 import com.example.domain.engine.ExerciseVisualResolver
 import com.example.domain.engine.MuscleVisualResolver
+import com.example.domain.workout.template.WeekdaySchedule
 import com.example.ui.components.SwipeAction
 import com.example.ui.components.SwipeActionRow
 import androidx.compose.material.icons.filled.MoreVert
@@ -72,6 +73,7 @@ fun TemplateDetailsScreen(
     shareViewModel: com.example.presentation.friends.ShareWorkoutViewModel? = null
 ) {
     val template by viewModel.template.collectAsStateWithLifecycle()
+    val scheduledDays by viewModel.scheduledDays.collectAsStateWithLifecycle()
     val exercises by viewModel.exercises.collectAsStateWithLifecycle()
     val rawExercises by viewModel.rawExercises.collectAsStateWithLifecycle()
     val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
@@ -113,9 +115,8 @@ fun TemplateDetailsScreen(
                 title = { 
                     Column {
                         Text(template?.name ?: "Treino", color = TextPrimary, fontWeight = FontWeight.Bold)
-                        val dayOfWeek = template?.dayOfWeek
-                        if (!dayOfWeek.isNullOrEmpty()) {
-                            Text(dayOfWeek, color = Lime400, fontSize = 12.sp)
+                        WeekdaySchedule.formatShort(scheduledDays)?.let { days ->
+                            Text(days, color = Lime400, fontSize = 12.sp)
                         }
                     }
                 },

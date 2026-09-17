@@ -25,6 +25,7 @@ import com.example.domain.social.WorkoutShareKind
 import com.example.domain.social.WorkoutShareOtherUser
 import com.example.domain.social.WorkoutShareOutcome
 import com.example.domain.social.WorkoutShareStatus
+import java.time.DayOfWeek
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -426,14 +427,15 @@ class WorkoutShareImporterTest {
                 name = "Legs",
                 shortIdentifier = "C",
                 orderInProgram = 2,
-                dayOfWeek = "Sex",
+                scheduledDays = listOf(DayOfWeek.FRIDAY),
                 exercises = listOf(SharedExerciseSnapshot("cat-squat", 0, 5, 5, 5, 180))
             ),
             SharedProgramTemplateSnapshot(
                 name = "Push",
                 shortIdentifier = "A",
                 orderInProgram = 0,
-                dayOfWeek = "Seg",
+                // Dois dias no mesmo treino (T19.8).
+                scheduledDays = listOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY),
                 exercises = listOf(
                     SharedExerciseSnapshot("cat-triceps", 1, 3, 12, 15, 60),
                     SharedExerciseSnapshot("cat-bench", 0, 4, 8, 10, 90)
@@ -443,7 +445,6 @@ class WorkoutShareImporterTest {
                 name = "Pull",
                 shortIdentifier = "B",
                 orderInProgram = 1,
-                dayOfWeek = null,
                 exercises = listOf(SharedExerciseSnapshot("cat-row", 0, 4, 8, 12, 90))
             )
         )
@@ -491,7 +492,11 @@ class WorkoutShareImporterTest {
         assertEquals(listOf("Push", "Pull", "Legs"), templates.map { it.name })
         assertEquals(listOf(0, 1, 2), templates.map { it.orderInProgram })
         assertEquals(listOf("A", "B", "C"), templates.map { it.shortIdentifier })
-        assertEquals(listOf("Seg", null, "Sex"), templates.map { it.dayOfWeek })
+        assertEquals(
+            "a cópia nasce com a mesma agenda, sem duplicar treino por dia",
+            listOf(listOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY), emptyList(), listOf(DayOfWeek.FRIDAY)),
+            database.workoutDao().getTemplatesWithScheduleForProgramSync(programId).map { it.scheduledDays }
+        )
         assertEquals("cada treino tem syncId próprio", 3, templates.map { it.syncId }.toSet().size)
 
         // Os exercícios de cada treino, na ordem, sem carga, nota ou máquina.

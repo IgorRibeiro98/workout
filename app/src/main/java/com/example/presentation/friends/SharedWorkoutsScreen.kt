@@ -64,6 +64,7 @@ import com.example.domain.social.WorkoutShareDetail
 import com.example.domain.social.WorkoutShareItem
 import com.example.domain.social.WorkoutShareKind
 import com.example.domain.social.WorkoutShareStatus
+import com.example.domain.workout.template.WeekdaySchedule
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -450,9 +451,9 @@ fun WorkoutSharePreviewDialog(
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.SemiBold
                                         )
-                                        template.dayOfWeek?.takeIf { it.isNotBlank() }?.let { day ->
+                                        WeekdaySchedule.formatShort(template.scheduledDays)?.let { days ->
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text(text = day, color = Lime400, fontSize = 12.sp)
+                                            Text(text = days, color = Lime400, fontSize = 12.sp)
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))

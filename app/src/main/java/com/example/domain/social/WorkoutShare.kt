@@ -1,5 +1,6 @@
 package com.example.domain.social
 
+import java.time.DayOfWeek
 import kotlinx.serialization.Serializable
 
 /**
@@ -44,15 +45,19 @@ data class SharedProgramSnapshot(
 )
 
 /**
- * Um treino dentro de um programa compartilhado. [orderInProgram] e [dayOfWeek] são os dois
+ * Um treino dentro de um programa compartilhado. [orderInProgram] e [scheduledDays] são os dois
  * campos estruturais que um treino tem por pertencer a um programa — nada além disso.
+ *
+ * [scheduledDays] são os **0..N** dias da semana do treino (T19.8), na ordem da semana e sem
+ * repetição; vazio é "sem dia fixo". Uma oferta anterior à T19.8 trazia um dia só como rótulo
+ * (`dayOfWeek`), e o DTO a converte ao entrar — o domínio só conhece esta forma.
  */
 @Serializable
 data class SharedProgramTemplateSnapshot(
     val name: String,
     val shortIdentifier: String? = null,
     val orderInProgram: Int,
-    val dayOfWeek: String? = null,
+    val scheduledDays: List<DayOfWeek> = emptyList(),
     val exercises: List<SharedExerciseSnapshot> = emptyList()
 )
 

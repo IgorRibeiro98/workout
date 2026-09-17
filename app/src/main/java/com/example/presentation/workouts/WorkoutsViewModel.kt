@@ -47,11 +47,11 @@ class WorkoutsViewModel(
         viewModelScope.launch { repository.setCurrentProgram(id) }
     }
     
-    fun createTemplate(name: String, shortId: String, dayOfWeek: String? = null) {
+    fun createTemplate(name: String, shortId: String?, scheduledDays: Set<java.time.DayOfWeek> = emptySet()) {
         val programId = currentProgram.value?.id ?: return
         val currentSize = templatesForCurrentProgram.value.size
-        viewModelScope.launch { 
-            repository.addTemplate(programId, name, shortId, currentSize, dayOfWeek) 
+        viewModelScope.launch {
+            repository.addTemplate(programId, name, shortId, currentSize, scheduledDays)
         }
     }
 

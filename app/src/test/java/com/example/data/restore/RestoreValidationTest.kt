@@ -289,6 +289,33 @@ class RestoreValidationTest {
         assertDataUnchanged()
     }
 
+    @Test
+    fun `um backup com treino v1 e restauravel, e o dia unico vira uma linha de agenda`() = runTest {
+        val backup = publishFixture("backup-v1-legacy-template")
+
+        val preparation = harness.repository.prepare(backup, uid)
+        assertTrue("$preparation", preparation is RestorePreparation.Ready)
+        val ready = preparation as RestorePreparation.Ready
+
+        val outcome = harness.repository.confirm(
+            plan = ready.plan,
+            restoreAttemptId = ready.restoreAttemptId,
+            currentUid = uid,
+            confirmed = true
+        )
+        assertTrue("$outcome", outcome is RestoreOutcome.Success)
+
+        // `dayOfWeek: "Seg"` (v1, rótulo de tela) → `[MONDAY]` (T19.8), no mesmo treino.
+        val template = harness.database.workoutDao()
+            .getTemplateBySyncId("e93a1b57-0d64-4c28-91f5-7a2e8c6b3d10")
+        assertTrue(template != null)
+        assertEquals(
+            listOf(java.time.DayOfWeek.MONDAY),
+            harness.database.workoutDao().getTemplatesWithScheduleForProgramSync(template!!.programId)
+                .single().scheduledDays
+        )
+    }
+
     // ------------------------------------------------------------------------- transporte
 
     @Test

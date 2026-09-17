@@ -177,19 +177,25 @@ open class WorkoutShareImporter(
         if (missing.isNotEmpty()) {
             return WorkoutShareImportResult.MissingExercises(missing)
         }
-        val templates = mutableListOf<Pair<WorkoutTemplateEntity, List<WorkoutTemplateExerciseEntity>>>()
+        val templates = mutableListOf<NewTemplate>()
         snapshot.templates.sortedBy { it.orderInProgram }.forEachIndexed { index, template ->
             val exercises = resolveExercises(repo, template.exercises)
                 ?: return WorkoutShareImportResult.MissingExercises(missingCanonicalIds(repo, template.exercises))
-            templates += WorkoutTemplateEntity(
-                programId = 0,
-                name = template.name,
-                shortIdentifier = template.shortIdentifier ?: "T",
-                // A posição é a ordem em que os treinos chegaram, normalizada: preserva a ordem do
-                // remetente sem herdar os valores do Room dele.
-                orderInProgram = index,
-                dayOfWeek = template.dayOfWeek
-            ) to exercises
+            templates += NewTemplate(
+                template = WorkoutTemplateEntity(
+                    programId = 0,
+                    name = template.name,
+                    shortIdentifier = template.shortIdentifier ?: "T",
+                    // A posição é a ordem em que os treinos chegaram, normalizada: preserva a
+                    // ordem do remetente sem herdar os valores do Room dele.
+                    orderInProgram = index
+                ),
+                exercises = exercises,
+                // A agenda da cópia é a da oferta (T19.8): os mesmos dias, no mesmo treino — e
+                // retry da importação não a duplica porque a transação inteira é idempotente pelo
+                // recibo.
+                scheduledDays = template.scheduledDays
+            )
         }
 
         // 3. Programa, treinos, exercícios e recibo — **uma** transação. Lançar dentro de

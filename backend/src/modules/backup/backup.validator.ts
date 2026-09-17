@@ -148,7 +148,9 @@ function validateItem(
     throw BackupErrors.unsupportedEntitySchemaVersion(item.entityType, item.entitySchemaVersion);
   }
 
-  const payload = definition.schema.safeParse(item.payload);
+  const payload = BackupEntityRegistry.schemaFor(definition, item.entitySchemaVersion).safeParse(
+    item.payload,
+  );
   if (!payload.success) {
     throw BackupErrors.invalid(`payload inválido em [${index}]: ${describe(payload.error)}`);
   }

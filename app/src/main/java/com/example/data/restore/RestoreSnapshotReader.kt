@@ -11,6 +11,7 @@ import com.example.data.sync.dto.CustomExerciseSyncDto
 import com.example.data.sync.dto.ExerciseRefDto
 import com.example.data.sync.dto.WorkoutProgramSyncDto
 import com.example.data.sync.dto.WorkoutSessionSyncDto
+import com.example.data.sync.dto.WorkoutTemplatePayloadCompat
 import com.example.data.sync.dto.WorkoutTemplateSyncDto
 import java.io.File
 import java.security.MessageDigest
@@ -214,7 +215,7 @@ class RestoreSnapshotReader(
                     "entityType desconhecido em [$index]"
                 )
 
-            if (item.entitySchemaVersion != type.schemaVersion) {
+            if (item.entitySchemaVersion !in type.readableSchemaVersions) {
                 throw RestoreException(
                     RestoreError.UNSUPPORTED_ENTITY_VERSION,
                     "${type.name} v${item.entitySchemaVersion}"
@@ -233,7 +234,7 @@ class RestoreSnapshotReader(
                     }
 
                 BackupEntityType.WORKOUT_TEMPLATE ->
-                    templates += decode(WorkoutTemplateSyncDto.serializer(), item, index).also {
+                    templates += decodeTemplate(item, index).also {
                         requireUuidIdentity(item.syncId, it.syncId, index)
                         validateTemplate(it, index)
                     }
@@ -345,6 +346,18 @@ class RestoreSnapshotReader(
     } catch (e: SerializationException) {
         // A razão descreve a **forma** do defeito, nunca o valor: o payload é treino, medida e nota
         // do usuário, e mensagem de erro acaba em tela e em log.
+        throw RestoreException(RestoreError.INVALID_BACKUP, "payload inválido em [$index]")
+    } catch (e: IllegalArgumentException) {
+        throw RestoreException(RestoreError.INVALID_BACKUP, "payload inválido em [$index]")
+    }
+
+    /**
+     * Um treino, na v1 ou na v2 do payload (T19.8) — a mesma fronteira que o sync usa. Um backup
+     * anterior à T19.8 continua restaurável: o dia único vira uma linha de agenda.
+     */
+    private fun decodeTemplate(item: RestoreItemDto, index: Int): WorkoutTemplateSyncDto = try {
+        WorkoutTemplatePayloadCompat.decode(json, item.entitySchemaVersion, item.payload)
+    } catch (e: SerializationException) {
         throw RestoreException(RestoreError.INVALID_BACKUP, "payload inválido em [$index]")
     } catch (e: IllegalArgumentException) {
         throw RestoreException(RestoreError.INVALID_BACKUP, "payload inválido em [$index]")
