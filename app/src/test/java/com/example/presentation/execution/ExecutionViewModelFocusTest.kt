@@ -67,8 +67,15 @@ class ExecutionViewModelFocusTest {
     @Before
     fun setUp() = runBlocking {
         Dispatchers.setMain(testDispatcher)
+        // Executores diretos: o Room roda nos executores **dele**, e um relógio virtual não faz o
+        // banco responder mais cedo (padrão de `WorkoutCheckInViewModelTest`). Sem isto, o
+        // `withTimeout` do teste de conclusão de série compete com a emissão do Room em outra
+        // thread — e o relógio virtual vence a corrida (memória `t178-checkins-feed`).
+        val inline = java.util.concurrent.Executor { it.run() }
         database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
+            .setQueryExecutor(inline)
+            .setTransactionExecutor(inline)
             .build()
         dao = database.workoutDao()
         val settings = SettingsManager(context)
