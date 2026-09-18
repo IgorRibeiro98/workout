@@ -153,6 +153,72 @@ class WorkoutShareSnapshotBuilderTest {
         assertTrue(blocked.reasons.any { it.contains("Exercício Sem Catálogo") })
     }
 
+    // ------------------------------------------------------------------ faixas (H1.2)
+
+    @Test
+    fun `buildSnapshot blocks when restDurationSeconds exceeds 600`() {
+        val ex1 = createExercise(1L, "Agachamento", "catalog-squat")
+        val details = listOf(
+            TemplateExerciseWithDetails(
+                createTemplateExercise(1L, sortOrder = 0, restDurationSeconds = 3600),
+                ex1
+            )
+        )
+
+        val result = builder.buildSnapshot(sampleTemplate, details)
+        assertTrue("Descanso acima de 600s deve ser bloqueado", result is SnapshotBuildResult.Blocked)
+        assertTrue((result as SnapshotBuildResult.Blocked).reasons.any { it.contains("Agachamento") })
+    }
+
+    @Test
+    fun `buildSnapshot blocks when targetSets exceeds 20`() {
+        val ex1 = createExercise(1L, "Supino", "catalog-bench-press")
+        val details = listOf(
+            TemplateExerciseWithDetails(
+                createTemplateExercise(1L, sortOrder = 0, targetSets = 50),
+                ex1
+            )
+        )
+
+        val result = builder.buildSnapshot(sampleTemplate, details)
+        assertTrue("targetSets acima de 20 deve ser bloqueado", result is SnapshotBuildResult.Blocked)
+    }
+
+    @Test
+    fun `buildSnapshot blocks when minReps is greater than maxReps`() {
+        val ex1 = createExercise(1L, "Remada", "catalog-row")
+        val details = listOf(
+            TemplateExerciseWithDetails(
+                createTemplateExercise(1L, sortOrder = 0, minReps = 20, maxReps = 10),
+                ex1
+            )
+        )
+
+        val result = builder.buildSnapshot(sampleTemplate, details)
+        assertTrue("minReps > maxReps deve ser bloqueado", result is SnapshotBuildResult.Blocked)
+    }
+
+    @Test
+    fun `buildSnapshot accepts the exact bounds 1-20 sets, 1-100 reps and 0-600s rest`() {
+        val ex1 = createExercise(1L, "Supino", "catalog-bench-press")
+        val details = listOf(
+            TemplateExerciseWithDetails(
+                createTemplateExercise(
+                    1L,
+                    sortOrder = 0,
+                    targetSets = 20,
+                    minReps = 1,
+                    maxReps = 100,
+                    restDurationSeconds = 600
+                ),
+                ex1
+            )
+        )
+
+        val result = builder.buildSnapshot(sampleTemplate, details)
+        assertTrue("Os limites inclusivos não deveriam ser bloqueados", result is SnapshotBuildResult.Success)
+    }
+
     // ------------------------------------------------------------------ programa (T19.3)
 
     private val sampleProgram = WorkoutProgramEntity(
@@ -269,6 +335,29 @@ class WorkoutShareSnapshotBuilderTest {
         val blocked = result as SnapshotBuildResult.Blocked
         // O motivo nomeia o treino e o exercício: é o que a pessoa precisa para resolver.
         assertTrue(blocked.reasons.any { it.contains("Pull") && it.contains("Meu Exercício") })
+    }
+
+    @Test
+    fun `buildProgramSnapshot bloqueia o programa inteiro quando um treino tem exercicio fora da faixa`() {
+        val bench = createExercise(1L, "Supino", "catalog-bench-press")
+        val outOfRange = createExercise(9L, "Descanso Longo", "catalog-long-rest")
+        val templates = listOf(
+            template(10L, "Push", "A", 0) to listOf(
+                TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), bench)
+            ),
+            template(20L, "Pull", "B", 1) to listOf(
+                TemplateExerciseWithDetails(
+                    createTemplateExercise(9L, sortOrder = 0, restDurationSeconds = 900),
+                    outOfRange
+                )
+            )
+        )
+
+        val result = builder.buildProgramSnapshot(sampleProgram, templates)
+
+        assertTrue(result is SnapshotBuildResult.Blocked)
+        val blocked = result as SnapshotBuildResult.Blocked
+        assertTrue(blocked.reasons.any { it.contains("Pull") && it.contains("Descanso Longo") })
     }
 
     @Test
