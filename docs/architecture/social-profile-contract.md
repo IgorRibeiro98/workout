@@ -179,12 +179,15 @@ escolheu, e essa é informação do dono.
 O **próprio dono** distingue os três estados, e só ele:
 
 ```text
-AVAILABLE     "Disponível"                   nada a fazer
-UNAVAILABLE   "Ainda não disponível"         sincronizar resolve
-UNSUPPORTED   "Não disponível nesta versão"  sincronizar NÃO resolve
+AVAILABLE     "Disponível"              nada a fazer
+UNAVAILABLE   "Ainda não disponível"    sincronizar resolve
+UNSUPPORTED   "Em breve"                sincronizar NÃO resolve
 ```
 
-Colapsar os dois últimos faria a tela prometer que sincronizar publicaria o nível.
+Colapsar os dois últimos faria a tela prometer que sincronizar publicaria o nível. Desde a T19.H0
+a etiqueta e o interruptor de `UNSUPPORTED` também não podem sugerir "APK antigo" ou "atualização
+pendente" (é limitação arquitetural, não versão desatualizada) — ver
+[`SocialProfileMessages.kt`](../../app/src/main/java/com/example/presentation/friends/SocialProfileMessages.kt).
 
 ## 5. Autorização
 

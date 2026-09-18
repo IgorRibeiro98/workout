@@ -114,8 +114,8 @@ data class SocialWeeklyGoal(
  *
  * ```text
  * AVAILABLE     "Disponível"
- * UNAVAILABLE   "Ainda não disponível"          → sincronizar resolve
- * UNSUPPORTED   "Não disponível nesta versão"   → sincronizar NÃO resolve
+ * UNAVAILABLE   "Ainda não disponível"   → sincronizar resolve
+ * UNSUPPORTED   "Em breve"                → sincronizar NÃO resolve
  * ```
  *
  * Colapsar as duas últimas faria a tela prometer que sincronizar publicaria o nível.
@@ -123,6 +123,10 @@ data class SocialWeeklyGoal(
  * Desde a T19.2 nenhuma das quatro métricas responde `UNSUPPORTED` no servidor atual: nível,
  * sequência e conquistas ganharam autoridade remota. O valor continua no contrato porque um
  * servidor mais antigo ainda o responde, e porque uma métrica futura pode nascer sem autoridade.
+ *
+ * A T19.H0 trocou só a apresentação de `UNSUPPORTED`: a etiqueta e o interruptor não podem
+ * sugerir "APK antigo" ou "atualização pendente" — é uma limitação arquitetural, não uma versão
+ * desatualizada. Ver [com.example.presentation.friends.availabilityLabel].
  */
 enum class SocialFieldAvailability {
     AVAILABLE,

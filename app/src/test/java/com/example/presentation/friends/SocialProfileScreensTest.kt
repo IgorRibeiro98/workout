@@ -1,10 +1,14 @@
 package com.example.presentation.friends
 
 import android.os.Build
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.domain.social.FriendSocialProfile
@@ -159,9 +163,35 @@ class SocialProfileScreensTest {
         composeRule.onNodeWithText("Treinos da semana").assertIsDisplayed()
         composeRule.onNodeWithText("Disponível").assertIsDisplayed()
         // A frase que impede a promessa falsa: sincronizar **não** resolve para estes campos.
-        // Três dos quatro campos estão nesse estado nesta versão.
-        composeRule.onAllNodesWithText("Não disponível nesta versão").assertCountEquals(3)
+        // Três dos quatro campos estão nesse estado nesta versão. "Em breve" (T19.H0) — nunca
+        // "Não disponível nesta versão", que sugeriria APK antigo.
+        composeRule.onAllNodesWithText("Em breve").assertCountEquals(3)
+        composeRule.onNodeWithText("Não disponível nesta versão").assertDoesNotExist()
         composeRule.onNodeWithText(PREVIEW_BUTTON).assertIsDisplayed()
+    }
+
+    @Test
+    fun `campo UNSUPPORTED desabilita o interruptor mesmo com preferencia antiga ligada`() {
+        composeRule.setContent {
+            ProgressSharingBody(
+                uiState = SocialProfileUiState(
+                    sharingPhase = ProgressSharingPhase.Ready,
+                    // Preferência antiga persistida como `true` — não pode ser apagada
+                    // silenciosamente (T19.H0 §5/§14), mas também não pode aparentar funcionar.
+                    settings = ProgressSharingSettings(shareLevel = true),
+                    availability = ProgressSharingAvailability(
+                        level = SocialFieldAvailability.UNSUPPORTED,
+                        weeklyWorkoutCount = SocialFieldAvailability.AVAILABLE
+                    )
+                )
+            )
+        }
+
+        composeRule.onNodeWithTag("progress_sharing_switch_Nível")
+            .assertIsOn()
+            .assertIsNotEnabled()
+        composeRule.onNodeWithTag("progress_sharing_switch_Treinos da semana")
+            .assertIsEnabled()
     }
 
     @Test

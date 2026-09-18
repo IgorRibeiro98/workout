@@ -58,20 +58,24 @@ fun messageFor(error: SocialProfileError): String = when (error) {
  * As três frases são diferentes porque as três pedem coisas diferentes:
  *
  * ```text
- * AVAILABLE     "Disponível"                   nada a fazer
- * UNAVAILABLE   "Ainda não disponível"         sincronizar resolve
- * UNSUPPORTED   "Não disponível nesta versão"  sincronizar NÃO resolve
+ * AVAILABLE     "Disponível"    nada a fazer
+ * UNAVAILABLE   "Ainda não disponível"   sincronizar resolve
+ * UNSUPPORTED   "Em breve"                sincronizar NÃO resolve
  * ```
  *
  * Colapsar as duas últimas faria a tela prometer que sincronizar publicaria o nível — e, com um
  * servidor anterior à T19.2, ele não seria publicado. Desde a T19.2 o servidor deriva nível,
  * sequência e conquistas dos treinos sincronizados e dos parâmetros que este app declara; o que
  * sobra como `UNAVAILABLE` é "ainda não sincronizou / ainda não declarou", e sincronizar resolve.
+ *
+ * `UNSUPPORTED` (T19.H0) não pode soar como "APK antigo" ou "atualização pendente" — é uma
+ * limitação arquitetural, não uma versão desatualizada. "Em breve" não promete uma data; apenas
+ * evita a leitura errada de "preciso atualizar o app".
  */
 fun availabilityLabel(availability: SocialFieldAvailability): String = when (availability) {
     SocialFieldAvailability.AVAILABLE -> "Disponível"
     SocialFieldAvailability.UNAVAILABLE -> "Ainda não disponível"
-    SocialFieldAvailability.UNSUPPORTED -> "Não disponível nesta versão"
+    SocialFieldAvailability.UNSUPPORTED -> "Em breve"
 }
 
 /** A explicação de por que um campo não está disponível. `null` quando ele está. */
@@ -84,11 +88,11 @@ fun availabilityHint(availability: SocialFieldAvailability): String? = when (ava
     SocialFieldAvailability.UNAVAILABLE ->
         "Seu progresso compartilhado é atualizado depois da sincronização."
 
-    // O caso estrutural: esta informação é calculada no aparelho e não é enviada ao servidor.
-    // Dizer "sincronize" aqui seria prometer uma solução que não existe.
+    // O caso estrutural: esta informação ainda não tem autoridade remota (T19.H0). Não é a versão
+    // do app, não é uma sincronização pendente e não há prazo — só não pode ser afirmada por
+    // enquanto.
     SocialFieldAvailability.UNSUPPORTED ->
-        "Esta informação é calculada no seu aparelho e ainda não chega ao servidor, " +
-            "então ela não aparece para os amigos."
+        "Esta informação ainda não pode ser compartilhada."
 }
 
 /**

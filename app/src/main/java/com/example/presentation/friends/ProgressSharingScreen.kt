@@ -27,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -76,9 +77,14 @@ const val PREVIEW_EMPTY_MESSAGE =
  * mostrar. As duas juntas produzem o único estado que uma tela de privacidade não pode esconder:
  * "ligado, e ainda assim não aparece" (§38/§74).
  *
- * Ligar um campo indisponível é permitido de propósito: a preferência fica guardada e o campo
+ * Ligar um campo `UNAVAILABLE` é permitido de propósito: a preferência fica guardada e o campo
  * aparece sozinho no dia em que o dado existir. O que **não** acontece é o servidor gravar um
  * valor falso para o interruptor ter efeito.
+ *
+ * `UNSUPPORTED` (T19.H0) é diferente: sincronizar nunca resolve, então o interruptor fica
+ * desabilitado — ligá-lo não teria efeito observável hoje nem depois. Uma preferência antiga
+ * persistida como `true` continua chegando como `true` (nada é apagado), só sem controle
+ * interativo enquanto a métrica não tiver autoridade remota (ver [SharingToggle]).
  *
  * ## Sem atualização otimista
  *
@@ -248,6 +254,12 @@ internal fun ProgressSharingBody(
  * A etiqueta de disponibilidade fica **fora** do interruptor porque ela não é o estado dele: é o
  * estado do dado. Juntar as duas coisas num único controle produziria o interruptor desabilitado
  * que a pessoa não entende — e ela precisa poder ligar agora o que vai aparecer depois.
+ *
+ * A exceção é [SocialFieldAvailability.UNSUPPORTED] (T19.H0): sincronizar nunca resolve esse
+ * campo, então ligá-lo agora não é "vai aparecer depois" — é um interruptor sem efeito observável.
+ * O switch fica desabilitado, mas o valor de [checked] não é apagado: uma preferência antiga
+ * persistida como `true` continua vindo do servidor como `true`, só sem poder ser alterada por
+ * aqui enquanto a métrica não tiver autoridade remota.
  */
 @Composable
 private fun SharingToggle(
@@ -259,6 +271,7 @@ private fun SharingToggle(
     /** Uma frase sobre o **significado** do campo publicado, quando ele difere do local. */
     note: String? = null
 ) {
+    val switchEnabled = enabled && availability != SocialFieldAvailability.UNSUPPORTED
     Surface(
         color = SurfaceDark,
         shape = RoundedCornerShape(16.dp),
@@ -295,8 +308,9 @@ private fun SharingToggle(
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
-                enabled = enabled,
-                colors = SwitchDefaults.colors(checkedTrackColor = Lime400)
+                enabled = switchEnabled,
+                colors = SwitchDefaults.colors(checkedTrackColor = Lime400),
+                modifier = Modifier.testTag("progress_sharing_switch_$label")
             )
         }
     }
