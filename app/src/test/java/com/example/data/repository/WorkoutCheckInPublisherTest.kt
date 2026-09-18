@@ -383,6 +383,84 @@ class WorkoutCheckInPublisherTest {
         assertEquals(CheckInPublishResult.AccountChanged, result)
     }
 
+    // ------------------------------------------------------------------ H1.1 upload + sync
+
+    @Test
+    fun `upload de foto envia o syncId da sessao e o clientUploadId recebido`() = runTest {
+        val sessionId = insertSession()
+        val syncId = database.workoutDao().getSessionById(sessionId)!!.syncId
+        gateway.uploadResults = mutableListOf(
+            WorkoutCheckInOutcome.Success(UploadedCheckInMedia("media-1", 100, 100, 10))
+        )
+
+        val result = publisher.uploadPhoto(sessionId, "upload-1", ByteArray(10))
+
+        assertTrue(result is CheckInMediaUploadResult.Uploaded)
+        assertEquals(listOf(Triple(syncId, "upload-1", 10)), gateway.uploadedWith)
+        assertEquals(0, syncCalls)
+    }
+
+    @Test
+    fun `upload de foto logo apos concluir o treino reconcilia o sync e reenvia com o mesmo clientUploadId`() =
+        runTest {
+            val sessionId = insertSession()
+            val syncId = database.workoutDao().getSessionById(sessionId)!!.syncId
+            gateway.uploadResults = mutableListOf(
+                WorkoutCheckInOutcome.Failure(WorkoutCheckInError.SESSION_NOT_FOUND),
+                WorkoutCheckInOutcome.Success(UploadedCheckInMedia("media-1", 100, 100, 10))
+            )
+
+            val result = publisher.uploadPhoto(sessionId, "upload-1", ByteArray(10))
+
+            assertTrue(
+                "esperava Uploaded, veio $result",
+                result is CheckInMediaUploadResult.Uploaded
+            )
+            assertEquals(1, syncCalls)
+            // O **mesmo** clientUploadId nas duas tentativas: retry idempotente, sem duplicar mídia.
+            assertEquals(
+                listOf(Triple(syncId, "upload-1", 10), Triple(syncId, "upload-1", 10)),
+                gateway.uploadedWith
+            )
+        }
+
+    @Test
+    fun `upload de foto sem sync bem sucedido nao insiste e nao altera a sessao`() = runTest {
+        val sessionId = insertSession()
+        val before = database.workoutDao().getSessionById(sessionId)!!
+        gateway.uploadResults = mutableListOf(
+            WorkoutCheckInOutcome.Failure(WorkoutCheckInError.SESSION_NOT_FOUND)
+        )
+        syncOutcome = SyncOutcome.Offline
+
+        val result = publisher.uploadPhoto(sessionId, "upload-1", ByteArray(10))
+
+        assertEquals(
+            CheckInMediaUploadResult.Failed(WorkoutCheckInError.SESSION_NOT_SYNCED),
+            result
+        )
+        // Uma tentativa só: sem o ciclo ter convergido, não há por que perguntar de novo.
+        assertEquals(1, gateway.uploadedWith.size)
+        assertEquals(before, database.workoutDao().getSessionById(sessionId))
+    }
+
+    @Test
+    fun `upload de foto cujo sync roda mas nao traz a sessao nao insiste`() = runTest {
+        val sessionId = insertSession()
+        gateway.uploadResults = mutableListOf(
+            WorkoutCheckInOutcome.Failure(WorkoutCheckInError.SESSION_NOT_FOUND)
+        )
+
+        val result = publisher.uploadPhoto(sessionId, "upload-1", ByteArray(10))
+
+        assertEquals(
+            CheckInMediaUploadResult.Failed(WorkoutCheckInError.SESSION_NOT_SYNCED),
+            result
+        )
+        assertEquals(2, gateway.uploadedWith.size)
+        assertEquals(1, syncCalls)
+    }
+
     // ------------------------------------------------------------------ erros mapeados
 
     @Test

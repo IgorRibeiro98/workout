@@ -206,16 +206,26 @@ class WorkoutCheckInPublisher(
         val uidBefore = currentUid()
             ?: return CheckInMediaUploadResult.NotEligible(CheckInEligibility.Unavailable)
 
-        val outcome = gateway.uploadMedia(session.syncId, clientUploadId, bytes)
+        val first = gateway.uploadMedia(session.syncId, clientUploadId, bytes)
         // §147/§149 — a conta pode ter trocado durante o envio. A foto que A escolheu não vira
         // publicação de B, e o servidor recusaria de qualquer forma: `owner_uid` está na cláusula
         // `WHERE` do anexo. Este `if` evita que a **tela** de B mostre um sucesso que era de A.
         if (currentUid() != uidBefore) return CheckInMediaUploadResult.AccountChanged
 
-        return when (outcome) {
-            is WorkoutCheckInOutcome.Success -> CheckInMediaUploadResult.Uploaded(outcome.data)
-            is WorkoutCheckInOutcome.Failure -> CheckInMediaUploadResult.Failed(outcome.error)
+        if (first !is WorkoutCheckInOutcome.Failure ||
+            first.error != WorkoutCheckInError.SESSION_NOT_FOUND
+        ) {
+            return interpretUpload(first)
         }
+
+        // A mesma leitura de [publish]: uma sessão recém-concluída pode ainda não ter subido pelo
+        // ciclo de sync da T16.6 (trabalho único do WorkManager, não síncrono com a conclusão do
+        // treino). O servidor responde SESSION_NOT_FOUND para "não existe" e para "ainda não
+        // sincronizou" de propósito — aqui sabemos que ela existe **neste aparelho** e é desta
+        // conta, então a leitura razoável é a segunda. Sem isto, tentar anexar uma foto logo após
+        // concluir o treino falhava sempre que a sessão ainda não tinha chegado ao servidor, sem
+        // nenhuma tentativa automática de recuperação (H1.1).
+        return reconcileUploadThenRetry(session.syncId, clientUploadId, bytes, uidBefore)
     }
 
     /**
@@ -315,6 +325,51 @@ class WorkoutCheckInPublisher(
         }
 
         return interpret(retry)
+    }
+
+    private suspend fun reconcileUploadThenRetry(
+        sessionSyncId: String,
+        clientUploadId: String,
+        bytes: ByteArray,
+        uidBefore: String
+    ): CheckInMediaUploadResult {
+        when (syncCycle.run(uidBefore)) {
+            is SyncOutcome.Success -> Unit
+
+            SyncOutcome.AuthRequired ->
+                return CheckInMediaUploadResult.Failed(WorkoutCheckInError.AUTH_REQUIRED)
+
+            // Nuvem não adotada, dataset de outra conta, rede, indisponibilidade, teto, recusa,
+            // ciclo já em andamento ou sem configuração: em todos, a sessão continua desconhecida
+            // do servidor e a foto não sobe. [CheckInMediaUploadResult] não distingue estes casos
+            // como [CheckInPublishResult.CloudNotAdopted] faz — a tela já mostra "não conseguimos
+            // enviar a foto" com as ações de tentar de novo ou publicar sem foto (§43).
+            else -> return CheckInMediaUploadResult.Failed(WorkoutCheckInError.SESSION_NOT_SYNCED)
+        }
+
+        if (currentUid() != uidBefore) return CheckInMediaUploadResult.AccountChanged
+
+        // O **mesmo** `clientUploadId`: é a mesma intenção do usuário, e reusá-lo é o que impede
+        // esta segunda tentativa de duplicar mídia no servidor (idempotência, §36).
+        val retry = gateway.uploadMedia(sessionSyncId, clientUploadId, bytes)
+        if (currentUid() != uidBefore) return CheckInMediaUploadResult.AccountChanged
+
+        if (retry is WorkoutCheckInOutcome.Failure &&
+            retry.error == WorkoutCheckInError.SESSION_NOT_FOUND
+        ) {
+            // O ciclo rodou e o servidor continua sem a sessão. Não insistimos: a próxima
+            // tentativa é uma ação nova do usuário (tentar de novo, ou publicar sem foto).
+            return CheckInMediaUploadResult.Failed(WorkoutCheckInError.SESSION_NOT_SYNCED)
+        }
+
+        return interpretUpload(retry)
+    }
+
+    private fun interpretUpload(
+        outcome: WorkoutCheckInOutcome<UploadedCheckInMedia>
+    ): CheckInMediaUploadResult = when (outcome) {
+        is WorkoutCheckInOutcome.Success -> CheckInMediaUploadResult.Uploaded(outcome.data)
+        is WorkoutCheckInOutcome.Failure -> CheckInMediaUploadResult.Failed(outcome.error)
     }
 
     private fun interpret(outcome: WorkoutCheckInOutcome<WorkoutCheckIn>): CheckInPublishResult =
