@@ -109,7 +109,7 @@ Os seis primeiros são exatamente os `SyncEntityType` da T16.3 e reusam
 (`["MONDAY", "THURSDAY"]`; `[]` é "sem dia fixo"). A v1 tinha `dayOfWeek: string | null` (um dia,
 texto livre — o app gravava o rótulo `"Seg"`). O Android escreve só v2 e lê v1 e v2
 (`WorkoutTemplatePayloadCompat`); o servidor aceita `[1, 2]`, cada versão com uma forma só
-(`dayOfWeek` na v2 e `scheduledDays` na v1 são recusados). Um backup guardado antes da T19.8
+(`dayOfWeek` na v1, `scheduledDays` na v2 — declarar o campo da outra versão é recusado). Um backup guardado antes da T19.8
 continua restaurável — é o que `backup-v1-legacy-template.json` prova nos dois lados.
 
 Os três últimos **não** produzem entrada de Outbox (a matriz da T16.3 já os marcava como "T16.4"):

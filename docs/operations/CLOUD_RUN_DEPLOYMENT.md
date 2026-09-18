@@ -701,7 +701,7 @@ script:
 ```text
 código em main
       ↓
-backend.yml verde NAQUELE commit
+backend.yml verde no commit backend-relevante mais recente na ancestralidade (T19.10 — ver abaixo)
       ↓
 workflow manual "Deploy Spark Backend" (workflow_dispatch)
       ↓
@@ -720,10 +720,22 @@ Step Summary (commit, revision, digest, tráfego, DR)
 
 `.github/workflows/deploy-backend.yml` só tem `workflow_dispatch:` — nunca `push:`/`pull_request:`.
 Ele nunca reimplementa `gcloud run deploy`/`gcloud run jobs deploy`/`update-traffic`: chama
-`ops/gcp/deploy-cloud-run.sh` como qualquer execução local faria, e o portão de procedência (origin/
-main + `backend.yml` `completed:success` no MESMO SHA — T18.3.2, `ops/lib.deploy-gate.sh`) roda
-**dentro** desse comando, usando o `git`/`gh` do próprio runner. Um commit sem CI verde, com CI em
-andamento, com CI vermelho, ou cujo CI verde é de **outro** SHA — todos abortam antes do build.
+`ops/gcp/deploy-cloud-run.sh` como qualquer execução local faria, e o portão de procedência
+(T18.3.2, `ops/lib.deploy-gate.sh`) roda **dentro** desse comando, usando o `git`/`gh` do próprio
+runner.
+
+O portão exige origin/main **e** `backend.yml` `completed:success` — mas não necessariamente no
+próprio commit publicado. `backend.yml` só dispara quando `backend/**`, `ops/**` ou os dois
+workflows relacionados mudam (T16.7.1 §"Escopo"); um release commit Android-only (version bump,
+UX, docs) nunca aciona esse workflow, e exigir CI "naquele commit" bloquearia todo release que não
+mexe em backend — foi exatamente o que aconteceu no deploy do commit `165a3933` (T19.10 §F1). Desde
+a T19.10 o gate caminha a ancestralidade do commit publicado e exige CI verde no commit
+backend-relevante **mais recente** encontrado nela (o próprio commit, se ele mesmo tocar
+backend/ops), sempre na branch `main` (nunca o CI de um PR/feature que só coincide no SHA). Se
+houver uma mudança de backend mais nova sem CI, ou o CI dela for vermelho/estiver rodando/não
+existir, o gate recusa — a procedência nunca "sobe" para um commit de backend mais antigo do que o
+mais recente na ancestralidade. Um commit sem CI verde, com CI em andamento, com CI vermelho, ou
+cujo CI verde é de **outra** branch/SHA — todos abortam antes do build.
 
 ### 20.1 Configuração inicial (MANUAL SETUP REQUIRED)
 

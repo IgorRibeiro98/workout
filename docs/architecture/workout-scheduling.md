@@ -107,8 +107,9 @@ v2  { ..., "scheduledDays": ["MONDAY","THURSDAY"] } 0..N dias, canônicos, sem r
   convertida e decodificada pelo mesmo serializer estrito da v2. Um backup guardado antes da T19.8
   continua restaurável; um aparelho ainda na v1 continua sendo lido.
 - O servidor aceita `[1, 2]` (`backup-entity.registry.ts`: `legacySchemas`/`schemaFor`); cada
-  versão tem uma forma só — `dayOfWeek` na v2, `scheduledDays` na v1, rótulo, repetição ou nome
-  fora do enum são `INVALID_PAYLOAD`.
+  versão tem uma forma só (`dayOfWeek` na v1, `scheduledDays` na v2) — `dayOfWeek` declarado como
+  v2, `scheduledDays` declarado como v1, rótulo, repetição ou nome fora do enum são todos
+  `INVALID_PAYLOAD`.
 - Apply remoto e restore **substituem** a agenda inteira (`replaceSchedulesForTemplate`), como os
   exercícios: o mesmo payload aplicado duas vezes produz as mesmas linhas.
 - Um cliente anterior à T19.8 que receba uma mudança v2 **pausa** o sync naquele ponto e pede

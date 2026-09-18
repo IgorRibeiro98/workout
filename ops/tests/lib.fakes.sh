@@ -47,6 +47,13 @@ install_fakes() {
   # `git` fake. `-C <dir>` é aceito e ignorado (os testes não têm repositório de verdade).
   #   GIT_FETCH_FAILS=1        → `git fetch` falha (sem rede/credencial)
   #   GIT_NOT_ANCESTOR=1       → o commit NÃO está em origin/main
+  #   GIT_BACKEND_SHA=<sha>    → o que `git log -1 <sha> -- <caminhos>` devolve (T19.10; a
+  #                             ancestralidade real filtraria por caminho — o dublê não replica o
+  #                             filtro, só o resultado que ele produziria)
+  #   GIT_NO_BACKEND_HISTORY=1 → nenhum commit na ancestralidade toca as superfícies de backend
+  #   default (nenhuma das duas acima)                → devolve o próprio <sha> pedido (o commit
+  #                             sendo publicado É o commit backend-relevante — preserva o
+  #                             comportamento anterior à T19.10 em todo teste que não opta por um)
   cat > "${dir}/git" <<'FAKE_GIT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -65,15 +72,36 @@ case "${1:-}" in
   fetch) [ -z "${GIT_FETCH_FAILS:-}" ] || exit 1 ;;
   merge-base) [ -z "${GIT_NOT_ANCESTOR:-}" ] || exit 1 ;;
   diff) exit 0 ;;
+  log)
+    # `git log --format=%H -1 <sha> -- <caminhos...>` (T19.10, ops/lib.deploy-gate.sh): localizar
+    # o commit backend-relevante mais recente na ancestralidade de <sha>.
+    [ -z "${GIT_NO_BACKEND_HISTORY:-}" ] || exit 0
+    if [ -n "${GIT_BACKEND_SHA:-}" ]; then
+      printf '%s\n' "${GIT_BACKEND_SHA}"
+      exit 0
+    fi
+    target=""
+    for arg in "$@"; do
+      [ "${arg}" != "--" ] || break
+      case "${arg}" in
+        --format=*|-1|log) ;;
+        *) target="${arg}" ;;
+      esac
+    done
+    printf '%s\n' "${target}"
+    ;;
 esac
 exit 0
 FAKE_GIT
 
-  # `gh`, para o portão de procedência do deploy (T18.3.2). `gh run list ... --jq` devolve a linha
-  # já reduzida pelo `--jq` do gh real: `status:conclusion` por execução, separadas por espaço.
+  # `gh`, para o portão de procedência do deploy (T18.3.2; ancestralidade na T19.10). `gh run
+  # list ... --jq` devolve a linha já reduzida pelo `--jq` do gh real: `status:conclusion` por
+  # execução, separadas por espaço.
   #   GH_NO_RUN=1              → nenhuma execução para aquele commit
   #   GH_RUN_RESULT=...        → o que a consulta devolve (default: completed:success)
   #   GH_RUN_LIST_FAILS=1      → a consulta falha (gh não autenticado, sem rede)
+  #   GH_RUN_WRONG_BRANCH=1    → existe execução para o commit, mas não na branch pedida (nunca
+  #                             deveria satisfazer `--branch main` — T19.10 §6.15)
   cat > "${dir}/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -83,12 +111,16 @@ if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
   # A API real do GitHub casa `--commit` pelo SHA **completo**: um valor mais curto nunca encontra
   # a execução, mesmo que ela exista — foi esse o defeito real (não coberto até este dublê aprender
   # a distinguir tamanho), e é o que a linha abaixo agora reproduz.
-  commit="" prev=""
+  commit="" branch="" prev=""
   for arg in "$@"; do
     [ "${prev}" != "--commit" ] || commit="${arg}"
+    [ "${prev}" != "--branch" ] || branch="${arg}"
     prev="${arg}"
   done
   if [ "${#commit}" -ne 40 ]; then
+    printf '\n'; exit 0
+  fi
+  if [ -n "${GH_RUN_WRONG_BRANCH:-}" ] && [ -n "${branch}" ]; then
     printf '\n'; exit 0
   fi
   [ -z "${GH_NO_RUN:-}" ] || { printf '\n'; exit 0; }

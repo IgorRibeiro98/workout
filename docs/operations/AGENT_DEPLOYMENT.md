@@ -31,7 +31,8 @@ gh run view <RUN_ID> --log   # ou: abra a URL do run e leia o Step Summary
 
 ```text
 1. confirmar que o trabalho foi commitado/pushado em main
-2. confirmar que o CI do backend (backend.yml) concluiu com sucesso naquele commit
+2. confirmar que o CI do backend (backend.yml) concluiu com sucesso no commit backend-relevante
+   mais recente na ancestralidade de main (não necessariamente o HEAD)
 3. disparar "Deploy Spark Backend" (gh workflow run deploy-backend.yml --ref main)
 4. se o GitHub pedir aprovação do Environment:
      informar o usuário e aguardar
@@ -42,8 +43,11 @@ gh run view <RUN_ID> --log   # ou: abra a URL do run e leia o Step Summary
 
 Passo 1 e 2 não são um gate que o agente decide sozinho por inspeção — são o que o próprio workflow
 verifica de qualquer forma (o commit precisa estar em `origin/main`, e `backend.yml` precisa ter
-`completed:success` **naquele SHA exato**; ver `ops/lib.deploy-gate.sh`). Confirmar antes só evita
-disparar um run que o próprio workflow vai recusar.
+`completed:success` no commit backend-relevante mais recente na ancestralidade do HEAD, **na branch
+main** — ver `ops/lib.deploy-gate.sh`). Um HEAD que só mexe em Android/docs/versão não precisa de
+`backend.yml` próprio: o gate usa o último commit que tocou `backend/**`/`ops/**` antes dele (T19.10
+— ver [`CLOUD_RUN_DEPLOYMENT.md` §20](./CLOUD_RUN_DEPLOYMENT.md#20-deploy-via-github-actions-e-workload-identity-federation-t1832)).
+Confirmar antes só evita disparar um run que o próprio workflow vai recusar.
 
 ## Nunca faça isto para um deploy normal
 

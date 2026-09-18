@@ -22,6 +22,12 @@
 #   - o deploy exige procedência do commit: presente em origin/main e com o workflow `backend`
 #     verde, com SPARK_DEPLOY_ALLOW_UNVERIFIED=1 como saída de emergência documentada.
 #
+# T19.10 corrige a procedência para ancestralidade: o commit publicado nem sempre é o commit que
+# `backend.yml` rodaria (um release Android-only nunca dispara esse workflow), então o gate agora
+# exige CI verde no commit backend-relevante MAIS RECENTE na ancestralidade do commit publicado —
+# nunca "o próprio commit" cegamente, nunca "algum CI verde recente" solto. Ver
+# `ops/lib.deploy-gate.sh` e a seção "T19.10 §F1/§6-7" abaixo.
+#
 # Uso: ops/tests/deploy-hardening.test.sh
 
 set -euo pipefail
@@ -263,6 +269,60 @@ SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
 check "a saída de emergência libera o deploy" "0" "${CODIGO}"
 check "...e deixa o aviso no log" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q 'AVISO: SPARK_DEPLOY_ALLOW_UNVERIFIED=1' && echo sim || echo não)"
+
+echo
+echo "=== T19.10 §F1/§6-7 procedência por ancestralidade de backend ==="
+# Caso 1 — o commit sendo publicado altera backend/ops diretamente: exige CI do próprio commit
+# (comportamento idêntico ao pré-T19.10; default do dublê de git já simula isto).
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "Caso 1 — HEAD backend-relevante com CI do próprio HEAD verde: ALLOW" "0" "${CODIGO}"
+check "...o log confirma que exigiu CI do próprio commit" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'altera .* diretamente' && echo sim || echo não)"
+
+# Caso 2 — release commit (ex.: version bump Android) depois do último commit de backend: usa o
+# commit backend-relevante ANCESTRAL como procedência, nunca o HEAD que o backend.yml nunca rodaria.
+GH_LOG="$(mktemp)"
+BACKEND_ANCESTOR="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_BACKEND_SHA="${BACKEND_ANCESTOR}" GH_CALL_LOG="${GH_LOG}" || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; GHCALLS="$(cat "${GH_LOG}")"; cleanup_logs; rm -f "${GH_LOG}"
+check "Caso 2 — release sem mudança de backend, ancestral com CI verde: ALLOW" "0" "${CODIGO}"
+check "...consultou o SHA ancestral, nunca o HEAD, para o CI" "sim" \
+  "$(printf '%s\n' "$GHCALLS" | grep -q -- "--commit ${BACKEND_ANCESTOR}" && echo sim || echo não)"
+check "...e nunca teria satisfação sem esse ancestral (HEAD não aparece como --commit)" "não" \
+  "$(printf '%s\n' "$GHCALLS" | grep -q -- '--commit 0123456789abcdef0123456789abcdef01234567' && echo sim || echo não)"
+check "...o log nomeia o commit ancestral como a procedência usada" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q "procedência de backend é ${BACKEND_ANCESTOR}" && echo sim || echo não)"
+
+# Caso 3 — backend mudou depois do último CI verde (o próprio commit é backend-relevante e não tem
+# execução do workflow): DENY. É o mesmo cenário de "commit sem execução do workflow" acima —
+# reafirmado aqui com a redação do finding F1.
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_NO_RUN=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "Caso 3 — backend-relevante sem CI: DENY" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+
+# Caso 6 — o CI verde encontrado é de OUTRA branch (PR/feature, nunca integrado a main pelo CI):
+# `--branch main` precisa recusá-lo, não aceitar pelo SHA sozinho.
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GH_RUN_WRONG_BRANCH=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "Caso 6 — CI verde de outra branch: DENY" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...a mensagem não finge evidência que não existe em main" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'nenhuma execução' && echo sim || echo não)"
+
+# Nenhum commit na ancestralidade toca backend/ops — não há procedência alguma para verificar.
+# Sem isto o gate poderia devolver string vazia e silenciosamente pular a checagem de CI.
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GIT_NO_BACKEND_HISTORY=1 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "nenhum commit backend-relevante na ancestralidade: DENY (fail-closed, não pula a checagem)" "sim" \
+  "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...a mensagem explica a ausência de procedência" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'nenhum commit na ancestralidade toca' && echo sim || echo não)"
 
 echo
 echo "=== §19 secret sem versão habilitada → deploy para antes de qualquer revision ==="
