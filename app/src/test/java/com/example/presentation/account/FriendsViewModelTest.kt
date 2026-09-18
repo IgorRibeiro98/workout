@@ -565,6 +565,105 @@ class FriendsViewModelTest {
         assertEquals(before, databaseSnapshot())
     }
 
+    // ------------------------------------------------------------------ H1.3 atualizar solicitações
+
+    @Test
+    fun `refreshRequests busca uma solicitacao nova sem reiniciar o app`() = runBlocking {
+        val viewModel = signedIn()
+        viewModel.open()
+        assertEquals(emptyList<Any>(), viewModel.uiState.value.incoming)
+
+        // A "nova solicitação" chega depois que a tela já está Ready — exatamente o cenário de
+        // H1.3: sem isto, ela só apareceria reiniciando o app, porque open() é idempotente.
+        gateway.seedRequest(requesterUid = jonathas.uid, recipientUid = igor.uid)
+        viewModel.refreshRequests()
+
+        val state = viewModel.uiState.value
+        assertEquals(1, state.incoming.size)
+        assertEquals(FriendsPhase.Ready, state.phase)
+        assertFalse(state.isRefreshing)
+    }
+
+    @Test
+    fun `refreshRequests marca isRefreshing em voo e desliga ao final, sem esconder a lista`() =
+        runBlocking {
+            val viewModel = signedIn()
+            viewModel.open()
+
+            val gate = CompletableDeferred<Unit>()
+            gateway.gate = gate
+            viewModel.refreshRequests()
+
+            // Em voo: a fase continua Ready (a lista some por Loading, não por isto) e o sinalizador
+            // próprio de refresh é que está ligado.
+            assertTrue(viewModel.uiState.value.isRefreshing)
+            assertEquals(FriendsPhase.Ready, viewModel.uiState.value.phase)
+
+            gateway.gate = null
+            gate.complete(Unit)
+
+            assertFalse(viewModel.uiState.value.isRefreshing)
+        }
+
+    @Test
+    fun `toque duplo em refreshRequests nao dispara uma segunda leitura`() = runBlocking {
+        val viewModel = signedIn()
+        viewModel.open()
+        val readsAfterOpen = gateway.readCalls
+
+        val gate = CompletableDeferred<Unit>()
+        gateway.gate = gate
+        viewModel.refreshRequests()
+        viewModel.refreshRequests()
+
+        gateway.gate = null
+        gate.complete(Unit)
+
+        // Uma leitura só (friends + incoming + outgoing), não duas.
+        assertEquals(readsAfterOpen + 3, gateway.readCalls)
+    }
+
+    @Test
+    fun `falha no refresh preserva a lista anterior, sem simular ausencia de solicitacoes`() =
+        runBlocking {
+            gateway.seedRequest(requesterUid = jonathas.uid, recipientUid = igor.uid)
+            val viewModel = signedIn()
+            viewModel.open()
+            assertEquals(1, viewModel.uiState.value.incoming.size)
+
+            gateway.failWith = FriendError.NETWORK
+            viewModel.refreshRequests()
+
+            val state = viewModel.uiState.value
+            assertEquals(1, state.incoming.size)
+            assertEquals(FriendsPhase.Ready, state.phase)
+            assertFalse(state.isRefreshing)
+        }
+
+    @Test
+    fun `resposta de refresh da conta anterior nao liga isRefreshing da conta nova`() = runBlocking {
+        val auth = FakeAuthGateway(initialAccount = accountA)
+        gateway.currentUid = igor.uid
+        val viewModel = viewModel(auth)
+        viewModel.open()
+
+        val gate = CompletableDeferred<Unit>()
+        gateway.gate = gate
+        viewModel.refreshRequests()
+
+        // B entra no meio da releitura de A.
+        gateway.currentUid = jonathas.uid
+        auth.signOut()
+        auth.nextOutcome = AuthOutcome.Success(accountB)
+        auth.signIn(context)
+        gateway.gate = null
+        gate.complete(Unit)
+
+        // O estado é o de B (recém-criado por onAccountChanged), nunca "refrescando" por causa da
+        // resposta de A que chegou atrasada.
+        assertFalse(viewModel.uiState.value.isRefreshing)
+    }
+
     // ------------------------------------------------------------------ apoio
 
     private fun signedIn(): FriendsViewModel {

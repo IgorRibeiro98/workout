@@ -135,7 +135,16 @@ data class FriendsUiState(
      * Separado de [FriendsPhase.Error] porque ele **não** substitui a tela: a lista continua
      * visível e utilizável, e o aviso desaparece na próxima ação.
      */
-    val notice: FriendError? = null
+    val notice: FriendError? = null,
+    /**
+     * Uma releitura manual pedida pelo usuário (H1.3, "Atualizar"/pull-to-refresh) está em voo.
+     *
+     * Separado de [FriendsPhase.Loading] de propósito: a primeira carga esconde a lista porque
+     * ainda não existe nada para mostrar, mas um refresh manual sobre [FriendsPhase.Ready] deve
+     * manter a lista anterior visível — sumir com ela por causa de um toque em "atualizar" seria
+     * pior do que não ter o botão.
+     */
+    val isRefreshing: Boolean = false
 ) {
 
     /** A tela está esperando alguma coisa que a bloqueia por inteiro? */

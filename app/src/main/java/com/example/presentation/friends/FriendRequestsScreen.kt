@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -108,22 +109,29 @@ fun FriendRequestsScreen(
             )
         }
     ) { innerPadding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = viewModel::refreshRequests,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .semantics { contentDescription = REQUESTS_LIST_DESCRIPTION },
-            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            RequestsBody(
-                uiState = uiState,
-                onAccept = viewModel::acceptRequest,
-                onReject = viewModel::rejectRequest,
-                onCancel = viewModel::cancelRequest,
-                onRetry = viewModel::refresh
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .semantics { contentDescription = REQUESTS_LIST_DESCRIPTION },
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                RequestsBody(
+                    uiState = uiState,
+                    onAccept = viewModel::acceptRequest,
+                    onReject = viewModel::rejectRequest,
+                    onCancel = viewModel::cancelRequest,
+                    onRetry = viewModel::refresh
+                )
+            }
         }
     }
 }

@@ -155,6 +155,32 @@ class FriendsViewModel(
         )
     }
 
+    /**
+     * Releitura manual pedida pelo usuário sobre a tela de Solicitações (H1.3).
+     *
+     * Uma nova solicitação recebida enquanto a tela já está [FriendsPhase.Ready] só aparecia
+     * antes reiniciando o app: [open] é idempotente por desenho (§113) e não existe nenhum outro
+     * gatilho de releitura. Isto reusa exatamente o [reload] que já roda depois de aceitar/
+     * recusar/cancelar um pedido — e não [refresh], que colapsaria a tela para
+     * [FriendsPhase.Loading] e esconderia a lista atual enquanto a resposta não chega.
+     *
+     * Sem polling, sem WebSocket: só o mesmo `GET` de sempre, sob demanda.
+     */
+    fun refreshRequests() {
+        val uid = currentUid ?: return
+        if (_uiState.value.isRefreshing) return
+
+        _uiState.value = _uiState.value.copy(isRefreshing = true)
+        viewModelScope.launch {
+            reload(uid)
+            // Se a conta trocou durante a releitura, o estado já foi substituído por inteiro em
+            // onAccountChanged — não há `isRefreshing` desta conta para desligar.
+            if (currentUid == uid) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+            }
+        }
+    }
+
     // --------------------------------------------------------------------------- adicionar
 
     /** Abre "Adicionar amigo". Não faz requisição nenhuma. */

@@ -63,6 +63,9 @@ class FakeFriendGateway(
         private set
     var removeCalls = 0
         private set
+    /** Quantas vezes `friends`/`incomingRequests`/`outgoingRequests` foram chamadas, juntas. */
+    var readCalls = 0
+        private set
 
     private var nextRequestId = 1
     private var clock = 1_000L
@@ -275,6 +278,7 @@ class FakeFriendGateway(
     }
 
     override suspend fun friends(cursor: String?): FriendOutcome<FriendPage<Friend>> = respond { uid ->
+        readCalls += 1
         val items = friendships
             .filter { (key, _) -> key.first == uid || key.second == uid }
             .mapNotNull { (key, since) ->
@@ -295,6 +299,7 @@ class FakeFriendGateway(
     private suspend fun requestPage(
         direction: FriendRequestDirection
     ): FriendOutcome<FriendPage<FriendRequest>> = respond { uid ->
+        readCalls += 1
         val items = requests
             .filter { it.status == "PENDING" }
             .filter {
