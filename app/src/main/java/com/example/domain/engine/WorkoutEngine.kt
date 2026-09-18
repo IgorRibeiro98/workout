@@ -8,6 +8,7 @@ import com.example.domain.gamification.GamificationEventPublisher
 import com.example.domain.gamification.GamificationEvents
 import com.example.domain.gamification.model.GamificationEvent
 import com.example.domain.workout.execution.DuoExecution
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -49,7 +50,21 @@ class WorkoutEngine(
     // `SupervisorJob` não é decoração (auditoria 2026-09-12): sem ele, uma exceção não capturada
     // em qualquer `launch` futuro cancela o escopo inteiro, e os `launch` seguintes viram no-ops
     // silenciosos — o motor continuaria de pé, aparentemente saudável, sem executar mais nada.
-    private val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    //
+    // O `CoroutineExceptionHandler` fecha a lacuna que a auditoria deixou aqui: sem ele, uma
+    // exceção do `init` (que roda numa thread real do `Dispatchers.IO`, fora do controle de
+    // qualquer teste) some no handler global do processo. Em teste isso é capturado pelo
+    // `ExceptionCollector` do kotlinx-coroutines-test e ressurge, sem relação aparente, como
+    // `UncaughtExceptionsBeforeTest` no próximo `runTest` de QUALQUER classe — não
+    // necessariamente a que criou o `WorkoutEngine` órfão. Mesmo padrão do `applicationScope`
+    // do `MainApplication`.
+    private val coroutineScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() +
+            Dispatchers.IO +
+            CoroutineExceptionHandler { _, throwable ->
+                android.util.Log.e(TAG, "falha não tratada no escopo do motor", throwable)
+            }
+    ),
     // O motor apenas informa fatos. Quem os interpreta (histórico, XP, conquistas) vive fora daqui.
     private val gamificationEvents: GamificationEventPublisher = GamificationEventPublisher.NoOp,
     // Fronteira transacional com a Outbox (T16.3). O padrão não registra nada: executar treino
