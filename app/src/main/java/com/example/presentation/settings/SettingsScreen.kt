@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.datastore.RestCompletionBehavior
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.BottomSheetActionItem
 import com.example.ui.components.SelectionBottomSheet
@@ -59,6 +60,7 @@ private sealed class SettingsSheetType {
     object CustomRestBetweenSets : SettingsSheetType()
     object RestBetweenExercises : SettingsSheetType()
     object CustomRestBetweenExercises : SettingsSheetType()
+    object RestCompletionBehaviorSheet : SettingsSheetType()
     object WeeklyGoal : SettingsSheetType()
     object ManageData : SettingsSheetType()
     object ConfirmReimportCatalog : SettingsSheetType()
@@ -88,6 +90,12 @@ private val REST_BETWEEN_EXERCISES_OPTIONS = listOf(
     "150 segundos (2.5 min)" to 150,
     "180 segundos (3 min)" to 180,
     "240 segundos (4 min)" to 240
+)
+
+/** As duas opções de comportamento ao terminar o descanso (T19.9). Nomeadas pelo efeito, não pelo termo técnico. */
+private val REST_COMPLETION_BEHAVIOR_OPTIONS = listOf(
+    "Avançar automaticamente" to RestCompletionBehavior.AUTO_ADVANCE,
+    "Continuar contando até eu avançar" to RestCompletionBehavior.MANUAL_OVERTIME
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,6 +130,7 @@ fun SettingsScreen(
 
     val defaultRestSecs by viewModel.defaultRestSeconds.collectAsStateWithLifecycle()
     val defaultExerciseRestSecs by viewModel.defaultExerciseRestSeconds.collectAsStateWithLifecycle()
+    val restCompletionBehavior by viewModel.restCompletionBehavior.collectAsStateWithLifecycle()
 
     // A leitura do arquivo e a importação correm no `viewModelScope`: no
     // `rememberCoroutineScope` da tela, uma mudança de configuração cancelava a importação no meio
@@ -181,7 +190,14 @@ fun SettingsScreen(
             valueText = "${defaultExerciseRestSecs}s",
             onClick = { activeSheet = SettingsSheetType.RestBetweenExercises }
         )
-        
+
+        SettingsValueItem(
+            title = "Ao terminar o descanso",
+            valueText = REST_COMPLETION_BEHAVIOR_OPTIONS.first { it.second == restCompletionBehavior }.first,
+            subtitle = "O que fazer quando o tempo de descanso chega a zero",
+            onClick = { activeSheet = SettingsSheetType.RestCompletionBehaviorSheet }
+        )
+
         SettingsToggleItem(
             title = "Som ao finalizar descanso",
             subtitle = "Emitir sinal sonoro ao fim do descanso",
@@ -368,6 +384,25 @@ fun SettingsScreen(
                 optionTitle = { it.first },
                 onOptionSelected = {
                     viewModel.setDefaultExerciseRestSeconds(it.second)
+                    activeSheet = null
+                },
+                onDismissRequest = { activeSheet = null }
+            )
+        }
+        is SettingsSheetType.RestCompletionBehaviorSheet -> {
+            SelectionBottomSheet(
+                title = "Ao terminar o descanso",
+                options = REST_COMPLETION_BEHAVIOR_OPTIONS,
+                selectedOption = REST_COMPLETION_BEHAVIOR_OPTIONS.find { it.second == restCompletionBehavior },
+                optionTitle = { it.first },
+                optionSubtitle = {
+                    when (it.second) {
+                        RestCompletionBehavior.AUTO_ADVANCE -> "Passa para a próxima série ou exercício sozinho"
+                        RestCompletionBehavior.MANUAL_OVERTIME -> "O cronômetro continua contando (negativo) até você tocar em continuar"
+                    }
+                },
+                onOptionSelected = {
+                    viewModel.setRestCompletionBehavior(it.second)
                     activeSheet = null
                 },
                 onDismissRequest = { activeSheet = null }

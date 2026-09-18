@@ -186,4 +186,27 @@ class ExecutionViewModelFocusTest {
         val settled = withTimeout(10_000) { viewModel.state.first { it.currentExerciseIndex == 1 } }
         assertEquals(1, settled.currentExerciseIndex)
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Comportamento ao terminar o descanso (T19.9)
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    fun `restCompletionBehavior comeca em AUTO_ADVANCE sem preferencia gravada`() = runTest(testDispatcher) {
+        val behavior = viewModel.restCompletionBehavior.value
+        assertEquals(com.example.data.datastore.RestCompletionBehavior.AUTO_ADVANCE, behavior)
+    }
+
+    @Test
+    fun `restCompletionBehavior reflete a preferencia gravada no SettingsManager`() = runTest(testDispatcher) {
+        backgroundScope.launch { viewModel.restCompletionBehavior.collect { } }
+
+        val settings = SettingsManager(context)
+        settings.setRestCompletionBehavior(com.example.data.datastore.RestCompletionBehavior.MANUAL_OVERTIME)
+
+        val settled = withTimeout(10_000) {
+            viewModel.restCompletionBehavior.first { it == com.example.data.datastore.RestCompletionBehavior.MANUAL_OVERTIME }
+        }
+        assertEquals(com.example.data.datastore.RestCompletionBehavior.MANUAL_OVERTIME, settled)
+    }
 }

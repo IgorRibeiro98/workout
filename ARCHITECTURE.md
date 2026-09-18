@@ -192,12 +192,26 @@ If legacy states remain internally for migration, do not expose or expand them w
 
 ## 7. Recovery/rest architecture
 
-> **Status (verificado em 2026-09-16): não implementado.** `RecoveryTimeCalculator` não existe no
-> código. O descanso hoje é controlado pelo estado de timer do `ExecutionViewModel` com os
-> valores persistidos em `SettingsManager` (`restTimerDeadline`, `defaultRestSeconds`). Desde a
-> T19.4 o convidado de uma dupla local tem o próprio prazo, por timestamp, em
-> `workout_session_participants.restEndsAt` — dois relógios, nenhum deles em estado de tela
-> ([`docs/architecture/duo-local-execution.md` §5](docs/architecture/duo-local-execution.md)).
+> **Status (verificado em 2026-09-18): não implementado como `RecoveryTimeCalculator`.** Essa
+> classe não existe no código. O descanso é controlado pelo estado de timer do
+> `ExecutionViewModel`, com o prazo (`restEndsAt`/`REST_TIMER_DEADLINE`) persistido em
+> `SettingsManager` (`WorkoutEngine.restTimerTarget`, espelhado no DataStore para sobreviver à
+> morte do processo). Desde a T19.4 o convidado de uma dupla local tem o próprio prazo, por
+> timestamp, em `workout_session_participants.restEndsAt` — dois relógios, nenhum deles em estado
+> de tela ([`docs/architecture/duo-local-execution.md` §5](docs/architecture/duo-local-execution.md)).
+>
+> **T19.9 (`RestCompletionBehavior`, `SettingsManager`):** o que acontece quando o prazo chega a
+> zero é preferência do usuário, não é mais fixo. `AUTO_ADVANCE` (padrão, compatível com o
+> comportamento anterior) chama a transição canônica assim que o descanso expira;
+> `MANUAL_OVERTIME` mantém o prazo vivo e a fase `RESTING` aberta além do zero — a tela mostra
+> `-MM:SS`, sempre derivado de `now - restEndsAt` por `RestCompletionCalculator`
+> (`domain/engine/`), nunca um contador decrementado pela UI — até o usuário tocar em avançar, que
+> chama o mesmo `skipRestTimer()`/`nextExercise()` de sempre. Nenhuma segunda autoridade temporal
+> foi criada: `ExecutionState.isResting` continua derivado só de `restTimerTarget`, e é justamente
+> por não zerar esse alvo sozinho que a fase `RESTING` sobrevive ao zero em `MANUAL_OVERTIME`. O
+> alarme de background (`RestNotificationReceiver.ACTION_TIMER_FINISHED`) só limpa o prazo quando
+> a preferência é `AUTO_ADVANCE` — em overtime ele precisa sobreviver ao alarme para o cálculo
+> continuar correto depois de background/process death.
 
 Recovery timing should be centralized.
 
@@ -763,6 +777,9 @@ persistência do domínio        validação da resposta
 | T19.4 | Treino em dupla local (`DUO_LOCAL`): duas pessoas, um aparelho, uma sessão do dono; convidado sem conta; backend N/A | **implementado** (aparelho real NOT VERIFIED) |
 | T19.5 | Treino em dupla à distância (`DUO_REMOTE`): dois aparelhos, uma sessão em cada, sala no backend que só coordena (HTTP long-polling, sem WebSocket/FCM) | **implementado** (dois aparelhos reais / Cloud Run real NOT VERIFIED) |
 | T19.6 | Workout Editor V2: reordenar exercícios do treino por arrastar (long-press) e pré-visualização read-only do exercício; `sortOrder` continua a única autoridade da ordem; backend N/A, migration N/A | **implementado** (gesto em aparelho real NOT VERIFIED; gesto em Robolectric VERIFIED) |
+| T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
+| T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
+| T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
 
 ### Identidade global dos dados e Outbox (T16.3)
 

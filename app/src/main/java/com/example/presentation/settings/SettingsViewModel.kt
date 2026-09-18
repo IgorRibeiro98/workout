@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.datastore.RestCompletionBehavior
 import com.example.data.datastore.SettingsManager
 import com.example.data.local.AppDatabase
 import com.example.data.remote.NetworkTestResult
@@ -110,6 +111,8 @@ class SettingsViewModel(
     val defaultRestSeconds: StateFlow<Int> = stateOf(settingsManager.defaultRestSecondsFlow, 60)
     val defaultExerciseRestSeconds: StateFlow<Int> =
         stateOf(settingsManager.defaultExerciseRestSecondsFlow, 120)
+    val restCompletionBehavior: StateFlow<RestCompletionBehavior> =
+        stateOf(settingsManager.restCompletionBehaviorFlow, RestCompletionBehavior.AUTO_ADVANCE)
 
     private val exportEngine by lazy { ExportEngine(database.workoutDao(), appContext) }
     private val manifestImporter by lazy { ManifestImporter(database, appContext, settingsManager) }
@@ -143,6 +146,9 @@ class SettingsViewModel(
     fun setShowGifs(show: Boolean) = persist { settingsManager.setShowGifs(show) }
 
     fun setShowCoachTip(show: Boolean) = persist { settingsManager.setShowCoachTip(show) }
+
+    fun setRestCompletionBehavior(behavior: RestCompletionBehavior) =
+        persist { settingsManager.setRestCompletionBehavior(behavior) }
 
     fun setDefaultExerciseRestSeconds(seconds: Int) =
         persist { settingsManager.setDefaultExerciseRestSeconds(seconds) }

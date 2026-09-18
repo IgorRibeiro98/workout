@@ -48,6 +48,8 @@ class SettingsManager(private val context: Context) {
         val REST_TIMER_TYPE = stringPreferencesKey("rest_timer_type")
         val RIR_RPE_ENABLED = booleanPreferencesKey("rir_rpe_enabled")
         val AUTO_REST_TIMER_ON_SET = booleanPreferencesKey("auto_rest_timer_on_set")
+        /** O que fazer quando o descanso chega a zero (T19.9). Ver [RestCompletionBehavior]. */
+        val REST_COMPLETION_BEHAVIOR = stringPreferencesKey("rest_completion_behavior")
         // Cada manifesto tem a sua própria chave: compartilhá-las fazia a gravação de um
         // importador bloquear a importação do outro.
         val INSTALLED_CATALOG_CONTENT_VERSION = intPreferencesKey("installed_catalog_content_version")
@@ -231,6 +233,16 @@ class SettingsManager(private val context: Context) {
     val restTimerTypeFlow: Flow<String?> = preference { it[REST_TIMER_TYPE] }
     val rirRpeEnabledFlow: Flow<Boolean> = preference { it[RIR_RPE_ENABLED] ?: true }
     val autoRestTimerOnSetFlow: Flow<Boolean> = preference { it[AUTO_REST_TIMER_ON_SET] ?: true }
+    /**
+     * Padrão `AUTO_ADVANCE` (T19.9): usuário existente sem valor gravado recebe o comportamento
+     * atual. `runCatching` cobre um nome de constante que uma versão futura tenha removido — o
+     * mesmo cuidado de [mediaProviderSettingsFlow] com `SyncStatus`.
+     */
+    val restCompletionBehaviorFlow: Flow<RestCompletionBehavior> = preference { prefs ->
+        prefs[REST_COMPLETION_BEHAVIOR]
+            ?.let { runCatching { RestCompletionBehavior.valueOf(it) }.getOrNull() }
+            ?: RestCompletionBehavior.AUTO_ADVANCE
+    }
     val overrideTemplateIdFlow: Flow<Long?> = preference { it[OVERRIDE_TEMPLATE_ID] }
     val timerNotificationEnabledFlow: Flow<Boolean> = preference { it[TIMER_NOTIFICATION_ENABLED] ?: true }
     val exerciseDbV2ApiKeyFlow: Flow<String> = preference { it[EXERCISE_DB_V2_API_KEY] ?: "" }
@@ -354,6 +366,10 @@ class SettingsManager(private val context: Context) {
 
     suspend fun setAutoRestTimerOnSet(enabled: Boolean) {
         context.dataStore.edit { it[AUTO_REST_TIMER_ON_SET] = enabled }
+    }
+
+    suspend fun setRestCompletionBehavior(behavior: RestCompletionBehavior) {
+        context.dataStore.edit { it[REST_COMPLETION_BEHAVIOR] = behavior.name }
     }
 
     suspend fun setOverrideTemplateId(id: Long?) {

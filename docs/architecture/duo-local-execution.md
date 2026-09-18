@@ -94,6 +94,10 @@ Owner: se o descanso dele ainda corre, a tela mostra o descanso; senão, a séri
 - O treino inteiro concluído (os dois) zera os dois relógios, como em solo.
 - Não há notificação de sistema para o descanso do convidado nesta versão; o alerta em tela
   (`FocusedRestView`) vale quando ele é o participante da vez.
+- `RestCompletionBehavior` (T19.9) vale para os dois relógios, porque os dois passam pela mesma
+  `FocusedRestView`: em `MANUAL_OVERTIME` o descanso do convidado também para em `RESTING` além do
+  zero — sem avançar sozinho — até o toque de quem está com a tela. Não é uma preferência por
+  participante; é a mesma preferência do dono, aplicada onde quer que o timestamp mande.
 
 ## 6. Persistência e recovery
 

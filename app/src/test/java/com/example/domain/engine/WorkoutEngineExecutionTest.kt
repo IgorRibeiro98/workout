@@ -150,6 +150,48 @@ class WorkoutEngineExecutionTest {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Comportamento ao terminar o descanso (T19.9)
+    //
+    // A decisão de avançar sozinho ou aguardar mora na tela (FocusedRestView +
+    // RestCompletionCalculator) — o motor continua sem conhecer a preferência. O que ele precisa
+    // continuar garantindo é o que já garantia: `skipRestTimer()` é a única forma de encerrar um
+    // descanso, e ela é idempotente e segura de chamar tarde.
+    // ---------------------------------------------------------------------------------------
+
+    @Test
+    fun `usuario existente sem preferencia gravada recebe AUTO_ADVANCE`() = runBlocking {
+        assertEquals(
+            com.example.data.datastore.RestCompletionBehavior.AUTO_ADVANCE,
+            settings.restCompletionBehaviorFlow.first()
+        )
+    }
+
+    @Test
+    fun `preferencia gravada sobrevive a leitura seguinte`() = runBlocking {
+        settings.setRestCompletionBehavior(com.example.data.datastore.RestCompletionBehavior.MANUAL_OVERTIME)
+        assertEquals(
+            com.example.data.datastore.RestCompletionBehavior.MANUAL_OVERTIME,
+            settings.restCompletionBehaviorFlow.first()
+        )
+    }
+
+    @Test
+    fun `encerrar descanso ja encerrado nao falha e nao ressuscita estado`() = runBlocking {
+        // O caminho do MANUAL_OVERTIME deixa o alvo vivo além do zero de propósito; quando o
+        // usuário finalmente avança, o motor recebe o mesmo `skipRestTimer()` de sempre — chamado
+        // tarde, sobre um descanso que já passou do previsto há muito tempo.
+        engine.startRestTimer(durationSeconds = 5, workoutSessionId = 1L, exerciseSessionId = 1L)
+        engine.skipRestTimer()
+
+        // Um evento tardio (alarme duplicado, notificação obsoleta) chamando de novo não recria
+        // nem falha.
+        engine.skipRestTimer()
+
+        assertNull(engine.restTimerTarget.first())
+        assertNull(settings.restTimerDeadlineFlow.first())
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Ciclo de vida da sessão
     // ---------------------------------------------------------------------------------------
 
@@ -245,6 +287,25 @@ class WorkoutEngineExecutionTest {
         sets.forEach { engine.updateSet(it.copy(completed = true)) }
 
         assertNull("o último set do treino não pode abrir descanso", engine.restTimerTarget.first())
+    }
+
+    @Test
+    fun `evento tardio apos a sessao concluida nao reabre descanso`() = runBlocking {
+        // Relevante para T19.9: MANUAL_OVERTIME mantém o descanso "vivo" além do previsto de
+        // propósito, então um evento que chegue depois de a sessão já ter sido finalizada — a
+        // notificação de fim de descanso atrasada, por exemplo — não pode ressuscitar nada.
+        val (templateId, _) = seedTemplate(targetSets = 1)
+        engine.startSession(templateId)
+        val session = dao.getActiveSession()!!
+        val set = dao.getSessionWithDetails(session.id)!!.exercises.first().sets.first()
+
+        engine.finishSession(session.id)
+        assertNull(engine.restTimerTarget.first())
+
+        // A série já pertence a uma sessão que não está mais IN_PROGRESS.
+        engine.updateSet(set.copy(completed = true))
+
+        assertNull("uma sessão concluída não pode ganhar um descanso novo", engine.restTimerTarget.first())
     }
 
     // ---------------------------------------------------------------------------------------

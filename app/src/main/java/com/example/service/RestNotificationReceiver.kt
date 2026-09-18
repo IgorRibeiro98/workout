@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.example.MainApplication
+import com.example.data.datastore.RestCompletionBehavior
 import com.example.data.datastore.SettingsManager
 import com.example.domain.engine.WorkoutEngine
 import kotlinx.coroutines.CancellationException
@@ -83,12 +84,19 @@ class RestNotificationReceiver : BroadcastReceiver() {
                 val soundEnabled = settingsManager.soundEnabledFlow.firstOrNull() ?: true
                 val hapticEnabled = settingsManager.hapticEnabledFlow.firstOrNull() ?: true
                 val notificationEnabled = settingsManager.timerNotificationEnabledFlow.firstOrNull() ?: true
+                val behavior = settingsManager.restCompletionBehaviorFlow.firstOrNull() ?: RestCompletionBehavior.AUTO_ADVANCE
                 val exName = intent.getStringExtra("exerciseName")
                     ?: workoutEngine.getActiveExerciseNameForTimer()
 
-                // 1. Clear timer state from WorkoutEngine and DataStore
-                workoutEngine.skipRestTimer()
-                // 2. Cancel the ongoing countdown notification & alarm
+                // 1. Clear timer state only when the policy is to advance on its own. Em
+                // MANUAL_OVERTIME o alvo precisa sobreviver ao alarme: é dele que a tela deriva
+                // "quanto passou" quando o usuário voltar — apagar aqui destruiria a única fonte
+                // do overtime (T19.9).
+                if (behavior != RestCompletionBehavior.MANUAL_OVERTIME) {
+                    workoutEngine.skipRestTimer()
+                }
+                // 2. Cancel the ongoing countdown notification & alarm — o trabalho dela (contar
+                // até zero) terminou nos dois modos; o alarme já disparou e não se repete.
                 notificationManager.cancelNotification()
                 // 3. Emit completion notification with sound and vibration via RestTimerNotificationManager
                 context?.let { ctx ->

@@ -2,6 +2,7 @@ package com.example.presentation.execution
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.datastore.RestCompletionBehavior
 import com.example.data.datastore.SettingsManager
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SessionWithDetails
@@ -261,6 +262,15 @@ class ExecutionViewModel(
      */
     val timerNotificationEnabled = settingsManager.timerNotificationEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    /**
+     * O que fazer quando o descanso chega a zero (T19.9): avançar sozinho ou aguardar o usuário.
+     *
+     * `AUTO_ADVANCE` é o padrão porque é o comportamento que já existia — ver
+     * [RestCompletionBehavior]. Quem lê isto é a tela de descanso; o motor não precisa saber.
+     */
+    val restCompletionBehavior = settingsManager.restCompletionBehaviorFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RestCompletionBehavior.AUTO_ADVANCE)
 
     /**
      * O exercício em foco, identificado por `exerciseSession.id` — nunca por posição.

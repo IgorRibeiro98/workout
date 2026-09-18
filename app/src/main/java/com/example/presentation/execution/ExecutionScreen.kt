@@ -53,10 +53,12 @@ import com.example.components.workout.execution.SetFeedbackBanner
 import com.example.components.workout.execution.WeightWheelPicker
 import com.example.components.workout.execution.WorkoutActionButton
 import com.example.components.workout.execution.WorkoutProgressHeader
+import com.example.data.datastore.RestCompletionBehavior
 import com.example.data.local.ExerciseSessionWithSets
 import com.example.data.local.SetLogEntity
 import com.example.data.local.WorkoutParticipantRole
 import com.example.domain.engine.ExerciseVisualResolver
+import com.example.domain.engine.RestCompletionCalculator
 import com.example.domain.engine.RirFormatter
 import com.example.domain.workout.execution.ExerciseExecutionContext
 import com.example.presentation.execution.components.DuoTurnBanner
@@ -103,6 +105,7 @@ fun ExecutionScreen(
     val showGifs by viewModel.showGifs.collectAsState()
     val showCoachTip by viewModel.showCoachTip.collectAsState()
     val timerNotificationEnabled by viewModel.timerNotificationEnabled.collectAsState()
+    val restCompletionBehavior by viewModel.restCompletionBehavior.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? androidx.activity.ComponentActivity
@@ -435,7 +438,8 @@ fun ExecutionScreen(
                                 totalSets = if (isPreparingNext) (nextExSession?.sets?.size ?: 1) else currentEx.sets.size,
                                 hapticEnabled = hapticEnabled,
                                 soundEnabled = soundEnabled,
-                                timerNotificationEnabled = timerNotificationEnabled
+                                timerNotificationEnabled = timerNotificationEnabled,
+                                restCompletionBehavior = restCompletionBehavior
                             )
                         }
                         ExecutionPhase.ACTIVE_SET -> {
@@ -1652,23 +1656,44 @@ fun FocusedRestView(
     hapticEnabled: Boolean = true,
     soundEnabled: Boolean = true,
     timerNotificationEnabled: Boolean = true,
-    isDurationMode: Boolean = false
+    isDurationMode: Boolean = false,
+    /** O que fazer ao chegar em zero (T19.9). Ver [RestCompletionCalculator]. */
+    restCompletionBehavior: RestCompletionBehavior = RestCompletionBehavior.AUTO_ADVANCE
 ) {
     var timeLeft by remember { mutableStateOf(0L) }
+    var overtimeSeconds by remember { mutableStateOf(0L) }
+    var isOvertime by remember { mutableStateOf(false) }
     var isFinishedAlertState by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     LaunchedEffect(targetTime) {
         if (targetTime == null) return@LaunchedEffect
+        // A preferência é lida **uma vez** aqui, no início deste descanso — não a cada segundo.
+        // `LaunchedEffect(targetTime)` só relança quando um novo descanso começa (novo alvo); é
+        // assim que uma mudança de configuração no meio de um descanso em andamento não muda o
+        // comportamento dele pela metade (requisito de determinismo da T19.9). Um descanso já em
+        // overtime continua em overtime até ser avançado, e o próximo descanso já nasce com a
+        // preferência atual.
+        val behavior = restCompletionBehavior
         // O alerta só vale para um descanso que **cruzou** o zero enquanto esta tela o observava.
         // Um alvo que já nasce no passado não é um descanso terminando agora: é um resto de estado.
         var hasCountedDown = false
+        var alertFired = false
         while (true) {
-            val remaining = (targetTime - System.currentTimeMillis()) / 1000
-            if (remaining <= 0) {
-                timeLeft = 0
-                if (!hasCountedDown) break
+            val now = System.currentTimeMillis()
+            val reading = RestCompletionCalculator.read(targetTime, now, behavior)
+            if (!reading.isExpired) {
+                hasCountedDown = true
+                timeLeft = reading.remainingSeconds
+                isOvertime = false
+                kotlinx.coroutines.delay(1000)
+                continue
+            }
+            timeLeft = 0
+            if (!hasCountedDown) break
+            if (!alertFired) {
+                alertFired = true
                 isFinishedAlertState = true
                 if (hapticEnabled) {
                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -1680,13 +1705,19 @@ fun FocusedRestView(
                     notificationEnabled = timerNotificationEnabled,
                     source = "FocusedRestView"
                 )
-                kotlinx.coroutines.delay(650)
-                onSkip()
-                break
             }
-            hasCountedDown = true
-            timeLeft = remaining
-            kotlinx.coroutines.delay(1000)
+            if (!RestCompletionCalculator.shouldAutoAdvance(behavior)) {
+                // MANUAL_OVERTIME: o alerta já disparou (uma vez); o avanço é do usuário.
+                // `reading.isOvertime` — não `true` fixo — é o que mantém a fronteira em `00:00`
+                // (T19.9 §6.3): só vira `-00:01` depois de um segundo cheio decorrido.
+                isOvertime = reading.isOvertime
+                overtimeSeconds = reading.overtimeSeconds
+                kotlinx.coroutines.delay(1000)
+                continue
+            }
+            kotlinx.coroutines.delay(650)
+            onSkip()
+            break
         }
     }
 
@@ -1755,8 +1786,12 @@ fun FocusedRestView(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = String.format(java.util.Locale.ROOT, "%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60),
-                color = TextPrimary,
+                text = if (isOvertime) {
+                    String.format(java.util.Locale.ROOT, "-%02d:%02d", overtimeSeconds / 60, overtimeSeconds % 60)
+                } else {
+                    String.format(java.util.Locale.ROOT, "%02d:%02d", (timeLeft.coerceAtLeast(0)) / 60, (timeLeft.coerceAtLeast(0)) % 60)
+                },
+                color = if (isOvertime) Emerald500 else TextPrimary,
                 fontSize = 72.sp,
                 fontWeight = FontWeight.Black
             )
