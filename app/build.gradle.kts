@@ -291,6 +291,37 @@ android {
             // que tocasse `android.*` sem Robolectric recebia `null`/`0`/`false` em silêncio, e a
             // asserção seguinte passava ou falhava por acaso. Sem ele, o mesmo teste falha com
             // "Method ... not mocked" — que é a informação certa: falta `@RunWith(AndroidJUnit4)`.
+
+            all {
+                // O heap do **worker de teste** (T19.H2).
+                //
+                // `org.gradle.jvmargs` dimensiona o daemon, não este processo: o worker usa o
+                // padrão do Gradle, 512m. A suíte passou de 1401 testes (2026-09-16) para 1757,
+                // com dezenas de classes Robolectric + Compose que carregam um sandbox Android
+                // inteiro e mantêm bancos Room em memória, e 512m deixou de bastar.
+                //
+                // O sintoma **não** parece falta de memória, e é por isso que ele custa caro: o
+                // `OutOfMemoryError` estoura numa corrotina qualquer, sem stack trace útil, e
+                // quando ela roda num dispatcher real o `ExceptionCollector` global do
+                // `kotlinx-coroutines-test` a guarda e a reporta como
+                // `UncaughtExceptionsBeforeTest` no **próximo** `runTest` da JVM — uma classe sem
+                // nenhuma relação com quem ficou sem memória. Foi assim que apareceu no CI, em
+                // `ExecutionViewModelDuoTest`.
+                it.maxHeapSize = "2g"
+
+                // O log do CI precisa bastar para diagnosticar.
+                //
+                // `UncaughtExceptionsBeforeTest` carrega a exceção original como `suppressed`, e o
+                // formato padrão do Gradle imprime só a primeira linha — foi por isso que o log do
+                // CI dizia apenas "UncaughtExceptionsBeforeTest at ExecutionViewModelDuoTest.kt:241"
+                // e escondia o `OutOfMemoryError` que de fato tinha acontecido em outra classe.
+                it.testLogging {
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showStackTraces = true
+                    showCauses = true
+                    events("failed")
+                }
+            }
         }
     }
     // Fonte canônica dos schemas do Room: `app/schemas`, gerada pelo KSP e versionada no Git.

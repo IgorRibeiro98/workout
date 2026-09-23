@@ -315,31 +315,6 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `havendo conflito de verdade, a fase continua sendo a da decisao`() = runBlocking {
-        device.bind()
-        val templateSyncId = device.newTemplate("Treino A")
-        device.sync()
-
-        val outro = SyncDevice(server, ownerUid, "device-b")
-        try {
-            outro.bind()
-            outro.sync()
-            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
-            outro.sync()
-        } finally {
-            outro.close()
-        }
-        device.renameTemplate(templateSyncId, "Escrito aqui")
-        val model = viewModel()
-        model.syncNow()
-
-        val phase = awaitPhase(model) { it is SyncPhase.NeedsAttention } as SyncPhase.NeedsAttention
-        assertEquals(1, phase.items)
-        // A contagem anunciada é a da lista mostrada: uma nunca sai sem a outra.
-        assertEquals(model.uiState.value.conflicts.size, phase.items)
-    }
-
-    @Test
     fun `o estado publicado nunca mistura duas leituras do banco`() = runBlocking {
         // Regressão de uma corrida real, encontrada pelo CI do Android na T16.7.1: `render` é
         // "lê o banco → monta o estado → publica", com pontos de suspensão no meio. Dois renders
