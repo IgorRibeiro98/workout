@@ -1,10 +1,13 @@
 package com.example.data.repository
 
+import com.example.data.local.ExerciseEntity
 import com.example.data.local.WorkoutProgramEntity
 import com.example.data.local.WorkoutShareImportReceiptEntity
 import com.example.data.local.WorkoutShareReceiptDao
 import com.example.data.local.WorkoutTemplateEntity
 import com.example.data.local.WorkoutTemplateExerciseEntity
+import com.example.data.sync.SyncIds
+import com.example.domain.social.SharedCustomExerciseSnapshot
 import com.example.domain.social.SharedExerciseSnapshot
 import com.example.domain.social.SharedProgramSnapshot
 import com.example.domain.social.SharedWorkoutSnapshot
@@ -115,6 +118,10 @@ open class WorkoutShareImporter(
         val resolved = resolveExercises(repo, snapshot.exercises)
             ?: return WorkoutShareImportResult.MissingExercises(missingCanonicalIds(repo, snapshot.exercises))
 
+        // 3b. Os exercícios CUSTOM da oferta (V2): cada um vira um exercício **novo** deste
+        // aparelho, com identidade daqui, criado na mesma transação do treino.
+        val customs = newCustomExercises(snapshot.customExercises, snapshot.exercises)
+
         // 4. Determinar a ordem dentro do programa
         val existingTemplates = repo.dao.getTemplatesForProgramSync(program.id)
         val nextOrder = (existingTemplates.maxOfOrNull { it.orderInProgram } ?: -1) + 1
@@ -123,7 +130,9 @@ open class WorkoutShareImporter(
         //
         // Eram três passos independentes, e uma interrupção entre eles deixava um treino pela
         // metade sem recibo: como o recibo é a idempotência desta importação, reabrir a oferta
-        // criava um segundo treino ao lado do primeiro. Ou tudo entra, ou nada entra.
+        // criava um segundo treino ao lado do primeiro. Ou tudo entra, ou nada entra. Desde a
+        // T19.H2 os exercícios CUSTOM criados entram na mesma transação, pelo mesmo motivo: um
+        // retry depois de um crash não pode deixar duas cópias do mesmo exercício.
         val templateId = repo.addTemplateWithExercises(
             template = WorkoutTemplateEntity(
                 programId = program.id,
@@ -131,7 +140,8 @@ open class WorkoutShareImporter(
                 shortIdentifier = snapshot.shortIdentifier ?: "T",
                 orderInProgram = nextOrder
             ),
-            exercises = resolved
+            exercises = resolved,
+            customExercises = customs
         ) { localTemplateId ->
             receipts.insertReceipt(
                 WorkoutShareImportReceiptEntity(
@@ -177,6 +187,19 @@ open class WorkoutShareImporter(
         if (missing.isNotEmpty()) {
             return WorkoutShareImportResult.MissingExercises(missing)
         }
+        // Os CUSTOM são da oferta inteira: um exercício por `ref`, mesmo quando vários treinos o
+        // usam. As entidades são **as mesmas instâncias** em todos os treinos — e a transação,
+        // pela chave, cria uma linha só (T19.H2 §15).
+        val customsByRef = snapshot.customExercises.associate { custom ->
+            custom.ref to ExerciseEntity(
+                name = custom.name,
+                primaryMuscle = custom.primaryMuscle,
+                equipment = custom.equipment,
+                description = custom.description,
+                isUserCreated = true,
+                syncId = SyncIds.random()
+            )
+        }
         val templates = mutableListOf<NewTemplate>()
         snapshot.templates.sortedBy { it.orderInProgram }.forEachIndexed { index, template ->
             val exercises = resolveExercises(repo, template.exercises)
@@ -194,7 +217,8 @@ open class WorkoutShareImporter(
                 // A agenda da cópia é a da oferta (T19.8): os mesmos dias, no mesmo treino — e
                 // retry da importação não a duplica porque a transação inteira é idempotente pelo
                 // recibo.
-                scheduledDays = template.scheduledDays
+                scheduledDays = template.scheduledDays,
+                customExercises = customPositions(customsByRef, template.exercises)
             )
         }
 
@@ -250,9 +274,71 @@ open class WorkoutShareImporter(
         repo: WorkoutRepository,
         exercises: List<SharedExerciseSnapshot>
     ): List<String> = exercises
-        .map { it.canonicalExerciseId }
+        .mapNotNull { it.canonicalExerciseId }
         .distinct()
         .filter { repo.getExerciseByCanonicalId(it) == null }
+
+    /**
+     * Os exercícios CUSTOM de uma oferta de **treino avulso**, prontos para a transação.
+     *
+     * Cada `ref` do snapshot vira uma `ExerciseEntity` nova, com `syncId` gerado **aqui** e
+     * `canonicalId` nulo — a mesma forma de um exercício que o usuário cria à mão ([WorkoutRepository.addExercise]).
+     * Nada do remetente chega junto: o snapshot não carrega `localId`, `syncId`, foto nem mídia.
+     */
+    private fun newCustomExercises(
+        customExercises: List<SharedCustomExerciseSnapshot>,
+        exercises: List<SharedExerciseSnapshot>
+    ): List<NewCustomExercise> {
+        if (customExercises.isEmpty()) return emptyList()
+        val byRef = customExercises.associate { custom ->
+            custom.ref to ExerciseEntity(
+                name = custom.name,
+                primaryMuscle = custom.primaryMuscle,
+                equipment = custom.equipment,
+                description = custom.description,
+                isUserCreated = true,
+                syncId = SyncIds.random()
+            )
+        }
+        return customPositions(byRef, exercises)
+    }
+
+    /**
+     * Liga cada `ref` às posições do treino que a usam.
+     *
+     * Uma `ref` que nenhum exercício referencia não produz exercício nenhum: o servidor já recusa
+     * esse caso, e uma oferta antiga que passasse por ele não deve deixar lixo no catálogo de quem
+     * recebe.
+     */
+    private fun customPositions(
+        byRef: Map<String, ExerciseEntity>,
+        exercises: List<SharedExerciseSnapshot>
+    ): List<NewCustomExercise> = exercises
+        .asSequence()
+        .sortedBy { it.sortOrder }
+        .mapNotNull { exercise -> exercise.customExerciseRef?.let { it to exercise } }
+        .groupBy({ (ref, _) -> ref }, { (_, exercise) -> exercise })
+        .mapNotNull { (ref, positions) ->
+            val entity = byRef[ref] ?: return@mapNotNull null
+            NewCustomExercise(
+                ref = ref,
+                exercise = entity,
+                positions = positions.map { exercise ->
+                    WorkoutTemplateExerciseEntity(
+                        templateId = 0,
+                        exerciseId = 0,
+                        sortOrder = exercise.sortOrder,
+                        targetSets = exercise.targetSets,
+                        minReps = exercise.minReps,
+                        maxReps = exercise.maxReps,
+                        restDurationSeconds = exercise.restDurationSeconds,
+                        plannedWeight = null,
+                        machineLabel = null,
+                        notes = null
+                    )
+                }
+            )
+        }
 
     /**
      * Os exercícios de um treino resolvidos para o catálogo **local**, pelo id canônico — nunca
@@ -266,7 +352,10 @@ open class WorkoutShareImporter(
     ): List<WorkoutTemplateExerciseEntity>? {
         val resolved = mutableListOf<WorkoutTemplateExerciseEntity>()
         for (ex in exercises.sortedBy { it.sortOrder }) {
-            val exerciseEntity = repo.getExerciseByCanonicalId(ex.canonicalExerciseId) ?: return null
+            // Uma posição CUSTOM não se resolve no catálogo: ela é criada pela transação, a partir
+            // do snapshot que a oferta trouxe.
+            val canonical = ex.canonicalExerciseId ?: continue
+            val exerciseEntity = repo.getExerciseByCanonicalId(canonical) ?: return null
             resolved.add(
                 WorkoutTemplateExerciseEntity(
                     templateId = 0,

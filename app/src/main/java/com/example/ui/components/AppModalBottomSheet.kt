@@ -1,6 +1,8 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -19,15 +21,41 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 
+/**
+ * A folha padrão do Spark.
+ *
+ * ## Conteúdo alto (H2.4)
+ *
+ * Por omissão o conteúdo não rola: a folha cresce com ele, e `ModalBottomSheet` a limita à altura
+ * da tela — o que passar disso fica **fora do alcance**, sem barra de rolagem e sem aviso. Foi
+ * exatamente o que aconteceu com a Meta Semanal: sete opções, o aviso de vigência e o botão de
+ * salvar passavam de 800dp, e em aparelhos de tela menor o botão simplesmente não existia para o
+ * usuário.
+ *
+ * [scrollableContent] liga a rolagem **do miolo**, e [footer] fica fixo abaixo dele. A combinação
+ * é o que garante que o CTA esteja sempre alcançável, em qualquer altura de tela e em qualquer
+ * `fontScale`. Continua sendo opt-in: uma folha cujo conteúdo já é uma lista rolável (`LazyColumn`)
+ * não pode ser embrulhada num `verticalScroll`, e todas as folhas existentes seguem como estavam.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppModalBottomSheet(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
-    sheetState: SheetState = rememberModalBottomSheetState(),
+    scrollableContent: Boolean = false,
+    /**
+     * A folha de conteúdo alto abre **inteira**.
+     *
+     * `ModalBottomSheet` abre no estado "meio aberto" quando o conteúdo passa de metade da tela, e
+     * é justamente aí que o rodapé — o CTA — fica abaixo da borda. Não é rolagem que resolve: o
+     * que está fora é a folha, não o conteúdo dela. Uma folha curta não chega a usar esse estado,
+     * então nada muda para as demais.
+     */
+    sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = scrollableContent),
     title: String? = null,
     subtitle: String? = null,
     headerRightContent: @Composable (RowScope.() -> Unit)? = null,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     ModalBottomSheet(
@@ -76,7 +104,20 @@ fun AppModalBottomSheet(
                     }
                 }
             }
-            content()
+            if (scrollableContent) {
+                // `fill = false`: o miolo ocupa o que precisa e só cede ao chegar no teto da
+                // folha — uma folha curta continua curta, e não passa a ocupar a tela inteira.
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    content()
+                }
+            } else {
+                content()
+            }
+            footer?.invoke(this)
             Spacer(modifier = Modifier.height(16.dp))
         }
     }

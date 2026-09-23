@@ -143,9 +143,43 @@ interface SyncOutboxDao {
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE ownerUid = :ownerUid AND status = 'BLOCKED'")
     suspend fun blockedCountFor(ownerUid: String): Int
 
+    /**
+     * As alterações travadas que **não** têm um conflito correspondente para o usuário decidir (H2.5).
+     *
+     * Toda vez que o push trava uma entrada, um conflito do mesmo agregado é registrado — mas os
+     * dois não caminham juntos para sempre: o conflito some quando o agregado volta a subir
+     * (`conflictDao.clear` no `APPLIED`) ou quando a política dele não produz escolha nenhuma, e a
+     * entrada travada continua onde estava, porque ela é a alteração da pessoa e nunca é apagada
+     * sozinha. É essa sobra que fazia a tela anunciar "3 itens precisam de atenção" e não ter
+     * nenhum item para mostrar.
+     *
+     * A contagem é **por agregado**, e não por entrada: o usuário conta itens, não linhas de fila.
+     */
+    @Query(
+        """
+        SELECT o.blockedReason AS reason, COUNT(DISTINCT o.entityType || ':' || o.entitySyncId) AS items
+        FROM sync_outbox o
+        WHERE o.ownerUid = :ownerUid AND o.status = 'BLOCKED'
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_conflicts c
+            WHERE c.ownerUid = o.ownerUid
+              AND c.entityType = o.entityType
+              AND c.entitySyncId = o.entitySyncId
+          )
+        GROUP BY o.blockedReason
+        """
+    )
+    suspend fun blockedWithoutConflictFor(ownerUid: String): List<BlockedReasonCount>
+
     @Query("SELECT * FROM sync_outbox ORDER BY id ASC")
     suspend fun all(): List<SyncOutboxEntryEntity>
 
     @Query("SELECT COUNT(*) FROM sync_outbox")
     suspend fun count(): Int
 }
+
+/** Uma classe de motivo de bloqueio e quantos agregados estão nela. */
+data class BlockedReasonCount(
+    val reason: String?,
+    val items: Int
+)

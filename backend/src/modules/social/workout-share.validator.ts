@@ -25,11 +25,23 @@ import {
  * presente decide o `shareType`; os dois juntos, ou nenhum, recusam. Não existe um `shareType`
  * no corpo: seria uma segunda afirmação sobre o mesmo fato, e as duas poderiam discordar.
  *
+ * ## Duas versões de snapshot (T19.H2)
+ *
+ * ```text
+ * V1   treino com 1..30 exercícios, todos do catálogo
+ * V2   + treino vazio  + exercício CUSTOM portátil (customExercises / customExerciseRef)
+ * ```
+ *
+ * A allowlist deste arquivo é a **união** das duas: quem separa é `WorkoutShareService`, que
+ * recusa `customExercises`/`customExerciseRef` num snapshot `snapshotVersion: 1`. Aqui a forma
+ * ainda não sabe qual versão está lendo — o campo `snapshotVersion` é só mais uma chave.
+ *
  * ## O que este arquivo **não** faz
  *
  * Semântica. Versão suportada, tamanho do nome, quantidade de treinos e de exercícios, faixas de
- * repetição e forma do `canonicalExerciseId` continuam em `WorkoutShareService`, que é onde
- * sempre estiveram — duplicar as regras aqui criaria duas autoridades sobre o mesmo contrato.
+ * repetição, forma do `canonicalExerciseId` e resolução das referências CUSTOM continuam em
+ * `WorkoutShareService`, que é onde sempre estiveram — duplicar as regras aqui criaria duas
+ * autoridades sobre o mesmo contrato.
  *
  * ## Os objetos devolvidos são os originais
  *
@@ -69,9 +81,21 @@ const SERVER_OWNED_FIELDS = [
 
 const REQUEST_FIELDS = ['recipientSocialId', 'clientRequestId', 'snapshot', 'programSnapshot'];
 
-const SNAPSHOT_FIELDS = ['snapshotVersion', 'name', 'shortIdentifier', 'exercises'] as const;
+const SNAPSHOT_FIELDS = [
+  'snapshotVersion',
+  'name',
+  'shortIdentifier',
+  'customExercises',
+  'exercises',
+] as const;
 
-const PROGRAM_SNAPSHOT_FIELDS = ['snapshotVersion', 'name', 'description', 'templates'] as const;
+const PROGRAM_SNAPSHOT_FIELDS = [
+  'snapshotVersion',
+  'name',
+  'description',
+  'customExercises',
+  'templates',
+] as const;
 
 const PROGRAM_TEMPLATE_FIELDS = [
   'name',
@@ -84,11 +108,28 @@ const PROGRAM_TEMPLATE_FIELDS = [
 
 const EXERCISE_FIELDS = [
   'canonicalExerciseId',
+  'customExerciseRef',
   'sortOrder',
   'targetSets',
   'minReps',
   'maxReps',
   'restDurationSeconds',
+] as const;
+
+/**
+ * O que um exercício CUSTOM pode carregar (T19.H2 / V2).
+ *
+ * A allowlist é curta de propósito: é a lista do que quem recebe precisa para ter um exercício
+ * dele. Foto local, mídia, `canonicalId`, `slug`, origem, versão de conteúdo e qualquer sinal de
+ * identidade do remetente ficam de fora — e, por serem nomes fora desta lista, recusam a oferta
+ * inteira em vez de serem ignorados.
+ */
+const CUSTOM_EXERCISE_FIELDS = [
+  'ref',
+  'name',
+  'primaryMuscle',
+  'equipment',
+  'description',
 ] as const;
 
 /**
@@ -127,6 +168,7 @@ export function parseCreateWorkoutShareRequest(body: unknown): CreateWorkoutShar
   if (hasTemplate) {
     const snapshot = requireObject(object.snapshot, 'snapshot');
     rejectUnknownFields(snapshot, SNAPSHOT_FIELDS, 'no snapshot');
+    requireCustomExerciseList(snapshot.customExercises, 'snapshot');
     requireExerciseList(snapshot.exercises, 'snapshot');
     return {
       recipientSocialId,
@@ -140,6 +182,7 @@ export function parseCreateWorkoutShareRequest(body: unknown): CreateWorkoutShar
 
   const program = requireObject(object.programSnapshot, 'programSnapshot');
   rejectUnknownFields(program, PROGRAM_SNAPSHOT_FIELDS, 'no programSnapshot');
+  requireCustomExerciseList(program.customExercises, 'programSnapshot');
   if (!Array.isArray(program.templates)) {
     throw invalid('programSnapshot.templates precisa ser uma lista');
   }
@@ -157,6 +200,17 @@ export function parseCreateWorkoutShareRequest(body: unknown): CreateWorkoutShar
       snapshot: object.programSnapshot as WorkoutProgramShareSnapshotV1,
     },
   };
+}
+
+function requireCustomExerciseList(value: unknown, owner: string): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw invalid(`${owner}.customExercises precisa ser uma lista`);
+  }
+  value.forEach((raw, index) => {
+    const custom = requireObject(raw, `o exercício personalizado [${index}]`);
+    rejectUnknownFields(custom, CUSTOM_EXERCISE_FIELDS, `no exercício personalizado [${index}]`);
+  });
 }
 
 function requireExerciseList(value: unknown, owner: string): void {

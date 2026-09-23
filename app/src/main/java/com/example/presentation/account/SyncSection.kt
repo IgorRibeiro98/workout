@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.sync.SyncConflictCategory
 import com.example.data.sync.SyncConflictChoice
 import com.example.data.sync.SyncConflictId
+import com.example.data.sync.SyncBlockedGroup
+import com.example.data.sync.SyncBlockedKind
 import com.example.data.sync.SyncConflictSummary
 import com.example.ui.theme.BorderLight
 import com.example.ui.theme.Lime400
@@ -135,13 +137,37 @@ fun SyncSection(
                     }
 
                     is SyncPhase.NeedsAttention -> {
-                        Warning(
-                            title = attentionTitle(phase.items),
-                            body = "Nada foi sobrescrito: as duas versões estão guardadas. " +
-                                "Escolha qual manter."
-                        )
+                        // Um conflito já decidido (`awaitingPush`) não é mais uma pendência do
+                        // usuário: ele espera rede. Contá-lo junto faria a tela pedir de novo uma
+                        // escolha que já foi feita.
+                        val awaitingDecision = uiState.conflicts.count { !it.awaitingPush }
+                        if (awaitingDecision > 0) {
+                            Warning(
+                                title = attentionTitle(awaitingDecision),
+                                body = "Nada foi sobrescrito: as duas versões estão guardadas. " +
+                                    "Escolha qual manter."
+                            )
+                        } else {
+                            Status(
+                                title = "Sua escolha foi guardada",
+                                detail = "Ela sobe na próxima sincronização. Nada foi perdido."
+                            )
+                        }
                         ConflictList(uiState, onResolveConflict)
-                        SyncButton(onSyncNow)
+                        // "Sincronizar agora" só aparece quando não há mais nada a decidir: com
+                        // uma decisão pendente, oferecer um ciclo de sync fazia a tela prometer
+                        // resolver o que ela não resolve — rodava, voltava igual, e o alerta
+                        // continuava (H2.5).
+                        if (awaitingDecision == 0) SyncButton(onSyncNow)
+                    }
+
+                    is SyncPhase.BlockedChanges -> {
+                        Warning(title = blockedTitle(phase.items), body = blockedBody(phase.groups))
+                        DeleteNotice(uiState.deferredDeletes)
+                        // O botão só aparece quando reenviar é mesmo o próximo passo. Para
+                        // "atualize o app" e para uma recusa de conteúdo ele não é: tentar de novo
+                        // produz exatamente a mesma resposta.
+                        if (phase.groups.any { it.kind.retryHelps }) SyncButton(onSyncNow)
                     }
 
                     is SyncPhase.NeedsRebaseline -> {
@@ -372,7 +398,42 @@ private fun pluralChanges(pending: Int): String =
     if (pending == 1) "1 alteração aguardando envio" else "$pending alterações aguardando envio"
 
 private fun attentionTitle(items: Int): String =
-    if (items == 1) "1 item precisa de atenção" else "$items itens precisam de atenção"
+    if (items == 1) "1 item precisa da sua decisão" else "$items itens precisam da sua decisão"
+
+private fun blockedTitle(items: Int): String =
+    if (items == 1) "1 alteração não foi enviada" else "$items alterações não foram enviadas"
+
+/**
+ * O que dizer sobre alterações travadas, por classe de motivo (H2.5).
+ *
+ * Cada frase termina num próximo passo — reenviar, atualizar o app, relatar — porque um alerta sem
+ * próximo passo é o defeito que esta fase existe para corrigir. Nada de `revision`, `syncId`,
+ * `cursor` ou o código do servidor: eles estão no log técnico e não ajudam ninguém aqui.
+ */
+private fun blockedBody(groups: List<SyncBlockedGroup>): String {
+    val sentences = groups.map { group ->
+        when (group.kind) {
+            SyncBlockedKind.CHANGED_ELSEWHERE ->
+                "Algumas alterações precisam ser revisadas porque o mesmo item mudou em outro " +
+                    "aparelho. Sincronize para trazer a versão de lá e revise antes de enviar."
+            SyncBlockedKind.NEEDS_APP_UPDATE ->
+                "Esta versão do Spark ainda não sabe enviar uma dessas alterações. Nada foi " +
+                    "perdido: atualize o aplicativo para que ela suba."
+            SyncBlockedKind.REJECTED_CONTENT ->
+                "O servidor não aceitou o conteúdo de uma alteração. Ela continua guardada aqui, " +
+                    "e tentar de novo daria o mesmo resultado — se continuar acontecendo, relate " +
+                    "o problema."
+            SyncBlockedKind.UNKNOWN ->
+                "Não foi possível enviar uma alteração feita neste aparelho. Ela continua " +
+                    "guardada aqui e o restante do Spark segue normal."
+        }
+    }.distinct()
+    return sentences.joinToString(" ")
+}
+
+/** Reenviar só é o próximo passo quando a causa pode ter mudado desde a última tentativa. */
+private val SyncBlockedKind.retryHelps: Boolean
+    get() = this == SyncBlockedKind.CHANGED_ELSEWHERE || this == SyncBlockedKind.UNKNOWN
 
 /**
  * "Última sincronização", sem prometer tempo real.

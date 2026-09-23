@@ -32,6 +32,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.BorderStroke
@@ -717,8 +720,15 @@ private fun SettingsToggleItem(
     }
 }
 
+/**
+ * Um item de configuração com valor à direita.
+ *
+ * `internal` por causa do teste de layout: a regra desta linha é responsiva (ver
+ * [AdaptiveLabelValueRow]) e precisa ser exercida em 320/360/411dp sem montar a tela inteira com
+ * DataStore e catálogo atrás.
+ */
 @Composable
-private fun SettingsValueItem(
+internal fun SettingsValueItem(
     title: String,
     valueText: String,
     onClick: () -> Unit,
@@ -736,44 +746,116 @@ private fun SettingsValueItem(
                 contentDescription = "$title, $valueText"
             }
     ) {
-        Row(
+        AdaptiveLabelValueRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                Text(
-                    text = title,
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                if (subtitle != null) {
+            label = {
+                Column {
                     Text(
-                        text = subtitle,
-                        color = TextSecondary,
-                        fontSize = 13.sp
+                        text = title,
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (subtitle != null) {
+                        Text(
+                            text = subtitle,
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            },
+            value = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = valueText,
+                        color = Lime400,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = valueText,
-                    color = Lime400,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Icon(
-                    imageVector = Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    tint = TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
+        )
+    }
+}
+
+/**
+ * Título (+ subtítulo) à esquerda, valor à direita — **lado a lado só quando os dois cabem** (H2.3).
+ *
+ * A `Row` que existia aqui media o valor **primeiro**, com a linha inteira à disposição: um valor
+ * longo como "Avançar automaticamente" ou "Continuar contando até eu avançar" ficava com quase
+ * toda a largura, e o título — mesmo com `weight(1f)` — sobrava com o que restasse. Em 320/360dp
+ * isso virava "Ao terminar / o descanso" sobre "O que fazer / quando o / tempo de...", uma palavra
+ * por linha por falta artificial de espaço.
+ *
+ * A regra agora é explícita e não depende de fonte menor: o valor só fica ao lado quando ele cabe
+ * em **metade** da linha. Acima disso ele desce, alinhado à direita, e o título recupera a largura
+ * inteira. Fonte maior (`fontScale`) aumenta a largura intrínseca do valor e empurra o item para a
+ * forma empilhada sozinho, que é o comportamento desejado.
+ *
+ * Cada slot emite **um** nó (aqui, uma `Column` e uma `Row`); é o que os dois chamadores fazem.
+ */
+@Composable
+private fun AdaptiveLabelValueRow(
+    label: @Composable () -> Unit,
+    value: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    horizontalGap: Dp = 12.dp,
+    verticalGap: Dp = 6.dp
+) {
+    Layout(
+        contents = listOf(label, value),
+        modifier = modifier
+    ) { (labelMeasurables, valueMeasurables), constraints ->
+        val labelMeasurable = labelMeasurables.first()
+        val valueMeasurable = valueMeasurables.first()
+        val gap = horizontalGap.roundToPx()
+        val stackGap = verticalGap.roundToPx()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+
+        val valueIntrinsicWidth = valueMeasurable.maxIntrinsicWidth(Constraints.Infinity)
+        val sideBySide = !constraints.hasBoundedWidth ||
+            valueIntrinsicWidth <= (constraints.maxWidth - gap) / 2
+
+        if (sideBySide) {
+            val valuePlaceable = valueMeasurable.measure(loose)
+            val labelMaxWidth = if (constraints.hasBoundedWidth) {
+                (constraints.maxWidth - gap - valuePlaceable.width).coerceAtLeast(0)
+            } else {
+                Constraints.Infinity
+            }
+            val labelPlaceable = labelMeasurable.measure(loose.copy(maxWidth = labelMaxWidth))
+            val width = if (constraints.hasBoundedWidth) {
+                constraints.maxWidth
+            } else {
+                labelPlaceable.width + gap + valuePlaceable.width
+            }
+            val height = maxOf(labelPlaceable.height, valuePlaceable.height)
+                .coerceAtLeast(constraints.minHeight)
+            layout(width, height) {
+                labelPlaceable.place(0, (height - labelPlaceable.height) / 2)
+                valuePlaceable.place(width - valuePlaceable.width, (height - valuePlaceable.height) / 2)
+            }
+        } else {
+            val labelPlaceable = labelMeasurable.measure(loose)
+            val valuePlaceable = valueMeasurable.measure(loose)
+            val width = constraints.maxWidth
+            val height = (labelPlaceable.height + stackGap + valuePlaceable.height)
+                .coerceAtLeast(constraints.minHeight)
+            layout(width, height) {
+                labelPlaceable.place(0, 0)
+                valuePlaceable.place(width - valuePlaceable.width, labelPlaceable.height + stackGap)
             }
         }
     }

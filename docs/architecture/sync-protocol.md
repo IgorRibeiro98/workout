@@ -136,6 +136,29 @@ não suportada. Ela não é apagada (é a alteração do usuário), sai da fila 
 a T16.7. O lado remoto correspondente vive em `sync_conflicts`, e `blockedReason` guarda o
 vocabulário técnico do motivo — nunca conteúdo.
 
+### `BLOCKED` e conflito não são a mesma contagem (T19.H2 / H2.5)
+
+Toda vez que o push trava uma entrada, um conflito do mesmo agregado é registrado. Mas os dois
+**não** caminham juntos para sempre: o conflito some quando o agregado volta a subir
+(`conflictDao.clear` no `APPLIED`), e a entrada travada de uma tentativa anterior continua onde
+estava, porque ela é a alteração da pessoa.
+
+A tela colapsava as duas contagens num `max(blocked, conflicts)` e usava o texto do conflito para as
+duas — anunciava "3 itens precisam de atenção / escolha qual manter" e não tinha item nenhum para
+mostrar, com um botão "Sincronizar agora" que rodava um ciclo e devolvia a mesma tela.
+
+Agora são dois estados com dois textos e dois próximos passos:
+
+```text
+conflicts.isNotEmpty()            → "N itens precisam da sua decisão" + as duas versões + as escolhas
+blocked sem conflito              → "N alterações não foram enviadas" + o motivo, por classe
+```
+
+`SyncOutboxDao.blockedWithoutConflictFor` é a consulta que separa as duas (contando **agregados**,
+não linhas de fila), e `SyncBlockedKind` traduz `blockedReason` em classe — `CHANGED_ELSEWHERE`,
+`NEEDS_APP_UPDATE`, `REJECTED_CONTENT`, `UNKNOWN`. O botão de reenviar só aparece quando reenviar é
+mesmo o próximo passo.
+
 ### Referência, não snapshot
 
 A entrada guarda **o que mudou**, não **o conteúdo**. O payload é montado a partir do Room no

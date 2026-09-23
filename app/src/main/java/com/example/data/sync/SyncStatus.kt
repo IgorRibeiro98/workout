@@ -92,8 +92,60 @@ data class SyncSnapshot(
     val blocked: Int = 0,
     /** Agregados com divergência preservada entre local e remoto. */
     val conflicts: Int = 0,
+    /**
+     * As alterações travadas **sem** conflito para decidir, agrupadas por motivo (H2.5).
+     *
+     * Elas existem: o conflito de um agregado some quando ele volta a subir, e a entrada travada
+     * de uma tentativa anterior continua na fila. Sem esta lista, a tela contava essas sobras
+     * junto com os conflitos e prometia uma escolha que não existia.
+     */
+    val blockedWithoutConflict: List<SyncBlockedGroup> = emptyList(),
     /** Quando o último ciclo completou, segundo o relógio deste aparelho. */
     val lastSyncedAt: Long? = null,
     /** A posição atual no change log do servidor. Diagnóstico — nunca texto de UI. */
     val cursor: Long = 0
+)
+
+/**
+ * Por que uma alteração local não subiu — em classes, nunca no código do servidor (H2.5).
+ *
+ * `STALE`, `IDEMPOTENCY_CONFLICT` e afins não são texto de UI; o que a tela precisa saber é qual é
+ * o **próximo passo** de quem está olhando.
+ */
+enum class SyncBlockedKind {
+    /** O servidor recusou o conteúdo. Tentar de novo dá o mesmo resultado; é defeito a relatar. */
+    REJECTED_CONTENT,
+
+    /** Esta versão do app não sabe enviar isso. O próximo passo é atualizar o aplicativo. */
+    NEEDS_APP_UPDATE,
+
+    /** O item mudou em outro aparelho. O próximo passo é sincronizar e revisar. */
+    CHANGED_ELSEWHERE,
+
+    /** Um motivo que esta versão não conhece. A tela diz o que sabe, sem inventar diagnóstico. */
+    UNKNOWN;
+
+    companion object {
+        /**
+         * A tradução do vocabulário técnico do push para a classe que a tela usa.
+         *
+         * O que não está mapeado vira [UNKNOWN] de propósito: um servidor mais novo pode recusar
+         * por um motivo que este app não conhece, e adivinhar seria pior do que dizer menos.
+         */
+        fun from(reason: String?): SyncBlockedKind = when (reason) {
+            SyncMutationStatus.INVALID.name -> REJECTED_CONTENT
+            SyncMutationStatus.UNSUPPORTED.name -> NEEDS_APP_UPDATE
+            SyncMutationStatus.STALE.name,
+            SyncMutationStatus.REMOTE_DELETED.name,
+            SyncMutationStatus.IMMUTABLE_HISTORY_CONFLICT.name,
+            SyncMutationStatus.IDEMPOTENCY_CONFLICT.name -> CHANGED_ELSEWHERE
+            else -> UNKNOWN
+        }
+    }
+}
+
+/** Quantos agregados estão travados por uma mesma classe de motivo. */
+data class SyncBlockedGroup(
+    val kind: SyncBlockedKind,
+    val items: Int
 )

@@ -2,7 +2,7 @@
  * Contrato de Compartilhamento de Treinos e Programas entre Amigos (T17.7 / T19.3).
  *
  * ## Regras e Fronteiras
- * 1. O compartilhamento é de snapshots portáteis e imutáveis (V1).
+ * 1. O compartilhamento é de snapshots portáteis e imutáveis (V1 e, desde a T19.H2, V2).
  * 2. Somente amigos com relacionamento ativo podem compartilhar.
  * 3. Bloqueio mútuo cancela/invalida ofertas.
  * 4. Cargas, histórico, notas e UIDs privados são estritamente excluídos.
@@ -54,8 +54,23 @@ export const WorkoutShareErrorCodes = {
   SOCIAL_NOT_ENABLED: 'SOCIAL_NOT_ENABLED',
 } as const;
 
+/** As versões de snapshot que este servidor aceita e devolve. */
+export const WORKOUT_SHARE_SNAPSHOT_VERSIONS = [1, 2] as const;
+
+export type WorkoutShareSnapshotVersion = (typeof WORKOUT_SHARE_SNAPSHOT_VERSIONS)[number];
+
+/**
+ * Um exercício dentro de um treino compartilhado.
+ *
+ * A identidade é **exatamente uma** das duas: `canonicalExerciseId`, uma referência ao catálogo,
+ * ou `customExerciseRef` (V2), uma chave que só existe dentro desta oferta e aponta para um
+ * [SharedCustomExerciseV2]. As duas juntas seriam duas afirmações sobre o mesmo fato; nenhuma
+ * delas deixaria o destinatário sem saber o que criar.
+ */
 export interface SharedExerciseV1 {
-  readonly canonicalExerciseId: string;
+  readonly canonicalExerciseId?: string;
+  /** Só em `snapshotVersion: 2`. */
+  readonly customExerciseRef?: string;
   readonly sortOrder: number;
   readonly targetSets: number;
   readonly minReps: number;
@@ -63,10 +78,35 @@ export interface SharedExerciseV1 {
   readonly restDurationSeconds: number;
 }
 
+/**
+ * Um exercício **criado pelo usuário** viajando como snapshot (T19.H2 / V2).
+ *
+ * Não é referência viva ao `Exercise` de quem compartilha: é uma cópia do pouco que é portável, e
+ * o destinatário cria um exercício próprio a partir dela, com identidade dele. Depois disso,
+ * editar o original não alcança a cópia.
+ *
+ * `ref` é **escopada ao snapshot** (`custom-1`, `custom-2`, ...). Ela existe para que o mesmo
+ * CUSTOM usado em três treinos do mesmo programa chegue como **uma** cópia referenciada três
+ * vezes — e não como três exercícios iguais. Ela não é, e nunca vira, identidade global: o
+ * `localId` e o `syncId` do remetente não estão aqui e não podem estar.
+ *
+ * O que **não** viaja: foto local, mídia, `canonicalId`, `slug`, origem, versão de conteúdo,
+ * histórico, carga — ver `FORBIDDEN_SNAPSHOT_KEYS` e a allowlist do validador.
+ */
+export interface SharedCustomExerciseV2 {
+  readonly ref: string;
+  readonly name: string;
+  readonly primaryMuscle?: string | null;
+  readonly equipment?: string | null;
+  readonly description?: string | null;
+}
+
 export interface WorkoutTemplateShareSnapshotV1 {
-  readonly snapshotVersion: 1;
+  readonly snapshotVersion: WorkoutShareSnapshotVersion;
   readonly name: string;
   readonly shortIdentifier?: string | null;
+  /** Só em `snapshotVersion: 2`. Os CUSTOM que os exercícios deste snapshot referenciam. */
+  readonly customExercises?: SharedCustomExerciseV2[];
   readonly exercises: SharedExerciseV1[];
 }
 
@@ -92,9 +132,16 @@ export interface SharedProgramTemplateV1 {
 }
 
 export interface WorkoutProgramShareSnapshotV1 {
-  readonly snapshotVersion: 1;
+  readonly snapshotVersion: WorkoutShareSnapshotVersion;
   readonly name: string;
   readonly description?: string | null;
+  /**
+   * Só em `snapshotVersion: 2`. Os CUSTOM da oferta **inteira**, e não de um treino.
+   *
+   * É o que permite ao mesmo exercício criado pelo usuário, usado em vários treinos do programa,
+   * chegar ao destinatário como uma cópia só.
+   */
+  readonly customExercises?: SharedCustomExerciseV2[];
   readonly templates: SharedProgramTemplateV1[];
 }
 

@@ -227,6 +227,44 @@ Before considering UI work complete:
 - preserve the requirement that the active workout execution screen should avoid unnecessary scrolling;
 - in Focus Mode, hide secondary information instead of merely shrinking everything.
 
+### 10.1 A matriz responsiva mínima (T19.H2)
+
+Toda tela alterada é verificada em **320 / 360 / 411 dp** e em **fontScale 1.0 / 1.3 / 1.5**. Não
+vale reduzir fonte, encurtar rótulo ou fixar largura para "fazer caber": a solução é a medida —
+`FlowRow`, rolagem horizontal, layout adaptativo ou duas linhas.
+
+Nenhuma das nove células pode ter:
+
+```text
+texto cortado          chip parcialmente visível        switch cortado
+CTA fora da viewport   palavra por linha sem necessidade  alvo de toque < 48dp
+```
+
+Isso é **testável** e é testado. `app/src/test/java/com/example/presentation/ResponsiveLayoutSupport.kt`
+tem as asserções (`assertTextFits`, `assertWithinViewportWidth/Height`, `assertTouchTargetAtLeast`);
+`HistoryFiltersResponsiveTest`, `SettingsValueItemResponsiveTest` e `ProgressSharingSwitchLayoutTest`
+são os exemplos a copiar. Uma célula por método de teste — `setContent` só pode ser chamado uma vez
+por teste, e a largura da tela é `@Config(qualifiers = ...)`, que também é por teste.
+
+Duas armadilhas que custaram tempo:
+
+- **`TextLayoutResult.hasVisualOverflow` não serve sob Robolectric.** Ele compara a altura do
+  parágrafo (float) com o tamanho do nó (inteiro arredondado) e responde `true` para todo texto. O
+  helper remede o texto numa linha só, sem limite de largura, e compara com a largura que ele
+  recebeu.
+- **Uma asserção de limites não pega texto cortado.** Compose clipa o texto dentro do nó: os
+  limites continuam corretos enquanto o usuário lê "Todos os...".
+
+### 10.2 Folha de conteúdo alto (T19.H2)
+
+`ModalBottomSheet` **não rola o conteúdo sozinho**, e abre "meio aberta" quando o conteúdo passa de
+metade da tela. As duas coisas juntas escondem o CTA sem barra de rolagem e sem aviso — foi assim
+que a Meta Semanal ficou impossível de salvar em aparelhos de 640dp.
+
+Uma folha que pode ficar alta usa `AppModalBottomSheet(scrollableContent = true, footer = { ... })`:
+o miolo rola, o rodapé fica fixo, e a folha abre inteira (`skipPartiallyExpanded`). Uma folha cujo
+conteúdo já é uma lista rolável (`LazyColumn`) **não** pode usar isso.
+
 ## 11. Offline-first and persistence
 
 Core workout functionality must not depend on a backend being available.
@@ -1993,6 +2031,40 @@ Documento canônico: `docs/architecture/workout-sharing.md`.
   "com.example.presentation.friends.ShareWorkout*" --tests
   "com.example.data.local.AppDatabaseMigration37To38Test" --tests
   "com.example.data.social.SocialBoundaryInspectionTest"`. As duas são offline.
+
+## 13.27 Sharing V2, sync acionável e responsividade (T19.H2)
+
+Contrato de compartilhamento em [`docs/architecture/workout-sharing.md`](docs/architecture/workout-sharing.md);
+a fixture compartilhada em `contracts/social/v1/workout-share-snapshot.json`. As regras que não
+podem ser quebradas:
+
+- **O texto que sai do aparelho é contrato, e é testado como texto.** O compartilhamento ficou
+  inteiro quebrado porque `kotlinx.serialization` não escreve um campo igual ao default declarado,
+  e `snapshotVersion` sumia do corpo. `WorkoutShareWireFormat` é o único lugar onde o JSON da rede é
+  configurado; `WorkoutShareWireFormatTest` afirma o corpo exato. Qualquer contrato novo de rede
+  ganha um teste do **texto**, não só do objeto.
+- **Números duplicados entre Android e backend nascem amarrados.** Faixa, teto ou formato que os
+  dois lados precisam conhecer vai para uma fixture em `contracts/`, lida pelo teste dos dois. Foi
+  a segunda vez que uma divergência silenciosa virou "o servidor recusou o conteúdo".
+- **V1 continua válida para sempre.** O app escreve a versão **mínima** que representa a oferta —
+  V2 só com CUSTOM ou treino vazio. Uma oferta V2 exige o backend novo; o resto não.
+- **CUSTOM viaja como cópia, com chave escopada à oferta.** `custom-1` existe dentro do snapshot e
+  em nenhum outro lugar; `localId` e `syncId` do remetente não atravessam a rede. O exercício
+  criado no destino entra na **mesma transação** da cópia — retry não duplica.
+- **Um alerta sempre tem próximo passo.** Travado na fila (`BLOCKED`) e divergente do servidor
+  (`sync_conflicts`) são coisas diferentes, com contagens diferentes e textos diferentes.
+  "Sincronizar agora" nunca é oferecido como saída para uma decisão que depende do usuário.
+- **Identidade na tela é projeção da sessão, nunca cópia guardada.** O cabeçalho do Perfil deriva
+  nome e foto de `AuthState` a cada composição; é o que torna a troca de conta correta por
+  construção, sem nenhum lugar onde o estado anterior possa sobreviver.
+- **Estado de uma folha modal vive na tela, não dentro do `if` que a desenha.** O seletor de
+  exercícios perdia a seleção porque ela morava na folha e o "voltar" que devia só esconder o
+  teclado fechava tudo.
+- **Testes.** Além do que a §13.23 já exige: `workout-share-contract.spec.ts` no backend e, no
+  Android, `com.example.data.social.WorkoutShare*`, `com.example.presentation.history.*`,
+  `com.example.presentation.settings.SettingsValueItemResponsiveTest`,
+  `com.example.presentation.profile.*`, `com.example.presentation.account.Sync*`,
+  `com.example.presentation.workouts.ExercisePickerStateTest`.
 
 ## 13.24 Treino em dupla local: uma sessão, dois participantes (T19.4)
 

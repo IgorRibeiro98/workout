@@ -429,7 +429,10 @@ describe('Program Shares: compartilhamento de programa completo (T19.3)', () => 
       'ordem negativa',
       { ...PROGRAM, templates: [{ ...PROGRAM.templates[0], orderInProgram: -1 }] },
     ],
-    ['versão desconhecida', { ...PROGRAM, snapshotVersion: 2 }],
+    // A T19.3 usava `2` aqui; desde a T19.H2 a V2 existe (treino vazio + CUSTOM portátil), então
+    // o caso passou a ser uma versão que **nenhum** servidor conhece. A afirmação é a mesma:
+    // versão desconhecida recusa por nome, em vez de tentar interpretar a forma.
+    ['versão desconhecida', { ...PROGRAM, snapshotVersion: 99 }],
     [
       'carga pessoal num exercício',
       {

@@ -14,10 +14,14 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.ai.model.AiCapability
@@ -28,6 +32,7 @@ import com.example.presentation.account.SocialPhase
 import com.example.presentation.coach.isKnownDenied
 import com.example.ui.components.AppModalBottomSheet
 import com.example.ui.components.HubEntryCard
+import coil.compose.AsyncImage
 import com.example.ui.theme.*
 import java.util.Locale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,6 +44,9 @@ import com.example.ui.components.semanticIcon
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.graphics.vector.ImageVector
+
+/** O botão de salvar da Meta Semanal — o gancho do teste que prova que ele está alcançável. */
+internal const val WEEKLY_GOAL_SAVE_TAG = "weekly_goal_save"
 
 private val PtBr = Locale("pt", "BR")
 
@@ -87,6 +95,7 @@ fun ProfileScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val aiCapabilitiesState = aiCapabilitiesViewModel?.state?.collectAsStateWithLifecycle()?.value
     val explanationState by viewModel.explanationState.collectAsStateWithLifecycle()
+    val weeklyGoalSave by viewModel.weeklyGoalSave.collectAsStateWithLifecycle()
     val accountState = accountViewModel?.uiState?.collectAsStateWithLifecycle()?.value
     // Observar o estado é leitura: ele diz o que mostrar, e nenhum backup começa por isso.
     val backupState = backupViewModel?.uiState?.collectAsStateWithLifecycle()?.value
@@ -133,6 +142,8 @@ fun ProfileScreen(
         onNavigateToMissions = onNavigateToMissions,
         onNavigateToAiHome = onNavigateToAiHome,
         onWeeklyGoalChange = viewModel::setWeeklyGoal,
+        weeklyGoalSave = weeklyGoalSave,
+        onWeeklyGoalSaveHandled = viewModel::acknowledgeWeeklyGoalSave,
         canExplainProgress = viewModel.canExplainProgress,
         onExplainProgress = {
             viewModel.explainProgress(
@@ -186,6 +197,8 @@ private fun ProfileScreenContent(
     onNavigateToMissions: () -> Unit,
     onNavigateToAiHome: () -> Unit,
     onWeeklyGoalChange: (Int) -> Unit,
+    weeklyGoalSave: WeeklyGoalSave,
+    onWeeklyGoalSaveHandled: () -> Unit,
     /** `false` esconde a entrada contextual quando o Coach não está disponível neste build. */
     canExplainProgress: Boolean = false,
     onExplainProgress: () -> Unit = {},
@@ -286,7 +299,10 @@ private fun ProfileScreenContent(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            AthleteHeaderCard(uiState = uiState)
+            AthleteHeaderCard(
+                uiState = uiState,
+                identity = athleteIdentityOf(accountState?.account)
+            )
 
             StatsGrid(uiState = uiState)
 
@@ -382,25 +398,72 @@ private fun ProfileScreenContent(
     }
 
     if (showGoalBottomSheet) {
+        // A folha fecha quando a gravação foi **aceita**, e não no toque: uma falha silenciosa
+        // deixaria a tela afirmando ter salvado uma meta que continuou a antiga (H2.4).
+        LaunchedEffect(weeklyGoalSave) {
+            if (weeklyGoalSave is WeeklyGoalSave.Saved) {
+                showGoalBottomSheet = false
+                onWeeklyGoalSaveHandled()
+            }
+        }
         WeeklyGoalBottomSheet(
             currentWeeklyGoal = uiState.weeklyGoal,
             nextWeeklyGoal = uiState.nextWeekGoal,
-            onDismiss = { showGoalBottomSheet = false },
-            onConfirm = { goal ->
-                onWeeklyGoalChange(goal)
+            saveState = weeklyGoalSave,
+            onDismiss = {
                 showGoalBottomSheet = false
-            }
+                onWeeklyGoalSaveHandled()
+            },
+            onConfirm = onWeeklyGoalChange
         )
     }
 }
 
 /**
+ * Quem o cabeçalho do Perfil mostra (H2.2).
+ *
+ * É uma **projeção** da conta autenticada, montada a cada composição a partir de
+ * [com.example.domain.auth.AuthState] — nunca uma cópia guardada. É o que garante o requisito de
+ * troca de conta: sair já não tem conta, e entrar com outra já tem a outra. Não existe lugar onde
+ * nome ou foto da conta anterior possam sobreviver, porque não existe lugar.
+ *
+ * `photoUrl` é apresentação da conta: não é persistida no Room, não entra no backup, não vai para
+ * o Social e não é baixada como mídia do Spark.
+ */
+internal data class AthleteIdentity(
+    val name: String,
+    val photoUrl: String?
+)
+
+/** O nome usado quando não há conta — ou quando a conta não informa nome nem e-mail. */
+internal const val DEFAULT_ATHLETE_NAME = "Atleta"
+
+/**
+ * A política de nome do cabeçalho: `displayName` → e-mail → "Atleta".
+ *
+ * Nenhum dos três é identidade técnica: quem identifica a conta é o `uid`, e ele não aparece aqui.
+ * O e-mail entra antes de "Atleta" porque é um dado real da conta; inventar um nome a partir dele
+ * (cortar antes do `@`, por exemplo) seria criar identidade que ninguém escolheu.
+ */
+internal fun athleteIdentityOf(account: com.example.domain.auth.SparkAccount?): AthleteIdentity =
+    AthleteIdentity(
+        name = account?.displayName?.takeIf { it.isNotBlank() }
+            ?: account?.email?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_ATHLETE_NAME,
+        photoUrl = account?.photoUrl?.takeIf { it.isNotBlank() }
+    )
+
+/**
  * Cabeçalho: quem sou eu no Spark hoje.
  *
- * O nome permanece "Atleta" enquanto não existir identidade configurável.
+ * Com conta conectada, o nome e a foto são os dela ([athleteIdentityOf]). Sem conta — ou sem os
+ * campos, que o Google não garante —, o cabeçalho volta ao avatar genérico e a "Atleta".
  */
 @Composable
-private fun AthleteHeaderCard(uiState: ProfileUiState) {
+internal fun AthleteHeaderCard(
+    uiState: ProfileUiState,
+    identity: AthleteIdentity = AthleteIdentity(DEFAULT_ATHLETE_NAME, null)
+) {
     Surface(
         color = SurfaceDark,
         shape = RoundedCornerShape(20.dp),
@@ -419,20 +482,36 @@ private fun AthleteHeaderCard(uiState: ProfileUiState) {
                         .background(Lime400.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
+                    // O ícone fica **atrás** da foto: sem `photoUrl`, ou com o download falhando,
+                    // ele continua visível e o cabeçalho não quebra (mesma regra do AccountSection).
                     Icon(
                         imageVector = Icons.Default.Person,
                         contentDescription = "Avatar",
                         tint = Lime400,
                         modifier = Modifier.size(36.dp)
                     )
+                    identity.photoUrl?.let { url ->
+                        AsyncImage(
+                            model = url,
+                            contentDescription = "Foto da conta",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(CircleShape)
+                        )
+                    }
                 }
 
-                Column {
+                // `weight(1f)`: um nome real ("Maria Fernanda de Albuquerque") empurrava o bloco
+                // inteiro para fora do cartão sem ele.
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Atleta",
+                        text = identity.name,
                         color = TextPrimary,
                         fontWeight = FontWeight.Black,
-                        fontSize = 20.sp
+                        fontSize = 20.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -966,18 +1045,60 @@ private fun SettingsSection(onClick: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun WeeklyGoalBottomSheet(
+internal fun WeeklyGoalBottomSheet(
     currentWeeklyGoal: Int,
     nextWeeklyGoal: Int,
     onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit
+    onConfirm: (Int) -> Unit,
+    saveState: WeeklyGoalSave = WeeklyGoalSave.Idle
 ) {
-    var selectedValue by remember { mutableIntStateOf(nextWeeklyGoal) }
+    var selectedValue by rememberSaveable { mutableIntStateOf(nextWeeklyGoal) }
+    val isSaving = saveState is WeeklyGoalSave.Saving
 
     AppModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSaving) onDismiss() },
         title = "Meta Semanal de Treinos",
-        subtitle = "Quantos dias por semana você pretende treinar?"
+        subtitle = "Quantos dias por semana você pretende treinar?",
+        // As sete opções, o aviso de vigência e o botão passavam de 800dp: numa tela de 640dp o
+        // botão de salvar ficava fora do alcance, sem rolagem e sem aviso (H2.4). Agora o miolo
+        // rola e o botão é rodapé fixo — ele existe em qualquer altura de tela.
+        scrollableContent = true,
+        footer = {
+            Spacer(modifier = Modifier.height(12.dp))
+            if (saveState is WeeklyGoalSave.Failed) {
+                Text(
+                    text = "Não foi possível salvar a meta agora. Nada foi alterado — tente de novo.",
+                    color = Red400,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+            Button(
+                onClick = { onConfirm(selectedValue) },
+                enabled = !isSaving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Lime400,
+                    contentColor = BackgroundDark,
+                    disabledContainerColor = SurfaceHighlight,
+                    disabledContentColor = TextSecondary
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag(WEEKLY_GOAL_SAVE_TAG)
+            ) {
+                Text(
+                    text = when {
+                        isSaving -> "Salvando..."
+                        selectedValue != nextWeeklyGoal -> "SALVAR NOVA META"
+                        else -> "Salvar Meta"
+                    },
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
+        }
     ) {
         Column(
             modifier = Modifier
@@ -1066,22 +1187,6 @@ private fun WeeklyGoalBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Button(
-                onClick = { onConfirm(selectedValue) },
-                colors = ButtonDefaults.buttonColors(containerColor = Lime400, contentColor = BackgroundDark),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-            ) {
-                Text(
-                    text = if (selectedValue != nextWeeklyGoal) "SALVAR NOVA META" else "Salvar Meta",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-            }
         }
     }
 }

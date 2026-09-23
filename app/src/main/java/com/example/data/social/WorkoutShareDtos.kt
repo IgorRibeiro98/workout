@@ -1,5 +1,6 @@
 package com.example.data.social
 
+import com.example.domain.social.SharedCustomExerciseSnapshot
 import com.example.domain.social.SharedExerciseSnapshot
 import com.example.domain.social.SharedProgramSnapshot
 import com.example.domain.social.SharedProgramTemplateSnapshot
@@ -47,17 +48,25 @@ data class CreateWorkoutShareRequestDto(
     }
 }
 
+/**
+ * O snapshot de um treino, como ele viaja.
+ *
+ * `customExercises` só existe em V2 e **só é escrito quando há algum**: `null` some do JSON
+ * (`explicitNulls = false`), e uma oferta V1 continua com exatamente as chaves que sempre teve.
+ */
 @Serializable
 data class SharedWorkoutSnapshotDto(
     val snapshotVersion: Int = 1,
     val name: String,
     val shortIdentifier: String? = null,
+    val customExercises: List<SharedCustomExerciseSnapshotDto>? = null,
     val exercises: List<SharedExerciseSnapshotDto> = emptyList()
 ) {
     fun toDomain(): SharedWorkoutSnapshot = SharedWorkoutSnapshot(
         snapshotVersion = snapshotVersion,
         name = name,
         shortIdentifier = shortIdentifier,
+        customExercises = customExercises.orEmpty().map { it.toDomain() },
         exercises = exercises.map { it.toDomain() }
     )
 
@@ -67,7 +76,38 @@ data class SharedWorkoutSnapshotDto(
                 snapshotVersion = domain.snapshotVersion,
                 name = domain.name,
                 shortIdentifier = domain.shortIdentifier,
+                customExercises = domain.customExercises
+                    .takeIf { it.isNotEmpty() }
+                    ?.map { SharedCustomExerciseSnapshotDto.fromDomain(it) },
                 exercises = domain.exercises.map { SharedExerciseSnapshotDto.fromDomain(it) }
+            )
+    }
+}
+
+@Serializable
+data class SharedCustomExerciseSnapshotDto(
+    val ref: String,
+    val name: String,
+    val primaryMuscle: String? = null,
+    val equipment: String? = null,
+    val description: String? = null
+) {
+    fun toDomain(): SharedCustomExerciseSnapshot = SharedCustomExerciseSnapshot(
+        ref = ref,
+        name = name,
+        primaryMuscle = primaryMuscle,
+        equipment = equipment,
+        description = description
+    )
+
+    companion object {
+        fun fromDomain(domain: SharedCustomExerciseSnapshot): SharedCustomExerciseSnapshotDto =
+            SharedCustomExerciseSnapshotDto(
+                ref = domain.ref,
+                name = domain.name,
+                primaryMuscle = domain.primaryMuscle,
+                equipment = domain.equipment,
+                description = domain.description
             )
     }
 }
@@ -77,12 +117,14 @@ data class SharedProgramSnapshotDto(
     val snapshotVersion: Int = 1,
     val name: String,
     val description: String? = null,
+    val customExercises: List<SharedCustomExerciseSnapshotDto>? = null,
     val templates: List<SharedProgramTemplateSnapshotDto> = emptyList()
 ) {
     fun toDomain(): SharedProgramSnapshot = SharedProgramSnapshot(
         snapshotVersion = snapshotVersion,
         name = name,
         description = description,
+        customExercises = customExercises.orEmpty().map { it.toDomain() },
         templates = templates.map { it.toDomain() }
     )
 
@@ -92,6 +134,9 @@ data class SharedProgramSnapshotDto(
                 snapshotVersion = domain.snapshotVersion,
                 name = domain.name,
                 description = domain.description,
+                customExercises = domain.customExercises
+                    .takeIf { it.isNotEmpty() }
+                    ?.map { SharedCustomExerciseSnapshotDto.fromDomain(it) },
                 templates = domain.templates.map { SharedProgramTemplateSnapshotDto.fromDomain(it) }
             )
     }
@@ -137,9 +182,17 @@ data class SharedProgramTemplateSnapshotDto(
     }
 }
 
+/**
+ * Um exercício, como ele viaja: id do catálogo **ou** referência CUSTOM escopada ao snapshot.
+ *
+ * Os dois são anuláveis no DTO porque o JSON traz exatamente um; o servidor recusa o corpo com os
+ * dois, ou com nenhum, e é ele a autoridade sobre a forma. Aqui a decodificação precisa apenas
+ * conseguir ler as duas formas.
+ */
 @Serializable
 data class SharedExerciseSnapshotDto(
-    val canonicalExerciseId: String,
+    val canonicalExerciseId: String? = null,
+    val customExerciseRef: String? = null,
     val sortOrder: Int,
     val targetSets: Int,
     val minReps: Int,
@@ -148,6 +201,7 @@ data class SharedExerciseSnapshotDto(
 ) {
     fun toDomain(): SharedExerciseSnapshot = SharedExerciseSnapshot(
         canonicalExerciseId = canonicalExerciseId,
+        customExerciseRef = customExerciseRef,
         sortOrder = sortOrder,
         targetSets = targetSets,
         minReps = minReps,
@@ -159,6 +213,7 @@ data class SharedExerciseSnapshotDto(
         fun fromDomain(domain: SharedExerciseSnapshot): SharedExerciseSnapshotDto =
             SharedExerciseSnapshotDto(
                 canonicalExerciseId = domain.canonicalExerciseId,
+                customExerciseRef = domain.customExerciseRef,
                 sortOrder = domain.sortOrder,
                 targetSets = domain.targetSets,
                 minReps = domain.minReps,

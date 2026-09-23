@@ -780,6 +780,7 @@ persistência do domínio        validação da resposta
 | T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
 | T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
 | T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
+| T19.H2 | Estabilização pós-QA: layout responsivo (Histórico, Settings, Progress Sharing), identidade da conta no Perfil, Meta Semanal salvável, sync com próximo passo, **snapshot de compartilhamento V2** (treino vazio + CUSTOM portátil) e seletor de exercícios com IME; migration Android e backend N/A | **implementado** (aparelho real NOT VERIFIED; matriz 320/360/411dp × fontScale 1.0/1.3/1.5 VERIFIED em Robolectric) |
 
 ### Identidade global dos dados e Outbox (T16.3)
 
@@ -2164,7 +2165,12 @@ fluxo incompleto. Fica como **requisito pré-release da fase de hardening (T16.8
 > mesma oferta transporta um **programa inteiro** (`share_type = WORKOUT_PROGRAM`, migration
 > PostgreSQL `0006`), o aceite é servidor-primeiro e idempotente, e a importação do programa —
 > programa + treinos + exercícios + recibo, `isCurrent = false`, `syncId`s novos — é uma transação
-> Room (v38). Contrato em [`docs/architecture/workout-sharing.md`](docs/architecture/workout-sharing.md).
+> Room (v38). **Desde a T19.H2** o snapshot tem duas versões: a V1 inalterada e uma **V2** que
+> acrescenta treino vazio e exercício `CUSTOM` portátil (`customExercises` + `customExerciseRef`,
+> chave escopada à oferta; o exercício criado no destino entra na mesma transação da cópia). O app
+> escreve a versão **mínima** que representa a oferta. Contrato em
+> [`docs/architecture/workout-sharing.md`](docs/architecture/workout-sharing.md), com a fixture
+> compartilhada em `contracts/social/v1/workout-share-snapshot.json`.
 > **T17.8** — check-ins de treino e Feed social: publicação **explícita por sessão**, validada
 > contra a sessão canônica sincronizada pela `CanonicalTrainingSource`, janela de 48h com o relógio
 > do servidor, Feed `FRIENDS_ONLY` bounded (30 dias, teto 50), migration

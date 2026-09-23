@@ -70,13 +70,35 @@ class MultiplayerWorkoutStarter(
             is SnapshotBuildResult.Success -> {
                 val content = built.content as? WorkoutShareContent.Workout
                     ?: return Result.failure(IllegalStateException("Conteúdo inesperado."))
+                // A sala carrega **só** referência canônica: o outro aparelho resolve cada
+                // exercício no catálogo dele. Desde a T19.H2 o snapshot de compartilhamento também
+                // sabe transportar exercício CUSTOM como cópia, mas o contrato da sala (T19.5) não
+                // — e adivinhar aqui criaria um treino em dupla com um exercício que só existe de
+                // um lado. A recusa é explícita, com o motivo.
+                if (content.snapshot.customExercises.isNotEmpty()) {
+                    return Result.failure(
+                        IllegalStateException(
+                            "O treino tem exercícios personalizados, que ainda não podem ir para " +
+                                "uma sala de treino em dupla. Use exercícios do catálogo ou " +
+                                "compartilhe o treino."
+                        )
+                    )
+                }
+                if (content.snapshot.exercises.isEmpty()) {
+                    return Result.failure(
+                        IllegalStateException("O treino precisa ter pelo menos um exercício para treinar em dupla.")
+                    )
+                }
                 Result.success(
                     MultiplayerWorkoutBlueprint(
                         name = content.snapshot.name,
                         shortIdentifier = content.snapshot.shortIdentifier,
                         exercises = content.snapshot.exercises.map {
                             MultiplayerBlueprintExercise(
-                                canonicalExerciseId = it.canonicalExerciseId,
+                                canonicalExerciseId = it.canonicalExerciseId
+                                    ?: return Result.failure(
+                                        IllegalStateException("Exercício sem identificação de catálogo.")
+                                    ),
                                 sortOrder = it.sortOrder,
                                 targetSets = it.targetSets,
                                 minReps = it.minReps,

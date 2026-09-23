@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.sync.SyncActivity
 import com.example.data.sync.SyncApplyStop
+import com.example.data.sync.SyncBlockedGroup
+import com.example.data.sync.SyncBlockedKind
 import com.example.data.sync.SyncConflictChoice
 import com.example.data.sync.SyncConflictId
 import com.example.data.sync.SyncConflictResolution
@@ -192,9 +194,14 @@ class SyncViewModel(
             val binding = snapshot.ownerUid
             val base = _uiState.value.copy(
                 pending = snapshot.pending,
-                // O que "precisa de atenção" é a soma do que ficou travado na fila com o que
-                // divergiu do servidor — do ponto de vista de quem olha a tela, é uma coisa só.
-                needsAttention = maxOf(snapshot.blocked, snapshot.conflicts),
+                // Travado na fila e divergente do servidor **não** são a mesma coisa (H2.5). Eram
+                // colapsados num `max()` só, e o número que sobrava não correspondia nem à lista
+                // de conflitos nem à fila: a tela anunciava "3 itens precisam de atenção" com
+                // zero itens listados e oferecia um botão que não resolvia nada.
+                conflictCount = conflicts.size,
+                blockedCount = snapshot.blocked,
+                blockedWithoutConflict = snapshot.blockedWithoutConflict +
+                    unlistableConflicts(snapshot.conflicts, conflicts.size),
                 lastSyncedAt = snapshot.lastSyncedAt,
                 conflicts = conflicts
             )
@@ -251,13 +258,39 @@ class SyncViewModel(
             else -> Unit
         }
 
+        // A ordem é a da urgência do que o usuário pode fazer: decidir um conflito é a única
+        // coisa que **só** ele consegue; uma alteração travada sem decisão vem depois; a fila
+        // normal por último.
         return when {
-            base.needsAttention > 0 ->
-                SyncPhase.NeedsAttention(base.needsAttention, base.lastSyncedAt)
+            base.conflicts.isNotEmpty() ->
+                SyncPhase.NeedsAttention(base.conflicts.size, base.lastSyncedAt)
+            base.blockedWithoutConflict.isNotEmpty() ->
+                SyncPhase.BlockedChanges(base.blockedWithoutConflict, base.lastSyncedAt)
+            // Rede de segurança: travado na fila, sem conflito listável e sem motivo agrupado.
+            // Não sei enumerar como se chega aqui, e é exatamente por isso que a classe é
+            // `UNKNOWN` — a tela diz o que sabe em vez de inventar um diagnóstico.
+            base.blockedCount > 0 ->
+                SyncPhase.BlockedChanges(
+                    listOf(SyncBlockedGroup(SyncBlockedKind.UNKNOWN, base.blockedCount)),
+                    base.lastSyncedAt
+                )
             base.pending > 0 -> SyncPhase.Pending(base.pending, base.lastSyncedAt)
             else -> SyncPhase.UpToDate(base.lastSyncedAt)
         }
     }
+}
+
+/**
+ * Os conflitos que existem no banco e que esta versão do app **não sabe montar** para a tela.
+ *
+ * `SyncConflictResolver.conflicts` descarta silenciosamente um conflito cujo tipo de entidade ele
+ * não conhece — o caso real é um agregado que outro aparelho, com uma versão mais nova, enviou.
+ * Sem isto, esses conflitos entravam na contagem e sumiam da lista, que é metade do defeito da
+ * H2.5. O próximo passo deles é preciso: atualizar o aplicativo.
+ */
+private fun unlistableConflicts(stored: Int, listed: Int): List<SyncBlockedGroup> {
+    val hidden = (stored - listed).coerceAtLeast(0)
+    return if (hidden == 0) emptyList() else listOf(SyncBlockedGroup(SyncBlockedKind.NEEDS_APP_UPDATE, hidden))
 }
 
 /**

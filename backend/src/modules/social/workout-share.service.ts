@@ -16,6 +16,7 @@ import { BlockRepository } from './block.repository';
 import { NotificationRepository } from './notification.repository';
 import {
   CreateWorkoutShareRequest,
+  SharedCustomExerciseV2,
   SharedExerciseV1,
   WorkoutProgramShareSnapshotV1,
   WorkoutShareDetailDto,
@@ -48,6 +49,38 @@ const MAX_DAILY_SHARES = 20;
  * virar linha no banco.
  */
 const CANONICAL_EXERCISE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * A forma de um `customExerciseRef` (T19.H2 / V2).
+ *
+ * Ela é **escopada ao snapshot**, e o formato diz isso em voz alta: `custom-1`, `custom-2`. Não é
+ * UUID, não é slug e não se parece com identidade global — justamente para que ninguém, de nenhum
+ * lado, seja tentado a guardá-la como uma.
+ */
+const CUSTOM_EXERCISE_REF_PATTERN = /^custom-[0-9]{1,3}$/;
+
+/** Quantos exercícios criados pelo usuário uma oferta pode carregar. */
+const MAX_CUSTOM_EXERCISES = 30;
+
+const MAX_CUSTOM_NAME_LENGTH = 100;
+const MAX_CUSTOM_MUSCLE_LENGTH = 60;
+const MAX_CUSTOM_EQUIPMENT_LENGTH = 60;
+const MAX_CUSTOM_DESCRIPTION_LENGTH = 500;
+
+/**
+ * As versões de snapshot aceitas, e o que muda entre elas (T19.H2).
+ *
+ * ```text
+ * V1   1..30 exercícios por treino, todos com canonicalExerciseId
+ * V2   0..30 exercícios por treino  +  customExercises / customExerciseRef
+ * ```
+ *
+ * A V1 continua valendo **sem mudança nenhuma**: uma oferta criada por um app anterior, ou pelo
+ * app atual quando a V1 basta, é validada exatamente como sempre foi. Um `customExercises` ou um
+ * `customExerciseRef` dentro de um snapshot `snapshotVersion: 1` recusa a oferta — a versão
+ * descreve a forma, e uma forma que se contradiz é defeito, não flexibilidade.
+ */
+const SUPPORTED_SNAPSHOT_VERSIONS: readonly number[] = [1, 2];
 
 @Injectable()
 export class WorkoutShareService {
@@ -197,7 +230,7 @@ export class WorkoutShareService {
       sender_uid: senderUid,
       recipient_uid: recipientUid,
       share_type: content.shareType,
-      snapshot_version: 1,
+      snapshot_version: content.snapshot.snapshotVersion,
       snapshot_json: snapshotJson,
       snapshot_hash: snapshotHash,
       status: 'PENDING',
@@ -231,7 +264,7 @@ export class WorkoutShareService {
     this.logger.info('social.workout_share.created', {
       shareId,
       shareType: content.shareType,
-      snapshotVersion: 1,
+      snapshotVersion: content.snapshot.snapshotVersion,
       templateCount:
         content.shareType === 'WORKOUT_PROGRAM' ? content.snapshot.templates.length : 1,
       exerciseCount:
@@ -520,13 +553,9 @@ export class WorkoutShareService {
       });
     }
 
-    const version = (snapshot as { snapshotVersion?: unknown }).snapshotVersion;
-    if (version !== 1) {
-      throw new BadRequestException({
-        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-        message: `Versão do snapshot não suportada: ${String(version)}.`,
-      });
-    }
+    const version = requireSupportedVersion(
+      (snapshot as { snapshotVersion?: unknown }).snapshotVersion,
+    );
 
     const name = snapshot.name?.trim();
     if (!name || name.length > 100) {
@@ -543,19 +572,25 @@ export class WorkoutShareService {
       });
     }
 
+    // V2 aceita treino vazio; V1 não muda (T19.H2). Um treino sem exercícios é um estado
+    // legítimo do Workout local — o esqueleto que a pessoa ainda vai preencher — e recusá-lo era
+    // o Social decidindo o que é um treino válido, que não é assunto dele.
+    const minExercises = version >= 2 ? 0 : 1;
     if (
       !Array.isArray(snapshot.exercises) ||
-      snapshot.exercises.length === 0 ||
+      snapshot.exercises.length < minExercises ||
       snapshot.exercises.length > 30
     ) {
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-        message: 'Treino deve conter entre 1 e 30 exercícios.',
+        message: `Treino deve conter entre ${minExercises} e 30 exercícios.`,
       });
     }
 
     rejectForbiddenKeys(snapshot, 'no snapshot');
-    this.validateExercises(snapshot.exercises, '');
+    const customRefs = this.validateCustomExercises(snapshot.customExercises, version);
+    this.validateExercises(snapshot.exercises, '', version, customRefs);
+    requireEveryCustomUsed(customRefs, snapshot.exercises);
   }
 
   /**
@@ -570,13 +605,9 @@ export class WorkoutShareService {
       });
     }
 
-    const version = (snapshot as { snapshotVersion?: unknown }).snapshotVersion;
-    if (version !== 1) {
-      throw new BadRequestException({
-        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-        message: `Versão do snapshot não suportada: ${String(version)}.`,
-      });
-    }
+    const version = requireSupportedVersion(
+      (snapshot as { snapshotVersion?: unknown }).snapshotVersion,
+    );
 
     const name = typeof snapshot.name === 'string' ? snapshot.name.trim() : '';
     if (!name || name.length > 100) {
@@ -597,6 +628,10 @@ export class WorkoutShareService {
     }
 
     rejectForbiddenKeys(snapshot, 'no snapshot');
+
+    // Os CUSTOM do **programa inteiro**, e não de um treino: é assim que o mesmo exercício usado
+    // em três treinos chega ao destinatário como uma cópia só (T19.H2 §15).
+    const customRefs = this.validateCustomExercises(snapshot.customExercises, version);
 
     if (
       !Array.isArray(snapshot.templates) ||
@@ -666,31 +701,152 @@ export class WorkoutShareService {
         }
       }
       rejectForbiddenKeys(template, where);
+      // Um treino vazio **dentro** de um programa também é válido em V2: bloquear o programa
+      // inteiro por causa de um treino que ainda não tem exercício é recusar o programa da pessoa
+      // por um estado que o app dela permite.
+      const minExercises = version >= 2 ? 0 : 1;
       if (
         !Array.isArray(template.exercises) ||
-        template.exercises.length === 0 ||
+        template.exercises.length < minExercises ||
         template.exercises.length > 30
       ) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `Treino [${tIdx}] deve conter entre 1 e 30 exercícios.`,
+          message: `Treino [${tIdx}] deve conter entre ${minExercises} e 30 exercícios.`,
         });
       }
-      this.validateExercises(template.exercises, `do treino [${tIdx}] `);
+      this.validateExercises(template.exercises, `do treino [${tIdx}] `, version, customRefs);
     });
+
+    requireEveryCustomUsed(
+      customRefs,
+      snapshot.templates.flatMap((template) =>
+        Array.isArray(template.exercises) ? template.exercises : [],
+      ),
+    );
+  }
+
+  /**
+   * Os exercícios CUSTOM da oferta (T19.H2 / V2). Devolve o conjunto de `ref` declaradas.
+   *
+   * O que é recusado aqui, e por quê:
+   *
+   * ```text
+   * customExercises em V1        a V1 não tem essa forma, e aceitar seria inventar uma V1.5
+   * ref fora de custom-N         a chave é do snapshot; qualquer outra forma sugere identidade global
+   * ref repetida                 duas entradas com a mesma chave: o destinatário não saberia qual criar
+   * nome vazio                   o único campo obrigatório de um exercício criado pelo usuário
+   * ```
+   */
+  private validateCustomExercises(
+    customExercises: readonly SharedCustomExerciseV2[] | undefined,
+    version: number,
+  ): Set<string> {
+    if (customExercises === undefined) return new Set();
+
+    if (version < 2) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: 'Exercícios personalizados exigem snapshotVersion 2.',
+      });
+    }
+
+    if (!Array.isArray(customExercises) || customExercises.length > MAX_CUSTOM_EXERCISES) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: `customExercises deve conter no máximo ${MAX_CUSTOM_EXERCISES} exercícios.`,
+      });
+    }
+
+    const refs = new Set<string>();
+    customExercises.forEach((custom, index) => {
+      const label = `exercício personalizado [${index}]`;
+      if (typeof custom?.ref !== 'string' || !CUSTOM_EXERCISE_REF_PATTERN.test(custom.ref)) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `ref inválida no ${label}.`,
+        });
+      }
+      if (refs.has(custom.ref)) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `ref repetida no ${label}: ${custom.ref}.`,
+        });
+      }
+      refs.add(custom.ref);
+
+      rejectForbiddenKeys(custom, `no ${label}`);
+
+      const name = typeof custom.name === 'string' ? custom.name.trim() : '';
+      if (!name || name.length > MAX_CUSTOM_NAME_LENGTH) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `Nome do ${label} deve ter entre 1 e ${MAX_CUSTOM_NAME_LENGTH} caracteres.`,
+        });
+      }
+      requireOptionalText(
+        custom.primaryMuscle,
+        MAX_CUSTOM_MUSCLE_LENGTH,
+        `primaryMuscle do ${label}`,
+      );
+      requireOptionalText(custom.equipment, MAX_CUSTOM_EQUIPMENT_LENGTH, `equipment do ${label}`);
+      requireOptionalText(
+        custom.description,
+        MAX_CUSTOM_DESCRIPTION_LENGTH,
+        `description do ${label}`,
+      );
+    });
+    return refs;
   }
 
   /** As regras de um exercício compartilhado — as mesmas para treino avulso e para programa. */
-  private validateExercises(exercises: SharedExerciseV1[], owner: string): void {
+  private validateExercises(
+    exercises: SharedExerciseV1[],
+    owner: string,
+    version: number,
+    customRefs: ReadonlySet<string>,
+  ): void {
     exercises.forEach((ex, idx) => {
       const label = `exercício ${owner}[${idx}]`;
-      if (
-        typeof ex.canonicalExerciseId !== 'string' ||
-        !CANONICAL_EXERCISE_ID_PATTERN.test(ex.canonicalExerciseId)
-      ) {
+      const hasCanonical = ex.canonicalExerciseId !== undefined;
+      const hasCustomRef = ex.customExerciseRef !== undefined;
+
+      if (hasCustomRef && version < 2) {
         throw new BadRequestException({
           code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
-          message: `Exercício ${owner}[${idx}] sem canonicalExerciseId válido.`,
+          message: `Exercício ${owner}[${idx}] usa customExerciseRef, que exige snapshotVersion 2.`,
+        });
+      }
+
+      // Exatamente uma identidade. As duas juntas seriam duas afirmações sobre o mesmo
+      // exercício; nenhuma deixaria o destinatário sem saber o que criar.
+      if (hasCanonical === hasCustomRef) {
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message:
+            `Exercício ${owner}[${idx}] precisa trazer exatamente um de canonicalExerciseId ` +
+            `ou customExerciseRef.`,
+        });
+      }
+
+      if (hasCanonical) {
+        if (
+          typeof ex.canonicalExerciseId !== 'string' ||
+          !CANONICAL_EXERCISE_ID_PATTERN.test(ex.canonicalExerciseId)
+        ) {
+          throw new BadRequestException({
+            code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+            message: `Exercício ${owner}[${idx}] sem canonicalExerciseId válido.`,
+          });
+        }
+      } else if (
+        typeof ex.customExerciseRef !== 'string' ||
+        !customRefs.has(ex.customExerciseRef)
+      ) {
+        // Uma referência que não resolve chegaria ao destinatário como um exercício sem conteúdo.
+        throw new BadRequestException({
+          code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+          message: `Exercício ${owner}[${idx}] referencia um customExerciseRef inexistente.`,
         });
       }
 
@@ -787,6 +943,18 @@ const FORBIDDEN_SNAPSHOT_KEYS = [
   'userId',
   'isCurrent',
   'externalId',
+  // T19.H2: o que um exercício CUSTOM tem no aparelho de quem compartilha e que não significa
+  // nada no de quem recebe — a foto é um arquivo local, `canonicalId`/`slug` são do catálogo, e
+  // `isUserCreated`/`origin` são estado do dono.
+  'canonicalId',
+  'customPhotoUri',
+  'mediaUrl',
+  'gifUrl',
+  'externalExerciseId',
+  'contentVersion',
+  'isUserCreated',
+  'origin',
+  'slug',
 ] as const;
 
 function rejectForbiddenKeys(object: unknown, where: string): void {
@@ -795,6 +963,54 @@ function rejectForbiddenKeys(object: unknown, where: string): void {
       throw new BadRequestException({
         code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
         message: `Campo proibido ${where}: ${key}.`,
+      });
+    }
+  }
+}
+
+/** A versão do snapshot, recusada por nome quando o servidor não a conhece. */
+function requireSupportedVersion(value: unknown): number {
+  if (typeof value !== 'number' || !SUPPORTED_SNAPSHOT_VERSIONS.includes(value)) {
+    throw new BadRequestException({
+      code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+      message: `Versão do snapshot não suportada: ${String(value)}.`,
+    });
+  }
+  return value;
+}
+
+function requireOptionalText(value: unknown, maxLength: number, label: string): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new BadRequestException({
+      code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+      message: `${label} deve ser texto de no máximo ${maxLength} caracteres.`,
+    });
+  }
+}
+
+/**
+ * Todo CUSTOM declarado precisa ser usado por algum exercício da oferta.
+ *
+ * Conteúdo que ninguém referencia é peso escolhido pelo remetente dentro da folga do teto, e
+ * atravessa o servidor até a tela de outra pessoa sem nunca aparecer como exercício. A oferta
+ * descreve o que ela usa.
+ */
+function requireEveryCustomUsed(
+  refs: ReadonlySet<string>,
+  exercises: readonly SharedExerciseV1[],
+): void {
+  if (refs.size === 0) return;
+  const used = new Set(
+    exercises
+      .map((exercise) => exercise?.customExerciseRef)
+      .filter((ref): ref is string => typeof ref === 'string'),
+  );
+  for (const ref of refs) {
+    if (!used.has(ref)) {
+      throw new BadRequestException({
+        code: WorkoutShareErrorCodes.INVALID_SNAPSHOT,
+        message: `customExercises traz ${ref}, que nenhum exercício da oferta usa.`,
       });
     }
   }

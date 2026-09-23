@@ -163,6 +163,10 @@ private fun ShareWorkoutContent(
     val isSending = state.isSending
     val errorMessage = state.errorMessage
     val isProgram = content is WorkoutShareContent.Program
+    val customExerciseCount = when (content) {
+        is WorkoutShareContent.Workout -> content.snapshot.customExercises.size
+        is WorkoutShareContent.Program -> content.snapshot.customExercises.size
+    }
 
     LaunchedEffect(viewModel) { viewModel.loadFriends() }
 
@@ -210,13 +214,32 @@ private fun ShareWorkoutContent(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (isProgram) {
-                        "O programa inteiro vai como uma cópia: nomes dos treinos, ordem, exercícios do catálogo, " +
-                            "séries, repetições e descansos. Suas cargas, notas, máquinas e histórico NÃO são enviados, " +
-                            "e o que seu amigo receber não muda quando você editar o seu."
-                    } else {
-                        "Apenas exercícios do catálogo, séries, repetições e descansos serão compartilhados. " +
-                            "Suas cargas, notas e máquinas NÃO são enviadas."
+                    // A frase muda quando há exercício personalizado na oferta (T19.H2): ele vai
+                    // como **cópia**, e quem recebe precisa saber que a cópia é dele — não um
+                    // vínculo com o exercício de quem compartilhou.
+                    text = buildString {
+                        append(
+                            if (isProgram) {
+                                "O programa inteiro vai como uma cópia: nomes dos treinos, ordem, exercícios, " +
+                                    "séries, repetições e descansos. Suas cargas, notas, máquinas e histórico NÃO são " +
+                                    "enviados, e o que seu amigo receber não muda quando você editar o seu."
+                            } else {
+                                "Exercícios, séries, repetições e descansos serão compartilhados. " +
+                                    "Suas cargas, notas e máquinas NÃO são enviadas."
+                            }
+                        )
+                        if (customExerciseCount > 0) {
+                            append(
+                                if (customExerciseCount == 1) {
+                                    " Seu exercício personalizado vai como uma cópia independente: nome, músculo, " +
+                                        "equipamento e descrição — sem a foto, e sem vínculo com o seu."
+                                } else {
+                                    " Seus $customExerciseCount exercícios personalizados vão como cópias " +
+                                        "independentes: nome, músculo, equipamento e descrição — sem as fotos, e sem " +
+                                        "vínculo com os seus."
+                                }
+                            )
+                        }
                     },
                     color = Color(0xFFE3F2FD),
                     fontSize = 12.sp,

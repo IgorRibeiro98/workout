@@ -415,7 +415,10 @@ fun WorkoutSharePreviewDialog(
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        SharedExerciseList(content.snapshot.exercises)
+                        SharedExerciseList(
+                            exercises = content.snapshot.exercises,
+                            customNames = content.snapshot.customExercises.associate { it.ref to it.name }
+                        )
                     }
                     is WorkoutShareContent.Program -> {
                         content.snapshot.description?.takeIf { it.isNotBlank() }?.let { description ->
@@ -457,7 +460,11 @@ fun WorkoutSharePreviewDialog(
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    SharedExerciseList(template.exercises, compact = true)
+                                    SharedExerciseList(
+                                        exercises = template.exercises,
+                                        compact = true,
+                                        customNames = content.snapshot.customExercises.associate { it.ref to it.name }
+                                    )
                                 }
                             }
                         }
@@ -526,9 +533,29 @@ fun WorkoutSharePreviewDialog(
     }
 }
 
+/**
+ * A prévia dos exercícios de uma oferta.
+ *
+ * [customNames] traz o nome de cada `customExerciseRef` da oferta (T19.H2): um exercício CUSTOM não
+ * tem id de catálogo para virar rótulo, e o nome que a prévia mostra é o que veio no snapshot — o
+ * mesmo que o destinatário vai criar.
+ *
+ * Um treino sem exercícios não é erro desde a T19.H2: a prévia diz isso em vez de não desenhar nada.
+ */
 @Composable
-private fun SharedExerciseList(exercises: List<SharedExerciseSnapshot>, compact: Boolean = false) {
-    if (exercises.isEmpty()) return
+private fun SharedExerciseList(
+    exercises: List<SharedExerciseSnapshot>,
+    compact: Boolean = false,
+    customNames: Map<String, String> = emptyMap()
+) {
+    if (exercises.isEmpty()) {
+        Text(
+            text = "Sem exercícios — este treino chega vazio, pronto para você montar.",
+            color = TextSecondary,
+            fontSize = if (compact) 12.sp else 13.sp
+        )
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
         exercises.sortedBy { it.sortOrder }.forEachIndexed { idx, ex ->
             Column(
@@ -541,8 +568,14 @@ private fun SharedExerciseList(exercises: List<SharedExerciseSnapshot>, compact:
                         .padding(10.dp)
                 }
             ) {
+                val label = ex.canonicalExerciseId
+                    ?.removePrefix("canonical:")
+                    ?.replace("-", " ")
+                    ?.capitalizeWords()
+                    ?: ex.customExerciseRef?.let { customNames[it] }
+                    ?: "Exercício"
                 Text(
-                    text = "${idx + 1}. ${ex.canonicalExerciseId.removePrefix("canonical:").replace("-", " ").capitalizeWords()}",
+                    text = "${idx + 1}. $label",
                     color = TextPrimary,
                     fontSize = if (compact) 13.sp else 14.sp,
                     fontWeight = FontWeight.Medium

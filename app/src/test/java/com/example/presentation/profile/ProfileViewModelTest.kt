@@ -331,7 +331,78 @@ class ProfileViewModelTest {
         assertEquals(goalBefore + 1, snapshots.first { it.effectiveFromWeek == nextMonday }.goal)
     }
 
+    @Test
+    fun weeklyGoalSave_confirmaAPersistenciaAntesDeDeixarATelaFechar() = runTest {
+        consistencyRepository.initialize()
+        val viewModel = createViewModel()
+        val goalBefore = viewModel.awaitState().weeklyGoal
+
+        assertEquals(WeeklyGoalSave.Idle, viewModel.weeklyGoalSave.value)
+
+        viewModel.setWeeklyGoal(goalBefore + 1)
+
+        // O desfecho é estado, e não um efeito colateral invisível: é ele que autoriza a folha a
+        // fechar. Antes a tela fechava no mesmo toque que disparava a gravação (H2.4).
+        val saved = viewModel.weeklyGoalSave.awaitValue<WeeklyGoalSave.Saved>()
+        assertEquals(goalBefore + 1, saved.goal)
+        assertEquals(goalBefore + 1, consistencyRepository.getGoalSnapshots().maxOf { it.goal })
+
+        viewModel.acknowledgeWeeklyGoalSave()
+        assertEquals(WeeklyGoalSave.Idle, viewModel.weeklyGoalSave.value)
+    }
+
+    @Test
+    fun weeklyGoalSave_umaFalhaNaoFingeQueSalvou() = runTest {
+        val viewModel = createViewModel(consistency = ExplodingConsistencyRepository())
+
+        viewModel.setWeeklyGoal(5)
+
+        assertEquals(WeeklyGoalSave.Failed, viewModel.weeklyGoalSave.awaitValue<WeeklyGoalSave.Failed>())
+    }
+
+    @Test
+    fun weeklyGoalSave_doisToquesProduzemUmaMudancaSo() = runTest {
+        val repository = CountingConsistencyRepository()
+        val viewModel = createViewModel(consistency = repository)
+
+        // O segundo toque chega **durante** a gravação: é o caso real do toque duplo.
+        repository.gate.value = false
+        viewModel.setWeeklyGoal(5)
+        viewModel.setWeeklyGoal(5)
+        repository.gate.value = true
+
+        viewModel.weeklyGoalSave.awaitValue<WeeklyGoalSave.Saved>()
+        assertEquals(1, repository.calls)
+    }
+
     // --- Helpers --------------------------------------------------------------------------------
+
+    // Sem `withTimeout`: o relógio de `runTest` é virtual e passaria instantaneamente, enquanto a
+    // gravação real atravessa o executor do Room. Quem limita a espera é o timeout do próprio
+    // `runTest`, que conta tempo de verdade.
+    private suspend inline fun <reified T : WeeklyGoalSave> kotlinx.coroutines.flow.StateFlow<WeeklyGoalSave>.awaitValue(): T =
+        first { it is T } as T
+
+    /** Um repositório que falha ao gravar: o desfecho precisa chegar à tela como falha. */
+    private class ExplodingConsistencyRepository : ConsistencyRepository by FakeConsistencyRepository(
+        ConsistencyProgress(0, 0, 0, 3, WeeklyConsistencyStatus.IN_PROGRESS)
+    ) {
+        override suspend fun setWeeklyGoal(newGoal: Int): Unit = throw IllegalStateException("disco cheio")
+    }
+
+    /** Conta as gravações e deixa a primeira presa até o teste soltar. */
+    private class CountingConsistencyRepository : ConsistencyRepository by FakeConsistencyRepository(
+        ConsistencyProgress(0, 0, 0, 3, WeeklyConsistencyStatus.IN_PROGRESS)
+    ) {
+        val gate = MutableStateFlow(true)
+        var calls = 0
+            private set
+
+        override suspend fun setWeeklyGoal(newGoal: Int) {
+            calls++
+            gate.first { it }
+        }
+    }
 
     private suspend fun insertSession(status: SessionStatus) {
         val now = System.currentTimeMillis()

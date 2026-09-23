@@ -145,6 +145,158 @@ class WorkoutShareImporterTest {
             content = content
         )
 
+    // ------------------------------------------------------------- CUSTOM portátil (T19.H2)
+
+    @Test
+    fun `um CUSTOM importado nasce como exercicio deste aparelho, com identidade daqui`() = runTest {
+        seedProgram()
+        val snapshot = SharedWorkoutSnapshot(
+            snapshotVersion = 2,
+            name = "Peito",
+            shortIdentifier = "P",
+            customExercises = listOf(
+                com.example.domain.social.SharedCustomExerciseSnapshot(
+                    ref = "custom-1",
+                    name = "Meu Supino",
+                    primaryMuscle = "Peitoral",
+                    equipment = "Barra",
+                    description = "Pegada fechada"
+                )
+            ),
+            exercises = listOf(
+                SharedExerciseSnapshot(
+                    canonicalExerciseId = null,
+                    sortOrder = 0,
+                    targetSets = 4,
+                    minReps = 6,
+                    maxReps = 10,
+                    restDurationSeconds = 120,
+                    customExerciseRef = "custom-1"
+                )
+            )
+        )
+
+        val result = importer.importShare("share-custom", snapshot)
+
+        val templateId = (result as WorkoutShareImportResult.Success).localId
+        val rows = database.workoutDao().getTemplateExercisesWithDetails(templateId)
+        val created = rows.single().exercise
+        assertEquals("Meu Supino", created.name)
+        assertEquals("Peitoral", created.primaryMuscle)
+        assertEquals("Barra", created.equipment)
+        // A cópia é do destinatário: exercício criado por ele, com `syncId` gerado aqui e sem
+        // identidade de catálogo. Nada do remetente chegou — o snapshot não o carrega.
+        assertTrue(created.isUserCreated)
+        assertNotNull(created.syncId)
+        assertNull(created.canonicalId)
+        assertNull(created.customPhotoUri)
+        // E a configuração da posição veio do snapshot, sem carga, máquina ou nota.
+        val position = rows.single().templateExercise
+        assertEquals(4, position.targetSets)
+        assertEquals(120, position.restDurationSeconds)
+        assertNull(position.plannedWeight)
+        assertNull(position.machineLabel)
+        assertNull(position.notes)
+    }
+
+    @Test
+    fun `o mesmo CUSTOM em dois treinos do programa vira um exercicio so`() = runTest {
+        val snapshot = SharedProgramSnapshot(
+            snapshotVersion = 2,
+            name = "Full Body",
+            customExercises = listOf(
+                com.example.domain.social.SharedCustomExerciseSnapshot(ref = "custom-1", name = "Meu Supino")
+            ),
+            templates = listOf(
+                SharedProgramTemplateSnapshot(
+                    name = "Treino A",
+                    shortIdentifier = "A",
+                    orderInProgram = 0,
+                    exercises = listOf(
+                        SharedExerciseSnapshot(
+                            sortOrder = 0, targetSets = 3, minReps = 8, maxReps = 12,
+                            restDurationSeconds = 90, customExerciseRef = "custom-1"
+                        )
+                    )
+                ),
+                SharedProgramTemplateSnapshot(
+                    name = "Treino B",
+                    shortIdentifier = "B",
+                    orderInProgram = 1,
+                    exercises = listOf(
+                        SharedExerciseSnapshot(
+                            sortOrder = 0, targetSets = 4, minReps = 6, maxReps = 10,
+                            restDurationSeconds = 120, customExerciseRef = "custom-1"
+                        )
+                    )
+                )
+            )
+        )
+
+        val result = importer.importProgramShare("share-program-custom", snapshot)
+
+        val programId = (result as WorkoutShareImportResult.Success).localId
+        val templates = database.workoutDao().getTemplatesForProgramSync(programId)
+        assertEquals(2, templates.size)
+        val exerciseIds = templates.flatMap { template ->
+            database.workoutDao().getTemplateExercisesWithDetails(template.id).map { it.exercise.id }
+        }
+        // Duas posições, **um** exercício: é o que a chave escopada à oferta existe para garantir.
+        assertEquals(2, exerciseIds.size)
+        assertEquals(1, exerciseIds.distinct().size)
+        assertEquals(1, database.workoutDao().getAllExercisesSync().count { it.isUserCreated })
+    }
+
+    @Test
+    fun `um retry depois de falha nao cria um segundo CUSTOM`() = runTest {
+        seedProgram()
+        val snapshot = SharedWorkoutSnapshot(
+            snapshotVersion = 2,
+            name = "Peito",
+            customExercises = listOf(
+                com.example.domain.social.SharedCustomExerciseSnapshot(ref = "custom-1", name = "Meu Supino")
+            ),
+            exercises = listOf(
+                SharedExerciseSnapshot(
+                    sortOrder = 0, targetSets = 3, minReps = 8, maxReps = 12,
+                    restDurationSeconds = 90, customExerciseRef = "custom-1"
+                )
+            )
+        )
+        // Primeira tentativa: o recibo lança, e a transação inteira volta atrás — inclusive o
+        // exercício CUSTOM recém-criado. Era exatamente isso que precisava valer também para ele.
+        val receipts = FailingReceiptDao(database.workoutShareReceiptDao())
+        val transactional = WorkoutShareImporter(
+            workoutRepository = transactionalRepository(),
+            receiptDao = receipts,
+            gateway = fakeGateway,
+            clock = { 1700000000000L }
+        )
+        assertTrue(runCatching { transactional.importShare("share-retry-custom", snapshot) }.isFailure)
+
+        assertEquals(0, database.workoutDao().getAllExercisesSync().count { it.isUserCreated })
+
+        // Retry: uma cópia, um CUSTOM. E um terceiro aceite, pelo recibo, não cria mais nada.
+        receipts.failing = false
+        assertTrue(transactional.importShare("share-retry-custom", snapshot) is WorkoutShareImportResult.Success)
+        assertEquals(1, database.workoutDao().getAllExercisesSync().count { it.isUserCreated })
+        assertTrue(transactional.importShare("share-retry-custom", snapshot) is WorkoutShareImportResult.AlreadyImported)
+        assertEquals(1, database.workoutDao().getAllExercisesSync().count { it.isUserCreated })
+    }
+
+    @Test
+    fun `um treino vazio importado vira um treino vazio, e nao um erro`() = runTest {
+        seedProgram()
+        val result = importer.importShare(
+            "share-empty",
+            SharedWorkoutSnapshot(snapshotVersion = 2, name = "Treino Vazio", shortIdentifier = "V")
+        )
+
+        val templateId = (result as WorkoutShareImportResult.Success).localId
+        assertEquals("Treino Vazio", database.workoutDao().getTemplateById(templateId)?.name)
+        assertTrue(database.workoutDao().getTemplateExercisesWithDetails(templateId).isEmpty())
+    }
+
     @Test
     fun `importShare successfully imports independent template with stripped private fields and records receipt`() = runTest {
         val ex1Id = seedCatalogExercise("Supino Reto", "cat-bench")

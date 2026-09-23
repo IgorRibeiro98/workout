@@ -283,8 +283,14 @@ private fun SharingToggle(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            // `weight(1f)` e não largura natural: sem ele, esta coluna é medida antes do
+            // `Switch` e com a linha inteira disponível, e a legenda de disponibilidade —
+            // "Este dado ainda não existe no servidor..." — consome o espaço que sobraria para o
+            // interruptor, que aparecia cortado em 320/360dp (H2.8).
             Column(
-                modifier = Modifier.padding(end = 12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(

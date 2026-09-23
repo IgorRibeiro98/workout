@@ -268,9 +268,13 @@ exercício  canonicalExerciseId, sortOrder, targetSets, minReps, maxReps, restDu
 T19.8 ainda manda `dayOfWeek` (um dia, como rótulo); o servidor aceita **uma** das duas formas por
 treino, e o app lê as duas — ver `docs/architecture/workout-scheduling.md`.
 
-Nunca: carga, histórico, notas, número de máquina, `localId`, `syncId`, `isCurrent`, uid. Exercício
-**CUSTOM** bloqueia o compartilhamento — do treino, ou do programa inteiro — fail-closed, decidido
-no aparelho (o servidor não conhece o catálogo, e valida a **forma** do identificador).
+Nunca: carga, histórico, notas, número de máquina, `localId`, `syncId`, `isCurrent`, uid. Um
+exercício **CUSTOM** deixou de bloquear na T19.H2: ele viaja como **cópia** num snapshot V2
+(`customExercises` + `customExerciseRef`, a chave escopada à oferta), e quem recebe cria um
+exercício dele, com identidade dele — nunca vínculo vivo. Um treino **vazio** também passou a ser
+compartilhável. Detalhes e o contrato completo em
+[`workout-sharing.md`](workout-sharing.md) §5; a validação continua sendo fail-closed no aparelho,
+porque o servidor não conhece o catálogo e valida só a **forma** do identificador.
 
 O aceite é **servidor-primeiro** (`POST :shareId/accept`, idempotente): é ele que revalida bloqueio,
 cancelamento e expiração e devolve o conteúdo sobre o qual a cópia é construída. A importação cria

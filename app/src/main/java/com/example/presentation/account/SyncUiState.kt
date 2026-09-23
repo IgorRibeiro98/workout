@@ -47,12 +47,30 @@ sealed interface SyncPhase {
     data class Offline(val pending: Int, val lastSyncedAt: Long?) : SyncPhase
 
     /**
-     * Há itens que precisam de decisão do usuário.
+     * Há itens que precisam de decisão do usuário: as duas versões existem e ele escolhe uma.
      *
      * Desde a T16.7 a decisão existe de verdade: a seção lista os itens e oferece as escolhas que
-     * fazem sentido para cada um. Nada é resolvido sozinho enquanto ninguém escolhe.
+     * fazem sentido para cada um. Nada é resolvido sozinho enquanto ninguém escolhe. E desde a
+     * H2.5 esta fase só aparece quando existe **mesmo** o que decidir — ver [BlockedChanges].
      */
     data class NeedsAttention(val items: Int, val lastSyncedAt: Long?) : SyncPhase
+
+    /**
+     * Alterações locais que não subiram e que **não** têm uma decisão para o usuário tomar (H2.5).
+     *
+     * Antes as duas situações eram a mesma fase e o mesmo texto: a tela dizia "3 itens precisam de
+     * atenção / Nada foi sobrescrito: as duas versões estão guardadas. Escolha qual manter" e não
+     * mostrava item nenhum, porque não havia conflito para listar. O botão oferecido — "Sincronizar
+     * agora" — rodava um ciclo e devolvia a mesma tela. Um alerta sem próximo passo.
+     *
+     * Agora o motivo vem junto ([groups]) e cada classe tem o seu texto e o seu próximo passo.
+     */
+    data class BlockedChanges(
+        val groups: List<com.example.data.sync.SyncBlockedGroup>,
+        val lastSyncedAt: Long?
+    ) : SyncPhase {
+        val items: Int get() = groups.sumOf { it.items }
+    }
 
     /**
      * A posição deste aparelho no histórico do servidor não pode mais ser retomada (T16.7).
@@ -152,7 +170,17 @@ enum class SyncResolutionProblem {
 data class SyncUiState(
     val phase: SyncPhase = SyncPhase.NotConfigured,
     val pending: Int = 0,
-    val needsAttention: Int = 0,
+    /**
+     * Agregados com divergência preservada que esperam uma escolha do usuário.
+     *
+     * Contado separado de [blockedCount] desde a H2.5: os dois já foram um `max()` só, e o número
+     * resultante não correspondia nem à lista de conflitos nem à fila travada.
+     */
+    val conflictCount: Int = 0,
+    /** Alterações locais que o servidor não aceitou e que continuam guardadas aqui. */
+    val blockedCount: Int = 0,
+    /** As travadas **sem** conflito para decidir, por classe de motivo (H2.5). */
+    val blockedWithoutConflict: List<com.example.data.sync.SyncBlockedGroup> = emptyList(),
     val deferredDeletes: Int = 0,
     val lastSyncedAt: Long? = null,
     /**

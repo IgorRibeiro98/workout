@@ -26,7 +26,17 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +70,37 @@ import com.example.ui.components.ActionBottomSheet
 import com.example.ui.components.ActionItemData
 import kotlinx.coroutines.launch
 
+/** O rótulo do filtro "sem filtro" do seletor de exercícios. */
+private const val PICKER_ALL_MUSCLES = "Todos"
+
+private val PICKER_MUSCLE_FILTERS = listOf(
+    PICKER_ALL_MUSCLES,
+    "Peitoral",
+    "Costas",
+    "Quadríceps",
+    "Posterior",
+    "Glúteos",
+    "Panturrilhas",
+    "Bíceps",
+    "Tríceps",
+    "Ombros",
+    "Abdômen"
+)
+
+/**
+ * Guarda a seleção do seletor de exercícios numa mudança de configuração.
+ *
+ * `mutableStateListOf` não é `Parcelable` sozinha; o que atravessa é a lista de `localId`, que é o
+ * que a seleção de fato é. Ela **não** sobrevive ao processo morrer, e isso é decisão: um seletor
+ * pela metade não é estado durável (T19.H2 §20).
+ */
+private val LongListSaver: Saver<SnapshotStateList<Long>, ArrayList<Long>> = Saver(
+    // `ArrayList`, e não `toList()`: o registro de estado salvo só aceita o que cabe num `Bundle`,
+    // e a lista imutável que `toList()` devolve não é um desses tipos.
+    save = { ArrayList(it) },
+    restore = { saved -> mutableStateListOf<Long>().apply { addAll(saved) } }
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TemplateDetailsScreen(
@@ -85,6 +126,23 @@ fun TemplateDetailsScreen(
 
     var showShareDialog by remember { mutableStateOf(false) }
     var showAddPickerSheet by remember { mutableStateOf(false) }
+    // O estado do seletor vive **fora** do `if` que desenha a folha (H2.9).
+    //
+    // Dentro dele, tudo o que o usuário tinha escolhido morria junto com a folha — e a folha
+    // fechava com o mesmo gesto que devia só esconder o teclado. Aqui ele sobrevive a
+    // recomposição, a uma passada de layout, ao IME abrindo e fechando e a uma mudança de
+    // configuração (`rememberSaveable`), e é zerado **explicitamente** quando o seletor é fechado
+    // ou confirmado — que são os dois momentos em que ele deixa de descrever uma intenção.
+    var pickerQuery by rememberSaveable { mutableStateOf("") }
+    var pickerMuscleFilter by rememberSaveable { mutableStateOf(PICKER_ALL_MUSCLES) }
+    val pickerSelection = rememberSaveable(saver = LongListSaver) { mutableStateListOf<Long>() }
+
+    fun closeExercisePicker() {
+        showAddPickerSheet = false
+        pickerQuery = ""
+        pickerMuscleFilter = PICKER_ALL_MUSCLES
+        pickerSelection.clear()
+    }
     var exerciseToEdit by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
     var activeExerciseActionSheet by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
     var exerciseToDelete by remember { mutableStateOf<ResolvedTemplateExercise?>(null) }
@@ -126,8 +184,12 @@ fun TemplateDetailsScreen(
                     }
                 },
                 actions = {
-                    // Compartilhar treino com amigos (T17.7)
-                    val canShare = exercises.isNotEmpty() && shareViewModel != null
+                    // Compartilhar treino com amigos (T17.7).
+                    //
+                    // Um treino **vazio** também é compartilhável desde a T19.H2: ele é um estado
+                    // legítimo do Workout local — o esqueleto que a pessoa vai preencher — e
+                    // desabilitar a ação era a tela decidindo o que vale a pena compartilhar.
+                    val canShare = shareViewModel != null
                     IconButton(
                         onClick = { showShareDialog = true },
                         enabled = canShare
@@ -320,32 +382,49 @@ fun TemplateDetailsScreen(
 
     // Fast Multi-Select Exercise Picker
     if (showAddPickerSheet) {
-        var searchQuery by remember { mutableStateOf("") }
-        var selectedMuscleFilter by remember { mutableStateOf("Todos") }
-        val selectedExerciseIds = remember { mutableStateListOf<Long>() }
-        
-        val muscleFilters = listOf("Todos", "Peitoral", "Costas", "Quadríceps", "Posterior", "Glúteos", "Panturrilhas", "Bíceps", "Tríceps", "Ombros", "Abdômen")
+        val muscleFilters = PICKER_MUSCLE_FILTERS
 
         val filteredCatalog = allExercises.filter { ex ->
             val matchesSearch = ExerciseSearchEngine.matches(
-                query = searchQuery,
+                query = pickerQuery,
                 name = ex.displayName,
                 primaryMuscle = ex.primaryMuscle,
                 equipment = ex.equipment
             )
-            
-            val matchesMuscle = selectedMuscleFilter == "Todos" || 
-                MuscleVisualResolver.getDisplayName(ex.primaryMuscle) == selectedMuscleFilter ||
-                (ex.primaryMuscle?.contains(selectedMuscleFilter, ignoreCase = true) == true)
-            
+
+            val matchesMuscle = pickerMuscleFilter == PICKER_ALL_MUSCLES ||
+                MuscleVisualResolver.getDisplayName(ex.primaryMuscle) == pickerMuscleFilter ||
+                (ex.primaryMuscle?.contains(pickerMuscleFilter, ignoreCase = true) == true)
+
             matchesSearch && matchesMuscle
         }
 
+        val keyboard = LocalSoftwareKeyboardController.current
+        val focusManager = LocalFocusManager.current
+        val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
         ModalBottomSheet(
-            onDismissRequest = { showAddPickerSheet = false },
+            onDismissRequest = { closeExercisePicker() },
             containerColor = SurfaceDark,
+            // A folha abre inteira: no estado "meio aberto" o botão de confirmar ficava abaixo da
+            // borda e o usuário precisava arrastar para alcançá-lo — com o teclado aberto, nem
+            // isso (H2.9).
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            // O "voltar" desta folha é **nosso** (H2.9). Com o tratamento padrão, o mesmo gesto que
+            // devia só esconder o teclado fechava a folha junto e levava a seleção embora.
+            properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
             dragHandle = { BottomSheetDefaults.DragHandle(color = TextSecondary) }
         ) {
+            // Primeiro "voltar" com o teclado aberto: esconde o teclado e a folha fica. O
+            // segundo fecha a folha, que é o comportamento que o Android promete.
+            BackHandler {
+                if (imeVisible) {
+                    focusManager.clearFocus()
+                    keyboard?.hide()
+                } else {
+                    closeExercisePicker()
+                }
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -364,7 +443,7 @@ fun TemplateDetailsScreen(
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold
                     )
-                    IconButton(onClick = { showAddPickerSheet = false }) {
+                    IconButton(onClick = { closeExercisePicker() }) {
                         Icon(Icons.Default.Close, contentDescription = "Fechar", tint = TextSecondary)
                     }
                 }
@@ -372,9 +451,11 @@ fun TemplateDetailsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    value = pickerQuery,
+                    onValueChange = { pickerQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("exercise_picker_search"),
                     placeholder = { Text("Buscar exercício...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
                     colors = TextFieldDefaults.colors(
@@ -384,19 +465,29 @@ fun TemplateDetailsScreen(
                         unfocusedTextColor = TextPrimary
                     ),
                     shape = RoundedCornerShape(12.dp),
-                    singleLine = true
+                    singleLine = true,
+                    // A busca já filtra a cada tecla; a ação do teclado só **esconde o teclado**.
+                    // Ela não confirma nem descarta nada — era o único jeito de fechar o IME sem
+                    // perder a seleção, e virou uma armadilha.
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        }
+                    )
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(muscleFilters, key = { it }) { filter ->
-                        val isSelected = filter == selectedMuscleFilter
+                        val isSelected = filter == pickerMuscleFilter
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
                                 .background(if (isSelected) Lime400 else BackgroundDark)
-                                .clickable { selectedMuscleFilter = filter }
+                                .clickable { pickerMuscleFilter = filter }
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Text(
@@ -416,7 +507,7 @@ fun TemplateDetailsScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(filteredCatalog, key = { it.id }) { ex ->
-                        val isSelected = selectedExerciseIds.contains(ex.id)
+                        val isSelected = pickerSelection.contains(ex.id)
                         val visual = ExerciseVisualResolver.resolve(ex)
 
                         Surface(
@@ -426,8 +517,8 @@ fun TemplateDetailsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    if (isSelected) selectedExerciseIds.remove(ex.id)
-                                    else selectedExerciseIds.add(ex.id)
+                                    if (isSelected) pickerSelection.remove(ex.id)
+                                    else pickerSelection.add(ex.id)
                                 }
                         ) {
                             Row(
@@ -465,8 +556,8 @@ fun TemplateDetailsScreen(
                                 Checkbox(
                                     checked = isSelected,
                                     onCheckedChange = { checked ->
-                                        if (checked) selectedExerciseIds.add(ex.id)
-                                        else selectedExerciseIds.remove(ex.id)
+                                        if (checked) pickerSelection.add(ex.id)
+                                        else pickerSelection.remove(ex.id)
                                     },
                                     colors = CheckboxDefaults.colors(
                                         checkedColor = Lime400,
@@ -482,12 +573,17 @@ fun TemplateDetailsScreen(
 
                 Button(
                     onClick = {
-                        if (selectedExerciseIds.isNotEmpty()) {
-                            viewModel.addExercisesToTemplate(selectedExerciseIds.toList())
-                            showAddPickerSheet = false
+                        // A trava do toque duplo é a própria seleção: `closeExercisePicker` a
+                        // limpa **sincronamente**, e a cópia que vai para a ViewModel foi tirada
+                        // antes. Um segundo toque no mesmo quadro encontra a lista vazia e não faz
+                        // nada. Um `isSending` à parte pareceria mais explícito e seria pior: dois
+                        // estados para o mesmo fato, um deles capaz de discordar do outro.
+                        if (pickerSelection.isNotEmpty()) {
+                            viewModel.addExercisesToTemplate(pickerSelection.toList())
+                            closeExercisePicker()
                         }
                     },
-                    enabled = selectedExerciseIds.isNotEmpty(),
+                    enabled = pickerSelection.isNotEmpty(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Lime400,
                         contentColor = BackgroundDark,
@@ -498,9 +594,10 @@ fun TemplateDetailsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
+                        .testTag("exercise_picker_confirm")
                 ) {
                     Text(
-                        text = if (selectedExerciseIds.isEmpty()) "Selecione exercícios" else "ADICIONAR ${selectedExerciseIds.size} EXERCÍCIO${if (selectedExerciseIds.size > 1) "S" else ""}",
+                        text = if (pickerSelection.isEmpty()) "Selecione exercícios" else "ADICIONAR ${pickerSelection.size} EXERCÍCIO${if (pickerSelection.size > 1) "S" else ""}",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
                     )

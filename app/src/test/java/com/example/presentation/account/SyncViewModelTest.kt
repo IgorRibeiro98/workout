@@ -269,6 +269,77 @@ class SyncViewModelTest {
     }
 
     @Test
+    fun `uma alteracao travada sem conflito nao e apresentada como decisao (H2_5)`() = runBlocking {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+        device.sync()
+
+        // Um conflito real, com a entrada travada na fila.
+        val outro = SyncDevice(server, ownerUid, "device-b")
+        try {
+            outro.bind()
+            outro.sync()
+            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
+            outro.sync()
+        } finally {
+            outro.close()
+        }
+        device.renameTemplate(templateSyncId, "Escrito aqui")
+        val model = viewModel()
+        model.syncNow()
+        awaitPhase(model) { it is SyncPhase.NeedsAttention }
+
+        // Agora a sobra real: o conflito deixa de existir (é o que acontece quando o agregado
+        // volta a subir — `conflictDao.clear` no `APPLIED`), e a entrada travada continua, porque
+        // ela é a alteração da pessoa e nunca é apagada sozinha. Era exatamente este estado que a
+        // tela anunciava como "3 itens precisam de atenção" e não tinha item nenhum para mostrar.
+        device.database.syncConflictDao().clear(
+            ownerUid,
+            com.example.data.sync.SyncEntityType.WORKOUT_TEMPLATE.name,
+            templateSyncId
+        )
+        model.onAccountChanged(ownerUid)
+
+        val phase = awaitPhase(model) { it is SyncPhase.BlockedChanges } as SyncPhase.BlockedChanges
+        assertEquals(1, phase.items)
+        // A classe do motivo chega à tela; o código do servidor não.
+        assertEquals(
+            listOf(com.example.data.sync.SyncBlockedKind.CHANGED_ELSEWHERE),
+            phase.groups.map { it.kind }
+        )
+        // E o estado separa as duas contagens, em vez de colapsá-las num número só.
+        val state = model.uiState.value
+        assertEquals(0, state.conflictCount)
+        assertEquals(1, state.blockedCount)
+        assertTrue(state.conflicts.isEmpty())
+    }
+
+    @Test
+    fun `havendo conflito de verdade, a fase continua sendo a da decisao`() = runBlocking {
+        device.bind()
+        val templateSyncId = device.newTemplate("Treino A")
+        device.sync()
+
+        val outro = SyncDevice(server, ownerUid, "device-b")
+        try {
+            outro.bind()
+            outro.sync()
+            outro.renameTemplate(templateSyncId, "Escrito pelo outro")
+            outro.sync()
+        } finally {
+            outro.close()
+        }
+        device.renameTemplate(templateSyncId, "Escrito aqui")
+        val model = viewModel()
+        model.syncNow()
+
+        val phase = awaitPhase(model) { it is SyncPhase.NeedsAttention } as SyncPhase.NeedsAttention
+        assertEquals(1, phase.items)
+        // A contagem anunciada é a da lista mostrada: uma nunca sai sem a outra.
+        assertEquals(model.uiState.value.conflicts.size, phase.items)
+    }
+
+    @Test
     fun `o estado publicado nunca mistura duas leituras do banco`() = runBlocking {
         // Regressão de uma corrida real, encontrada pelo CI do Android na T16.7.1: `render` é
         // "lê o banco → monta o estado → publica", com pontos de suspensão no meio. Dois renders

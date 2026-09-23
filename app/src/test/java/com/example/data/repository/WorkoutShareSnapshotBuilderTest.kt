@@ -8,6 +8,7 @@ import com.example.data.local.WorkoutTemplateScheduleEntity
 import com.example.data.local.WorkoutTemplateWithSchedule
 import java.time.DayOfWeek
 import com.example.data.local.WorkoutTemplateExerciseEntity
+import com.example.data.social.WorkoutShareSnapshotLimits
 import com.example.domain.social.WorkoutShareContent
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -20,6 +21,12 @@ import org.junit.Test
 class WorkoutShareSnapshotBuilderTest {
 
     private val builder = WorkoutShareSnapshotBuilder()
+
+    private fun SnapshotBuildResult.Success.workout() =
+        (content as WorkoutShareContent.Workout).snapshot
+
+    private fun SnapshotBuildResult.Success.program() =
+        (content as WorkoutShareContent.Program).snapshot
 
     private val sampleTemplate = WorkoutTemplateEntity(
         id = 42L,
@@ -122,22 +129,97 @@ class WorkoutShareSnapshotBuilderTest {
     }
 
     @Test
-    fun `buildSnapshot blocks when template has no exercises`() {
+    fun `treino sem exercicios vira oferta V2, e nao bloqueio (T19_H2)`() {
         val result = builder.buildSnapshot(sampleTemplate, emptyList())
-        assertTrue("Treino sem exercícios deve ser bloqueado", result is SnapshotBuildResult.Blocked)
+
+        // Um treino vazio é um estado legítimo do Workout local. Até a T19.H2 o Social o recusava,
+        // decidindo pelo usuário o que é um treino válido.
+        val snapshot = (result as SnapshotBuildResult.Success).workout()
+        assertEquals(WorkoutShareSnapshotLimits.VERSION_V2, snapshot.snapshotVersion)
+        assertTrue(snapshot.exercises.isEmpty())
+        assertTrue(snapshot.customExercises.isEmpty())
     }
 
     @Test
-    fun `buildSnapshot blocks when exercise is marked as isUserCreated`() {
+    fun `exercicio criado pelo usuario viaja como copia, nunca como referencia (T19_H2)`() {
         val ex1 = createExercise(1L, "Meu Supino Especial", "custom-id-123", isUserCreated = true)
         val details = listOf(
             TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), ex1)
         )
 
-        val result = builder.buildSnapshot(sampleTemplate, details)
-        assertTrue("Exercício criado pelo usuário deve ser bloqueado", result is SnapshotBuildResult.Blocked)
+        val snapshot = (builder.buildSnapshot(sampleTemplate, details) as SnapshotBuildResult.Success).workout()
+
+        assertEquals(WorkoutShareSnapshotLimits.VERSION_V2, snapshot.snapshotVersion)
+        val custom = snapshot.customExercises.single()
+        assertEquals("custom-1", custom.ref)
+        assertEquals("Meu Supino Especial", custom.name)
+        // A posição aponta para a chave, e **não** carrega id de catálogo.
+        val position = snapshot.exercises.single()
+        assertEquals("custom-1", position.customExerciseRef)
+        assertNull(position.canonicalExerciseId)
+        // Nada do remetente atravessa: nem o `localId`, nem o `canonicalId` que a linha tinha.
+        val json = Json.encodeToString(snapshot)
+        assertFalse(json.contains("custom-id-123"))
+        assertFalse(json.contains("\"localId\""))
+        assertFalse(json.contains("\"syncId\""))
+    }
+
+    @Test
+    fun `o mesmo CUSTOM em duas posicoes do treino recebe uma chave so`() {
+        val custom = createExercise(9L, "Meu Supino", null, isUserCreated = true)
+        val details = listOf(
+            TemplateExerciseWithDetails(createTemplateExercise(9L, sortOrder = 0), custom),
+            TemplateExerciseWithDetails(createTemplateExercise(9L, sortOrder = 1), custom)
+        )
+
+        val snapshot = (builder.buildSnapshot(sampleTemplate, details) as SnapshotBuildResult.Success).workout()
+
+        assertEquals(1, snapshot.customExercises.size)
+        assertEquals(listOf("custom-1", "custom-1"), snapshot.exercises.map { it.customExerciseRef })
+    }
+
+    @Test
+    fun `um treino so de exercicios do catalogo continua sendo escrito como V1`() {
+        val ex1 = createExercise(1L, "Supino", "catalog-bench-press")
+        val details = listOf(
+            TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), ex1)
+        )
+
+        val snapshot = (builder.buildSnapshot(sampleTemplate, details) as SnapshotBuildResult.Success).workout()
+
+        // O app escreve a versão **mínima** que representa a oferta: uma V1 é aceita por qualquer
+        // Spark Backend já publicado, e o caminho que já funcionava não passa a depender do novo.
+        assertEquals(WorkoutShareSnapshotLimits.VERSION_V1, snapshot.snapshotVersion)
+        assertTrue(snapshot.customExercises.isEmpty())
+    }
+
+    @Test
+    fun `sigla maior que o limite do servidor bloqueia antes da requisicao (H2_6)`() {
+        val ex1 = createExercise(1L, "Supino", "catalog-bench-press")
+        val details = listOf(
+            TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), ex1)
+        )
+
+        val result = builder.buildSnapshot(sampleTemplate.copy(shortIdentifier = "Superiores A"), details)
+
         val blocked = result as SnapshotBuildResult.Blocked
-        assertTrue(blocked.reasons.any { it.contains("Meu Supino Especial") })
+        assertTrue(blocked.reasons.any { it.contains("sigla") })
+    }
+
+    @Test
+    fun `sortOrder viaja normalizado, e um buraco na ordem nao vira recusa do servidor`() {
+        val a = createExercise(1L, "Supino", "catalog-bench-press")
+        val b = createExercise(2L, "Remada", "catalog-row")
+        val details = listOf(
+            TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 7), a),
+            TemplateExerciseWithDetails(createTemplateExercise(2L, sortOrder = 41), b)
+        )
+
+        val snapshot = (builder.buildSnapshot(sampleTemplate, details) as SnapshotBuildResult.Success).workout()
+
+        // 41 está fora do 0..30 que o servidor aceita; o que a oferta transporta é a ordem.
+        assertEquals(listOf(0, 1), snapshot.exercises.map { it.sortOrder })
+        assertEquals(listOf("catalog-bench-press", "catalog-row"), snapshot.exercises.map { it.canonicalExerciseId })
     }
 
     @Test
@@ -317,24 +399,27 @@ class WorkoutShareSnapshotBuilderTest {
     }
 
     @Test
-    fun `buildProgramSnapshot bloqueia o programa inteiro quando um treino tem exercicio CUSTOM`() {
+    fun `o mesmo CUSTOM em dois treinos do programa aparece uma vez, referenciado duas (T19_H2)`() {
         val bench = createExercise(1L, "Supino", "catalog-bench-press")
-        val custom = createExercise(9L, "Meu Exercício", "custom-9", isUserCreated = true)
+        val custom = createExercise(9L, "Meu Exercício", null, isUserCreated = true)
         val templates = listOf(
             template(10L, "Push", "A", 0) to listOf(
-                TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), bench)
+                TemplateExerciseWithDetails(createTemplateExercise(1L, sortOrder = 0), bench),
+                TemplateExerciseWithDetails(createTemplateExercise(9L, sortOrder = 1), custom)
             ),
             template(20L, "Pull", "B", 1) to listOf(
                 TemplateExerciseWithDetails(createTemplateExercise(9L, sortOrder = 0), custom)
             )
         )
 
-        val result = builder.buildProgramSnapshot(sampleProgram, templates)
+        val snapshot = (builder.buildProgramSnapshot(sampleProgram, templates) as SnapshotBuildResult.Success).program()
 
-        assertTrue(result is SnapshotBuildResult.Blocked)
-        val blocked = result as SnapshotBuildResult.Blocked
-        // O motivo nomeia o treino e o exercício: é o que a pessoa precisa para resolver.
-        assertTrue(blocked.reasons.any { it.contains("Pull") && it.contains("Meu Exercício") })
+        assertEquals(WorkoutShareSnapshotLimits.VERSION_V2, snapshot.snapshotVersion)
+        // Uma entrada só para a oferta inteira: é o que faz o destinatário criar **um** exercício.
+        assertEquals(listOf("Meu Exercício"), snapshot.customExercises.map { it.name })
+        val ref = snapshot.customExercises.single().ref
+        assertEquals(ref, snapshot.templates[0].exercises.last().customExerciseRef)
+        assertEquals(ref, snapshot.templates[1].exercises.single().customExerciseRef)
     }
 
     @Test
@@ -361,7 +446,7 @@ class WorkoutShareSnapshotBuilderTest {
     }
 
     @Test
-    fun `buildProgramSnapshot bloqueia quando um treino nao tem exercicios`() {
+    fun `um programa com um treino vazio continua compartilhavel (T19_H2)`() {
         val bench = createExercise(1L, "Supino", "catalog-bench-press")
         val templates = listOf(
             template(10L, "Push", "A", 0) to listOf(
@@ -370,10 +455,11 @@ class WorkoutShareSnapshotBuilderTest {
             template(20L, "Vazio", "B", 1) to emptyList()
         )
 
-        val result = builder.buildProgramSnapshot(sampleProgram, templates)
+        val snapshot = (builder.buildProgramSnapshot(sampleProgram, templates) as SnapshotBuildResult.Success).program()
 
-        assertTrue(result is SnapshotBuildResult.Blocked)
-        assertTrue((result as SnapshotBuildResult.Blocked).reasons.any { it.contains("Vazio") })
+        assertEquals(WorkoutShareSnapshotLimits.VERSION_V2, snapshot.snapshotVersion)
+        assertEquals(2, snapshot.templates.size)
+        assertTrue(snapshot.templates.single { it.name == "Vazio" }.exercises.isEmpty())
     }
 
     @Test

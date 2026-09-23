@@ -53,6 +53,11 @@ class ProfileViewModel(
     private val _uiState = MutableStateFlow(ProfileUiState())
     val uiState: StateFlow<ProfileUiState> = _uiState.asStateFlow()
 
+    private val _weeklyGoalSave = MutableStateFlow<WeeklyGoalSave>(WeeklyGoalSave.Idle)
+
+    /** O desfecho da última tentativa de alterar a meta semanal (H2.4). */
+    val weeklyGoalSave: StateFlow<WeeklyGoalSave> = _weeklyGoalSave.asStateFlow()
+
     private val explanations = CoachExplanationController(viewModelScope)
     val explanationState: StateFlow<CoachExplanationUiState> = explanations.state
 
@@ -177,11 +182,34 @@ class ProfileViewModel(
     /**
      * Altera a meta semanal preservando a vigência já implementada: a semana corrente mantém a meta
      * antiga e o novo valor passa a valer na próxima. A regra continua morando no repositório.
+     *
+     * ## Por que existe um estado de salvamento (H2.4)
+     *
+     * A tela fechava a folha no mesmo toque que disparava a gravação, sem esperar por ela. Enquanto
+     * deu certo, ninguém percebeu; quando não desse, a folha fecharia igual e a meta continuaria a
+     * antiga — uma falha invisível numa tela que afirma ter salvado. Agora o desfecho é estado: a
+     * folha só fecha em [WeeklyGoalSave.Saved], e um erro fica visível com a folha aberta.
+     *
+     * Um segundo toque durante a gravação não faz nada: a mudança é **uma**, não duas.
      */
     fun setWeeklyGoal(goal: Int) {
+        if (_weeklyGoalSave.value is WeeklyGoalSave.Saving) return
+        _weeklyGoalSave.value = WeeklyGoalSave.Saving
         viewModelScope.launch {
-            consistencyRepository.setWeeklyGoal(goal)
+            _weeklyGoalSave.value = try {
+                consistencyRepository.setWeeklyGoal(goal)
+                WeeklyGoalSave.Saved(goal)
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                WeeklyGoalSave.Failed
+            }
         }
+    }
+
+    /** A folha foi fechada (salva ou não): o desfecho anterior deixou de descrever alguma coisa. */
+    fun acknowledgeWeeklyGoalSave() {
+        _weeklyGoalSave.value = WeeklyGoalSave.Idle
     }
 
     /** A impressão dos números explicáveis desta tela. */
@@ -208,4 +236,22 @@ class ProfileViewModel(
     private companion object {
         const val MAX_ACHIEVEMENT_PREVIEW = 3
     }
+}
+
+/**
+ * O desfecho de "Salvar" na Meta Semanal (H2.4).
+ *
+ * Existe para que a folha só feche depois de a gravação ter sido aceita pela camada que manda nela
+ * ([ConsistencyRepository] + DataStore), e para que uma falha apareça em vez de sumir junto com a
+ * folha.
+ */
+sealed interface WeeklyGoalSave {
+    data object Idle : WeeklyGoalSave
+
+    data object Saving : WeeklyGoalSave
+
+    /** A meta foi persistida. [goal] é o valor que passa a valer na **próxima** semana. */
+    data class Saved(val goal: Int) : WeeklyGoalSave
+
+    data object Failed : WeeklyGoalSave
 }

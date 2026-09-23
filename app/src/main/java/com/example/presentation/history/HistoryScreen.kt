@@ -6,7 +6,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyRow
@@ -32,6 +36,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -173,48 +180,19 @@ fun HistoryScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // Segmented Control Tabs (T3.3)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceDark)
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    val tabs = listOf("Calendário", "Todos os Treinos", "Análise")
-                    tabs.forEachIndexed { index, title ->
-                        val isSelected = selectedTab == index
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isSelected) Lime400 else Color.Transparent)
-                                .clickable { selectedTab = index }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = title,
-                                color = if (isSelected) BackgroundDark else TextSecondary,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                fontSize = 13.sp,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
+                // Segmented Control Tabs (T3.3), responsivo desde a H2.1
+                HistorySegmentedTabs(
+                    tabs = HISTORY_TABS,
+                    selectedIndex = selectedTab,
+                    onSelect = { selectedTab = it }
+                )
 
                 if (selectedTab != 0) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("history_period_filter"),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    HistoryFilterGroup(
+                        label = "Período",
+                        modifier = Modifier.testTag("history_period_filter")
                     ) {
-                        Text("Período:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         HistoryPeriod.entries.forEach { period ->
                             HistoryFilterChip(
                                 label = period.label,
@@ -325,55 +303,31 @@ fun HistoryScreen(
                                     .padding(bottom = 12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Tipo & Agrupamento
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                // Tipo e Agrupamento: dois grupos rotulados, cada um com os seus
+                                // chips. Os seis dividiam uma `Row` só e saíam da tela em 360dp.
+                                HistoryFilterGroup(
+                                    label = "Tipo",
+                                    modifier = Modifier.testTag("history_type_filter")
                                 ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("Tipo:", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        listOf("Todos", "Concluídos", "Parciais").forEach { type ->
-                                            val isSelected = type == historyTypeFilter
-                                            Surface(
-                                                color = if (isSelected) Lime400 else SurfaceDark,
-                                                shape = RoundedCornerShape(8.dp),
-                                                modifier = Modifier.clickable { historyTypeFilter = type }
-                                            ) {
-                                                Text(
-                                                    text = type,
-                                                    color = if (isSelected) BackgroundDark else TextSecondary,
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                                                )
-                                            }
-                                        }
+                                    HISTORY_TYPE_FILTERS.forEach { type ->
+                                        HistoryFilterChip(
+                                            label = type,
+                                            isSelected = type == historyTypeFilter,
+                                            onClick = { historyTypeFilter = type }
+                                        )
                                     }
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        listOf("Semana", "Mês", "Dia").forEach { grp ->
-                                            val isSelected = grp == historyGrouping
-                                            Surface(
-                                                color = if (isSelected) Lime400.copy(alpha = 0.2f) else SurfaceDark,
-                                                shape = RoundedCornerShape(8.dp),
-                                                border = BorderStroke(1.dp, if (isSelected) Lime400 else BorderLight),
-                                                modifier = Modifier.clickable { historyGrouping = grp }
-                                            ) {
-                                                Text(
-                                                    text = grp,
-                                                    color = if (isSelected) Lime400 else TextSecondary,
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-                                                )
-                                            }
-                                        }
+                                }
+                                HistoryFilterGroup(
+                                    label = "Agrupar",
+                                    modifier = Modifier.testTag("history_grouping_filter")
+                                ) {
+                                    HISTORY_GROUPINGS.forEach { grp ->
+                                        HistoryFilterChip(
+                                            label = grp,
+                                            isSelected = grp == historyGrouping,
+                                            onClick = { historyGrouping = grp },
+                                            style = HistoryChipStyle.Outlined
+                                        )
                                     }
                                 }
                             }
@@ -1024,24 +978,184 @@ private fun isSameDay(date1: Date, date2: Date): Boolean {
 
 /** Rounded selectable chip used by the history period and analysis filters. */
 @Composable
-private fun HistoryFilterChip(
+internal fun HistoryFilterChip(
     label: String,
     isSelected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    style: HistoryChipStyle = HistoryChipStyle.Filled
 ) {
+    val filled = style == HistoryChipStyle.Filled
     Surface(
-        color = if (isSelected) Lime400 else SurfaceDark,
+        color = when {
+            !isSelected -> SurfaceDark
+            filled -> Lime400
+            else -> Lime400.copy(alpha = 0.2f)
+        },
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.clickable(onClick = onClick)
+        border = if (filled) null else BorderStroke(1.dp, if (isSelected) Lime400 else BorderLight),
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
     ) {
         Text(
             text = label,
-            color = if (isSelected) BackgroundDark else TextSecondary,
+            color = when {
+                !isSelected -> TextSecondary
+                filled -> BackgroundDark
+                else -> Lime400
+            },
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
         )
+    }
+}
+
+internal enum class HistoryChipStyle { Filled, Outlined }
+
+/**
+ * Um grupo de filtros: o rótulo em cima, os chips embaixo, quebrando de linha quando preciso.
+ *
+ * Antes da H2.1 os filtros do Histórico viviam em `Row`s rígidas — "Período:" com quatro chips numa
+ * linha, e "Tipo:" com três chips **mais** o agrupamento com outros três na mesma linha. Uma `Row`
+ * não quebra: o que não cabe é medido com o que sobrou e sai comprimido ou pela borda. Em 360dp o
+ * último chip aparecia cortado na lateral, e em `fontScale` alto já em 411dp.
+ *
+ * `FlowRow` resolve isso pelo que o problema é — os chips são uma coleção, não colunas de uma
+ * tabela — e continua ocupando uma linha só quando há espaço.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun HistoryFilterGroup(
+    label: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            content()
+        }
+    }
+}
+
+internal val HISTORY_TABS = listOf("Calendário", "Todos os Treinos", "Análise")
+internal val HISTORY_TYPE_FILTERS = listOf("Todos", "Concluídos", "Parciais")
+internal val HISTORY_GROUPINGS = listOf("Semana", "Mês", "Dia")
+
+/**
+ * O seletor de abas do Histórico, adaptativo por medida — não por fonte menor (H2.1).
+ *
+ * ```text
+ * cabe:      [ Calendário ][ Todos os Treinos ][ Análise ]      três fatias iguais, linha cheia
+ * não cabe:  [ Calendário ][ Todos os Treinos ][ Análi…        cada aba na largura que precisa,
+ *            <─────────── rola na horizontal ───────────>      e a faixa rola
+ * ```
+ *
+ * A versão anterior dava `weight(1f)` às três e `maxLines = 1` ao texto: em 360dp "Todos os
+ * Treinos" já não cabia no terço que sobrava e era cortado no meio da palavra; com `fontScale`
+ * aumentado, "Calendário" também. Diminuir a fonte esconderia o problema em vez de resolvê-lo.
+ *
+ * A decisão é tomada com a largura real da faixa ([BoxWithConstraints]) e a largura intrínseca de
+ * cada aba: se a soma cabe, cada uma recebe a mesma fatia e a faixa preenche a linha; se não cabe,
+ * cada uma recebe o que precisa e a faixa inteira passa a rolar. Em nenhum dos dois casos existe
+ * texto cortado.
+ */
+@Composable
+internal fun HistorySegmentedTabs(
+    tabs: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    val gap = 4.dp
+    val trackPadding = 4.dp
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val viewportPx = with(LocalDensity.current) {
+            (maxWidth - trackPadding * 2).roundToPx().coerceAtLeast(0)
+        }
+        val gapPx = with(LocalDensity.current) { gap.roundToPx() }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(SurfaceDark)
+                .horizontalScroll(rememberScrollState())
+                .padding(trackPadding)
+        ) {
+            Layout(
+                content = {
+                    tabs.forEachIndexed { index, title ->
+                        val isSelected = selectedIndex == index
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isSelected) Lime400 else Color.Transparent)
+                                .clickable { onSelect(index) }
+                                // 48dp é o alvo de toque mínimo do Material, e a faixa anterior
+                                // entregava 35dp — pequeno o bastante para errar a aba vizinha.
+                                .heightIn(min = 48.dp)
+                                .padding(horizontal = 10.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = title,
+                                color = if (isSelected) BackgroundDark else TextSecondary,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            ) { measurables, constraints ->
+                if (measurables.isEmpty()) return@Layout layout(0, 0) {}
+                val totalGap = gapPx * (measurables.size - 1)
+                // A largura que cada aba precisa para caber numa linha, sem corte.
+                val intrinsic = measurables.map { it.maxIntrinsicWidth(Constraints.Infinity) }
+                val needed = intrinsic.sum() + totalGap
+                val fits = needed <= viewportPx
+
+                // Cabendo, a sobra é dividida igualmente e a faixa preenche a linha; não cabendo,
+                // cada aba fica com o que precisa e a faixa passa a rolar. Dividir a largura em
+                // fatias iguais **sem** olhar para a maior aba é o que cortava "Todos os Treinos"
+                // mesmo quando a soma cabia (H2.1).
+                val extra = if (fits) (viewportPx - needed) / measurables.size else 0
+                val widths = intrinsic.mapIndexed { index, natural ->
+                    // A última absorve o resto da divisão, para a faixa fechar exatamente.
+                    val leftover = if (fits && index == measurables.lastIndex) {
+                        (viewportPx - needed) - extra * measurables.size
+                    } else {
+                        0
+                    }
+                    natural + extra + leftover
+                }
+                val placeables = measurables.mapIndexed { index, measurable ->
+                    measurable.measure(
+                        Constraints(
+                            minWidth = widths[index],
+                            maxWidth = widths[index],
+                            minHeight = 0,
+                            maxHeight = constraints.maxHeight
+                        )
+                    )
+                }
+                val width = if (fits) viewportPx else needed
+                val height = placeables.maxOf { it.height }
+                layout(width, height) {
+                    var x = 0
+                    placeables.forEach { placeable ->
+                        placeable.place(x, (height - placeable.height) / 2)
+                        x += placeable.width + gapPx
+                    }
+                }
+            }
+        }
     }
 }
 

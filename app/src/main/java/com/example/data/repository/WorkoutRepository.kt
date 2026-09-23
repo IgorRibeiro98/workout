@@ -14,6 +14,7 @@ import com.example.data.remote.NetworkExerciseRemoteDataSource
 import com.example.data.sync.SyncEntityType
 import com.example.data.sync.SyncIds
 import com.example.data.sync.SyncMutationCoordinator
+import com.example.data.sync.SyncMutationScope
 
 /**
  * @param syncMutations a fronteira transacional entre a escrita de domínio e a Outbox (T16.3).
@@ -314,14 +315,52 @@ class WorkoutRepository(
         template: WorkoutTemplateEntity,
         exercises: List<WorkoutTemplateExerciseEntity>,
         scheduledDays: Collection<DayOfWeek> = emptyList(),
+        /**
+         * Exercícios CUSTOM que nascem **nesta mesma transação** (T19.H2), com as posições que os
+         * usam. É o caminho da importação de uma oferta que trouxe exercícios criados pelo
+         * remetente: ou o treino, os exercícios e o recibo entram juntos, ou nada entra — e um
+         * retry depois de um crash não cria uma segunda cópia de nada.
+         */
+        customExercises: List<NewCustomExercise> = emptyList(),
         andThen: suspend (templateId: Long) -> Unit = {}
     ): Long = syncMutations.mutate {
         val templateId = dao.insertTemplate(template)
         exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+        insertCustomExercises(customExercises, templateId, mutableMapOf())
         dao.replaceSchedulesForTemplate(templateId, WeekdaySchedule.names(scheduledDays))
         andThen(templateId)
         upsert(SyncEntityType.WORKOUT_TEMPLATE, template.syncId)
         templateId
+    }
+
+    /**
+     * Cria os exercícios CUSTOM de uma importação e as posições de treino que apontam para eles.
+     *
+     * [createdRefs] é o que faz o **mesmo** CUSTOM usado em vários treinos do mesmo programa nascer
+     * uma vez só: a chave escopada à oferta (`custom-1`) já criada é reaproveitada, e as posições
+     * seguintes recebem o `localId` do exercício que já existe.
+     *
+     * A identidade do exercício criado é inteiramente deste aparelho: `localId` do Room e `syncId`
+     * gerado aqui. O do remetente nunca chegou — o snapshot não o carrega.
+     */
+    private suspend fun SyncMutationScope.insertCustomExercises(
+        customExercises: List<NewCustomExercise>,
+        templateId: Long,
+        createdRefs: MutableMap<String, Long>
+    ) {
+        customExercises.forEach { custom ->
+            val exerciseId = createdRefs[custom.ref] ?: run {
+                val id = dao.insertExercise(custom.exercise)
+                createdRefs[custom.ref] = id
+                custom.exercise.syncId?.let { upsert(SyncEntityType.CUSTOM_EXERCISE, it) }
+                id
+            }
+            custom.positions.forEach { position ->
+                dao.insertTemplateExercise(
+                    position.copy(templateId = templateId, exerciseId = exerciseId)
+                )
+            }
+        }
     }
 
     /**
@@ -347,9 +386,14 @@ class WorkoutRepository(
         andThen: suspend (programId: Long) -> Unit = {}
     ): Long = syncMutations.mutate {
         val programId = dao.insertProgram(program.copy(isCurrent = false))
-        val templateSyncIds = templates.map { (template, exercises, scheduledDays) ->
+        // As chaves CUSTOM valem para a oferta **inteira**: o mesmo exercício personalizado usado
+        // em três treinos do programa nasce uma vez e é referenciado três vezes (T19.H2 §15).
+        val createdRefs = mutableMapOf<String, Long>()
+        val templateSyncIds = templates.map { newTemplate ->
+            val (template, exercises, scheduledDays) = newTemplate
             val templateId = dao.insertTemplate(template.copy(programId = programId))
             exercises.forEach { dao.insertTemplateExercise(it.copy(templateId = templateId)) }
+            insertCustomExercises(newTemplate.customExercises, templateId, createdRefs)
             dao.replaceSchedulesForTemplate(templateId, WeekdaySchedule.names(scheduledDays))
             template.syncId
         }
@@ -493,7 +537,26 @@ sealed class CustomExerciseDeleteResult {
 data class NewTemplate(
     val template: WorkoutTemplateEntity,
     val exercises: List<WorkoutTemplateExerciseEntity>,
-    val scheduledDays: List<DayOfWeek> = emptyList()
+    val scheduledDays: List<DayOfWeek> = emptyList(),
+    /** Exercícios CUSTOM da oferta usados por **este** treino (T19.H2). */
+    val customExercises: List<NewCustomExercise> = emptyList()
+)
+
+/**
+ * Um exercício CUSTOM que nasce junto de uma cópia importada, e as posições que o usam (T19.H2).
+ *
+ * [ref] é a chave escopada à oferta (`custom-1`, `custom-2`). Ela serve para ligar posições ao
+ * mesmo exercício dentro desta transação — inclusive posições de treinos diferentes do mesmo
+ * programa — e morre aqui: a identidade do exercício criado é o `localId` do Room mais o `syncId`
+ * gerado neste aparelho.
+ *
+ * [positions] chegam com `templateId` e `exerciseId` irrelevantes: os dois são preenchidos na
+ * inserção.
+ */
+data class NewCustomExercise(
+    val ref: String,
+    val exercise: ExerciseEntity,
+    val positions: List<WorkoutTemplateExerciseEntity>
 )
 
 /**

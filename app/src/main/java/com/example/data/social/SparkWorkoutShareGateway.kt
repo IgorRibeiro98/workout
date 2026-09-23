@@ -9,8 +9,6 @@ import com.example.domain.social.WorkoutShareGateway
 import com.example.domain.social.WorkoutShareItem
 import com.example.domain.social.WorkoutShareOutcome
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 private const val HTTP_UNAUTHORIZED = 401
 private const val HTTP_TOO_MANY_REQUESTS = 429
@@ -21,10 +19,7 @@ class SparkWorkoutShareGateway(
     private val client: SparkBackendClient?
 ) : WorkoutShareGateway {
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-    }
+    private val json = WorkoutShareWireFormat.json
 
     override val isConfigured: Boolean get() = client?.isConfigured == true
 
@@ -34,7 +29,7 @@ class SparkWorkoutShareGateway(
         content: WorkoutShareContent
     ): WorkoutShareOutcome<WorkoutShareDetail> {
         val dto = CreateWorkoutShareRequestDto.of(recipientSocialId, clientRequestId, content)
-        return post(WorkoutShareContract.WORKOUT_SHARES_PATH, json.encodeToString(dto)) { body ->
+        return post(WorkoutShareContract.WORKOUT_SHARES_PATH, WorkoutShareWireFormat.encodeCreateRequest(dto)) { body ->
             json.decodeFromString<WorkoutShareDetailDto>(body).toDomain()
         }
     }

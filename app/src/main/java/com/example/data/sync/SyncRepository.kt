@@ -123,6 +123,10 @@ class SyncRepository(
             pending = outboxDao.pendingCountFor(ownerUid),
             blocked = outboxDao.blockedCountFor(ownerUid),
             conflicts = conflictDao.countFor(ownerUid),
+            blockedWithoutConflict = outboxDao.blockedWithoutConflictFor(ownerUid)
+                .groupBy { SyncBlockedKind.from(it.reason) }
+                .map { (kind, rows) -> SyncBlockedGroup(kind, rows.sumOf { row -> row.items }) }
+                .sortedByDescending { it.items },
             lastSyncedAt = cursor?.lastSyncedAt,
             cursor = cursor?.lastPulledServerSequence ?: 0
         )
