@@ -232,8 +232,15 @@ const adaptationResponseSchema: AiOutputSchema = {
     },
     changes: {
       type: 'ARRAY',
-      description: 'Mudanças propostas. Pode ser vazia quando não há o que ajustar.',
-      maxItems: String(R.maxAdaptationChanges),
+      // O teto vive na descrição, não em `maxItems`, e isso é deliberado. O item de adaptação é o
+      // maior schema do Coach (dezesseis campos, quase todos `nullable`); com `maxItems` a Gemini
+      // API recusa a requisição inteira com `400 INVALID_ARGUMENT` — sem chegar ao modelo, sempre,
+      // para qualquer conteúdo. Os outros arrays do Coach têm itens menores e seguem com `maxItems`.
+      //
+      // Quem garante o limite continua sendo `validateAdaptation`, que já rejeita a resposta acima
+      // de `maxAdaptationChanges`. A descrição existe para o modelo não esbarrar nessa rejeição:
+      // sem ela, nada comunicaria o teto, porque o prompt não o repete.
+      description: `Mudanças propostas, no máximo ${R.maxAdaptationChanges}. Pode ser vazia quando não há o que ajustar.`,
       items: {
         type: 'OBJECT',
         properties: {
