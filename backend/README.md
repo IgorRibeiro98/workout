@@ -144,7 +144,7 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Só lido em modo `file`. Sem ele, rota autenticada responde `503` |
 | `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial (ou é declarado explicitamente em modo `adc`) |
 | `GEMINI_API_KEY` | não | — | Credencial do Gemini. **Server-only.** Sem ela, `/v1/ai/coach` responde `503` e o núcleo do Spark segue intacto |
-| `GEMINI_MODEL` | não | `gemini-3.6-flash` | O mesmo modelo que a T14 usava; trocar é decisão explícita |
+| `GEMINI_MODEL` | não | `gemini-3.5-flash` | Trocar é decisão explícita. O default saiu de `gemini-3.6-flash` em 2026-09-23: a chave de produção é free tier e o Gemini deixou de servir o `3.6` (e `3.7`/`3.8`/`flash-latest`) nesse tier, devolvendo `503` em toda chamada. Produção não define esta variável — o deploy usa `--set-env-vars`, então o default do código **é** o valor de produção |
 | `AI_TIMEOUT_MS` | não | `60000` | Teto de uma chamada ao provider. Máximo `60000`: a cadeia de timeout do Coach no Android (T18.3.1) é provider < HTTP do Coach (75 s) < absoluto (90 s) |
 | `AI_TEMPERATURE` | não | `0.2` | Análise pede consistência, não criatividade |
 | `AI_MAX_OUTPUT_TOKENS` | não | `2048` | Teto de saída |

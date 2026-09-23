@@ -23,11 +23,13 @@ describe('Configuração do provider de IA', () => {
     expect(configWith().geminiApiKey).toBeUndefined();
   });
 
-  it('o default preserva o modelo e os parâmetros que a T14 usava', () => {
+  it('o default fixa o modelo e os parâmetros do Coach', () => {
     const config = configWith();
 
-    // A T16.2 é migração de transporte. Trocar de modelo aqui seria outra decisão.
-    expect(config.geminiModel).toBe('gemini-3.6-flash');
+    // O modelo saiu de `gemini-3.6-flash` em 2026-09-23: a chave de produção é free tier, e o
+    // Gemini parou de servir o `3.6` nesse tier (503 em toda chamada). Este default é o lever de
+    // produção — o Cloud Run não define `GEMINI_MODEL`. Os parâmetros seguem os da T14.
+    expect(config.geminiModel).toBe('gemini-3.5-flash');
     expect(config.aiTemperature).toBe(0.2);
     expect(config.aiMaxOutputTokens).toBe(2048);
     expect(config.aiThinkingLevel).toBe('MEDIUM');

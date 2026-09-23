@@ -161,10 +161,25 @@ export const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1).optional(),
 
   /**
-   * Modelo do Coach. O default preserva exatamente o que a T14 usava via Firebase AI Logic:
-   * a T16.2 é migração de transporte, não troca oportunista de modelo.
+   * Modelo do Coach.
+   *
+   * O default foi `gemini-3.6-flash` até 2026-09-23, preservando o que a T14 usava via Firebase AI
+   * Logic — a T16.2 foi migração de transporte, não troca oportunista de modelo. A troca para
+   * `gemini-3.5-flash` não é oportunista tampouco: a chave de produção é free tier, e o Gemini
+   * parou de atender `3.6-flash` (e `3.7`, `3.8`, `flash-latest`) nesse tier, devolvendo
+   * `503 "This model is currently experiencing high demand"` em **toda** chamada desde
+   * 2026-09-14. `gemini-3.5-flash` é o modelo mais novo que o free tier ainda serve.
+   *
+   * Duas consequências que o default não resolve, e que valem antes de mexer aqui de novo:
+   * o free tier dá vinte requisições por dia **por projeto** (não por usuário), e o mesmo gate
+   * volta a derrubar o Coach quando o `3.5` sair do free tier. A saída durável é billing na chave,
+   * não outro nome de modelo.
+   *
+   * Produção não define `GEMINI_MODEL`: `ops/gcp/deploy-cloud-run.sh` monta o ambiente com
+   * `--set-env-vars`, que substitui o conjunto inteiro, então uma variável posta à mão no Cloud Run
+   * sumiria no deploy seguinte. Este default **é** o lever de produção.
    */
-  GEMINI_MODEL: z.string().min(1).default('gemini-3.6-flash'),
+  GEMINI_MODEL: z.string().min(1).default('gemini-3.5-flash'),
 
   /**
    * Teto de tempo de uma chamada ao provider.
