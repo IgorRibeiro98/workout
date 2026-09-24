@@ -30,7 +30,19 @@ data class SharedWorkoutsUiState(
     val previewDetail: WorkoutShareDetail? = null,
     val isPreviewLoading: Boolean = false,
     val importingShareId: String? = null,
-    val notice: String? = null
+    val notice: String? = null,
+    /**
+     * As listas já foram lidas ao menos uma vez nesta conta (T19.H3).
+     *
+     * É o que separa "carregando pela primeira vez" (spinner no lugar da lista) de "atualizando"
+     * (a lista fica, o ↻ gira) — e "nenhum compartilhamento" de "não deu para ler".
+     */
+    val hasLoaded: Boolean = false,
+    /**
+     * A primeira leitura falhou. Antes da T19.H3 a falha virava duas listas vazias, e a tela dizia
+     * "nenhum treino compartilhado com você" para quem só estava sem rede.
+     */
+    val loadError: String? = null
 )
 
 /**
@@ -78,25 +90,57 @@ class SharedWorkoutsViewModel(
         _uiState.value = _uiState.value.copy(selectedTab = tab)
     }
 
+    /**
+     * A tela chegou. A leitura inicial já sai no `init`; com ela (ou outra) em voo, nada sai de
+     * novo — antes da T19.H3 a primeira abertura fazia as duas requisições duas vezes.
+     */
+    fun open() {
+        if (_uiState.value.isLoading) return
+        refresh()
+    }
+
+    /**
+     * Relê as duas listas — o "↻" da barra (T19.H3).
+     *
+     * Um toque durante uma leitura em voo é ignorado. Uma falha **não** esvazia o que já estava na
+     * tela: a lista boa fica e o aviso diz que ela pode estar desatualizada. Sem lista anterior, a
+     * tela diz que não deu para carregar — e nunca "nenhum compartilhamento".
+     */
     fun refresh() {
         if (!shareGateway.isConfigured) return
         val uid = currentUid ?: return
+        if (_uiState.value.isLoading) return
 
+        _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
-
             val receivedOutcome = shareGateway.listReceived()
             val sentOutcome = shareGateway.listSent()
             if (currentUid != uid) return@launch
 
-            val received = (receivedOutcome as? WorkoutShareOutcome.Success)?.data ?: emptyList()
-            val sent = (sentOutcome as? WorkoutShareOutcome.Success)?.data ?: emptyList()
+            val received = (receivedOutcome as? WorkoutShareOutcome.Success)?.data
+            val sent = (sentOutcome as? WorkoutShareOutcome.Success)?.data
+            val state = _uiState.value
 
-            _uiState.value = _uiState.value.copy(
-                isLoading = false,
-                receivedItems = received,
-                sentItems = sent
-            )
+            _uiState.value = when {
+                received != null && sent != null -> state.copy(
+                    isLoading = false,
+                    hasLoaded = true,
+                    loadError = null,
+                    receivedItems = received,
+                    sentItems = sent
+                )
+                state.hasLoaded -> state.copy(
+                    isLoading = false,
+                    receivedItems = received ?: state.receivedItems,
+                    sentItems = sent ?: state.sentItems,
+                    notice = "Não foi possível atualizar agora — mostrando a última atualização."
+                )
+                else -> state.copy(
+                    isLoading = false,
+                    loadError = "Não foi possível carregar os compartilhamentos. " +
+                        "Seus treinos continuam normais."
+                )
+            }
         }
     }
 

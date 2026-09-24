@@ -3,6 +3,7 @@ package com.example.data.social
 import com.example.domain.social.FriendSocialProfile
 import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingAvailability
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
 import com.example.domain.social.SocialConsistencyParameters
@@ -25,7 +26,8 @@ import kotlinx.serialization.Serializable
  * `ownerUid`, `firebaseUid`, `email`, `friendCode`, qualquer flag de privacidade de outra pessoa e
  * qualquer dado de treino bruto — sessão, série, carga, nota, horário, medida, payload de sync ou
  * de backup. Nada disso chega do servidor, e declarar o campo aqui seria a primeira metade de
- * passar a receber.
+ * passar a receber. As estatísticas da T19.H3 entram como **agregado** já calculado no servidor;
+ * o detalhe de uma sessão mora no check-in (`WorkoutCheckInDtos.kt`), não no perfil.
  */
 
 /** O progresso já filtrado que um amigo recebe. Todo campo é opcional. */
@@ -34,7 +36,12 @@ data class SharedProgressDto(
     val level: Int? = null,
     val consistencyStreak: Int? = null,
     val weeklyWorkoutCount: Int? = null,
-    val highlightedAchievementIds: List<String>? = null
+    val highlightedAchievementIds: List<String>? = null,
+    // T19.H3 — estatísticas de treino. Ausente continua sendo "não", nunca zero.
+    val weeklyTrainingMinutes: Int? = null,
+    val weeklyCompletedSets: Int? = null,
+    val weeklyVolumeKg: Double? = null,
+    val totalWorkouts: Int? = null
 )
 
 /** `GET /v1/social/friends/{socialId}/profile` e `GET /v1/social/me/profile-preview`. */
@@ -57,6 +64,19 @@ data class ProgressSharingSettingsDto(
     val shareConsistencyStreak: Boolean = false,
     val shareWeeklyWorkoutCount: Boolean = false,
     val shareHighlightedAchievements: Boolean = false,
+    // T19.H3. Default `false`: um servidor anterior à 0008 não manda estes campos, e ausência de
+    // escolha é "desligado" — nunca o contrário.
+    val shareWeeklyTrainingMinutes: Boolean = false,
+    val shareWeeklyCompletedSets: Boolean = false,
+    val shareWeeklyVolume: Boolean = false,
+    val shareTotalWorkouts: Boolean = false,
+    val shareWorkoutName: Boolean = false,
+    val shareWorkoutTime: Boolean = false,
+    val shareWorkoutDuration: Boolean = false,
+    val shareWorkoutExercises: Boolean = false,
+    val shareWorkoutSets: Boolean = false,
+    val shareWorkoutWeights: Boolean = false,
+    val shareWorkoutVolume: Boolean = false,
     val weekTimeZone: String? = null,
     val consistency: ConsistencyParametersDto? = null,
     val updatedAt: Long = 0L
@@ -87,7 +107,12 @@ data class ProgressSharingAvailabilityDto(
     val level: String? = null,
     val consistencyStreak: String? = null,
     val weeklyWorkoutCount: String? = null,
-    val highlightedAchievements: String? = null
+    val highlightedAchievements: String? = null,
+    // T19.H3
+    val weeklyTrainingMinutes: String? = null,
+    val weeklyCompletedSets: String? = null,
+    val weeklyVolume: String? = null,
+    val totalWorkouts: String? = null
 )
 
 @Serializable
@@ -112,9 +137,50 @@ data class UpdateProgressSharingRequestDto(
     val shareConsistencyStreak: Boolean? = null,
     val shareWeeklyWorkoutCount: Boolean? = null,
     val shareHighlightedAchievements: Boolean? = null,
+    val shareWeeklyTrainingMinutes: Boolean? = null,
+    val shareWeeklyCompletedSets: Boolean? = null,
+    val shareWeeklyVolume: Boolean? = null,
+    val shareTotalWorkouts: Boolean? = null,
+    val shareWorkoutName: Boolean? = null,
+    val shareWorkoutTime: Boolean? = null,
+    val shareWorkoutDuration: Boolean? = null,
+    val shareWorkoutExercises: Boolean? = null,
+    val shareWorkoutSets: Boolean? = null,
+    val shareWorkoutWeights: Boolean? = null,
+    val shareWorkoutVolume: Boolean? = null,
     val weekTimeZone: String? = null,
     val consistency: ConsistencyParametersDto? = null
-)
+) {
+    companion object {
+        /**
+         * O corpo do `PATCH` a partir das mudanças por campo. Um campo fora de [changes] fica
+         * `null` — e `explicitNulls = false` no `Json` do gateway o tira do corpo.
+         */
+        fun of(
+            changes: Map<ProgressSharingField, Boolean>,
+            weekTimeZone: String?,
+            consistency: ConsistencyParametersDto?
+        ): UpdateProgressSharingRequestDto = UpdateProgressSharingRequestDto(
+            shareLevel = changes[ProgressSharingField.LEVEL],
+            shareConsistencyStreak = changes[ProgressSharingField.CONSISTENCY_STREAK],
+            shareWeeklyWorkoutCount = changes[ProgressSharingField.WEEKLY_WORKOUT_COUNT],
+            shareHighlightedAchievements = changes[ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS],
+            shareWeeklyTrainingMinutes = changes[ProgressSharingField.WEEKLY_TRAINING_MINUTES],
+            shareWeeklyCompletedSets = changes[ProgressSharingField.WEEKLY_COMPLETED_SETS],
+            shareWeeklyVolume = changes[ProgressSharingField.WEEKLY_VOLUME],
+            shareTotalWorkouts = changes[ProgressSharingField.TOTAL_WORKOUTS],
+            shareWorkoutName = changes[ProgressSharingField.WORKOUT_NAME],
+            shareWorkoutTime = changes[ProgressSharingField.WORKOUT_TIME],
+            shareWorkoutDuration = changes[ProgressSharingField.WORKOUT_DURATION],
+            shareWorkoutExercises = changes[ProgressSharingField.WORKOUT_EXERCISES],
+            shareWorkoutSets = changes[ProgressSharingField.WORKOUT_SETS],
+            shareWorkoutWeights = changes[ProgressSharingField.WORKOUT_WEIGHTS],
+            shareWorkoutVolume = changes[ProgressSharingField.WORKOUT_VOLUME],
+            weekTimeZone = weekTimeZone,
+            consistency = consistency
+        )
+    }
+}
 
 fun SocialConsistencyParameters.toDto(): ConsistencyParametersDto = ConsistencyParametersDto(
     trackingStartedAtEpochDay = trackingStartedAtEpochDay,
@@ -146,7 +212,11 @@ fun SharedProgressDto.toDomain(): SharedProgress = SharedProgress(
     consistencyStreak = consistencyStreak,
     weeklyWorkoutCount = weeklyWorkoutCount,
     // Uma lista ausente e uma lista vazia são a mesma coisa para quem olha: não há destaque.
-    highlightedAchievementIds = highlightedAchievementIds.orEmpty()
+    highlightedAchievementIds = highlightedAchievementIds.orEmpty(),
+    weeklyTrainingMinutes = weeklyTrainingMinutes,
+    weeklyCompletedSets = weeklyCompletedSets,
+    weeklyVolumeKg = weeklyVolumeKg,
+    totalWorkouts = totalWorkouts
 )
 
 fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
@@ -155,6 +225,17 @@ fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
         shareConsistencyStreak = settings.shareConsistencyStreak,
         shareWeeklyWorkoutCount = settings.shareWeeklyWorkoutCount,
         shareHighlightedAchievements = settings.shareHighlightedAchievements,
+        shareWeeklyTrainingMinutes = settings.shareWeeklyTrainingMinutes,
+        shareWeeklyCompletedSets = settings.shareWeeklyCompletedSets,
+        shareWeeklyVolume = settings.shareWeeklyVolume,
+        shareTotalWorkouts = settings.shareTotalWorkouts,
+        shareWorkoutName = settings.shareWorkoutName,
+        shareWorkoutTime = settings.shareWorkoutTime,
+        shareWorkoutDuration = settings.shareWorkoutDuration,
+        shareWorkoutExercises = settings.shareWorkoutExercises,
+        shareWorkoutSets = settings.shareWorkoutSets,
+        shareWorkoutWeights = settings.shareWorkoutWeights,
+        shareWorkoutVolume = settings.shareWorkoutVolume,
         weekTimeZone = settings.weekTimeZone,
         consistency = settings.consistency?.toDomain(),
         updatedAt = settings.updatedAt
@@ -163,7 +244,11 @@ fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
         level = parseAvailability(availability.level),
         consistencyStreak = parseAvailability(availability.consistencyStreak),
         weeklyWorkoutCount = parseAvailability(availability.weeklyWorkoutCount),
-        highlightedAchievements = parseAvailability(availability.highlightedAchievements)
+        highlightedAchievements = parseAvailability(availability.highlightedAchievements),
+        weeklyTrainingMinutes = parseAvailability(availability.weeklyTrainingMinutes),
+        weeklyCompletedSets = parseAvailability(availability.weeklyCompletedSets),
+        weeklyVolume = parseAvailability(availability.weeklyVolume),
+        totalWorkouts = parseAvailability(availability.totalWorkouts)
     )
 )
 

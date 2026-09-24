@@ -5,14 +5,14 @@ package com.example.domain.social
  *
  * ## O que ele carrega — e o que a ausência significa
  *
- * Nenhum campo aqui é dado de treino. Não existe — nem neste tipo, nem em DTO nenhum, nem no
- * servidor — nome do treino, exercício, série, repetição, carga, duração, volume, recorde,
- * horário do treino, nota ou medida corporal. A ausência não é "ainda não implementamos": é o
- * contrato, e é o que faz o Feed poder existir sem publicar a intimidade do histórico.
+ * Até a T19.H2 nenhum campo aqui era dado de treino. Desde a T19.H3 existe [workoutSummary]: nome
+ * do treino, horário, duração, exercícios, séries, cargas e volume — **somente** quando o autor
+ * ligou o interruptor de cada um em "Compartilhar progresso", e **somente** com valores que o
+ * servidor derivou da sessão sincronizada. Nota, medida corporal, RPE, RIR e recorde continuam
+ * fora, com ou sem escolha.
  *
- * [publishedAt] é **quando a pessoa publicou**, e nunca quando ela treinou. Os dois instantes
- * seriam parecidos no caminho feliz e completamente diferentes quando alguém compartilha pelo
- * Histórico horas depois — e é justamente o instante do treino que não pode circular.
+ * [publishedAt] é **quando a pessoa publicou**, e nunca quando ela treinou. O instante do treino
+ * só aparece em [WorkoutSocialSummary.startedAt], e só com "Horário do treino" ligado.
  *
  * ## O que a T17.9 acrescentou
  *
@@ -59,11 +59,55 @@ data class WorkoutCheckIn(
      * A tela usa o booleano para não desenhar o que não funciona; o servidor recusa de qualquer
      * forma, porque esconder um botão nunca foi controle de acesso (§72).
      */
-    val canInteract: Boolean = true
+    val canInteract: Boolean = true,
+    /**
+     * O resumo do treino de origem, **já filtrado no servidor** pelas escolhas do autor
+     * (T19.H3 §28/§35). `null` quando o autor não compartilha detalhe nenhum. A tela desenha o
+     * que veio — ela não tem o que esconder, porque o que não foi escolhido não chegou.
+     */
+    val workoutSummary: WorkoutSocialSummary? = null
 ) {
     /** O total de reações que este viewer enxerga. Derivado, nunca enviado pelo servidor. */
     val totalReactions: Int get() = reactions.values.sum()
 }
+
+/**
+ * O que o autor escolheu mostrar do treino que virou este check-in (T19.H3 §28).
+ *
+ * Cada campo corresponde a um interruptor de "Detalhes dos check-ins" e é `null` quando ele está
+ * desligado. Todos os valores foram calculados no servidor a partir da sessão sincronizada — o
+ * app nunca os declara.
+ */
+data class WorkoutSocialSummary(
+    val name: String? = null,
+    /** Início do treino, epoch millis UTC. Só com "Horário do treino". */
+    val startedAt: Long? = null,
+    val durationSeconds: Long? = null,
+    val exerciseCount: Int? = null,
+    val completedSetCount: Int? = null,
+    val totalVolumeKg: Double? = null,
+    val exercises: List<WorkoutSocialExercise>? = null
+) {
+    val isEmpty: Boolean
+        get() = name == null && startedAt == null && durationSeconds == null &&
+            exerciseCount == null && completedSetCount == null && totalVolumeKg == null &&
+            exercises == null
+}
+
+/** Um exercício executado, pelo nome que tinha no dia do treino (um CUSTOM também). */
+data class WorkoutSocialExercise(
+    val name: String,
+    val primaryMuscle: String? = null,
+    /** As séries de trabalho concluídas, em ordem. `null` sem "Séries e repetições". */
+    val sets: List<WorkoutSocialSet>? = null
+)
+
+/** Uma série concluída: repetições **ou** duração; carga só com "Cargas utilizadas". */
+data class WorkoutSocialSet(
+    val reps: Int? = null,
+    val durationSeconds: Int? = null,
+    val weightKg: Double? = null
+)
 
 /**
  * A foto de um check-in, como o Feed a descreve (T17.9 §58/§59).

@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -84,8 +85,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  *
  * ## Sem polling e sem tempo real
  *
- * O placar atualiza ao abrir o desafio ou ao puxar a lista. Não há `WebSocket`, `SSE`, FCM nem
- * atualização periódica — e abrir um desafio **não** dispara sincronização de treino.
+ * O placar atualiza ao abrir o desafio, ao puxar a lista ou no "↻" da barra (T19.H3). Não há
+ * `WebSocket`, `SSE`, FCM nem atualização periódica — e abrir um desafio **não** dispara
+ * sincronização de treino.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,27 +122,45 @@ fun ChallengesScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3 §9: convites novos e placares só aparecem relendo. Ícone e gesto
+                    // chamam o mesmo `refresh()`.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing ||
+                            uiState.listPhase is ChallengeListPhase.Loading,
+                        onRefresh = viewModel::refresh,
+                        enabled = uiState.listPhase !is ChallengeListPhase.NotConfigured &&
+                            uiState.listPhase !is ChallengeListPhase.SignedOut
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
     ) { innerPadding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = viewModel::refresh,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .semantics { contentDescription = CHALLENGES_LIST_DESCRIPTION },
-            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ChallengesBody(
-                uiState = uiState,
-                onOpenChallenge = onOpenChallenge,
-                onCreateChallenge = onCreateChallenge,
-                onAcceptInvite = viewModel::acceptInvite,
-                onDeclineInvite = viewModel::declineInvite,
-                onRetry = viewModel::refresh
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .semantics { contentDescription = CHALLENGES_LIST_DESCRIPTION },
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ChallengesBody(
+                    uiState = uiState,
+                    onOpenChallenge = onOpenChallenge,
+                    onCreateChallenge = onCreateChallenge,
+                    onAcceptInvite = viewModel::acceptInvite,
+                    onDeclineInvite = viewModel::declineInvite,
+                    onRetry = viewModel::refresh
+                )
+            }
         }
     }
 }

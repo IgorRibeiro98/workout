@@ -169,6 +169,117 @@ class ChallengeViewModelTest {
         assertEquals(after, gateway.requestCount)
     }
 
+    // --------------------------------------------------------------------------- T19.H3 refresh
+
+    @Test
+    fun `refresh com a lista na tela nao colapsa para Loading e traz o convite novo`() =
+        runBlocking {
+            gateway.seedChallenge("uid-a", FakeChallengeGateway.challenge())
+            val vm = signedIn("uid-a")
+            vm.open()
+
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            gateway.gate = gate
+            gateway.seedInvite("uid-a", FakeChallengeGateway.invite())
+            vm.refresh()
+
+            // Em voo: a lista continua na tela, e o sinalizador próprio é que está ligado.
+            assertTrue(vm.uiState.value.listPhase is ChallengeListPhase.Ready)
+            assertTrue(vm.uiState.value.isRefreshing)
+
+            gateway.gate = null
+            gate.complete(Unit)
+
+            assertFalse(vm.uiState.value.isRefreshing)
+            assertEquals(1, vm.uiState.value.invites.size)
+        }
+
+    @Test
+    fun `refresh sem rede mantem a ultima lista boa e avisa`() = runBlocking {
+        gateway.seedChallenge("uid-a", FakeChallengeGateway.challenge())
+        val vm = signedIn("uid-a")
+        vm.open()
+
+        gateway.failWith = ChallengeError.NETWORK
+        vm.refresh()
+
+        val state = vm.uiState.value
+        assertEquals(1, (state.listPhase as ChallengeListPhase.Ready).challenges.size)
+        assertEquals(ChallengeError.NETWORK, state.notice)
+        assertFalse(state.isRefreshing)
+    }
+
+    @Test
+    fun `toque duplo no refresh nao dispara uma segunda leitura`() = runBlocking {
+        gateway.seedChallenge("uid-a", FakeChallengeGateway.challenge())
+        val vm = signedIn("uid-a")
+        vm.open()
+        val before = gateway.requestCount
+
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        gateway.gate = gate
+        vm.refresh()
+        vm.refresh()
+        gateway.gate = null
+        gate.complete(Unit)
+
+        // Uma leitura só: lista + convites.
+        assertEquals(before + 2, gateway.requestCount)
+    }
+
+    @Test
+    fun `refresh do placar mantem o desafio na tela e, sem rede, avisa em vez de apagar`() =
+        runBlocking {
+            val challenge = FakeChallengeGateway.challenge()
+            gateway.seedChallenge("uid-a", challenge)
+            val vm = signedIn("uid-a")
+            vm.openChallenge(challenge.challengeId)
+            assertTrue(vm.uiState.value.detailPhase is ChallengeDetailPhase.Ready)
+
+            gateway.failWith = ChallengeError.NETWORK
+            vm.refreshChallenge()
+
+            assertTrue(vm.uiState.value.detailPhase is ChallengeDetailPhase.Ready)
+            assertEquals(ChallengeError.NETWORK, vm.uiState.value.notice)
+            assertFalse(vm.uiState.value.isDetailRefreshing)
+        }
+
+    @Test
+    fun `fechar o desafio no meio do refresh nao deixa o indicador preso`() = runBlocking {
+        val challenge = FakeChallengeGateway.challenge()
+        gateway.seedChallenge("uid-a", challenge)
+        val vm = signedIn("uid-a")
+        vm.openChallenge(challenge.challengeId)
+
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        gateway.gate = gate
+        vm.refreshChallenge()
+        vm.closeChallenge()
+        gateway.gate = null
+        gate.complete(Unit)
+
+        assertFalse(vm.uiState.value.isDetailRefreshing)
+    }
+
+    @Test
+    fun `a resposta de refresh da conta anterior nao escreve na conta nova (H3 44)`() =
+        runBlocking {
+            gateway.seedChallenge("uid-a", FakeChallengeGateway.challenge())
+            val vm = signedIn("uid-a")
+            vm.open()
+
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            gateway.gate = gate
+            vm.refresh()
+            switchTo("uid-b")
+            gateway.gate = null
+            gate.complete(Unit)
+
+            val state = vm.uiState.value
+            assertFalse(state.isRefreshing)
+            assertFalse(state.listPhase is ChallengeListPhase.Ready)
+        }
+
     // --------------------------------------------------------------------------- placar
 
     @Test

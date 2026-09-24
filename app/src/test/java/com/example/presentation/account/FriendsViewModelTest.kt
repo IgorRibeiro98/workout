@@ -638,6 +638,37 @@ class FriendsViewModelTest {
             assertEquals(1, state.incoming.size)
             assertEquals(FriendsPhase.Ready, state.phase)
             assertFalse(state.isRefreshing)
+            // T19.H3 §45: a lista fica, **e** a tela diz que não conseguiu atualizar — antes a
+            // falha era silenciosa, e "nada mudou" parecia "nada novo".
+            assertEquals(FriendError.NETWORK, state.notice)
+        }
+
+    @Test
+    fun `refreshRequests bem-sucedido limpa o aviso da falha anterior`() = runBlocking {
+        val viewModel = signedIn()
+        viewModel.open()
+        gateway.failWith = FriendError.NETWORK
+        viewModel.refreshRequests()
+        assertEquals(FriendError.NETWORK, viewModel.uiState.value.notice)
+
+        gateway.failWith = null
+        viewModel.refreshRequests()
+
+        assertEquals(null, viewModel.uiState.value.notice)
+    }
+
+    @Test
+    fun `refreshRequests e so leitura — nao aceita, nao envia, nao remove nada (H3 46)`() =
+        runBlocking {
+            gateway.seedRequest(requesterUid = jonathas.uid, recipientUid = igor.uid)
+            val viewModel = signedIn()
+            viewModel.open()
+
+            repeat(3) { viewModel.refreshRequests() }
+
+            assertEquals(0, gateway.acceptCalls + gateway.rejectCalls + gateway.cancelCalls)
+            assertEquals(0, gateway.sendCalls + gateway.removeCalls)
+            assertEquals(1, viewModel.uiState.value.incoming.size)
         }
 
     @Test

@@ -41,6 +41,14 @@ sealed interface SocialFeedPhase {
 data class SocialFeedUiState(
     val phase: SocialFeedPhase = SocialFeedPhase.Loading,
     val isRefreshing: Boolean = false,
+    /**
+     * A última atualização falhou e a lista na tela é a última boa (T19.H3 §11/§45).
+     *
+     * Um aviso **ao lado** da lista, e não no lugar dela: sem rede, o Feed que já estava aberto
+     * continua legível, e a frase diz que ele pode estar desatualizado. Some na próxima leitura
+     * bem-sucedida.
+     */
+    val staleNotice: String? = null,
     /** O check-in cuja exclusão está em andamento. Ocupação **por alvo**, nunca um `isLoading`. */
     val deletingCheckInId: String? = null,
     /**
@@ -131,17 +139,26 @@ class SocialFeedViewModel(
         }
     }
 
-    /** Abrir a tela busca. Chamar de novo enquanto uma leitura corre não abre outra. */
+    /**
+     * Abrir a tela busca. Chamar de novo enquanto uma leitura corre não abre outra.
+     *
+     * Voltar ao Feed com a lista já na tela (vindo do detalhe de uma publicação) relê **sem**
+     * trocá-la por "carregando" (T19.H3): as contagens de reação e comentário mudaram por causa
+     * do próprio usuário, e sumir com a lista para mostrá-las seria pior do que atualizar no lugar.
+     */
     fun open() {
         val uid = currentUid() ?: run {
             _uiState.value = SocialFeedUiState(phase = SocialFeedPhase.SignedOut)
             return
         }
         if (_uiState.value.isRefreshing) return
-        load(uid, refreshing = false)
+        load(uid, refreshing = _uiState.value.phase is SocialFeedPhase.Success)
     }
 
-    /** Puxar para atualizar (§92). */
+    /**
+     * Puxar para atualizar (§92) **e** o "↻" da barra (T19.H3 §8): o mesmo método, a mesma
+     * requisição. Só relê o Feed — não publica, não sincroniza treino, não altera check-in.
+     */
     fun refresh() {
         val uid = currentUid() ?: run {
             _uiState.value = SocialFeedUiState(phase = SocialFeedPhase.SignedOut)
@@ -344,9 +361,23 @@ class SocialFeedViewModel(
             // Feed de outra pessoa (§110).
             if (currentUid() != expectedUid) return@launch
 
+            // Com uma lista boa na tela, uma falha **recuperável** não a derruba (T19.H3 §11).
+            // "Saiu da conta" e "Social desativado" derrubam: aí a lista deixou de ser desta tela.
+            val previous = _uiState.value.phase as? SocialFeedPhase.Success
+            if (refreshing && previous != null && outcome is WorkoutCheckInOutcome.Failure &&
+                outcome.error != WorkoutCheckInError.AUTH_REQUIRED &&
+                outcome.error != WorkoutCheckInError.SOCIAL_NOT_ENABLED
+            ) {
+                _uiState.update {
+                    it.copy(isRefreshing = false, staleNotice = staleNoticeFor(outcome.error))
+                }
+                return@launch
+            }
+
             _uiState.update { state ->
                 state.copy(
                     isRefreshing = false,
+                    staleNotice = null,
                     phase = when (outcome) {
                         is WorkoutCheckInOutcome.Success ->
                             SocialFeedPhase.Success(outcome.data)
@@ -367,6 +398,14 @@ class SocialFeedViewModel(
                 )
             }
         }
+    }
+
+    private fun staleNoticeFor(error: WorkoutCheckInError): String = when (error) {
+        WorkoutCheckInError.NETWORK ->
+            "Sem conexão agora — mostrando a última atualização do Feed."
+        WorkoutCheckInError.RATE_LIMITED ->
+            "Muitas atualizações seguidas. Tente em instantes — mostrando a última atualização."
+        else -> "Não foi possível atualizar agora — mostrando a última atualização do Feed."
     }
 
     private fun currentUid(): String? =

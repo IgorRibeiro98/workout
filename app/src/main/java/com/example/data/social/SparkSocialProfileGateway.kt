@@ -4,6 +4,7 @@ import com.example.data.remote.spark.SparkBackendClient
 import com.example.data.remote.spark.SparkHttpOutcome
 import com.example.domain.social.FriendSocialProfile
 import com.example.domain.social.ProgressSharing
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
@@ -70,22 +71,12 @@ class SparkSocialProfileGateway(
         }
 
     override suspend fun updateProgressSharing(
-        shareLevel: Boolean?,
-        shareConsistencyStreak: Boolean?,
-        shareWeeklyWorkoutCount: Boolean?,
-        shareHighlightedAchievements: Boolean?,
+        changes: Map<ProgressSharingField, Boolean>,
         weekTimeZone: String?,
         consistency: SocialConsistencyParameters?
     ): SocialProfileOutcome<ProgressSharing> {
         val body = json.encodeToString(
-            UpdateProgressSharingRequestDto(
-                shareLevel = shareLevel,
-                shareConsistencyStreak = shareConsistencyStreak,
-                shareWeeklyWorkoutCount = shareWeeklyWorkoutCount,
-                shareHighlightedAchievements = shareHighlightedAchievements,
-                weekTimeZone = weekTimeZone,
-                consistency = consistency?.toDto()
-            )
+            UpdateProgressSharingRequestDto.of(changes, weekTimeZone, consistency?.toDto())
         )
         return patch(SocialProfileContract.PROGRESS_SHARING_PATH, body) { response ->
             json.decodeFromString<ProgressSharingResponseDto>(response).toDomain()

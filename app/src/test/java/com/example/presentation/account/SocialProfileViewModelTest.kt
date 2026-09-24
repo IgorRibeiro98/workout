@@ -11,6 +11,8 @@ import com.example.data.social.FakeSocialProfileGateway
 import com.example.domain.auth.AuthOutcome
 import com.example.domain.auth.FakeAuthGateway
 import com.example.domain.auth.SparkAccount
+import com.example.domain.social.isShared
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
@@ -220,6 +222,96 @@ class SocialProfileViewModelTest {
         awaitFriendPhase(viewModel) { it is FriendProfilePhase.Offline }
         Unit
     }
+
+    // ------------------------------------------------------------------ T19.H3 refresh do perfil
+
+    @Test
+    fun `refresh sem rede mantem o perfil do amigo na tela com aviso`() = runBlocking {
+        share(UID_B, level = true)
+        val viewModel = signedIn(accountA)
+        viewModel.openFriendProfile(SOCIAL_B)
+        awaitFriendPhase(viewModel) { it is FriendProfilePhase.Ready }
+
+        gateway.failWith = SocialProfileError.NETWORK
+        viewModel.refreshFriendProfile()
+
+        viewModel.uiState.first { !it.isFriendProfileRefreshing }
+        assertTrue(viewModel.uiState.value.friendPhase is FriendProfilePhase.Ready)
+        assertEquals(SocialProfileError.NETWORK, viewModel.uiState.value.friendStaleNotice)
+    }
+
+    @Test
+    fun `refresh depois de desfazer a amizade substitui a tela — o perfil antigo nao fica`() =
+        runBlocking {
+            share(UID_B, level = true)
+            val viewModel = signedIn(accountA)
+            viewModel.openFriendProfile(SOCIAL_B)
+            awaitFriendPhase(viewModel) { it is FriendProfilePhase.Ready }
+
+            gateway.unfriend(UID_A, UID_B)
+            viewModel.refreshFriendProfile()
+
+            awaitFriendPhase(viewModel) { it is FriendProfilePhase.NotAvailable }
+            assertNull(viewModel.uiState.value.friendStaleNotice)
+        }
+
+    // ------------------------------------------------------------------ T19.H3 compartilhar progresso V3
+
+    @Test
+    fun `os onze interruptores novos comecam desligados`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        val settings = viewModel.uiState.value.settings
+        for (field in ProgressSharingField.entries) {
+            assertFalse("$field nasce desligado", settings.isShared(field))
+        }
+    }
+
+    @Test
+    fun `ligar um detalhe de check-in envia so aquele campo`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        viewModel.setShare(ProgressSharingField.WORKOUT_WEIGHTS, true)
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertEquals(mapOf(ProgressSharingField.WORKOUT_WEIGHTS to true), gateway.sentChanges.last())
+        assertTrue(viewModel.uiState.value.settings.shareWorkoutWeights)
+        assertFalse(viewModel.uiState.value.settings.shareWorkoutSets)
+    }
+
+    @Test
+    fun `offline um detalhe de check-in nao finge ter sido salvo (H3 45)`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        viewModel.openProgressSharing()
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        gateway.failWith = SocialProfileError.NETWORK
+        viewModel.setShare(ProgressSharingField.WORKOUT_TIME, true)
+        awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+        assertFalse(viewModel.uiState.value.settings.shareWorkoutTime)
+        assertFalse(gateway.settingsOf(UID_A).shareWorkoutTime)
+        assertEquals(SocialProfileError.NETWORK, viewModel.uiState.value.notice)
+    }
+
+    @Test
+    fun `refresh das configuracoes nao esconde os interruptores e, sem rede, avisa`() =
+        runBlocking {
+            val viewModel = signedIn(accountA)
+            viewModel.openProgressSharing()
+            awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
+
+            gateway.failWith = SocialProfileError.NETWORK
+            viewModel.refreshProgressSharing()
+            viewModel.uiState.first { !it.isSharingRefreshing }
+
+            assertEquals(ProgressSharingPhase.Ready, viewModel.uiState.value.sharingPhase)
+            assertEquals(SocialProfileError.NETWORK, viewModel.uiState.value.notice)
+        }
 
     // ------------------------------------------------------------------ minhas configurações
 

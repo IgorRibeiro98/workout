@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -143,6 +144,13 @@ fun SquadDetailScreen(
                     }
                 },
                 actions = {
+                    // T19.H3: o feed do Squad muda quando outros membros publicam. O gesto já
+                    // existia; o ↻ é a forma visível dele.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing ||
+                            uiState.phase is SquadDetailPhase.Loading,
+                        onRefresh = viewModel::refresh
+                    )
                     if (uiState.phase is SquadDetailPhase.Success) {
                         SquadOverflowMenu(
                             isOwner = uiState.isOwner,
@@ -187,6 +195,12 @@ fun SquadDetailScreen(
                         onClick = { viewModel.selectTab(SquadDetailTab.MEMBERS) },
                         text = { Text("Membros") }
                     )
+                }
+            }
+
+            uiState.staleNotice?.let { notice ->
+                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    StaleNotice(notice)
                 }
             }
 
@@ -474,6 +488,12 @@ private fun SquadFeedCard(
                         )
                     }
                 }
+            }
+
+            // O mesmo resumo do Feed de amigos (T19.H3): o servidor o monta pelo mesmo projetor,
+            // com as escolhas do autor.
+            checkIn.workoutSummary?.let { summary ->
+                CheckInWorkoutSummaryView(summary = summary, compact = true)
             }
 
             if (photo != null) {

@@ -62,6 +62,8 @@ data class SquadDetailUiState(
     val phase: SquadDetailPhase = SquadDetailPhase.Loading,
     val tab: SquadDetailTab = SquadDetailTab.FEED,
     val isRefreshing: Boolean = false,
+    /** A última atualização falhou; o que está na tela é a última leitura boa (T19.H3 §45). */
+    val staleNotice: String? = null,
     /** As fotos já carregadas, em memória (T17.9 §56; T17.11 §113). */
     val photos: Map<String, ImageBitmap> = emptyMap(),
     /** Os amigos elegíveis para convite — a lista local, filtrada (§137). */
@@ -134,6 +136,9 @@ class SquadDetailViewModel(
     private val checkInGateway: WorkoutCheckInGateway? = null
 ) : ViewModel() {
 
+    /** A geração da última leitura (T19.H3 §47). */
+    private var loadGeneration = 0L
+
     private val _uiState = MutableStateFlow(SquadDetailUiState())
     val uiState: StateFlow<SquadDetailUiState> = _uiState.asStateFlow()
 
@@ -161,15 +166,22 @@ class SquadDetailViewModel(
         }
     }
 
+    /**
+     * Chamado ao entrar na tela. A leitura inicial já saiu no `init`; com ela em voo, nada sai de
+     * novo (antes da T19.H3 a primeira abertura fazia as três requisições duas vezes). Voltar com
+     * o Squad na tela relê sem trocá-lo por "carregando".
+     */
     fun open() {
         val uid = currentUid() ?: run {
             _uiState.value = SquadDetailUiState(phase = SquadDetailPhase.SignedOut)
             return
         }
-        if (_uiState.value.isRefreshing) return
-        load(uid, refreshing = false)
+        val state = _uiState.value
+        if (state.isRefreshing || state.phase is SquadDetailPhase.Loading) return
+        load(uid, refreshing = state.phase is SquadDetailPhase.Success)
     }
 
+    /** O gesto de puxar e o "↻" da barra (T19.H3 §3): o mesmo método, a mesma leitura. */
     fun refresh() {
         val uid = currentUid() ?: return
         if (_uiState.value.isRefreshing) return
@@ -443,40 +455,58 @@ class SquadDetailViewModel(
                 phase = if (refreshing) it.phase else SquadDetailPhase.Loading
             )
         }
+        // A releitura depois de uma mutação substitui uma leitura em voo: só a geração mais nova
+        // escreve (T19.H3 §47).
+        val generation = ++loadGeneration
+        fun stale() = currentUid() != uid || generation != loadGeneration
 
         viewModelScope.launch {
             val detailOutcome = gateway.group(groupId)
-            if (currentUid() != uid) return@launch
+            if (stale()) return@launch
             if (detailOutcome is SocialGroupOutcome.Failure) {
-                _uiState.update { it.copy(isRefreshing = false, phase = phaseFor(detailOutcome.error)) }
+                fail(detailOutcome.error)
                 return@launch
             }
 
             val feedOutcome = gateway.feed(groupId)
-            if (currentUid() != uid) return@launch
+            if (stale()) return@launch
             if (feedOutcome is SocialGroupOutcome.Failure) {
-                _uiState.update { it.copy(isRefreshing = false, phase = phaseFor(feedOutcome.error)) }
+                fail(feedOutcome.error)
                 return@launch
             }
 
             val membersOutcome = gateway.members(groupId)
-            if (currentUid() != uid) return@launch
+            if (stale()) return@launch
             if (membersOutcome is SocialGroupOutcome.Failure) {
-                _uiState.update {
-                    it.copy(isRefreshing = false, phase = phaseFor(membersOutcome.error))
-                }
+                fail(membersOutcome.error)
                 return@launch
             }
 
             _uiState.update {
                 it.copy(
                     isRefreshing = false,
+                    staleNotice = null,
                     phase = SquadDetailPhase.Success(
                         detail = (detailOutcome as SocialGroupOutcome.Success).data,
                         feed = (feedOutcome as SocialGroupOutcome.Success).data,
                         members = (membersOutcome as SocialGroupOutcome.Success).data
                     )
                 )
+            }
+        }
+    }
+
+    /**
+     * Uma falha de leitura. Com o Squad na tela e uma falha recuperável, ele **fica** e o aviso diz
+     * que pode estar desatualizado (T19.H3 §45). Uma falha que muda o que a tela é — o Squad não
+     * existe mais, você saiu, a conta mudou — substitui a fase.
+     */
+    private fun fail(error: SocialGroupError) {
+        _uiState.update {
+            if (it.phase is SquadDetailPhase.Success && error.isRecoverableRead()) {
+                it.copy(isRefreshing = false, staleNotice = staleListNotice(error))
+            } else {
+                it.copy(isRefreshing = false, phase = phaseFor(error))
             }
         }
     }

@@ -6,6 +6,7 @@ import com.example.data.remote.spark.SparkAuthInterceptor
 import com.example.data.remote.spark.SparkBackendClient
 import com.example.domain.auth.AuthTokenProvider
 import com.example.domain.auth.AuthTokenResult
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.SocialFieldAvailability
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileOutcome
@@ -67,7 +68,10 @@ class SparkSocialProfileGatewayTest {
         val sent = mutableListOf<Request>()
         val gateway = gatewayWith(sent, body = sharingJson())
 
-        gateway.updateProgressSharing(shareWeeklyWorkoutCount = true, weekTimeZone = "America/Sao_Paulo")
+        gateway.updateProgressSharing(
+            changes = mapOf(ProgressSharingField.WEEKLY_WORKOUT_COUNT to true),
+            weekTimeZone = "America/Sao_Paulo"
+        )
 
         val body = bodyOf(sent.single())
         assertTrue(body.contains("shareWeeklyWorkoutCount"))
@@ -85,7 +89,7 @@ class SparkSocialProfileGatewayTest {
         val sent = mutableListOf<Request>()
         val gateway = gatewayWith(sent, body = sharingJson())
 
-        gateway.updateProgressSharing(shareLevel = true)
+        gateway.updateProgressSharing(changes = mapOf(ProgressSharingField.LEVEL to true))
 
         val body = bodyOf(sent.single())
         assertTrue(body.contains("shareLevel"))
@@ -94,6 +98,72 @@ class SparkSocialProfileGatewayTest {
         assertFalse(body.contains("shareConsistencyStreak"))
         assertFalse(body.contains("weekTimeZone"))
     }
+
+    // ------------------------------------------------------------------ T19.H3 texto do contrato
+
+    @Test
+    fun `o PATCH de um interruptor V3 e exatamente o campo pedido — o texto, e nao o objeto`() =
+        runBlocking {
+            // PROJECT_RULES §13.27 (T19.H2): contrato de rede ganha teste do **texto**. Um default
+            // omitido ou um nome trocado aqui não aparece em teste que compara objeto Kotlin.
+            for ((field, wire) in listOf(
+                ProgressSharingField.WEEKLY_TRAINING_MINUTES to "shareWeeklyTrainingMinutes",
+                ProgressSharingField.WEEKLY_COMPLETED_SETS to "shareWeeklyCompletedSets",
+                ProgressSharingField.WEEKLY_VOLUME to "shareWeeklyVolume",
+                ProgressSharingField.TOTAL_WORKOUTS to "shareTotalWorkouts",
+                ProgressSharingField.WORKOUT_NAME to "shareWorkoutName",
+                ProgressSharingField.WORKOUT_TIME to "shareWorkoutTime",
+                ProgressSharingField.WORKOUT_DURATION to "shareWorkoutDuration",
+                ProgressSharingField.WORKOUT_EXERCISES to "shareWorkoutExercises",
+                ProgressSharingField.WORKOUT_SETS to "shareWorkoutSets",
+                ProgressSharingField.WORKOUT_WEIGHTS to "shareWorkoutWeights",
+                ProgressSharingField.WORKOUT_VOLUME to "shareWorkoutVolume"
+            )) {
+                val sent = mutableListOf<Request>()
+                gatewayWith(sent, body = sharingJson())
+                    .updateProgressSharing(changes = mapOf(field to false))
+                // `false` também vai: desligar é uma escolha, e não "não mexa".
+                assertEquals("""{"$wire":false}""", bodyOf(sent.single()))
+            }
+        }
+
+    @Test
+    fun `as configuracoes V3 e a disponibilidade nova sao lidas do texto do servidor`() =
+        runBlocking {
+            val gateway = gatewayWith(
+                body = """{"settings":{"shareLevel":false,"shareWorkoutExercises":true,
+                           "shareWorkoutWeights":true,"shareTotalWorkouts":true,"updatedAt":7},
+                           "availability":{"weeklyTrainingMinutes":"AVAILABLE",
+                           "weeklyVolume":"UNAVAILABLE","totalWorkouts":"AVAILABLE"}}"""
+            )
+
+            val sharing = (gateway.progressSharing() as SocialProfileOutcome.Success).value
+            assertTrue(sharing.settings.shareWorkoutExercises)
+            assertTrue(sharing.settings.shareWorkoutWeights)
+            assertTrue(sharing.settings.shareTotalWorkouts)
+            assertFalse(sharing.settings.shareWorkoutSets)
+            assertEquals(SocialFieldAvailability.AVAILABLE, sharing.availability.weeklyTrainingMinutes)
+            assertEquals(SocialFieldAvailability.UNAVAILABLE, sharing.availability.weeklyVolume)
+            // Ausente no JSON (servidor anterior à 0008): o valor conservador, nunca "Disponível".
+            assertEquals(SocialFieldAvailability.UNAVAILABLE, sharing.availability.weeklyCompletedSets)
+        }
+
+    @Test
+    fun `as estatisticas de treino do amigo chegam como vieram — e ausentes continuam nulas`() =
+        runBlocking {
+            val gateway = gatewayWith(
+                body = """{"profile":{"socialId":"$socialId","displayName":"Igor",
+                           "sharedProgress":{"weeklyVolumeKg":6060.5,"totalWorkouts":42}}}"""
+            )
+
+            val progress = (gateway.friendProfile(socialId) as SocialProfileOutcome.Success)
+                .value.sharedProgress
+            assertEquals(6060.5, progress.weeklyVolumeKg!!, 0.0)
+            assertEquals(42, progress.totalWorkouts)
+            assertNull(progress.weeklyTrainingMinutes)
+            assertNull(progress.weeklyCompletedSets)
+            assertFalse(progress.isEmpty)
+        }
 
     @Test
     fun `sem conta nao sai requisicao`() = runBlocking {
@@ -199,7 +269,7 @@ class SparkSocialProfileGatewayTest {
 
         assertEquals(
             SocialProfileOutcome.Failure(SocialProfileError.NETWORK),
-            gateway.updateProgressSharing(shareLevel = true)
+            gateway.updateProgressSharing(changes = mapOf(ProgressSharingField.LEVEL to true))
         )
     }
 

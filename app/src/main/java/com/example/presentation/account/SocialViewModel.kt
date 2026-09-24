@@ -155,25 +155,44 @@ class SocialViewModel(
         }
     }
 
-    /** Relê o perfil no servidor. Leitura pura: não cria e não altera nada. */
+    /**
+     * Relê o perfil no servidor. Leitura pura: não cria e não altera nada.
+     *
+     * É o "↻" do SocialHome e o "tentar de novo" (T19.H3 §6). Com o perfil já conhecido, a tela
+     * **não** volta para "carregando": ela continua mostrando o perfil, o botão gira, e uma falha
+     * mantém o perfil com o aviso ao lado ([SocialPhase.Offline]/[SocialPhase.Error] carregam o
+     * perfil) — a última leitura boa não some por causa de uma rede instável.
+     */
     fun refresh() {
         val uid = currentUid ?: return
-        if (_uiState.value.isBusy) return
-        _uiState.value = _uiState.value.copy(phase = SocialPhase.Loading)
-        load(uid)
+        if (_uiState.value.isBusy || _uiState.value.isRefreshing) return
+        val known = _uiState.value.profile
+        _uiState.value = if (known == null) {
+            _uiState.value.copy(phase = SocialPhase.Loading)
+        } else {
+            _uiState.value.copy(isRefreshing = true)
+        }
+        load(uid, known)
     }
 
-    private fun load(uid: String) {
+    private fun load(uid: String, known: SocialProfile? = null) {
         isReading = true
         viewModelScope.launch {
             val outcome = gateway.profile()
             if (currentUid != uid) return@launch
             isReading = false
+            // Uma mutação (nome, privacidade, desativar) começou enquanto a releitura voava: a
+            // resposta dela é mais nova que esta, e é ela quem escreve o perfil (§47).
+            if (known != null && _uiState.value.isBusy) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+                return@launch
+            }
             _uiState.value = _uiState.value.copy(
+                isRefreshing = false,
                 phase = when (outcome) {
                     is SocialOutcome.Success -> SocialPhase.Active(outcome.profile)
                     SocialOutcome.NotEnabled -> SocialPhase.NotEnabled
-                    is SocialOutcome.Failure -> failurePhase(outcome.error, profile = null)
+                    is SocialOutcome.Failure -> failurePhase(outcome.error, profile = known)
                 }
             )
         }

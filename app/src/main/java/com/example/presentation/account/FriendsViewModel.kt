@@ -66,6 +66,16 @@ class FriendsViewModel(
     /** A conta da qual o estado atual fala. `null` = nenhuma. */
     private var currentUid: String? = null
 
+    /**
+     * A geração da última leitura das listas (T19.H3 §47).
+     *
+     * Um refresh manual e a releitura depois de um aceite podem estar em voo ao mesmo tempo, e a
+     * resposta que chega por último não é necessariamente a mais nova. Cada leitura pega um número;
+     * só a do número mais alto escreve. É o mesmo raciocínio do `uid` capturado antes do voo, para
+     * o eixo "qual leitura" em vez de "qual conta".
+     */
+    private var readGeneration = 0L
+
     /** O leitor de QR, instalado pela tela — que é quem tem `Context`. */
     private var scanner: (suspend () -> QrScan)? = null
 
@@ -129,10 +139,11 @@ class FriendsViewModel(
     }
 
     private suspend fun load(uid: String) {
+        val generation = ++readGeneration
         val friendsResult = gateway.friends()
         val incomingResult = gateway.incomingRequests()
         val outgoingResult = gateway.outgoingRequests()
-        if (currentUid != uid) return
+        if (currentUid != uid || generation != readGeneration) return
 
         val failure = listOf(friendsResult, incomingResult, outgoingResult)
             .firstNotNullOfOrNull { it as? FriendOutcome.Failure }
@@ -156,7 +167,8 @@ class FriendsViewModel(
     }
 
     /**
-     * Releitura manual pedida pelo usuário sobre a tela de Solicitações (H1.3).
+     * Releitura manual pedida pelo usuário — o "↻" e o pull-to-refresh de Amigos, Solicitações e
+     * do SocialHome (H1.3, T19.H3 §6/§7/§9).
      *
      * Uma nova solicitação recebida enquanto a tela já está [FriendsPhase.Ready] só aparecia
      * antes reiniciando o app: [open] é idempotente por desenho (§113) e não existe nenhum outro
@@ -164,19 +176,27 @@ class FriendsViewModel(
      * recusar/cancelar um pedido — e não [refresh], que colapsaria a tela para
      * [FriendsPhase.Loading] e esconderia a lista atual enquanto a resposta não chega.
      *
-     * Sem polling, sem WebSocket: só o mesmo `GET` de sempre, sob demanda.
+     * Uma falha **não** apaga a última lista boa (§45): ela continua na tela, e o aviso diz que
+     * não foi possível atualizar. Sem polling, sem WebSocket: só o mesmo `GET` de sempre, sob
+     * demanda.
      */
     fun refreshRequests() {
         val uid = currentUid ?: return
         if (_uiState.value.isRefreshing) return
+        // A primeira leitura ainda está em voo: um segundo pedido só competiria com ela.
+        if (_uiState.value.phase is FriendsPhase.Loading) return
 
-        _uiState.value = _uiState.value.copy(isRefreshing = true)
+        _uiState.value = _uiState.value.copy(isRefreshing = true, notice = null)
         viewModelScope.launch {
-            reload(uid)
+            val failure = reload(uid)
             // Se a conta trocou durante a releitura, o estado já foi substituído por inteiro em
             // onAccountChanged — não há `isRefreshing` desta conta para desligar.
             if (currentUid == uid) {
-                _uiState.value = _uiState.value.copy(isRefreshing = false)
+                _uiState.value = _uiState.value.copy(
+                    isRefreshing = false,
+                    // Só quando havia lista a preservar: sem ela, a própria fase diz o que houve.
+                    notice = failure?.takeIf { _uiState.value.phase is FriendsPhase.Ready }
+                )
             }
         }
     }
@@ -421,17 +441,19 @@ class FriendsViewModel(
     // --------------------------------------------------------------------------- comum
 
     /**
-     * Releitura silenciosa depois de uma mutação.
+     * Releitura silenciosa depois de uma mutação, e a do refresh manual.
      *
      * Sem passar por [FriendsPhase.Loading]: a lista já está na tela e sumir por meio segundo a
      * cada aceite seria pior do que atualizar no lugar. Uma falha aqui também não derruba a tela
-     * — o que ela mostra continua sendo a última leitura boa.
+     * — o que ela mostra continua sendo a última leitura boa. Devolve a primeira falha, ou `null`
+     * quando as três leituras deram certo (ou quando a resposta ficou velha e foi descartada).
      */
-    private suspend fun reload(uid: String) {
+    private suspend fun reload(uid: String): FriendError? {
+        val generation = ++readGeneration
         val friendsResult = gateway.friends()
         val incomingResult = gateway.incomingRequests()
         val outgoingResult = gateway.outgoingRequests()
-        if (currentUid != uid) return
+        if (currentUid != uid || generation != readGeneration) return null
 
         val friends = (friendsResult as? FriendOutcome.Success)?.value
         val incoming = (incomingResult as? FriendOutcome.Success)?.value
@@ -445,6 +467,8 @@ class FriendsViewModel(
             incomingCount = incoming?.total ?: _uiState.value.incomingCount,
             outgoing = outgoing?.items ?: _uiState.value.outgoing
         )
+        return listOf(friendsResult, incomingResult, outgoingResult)
+            .firstNotNullOfOrNull { (it as? FriendOutcome.Failure)?.error }
     }
 
     /** O estado local ficou velho: outro aparelho ou a outra pessoa mudou algo antes. */

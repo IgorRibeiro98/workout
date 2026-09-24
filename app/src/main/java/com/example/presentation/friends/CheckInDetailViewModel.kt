@@ -71,7 +71,9 @@ data class CheckInDetailUiState(
     val isReacting: Boolean = false,
     /** O comentário cuja exclusão está em andamento. Ocupação **por alvo**. */
     val deletingCommentId: String? = null,
-    val notice: String? = null
+    val notice: String? = null,
+    /** O "↻" está relendo a publicação e os comentários, com eles na tela (T19.H3). */
+    val isRefreshing: Boolean = false
 ) {
     val draftRemaining: Int
         get() = WorkoutCheckInContract.Limits.MAX_COMMENT_LENGTH -
@@ -121,6 +123,9 @@ class CheckInDetailViewModel(
     private val authGateway: AuthGateway,
     private val mediaCache: SocialMediaCache? = null
 ) : ViewModel() {
+
+    /** A geração da última leitura (T19.H3 §47): só a mais nova escreve. */
+    private var loadGeneration = 0L
 
     private val _uiState = MutableStateFlow(CheckInDetailUiState())
     val uiState: StateFlow<CheckInDetailUiState> = _uiState.asStateFlow()
@@ -194,10 +199,18 @@ class CheckInDetailViewModel(
         load(checkInId, context, uid)
     }
 
+    /**
+     * O "↻" da barra e o "tentar de novo" (T19.H3): relê a publicação e os comentários.
+     *
+     * Um toque durante a releitura é ignorado. Com a publicação na tela, ela fica enquanto a
+     * releitura voa, e uma falha recuperável a mantém — com os comentários que já estavam lá.
+     */
     fun refresh() {
         val uid = currentUid() ?: return
         val state = _uiState.value
         val checkInId = state.checkInId.takeIf { it.isNotBlank() } ?: return
+        if (state.isRefreshing) return
+        _uiState.update { it.copy(isRefreshing = true) }
         load(checkInId, state.context, uid)
     }
 
@@ -395,28 +408,46 @@ class CheckInDetailViewModel(
         context: InteractionContext,
         expectedUid: String
     ) {
+        val generation = ++loadGeneration
+        fun stale() =
+            !isStillTargeting(expectedUid, checkInId, context) || generation != loadGeneration
+
         viewModelScope.launch {
             val checkIn = gateway.checkIn(checkInId, context)
-            if (!isStillTargeting(expectedUid, checkInId, context)) return@launch
+            if (stale()) return@launch
 
+            val previous = _uiState.value.phase as? CheckInDetailPhase.Success
             when (checkIn) {
                 is WorkoutCheckInOutcome.Success -> {
                     val comments = gateway.comments(checkInId, context = context)
-                    if (!isStillTargeting(expectedUid, checkInId, context)) return@launch
+                    if (stale()) return@launch
 
-                    val items = (comments as? WorkoutCheckInOutcome.Success)?.data ?: emptyList()
+                    // Uma falha só nos comentários não os apaga da tela (T19.H3 §45): antes, um
+                    // refresh sem rede para eles esvaziava a conversa que estava sendo lida.
+                    val items = (comments as? WorkoutCheckInOutcome.Success)?.data
+                        ?: previous?.comments
+                        ?: emptyList()
                     _uiState.update {
                         it.copy(
                             checkInId = checkInId,
+                            isRefreshing = false,
                             phase = CheckInDetailPhase.Success(checkIn.data, items)
                         )
                     }
                     checkIn.data.media?.let { media -> loadPhoto(media.mediaId, expectedUid) }
                 }
 
-                is WorkoutCheckInOutcome.Failure -> _uiState.update {
+                is WorkoutCheckInOutcome.Failure -> if (previous != null && checkIn.error.isRecoverableRead()) {
+                    _uiState.update {
+                        it.copy(
+                            isRefreshing = false,
+                            notice = "Não foi possível atualizar agora — mostrando a última atualização."
+                        )
+                    }
+                } else _uiState.update {
                     it.copy(
                         checkInId = checkInId,
+                        isRefreshing = false,
                         phase = when (checkIn.error) {
                             WorkoutCheckInError.NETWORK -> CheckInDetailPhase.Offline
                             WorkoutCheckInError.AUTH_REQUIRED -> CheckInDetailPhase.SignedOut
@@ -480,3 +511,9 @@ class CheckInDetailViewModel(
     private fun currentUid(): String? =
         (authGateway.state.value as? AuthState.SignedIn)?.account?.uid
 }
+
+/** Falhas que não dizem nada sobre a publicação — só que ela não pôde ser relida agora. */
+internal fun WorkoutCheckInError.isRecoverableRead(): Boolean =
+    this == WorkoutCheckInError.NETWORK ||
+        this == WorkoutCheckInError.UNAVAILABLE ||
+        this == WorkoutCheckInError.RATE_LIMITED

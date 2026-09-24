@@ -28,8 +28,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.social.SocialProfileStatus
 import com.example.presentation.account.FriendsViewModel
+import com.example.presentation.account.SocialPhase
 import com.example.presentation.account.SocialSection
 import com.example.presentation.account.SocialViewModel
+import com.example.presentation.friends.SocialRefreshAction
 import com.example.ui.theme.BackgroundDark
 import com.example.ui.theme.TextPrimary
 
@@ -101,6 +103,22 @@ fun SocialHomeScreen(
                             tint = TextPrimary
                         )
                     }
+                },
+                actions = {
+                    // T19.H3 §6: voltar ao SocialHome não relê nada (`open()` é idempotente). O ↻
+                    // é o pedido explícito: o perfil e, com ele ativo, o resumo do grafo — duas
+                    // leituras, nenhuma mutação.
+                    SocialRefreshAction(
+                        isRefreshing = socialState.isRefreshing ||
+                            socialState.phase is SocialPhase.Loading ||
+                            friendsState?.isRefreshing == true,
+                        onRefresh = {
+                            socialViewModel.refresh()
+                            if (isSocialActive) friendsViewModel?.refreshRequests()
+                        },
+                        enabled = socialState.phase !is SocialPhase.NotConfigured &&
+                            socialState.phase !is SocialPhase.SignedOut
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )

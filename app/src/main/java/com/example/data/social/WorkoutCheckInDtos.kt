@@ -6,6 +6,9 @@ import com.example.domain.social.ReactionType
 import com.example.domain.social.SocialCheckInAuthor
 import com.example.domain.social.UploadedCheckInMedia
 import com.example.domain.social.WorkoutCheckIn
+import com.example.domain.social.WorkoutSocialExercise
+import com.example.domain.social.WorkoutSocialSet
+import com.example.domain.social.WorkoutSocialSummary
 import kotlinx.serialization.Serializable
 
 /**
@@ -85,7 +88,9 @@ internal data class WorkoutCheckInDto(
      * condição de aparecer. Um default `false` faria um app novo esconder as ações de interação
      * contra um servidor antigo, que é uma regressão silenciosa e difícil de rastrear.
      */
-    val canInteract: Boolean = true
+    val canInteract: Boolean = true,
+    /** T19.H3 — ausente quando o autor não compartilha detalhe nenhum (ou servidor anterior). */
+    val workoutSummary: WorkoutSocialSummaryDto? = null
 ) {
     /** `null` quando a resposta não descreve um check-in íntegro — o gateway trata como recusa. */
     fun toDomainOrNull(): WorkoutCheckIn? {
@@ -102,10 +107,66 @@ internal data class WorkoutCheckInDto(
             currentUserReaction = ReactionType.fromWire(currentUserReaction),
             commentCount = commentCount,
             isCurrentUser = isCurrentUser,
-            canInteract = canInteract
+            canInteract = canInteract,
+            workoutSummary = workoutSummary?.toDomainOrNull()
         )
     }
 }
+
+/**
+ * O resumo do treino de origem, como o servidor o publica (T19.H3 §28).
+ *
+ * Todo campo é nulável e sem default numérico: o servidor **omite** o que o autor não compartilha,
+ * e um `Int = 0` aqui transformaria "não compartilhado" em "zero séries". Não há `syncId`, `localId`
+ * nem identificador nenhum — o resumo descreve o treino, não o aponta.
+ */
+@Serializable
+internal data class WorkoutSocialSummaryDto(
+    val name: String? = null,
+    val startedAt: Long? = null,
+    val durationSeconds: Long? = null,
+    val exerciseCount: Int? = null,
+    val completedSetCount: Int? = null,
+    val totalVolumeKg: Double? = null,
+    val exercises: List<WorkoutSocialExerciseDto>? = null
+) {
+    /** `null` quando não sobra nada a mostrar — o card fica igual ao de um check-in sem resumo. */
+    fun toDomainOrNull(): WorkoutSocialSummary? {
+        val summary = WorkoutSocialSummary(
+            name = name?.takeIf { it.isNotBlank() },
+            startedAt = startedAt?.takeIf { it > 0 },
+            durationSeconds = durationSeconds?.takeIf { it >= 0 },
+            exerciseCount = exerciseCount?.takeIf { it >= 0 },
+            completedSetCount = completedSetCount?.takeIf { it >= 0 },
+            totalVolumeKg = totalVolumeKg?.takeIf { it >= 0 },
+            exercises = exercises?.mapNotNull { it.toDomainOrNull() }
+        )
+        return summary.takeUnless { it.isEmpty }
+    }
+}
+
+@Serializable
+internal data class WorkoutSocialExerciseDto(
+    val name: String = "",
+    val primaryMuscle: String? = null,
+    val sets: List<WorkoutSocialSetDto>? = null
+) {
+    fun toDomainOrNull(): WorkoutSocialExercise? {
+        if (name.isBlank()) return null
+        return WorkoutSocialExercise(
+            name = name,
+            primaryMuscle = primaryMuscle?.takeIf { it.isNotBlank() },
+            sets = sets?.map { WorkoutSocialSet(it.reps, it.durationSeconds, it.weightKg) }
+        )
+    }
+}
+
+@Serializable
+internal data class WorkoutSocialSetDto(
+    val reps: Int? = null,
+    val durationSeconds: Int? = null,
+    val weightKg: Double? = null
+)
 
 @Serializable
 internal data class SocialFeedDto(

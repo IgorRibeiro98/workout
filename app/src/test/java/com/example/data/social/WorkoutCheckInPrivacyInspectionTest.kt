@@ -64,17 +64,22 @@ class WorkoutCheckInPrivacyInspectionTest {
     // ------------------------------------------------------------------ o DTO não carrega treino
 
     @Test
-    fun `nenhum tipo do check-in declara dado de treino ou identidade privada`() {
+    fun `nenhum tipo do check-in declara identidade privada nem dado pessoal de treino`() {
         // O servidor também não envia nada disso. Declarar aqui seria o primeiro passo para
         // alguém decidir que "seria útil se ele mandasse".
+        //
+        // T19.H3 — o que **saiu** desta lista foi só o que o resumo de treino passou a publicar
+        // por escolha do autor (nome, horário, duração, exercícios, séries, cargas, volume), e só
+        // dentro dos três tipos do resumo — ver o teste seguinte. O que continua proibido em
+        // qualquer tipo, com ou sem escolha, é o que está aqui.
         val forbidden = listOf(
             // Identidade privada — a fronteira da T17.0, intocada.
             "ownerUid", "authorUid", "firebaseUid", "email", "friendCode",
-            "sourceSessionSyncId",
-            // Dado de treino — a fronteira da T17.8, intocada.
-            "startedAt", "finishedAt", "workoutId", "templateId", "templateName", "programId",
-            "exercises", "sets", "reps", "repetitions", "load", "weight",
-            "duration", "durationMinutes", "volume", "notes", "measurements",
+            "sourceSessionSyncId", "templateSyncId", "syncId", "localId", "canonicalId",
+            // Dado de treino que nenhuma escolha publica (T19.H3 §27).
+            "finishedAt", "workoutId", "templateId", "programId", "notes", "measurements",
+            "rpe", "rir", "machineLabel", "machineLabelSnapshot", "replacementReason",
+            "bodyWeight", "bodyFat", "personalRecord",
             // T17.9 — a foto entra por `mediaId`, e **nunca** por URL nem por bytes embutidos
             // (§59/§133/§134). `videoUrl` continua fora porque vídeo continua fora de escopo (§3).
             "photoUrl", "imageUrl", "mediaUrl", "videoUrl", "storageKey", "contentHash",
@@ -91,6 +96,44 @@ class WorkoutCheckInPrivacyInspectionTest {
             }
         }
         assertEquals(emptyList<String>(), offenders)
+    }
+
+    @Test
+    fun `dado de treino so existe dentro do resumo, e o resumo tem exatamente os campos autorizados`() {
+        // T19.H3 §28–§31: cada campo corresponde a um interruptor do autor, e o servidor omite o
+        // que não foi escolhido. A lista é fechada — um campo novo aqui é uma decisão de
+        // privacidade, e precisa passar por este teste, pelo contrato e pela tela de escolhas.
+        assertEquals(
+            listOf(
+                "name",
+                "startedAt",
+                "durationSeconds",
+                "exerciseCount",
+                "completedSetCount",
+                "totalVolumeKg",
+                "exercises"
+            ),
+            declaredFields("WorkoutSocialSummaryDto")
+        )
+        assertEquals(listOf("name", "primaryMuscle", "sets"), declaredFields("WorkoutSocialExerciseDto"))
+        assertEquals(listOf("reps", "durationSeconds", "weightKg"), declaredFields("WorkoutSocialSetDto"))
+
+        // E fora dele, nenhum outro tipo de check-in ganhou campo de treino.
+        val trainingFields = listOf(
+            "startedAt", "durationSeconds", "exercises", "sets", "reps", "repetitions",
+            "weight", "weightKg", "volume", "totalVolumeKg", "exerciseCount", "completedSetCount"
+        )
+        for (type in listOf(
+            "WorkoutCheckInDto",
+            "WorkoutCheckInAuthorDto",
+            "WorkoutCheckInMediaDto",
+            "CheckInCommentDto",
+            "UploadedMediaDto",
+            "CreateWorkoutCheckInRequestDto"
+        )) {
+            val leaked = declaredFields(type).filter { it in trainingFields }
+            assertEquals("$type não pode declarar dado de treino", emptyList<String>(), leaked)
+        }
     }
 
     @Test
@@ -113,7 +156,10 @@ class WorkoutCheckInPrivacyInspectionTest {
                 // T17.11 §70 — se **este** viewer pode reagir e comentar. Booleano derivado da
                 // política de acesso do servidor: não carrega identidade nem dado de treino, e é
                 // o que mantém "membro só de Squad não interage" visível para a tela.
-                "canInteract"
+                "canInteract",
+                // T19.H3 §28 — o resumo do treino, já filtrado no servidor pelas escolhas do
+                // autor. Os campos dele têm a própria lista fechada (teste acima).
+                "workoutSummary"
             ),
             declared
         )
@@ -168,7 +214,11 @@ class WorkoutCheckInPrivacyInspectionTest {
             "SocialFeedDto",
             "CheckInCommentDto",
             "CheckInCommentsDto",
-            "UploadedMediaDto"
+            "UploadedMediaDto",
+            // T19.H3 — o resumo descreve o treino, e não o aponta.
+            "WorkoutSocialSummaryDto",
+            "WorkoutSocialExerciseDto",
+            "WorkoutSocialSetDto"
         )) {
             assertEquals(
                 "$responseType não pode declarar sessionSyncId",
@@ -319,6 +369,24 @@ class WorkoutCheckInPrivacyInspectionTest {
             }
         }
         assertEquals(emptyList<String>(), offenders)
+    }
+
+    @Test
+    fun `o resumo de treino do card so formata o que o servidor mandou (T19H3)`() {
+        // O resumo é server-authoritative (§21/§35): a tela recebe valores prontos e os formata.
+        // Se este arquivo passasse a ler Room, calcular volume ou olhar o snapshot local do treino,
+        // o card mostraria o que o **aparelho** acha — e não o que o autor autorizou o servidor a
+        // publicar, filtrado pela escolha dele.
+        val summaryView = source("app/src/main/java/com/example/presentation/friends/CheckInWorkoutSummary.kt")
+        assertTrue(summaryView.isFile)
+        val code = AuthSourceInspection.code(summaryView)
+        for (term in listOf(
+            "AppDatabase", "WorkoutDao", "androidx.room", "SetLogEntity", "ExerciseSession",
+            "VolumeCalculator", "PerformanceCalculator", "templateNameSnapshot",
+            "exerciseNameSnapshot", "SyncEntityType", "isShared(", "shareWorkout"
+        )) {
+            assertEquals("CheckInWorkoutSummary.kt não pode usar '$term'", false, code.contains(term))
+        }
     }
 
     @Test

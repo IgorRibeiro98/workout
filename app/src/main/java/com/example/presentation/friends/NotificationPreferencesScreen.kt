@@ -24,6 +24,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -92,6 +93,14 @@ fun NotificationPreferencesScreen(
                         )
                     }
                 },
+                actions = {
+                    SocialRefreshAction(
+                        isRefreshing = uiState is NotificationPreferencesUiState.Loading ||
+                            (uiState as? NotificationPreferencesUiState.Loaded)?.isRefreshing == true,
+                        onRefresh = viewModel::refresh,
+                        enabled = uiState !is NotificationPreferencesUiState.SignedOut
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = BackgroundDark
                 )
@@ -143,6 +152,10 @@ fun NotificationPreferencesScreen(
                             color = TextSecondary,
                             fontSize = 15.sp
                         )
+                        // Antes da T19.H3 esta tela não tinha saída: o erro ficava até reabrir.
+                        TextButton(onClick = viewModel::refresh) {
+                            Text("Tentar de novo", color = Lime400)
+                        }
                     }
                 }
                 is NotificationPreferencesUiState.Loaded -> {

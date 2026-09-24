@@ -123,7 +123,17 @@ data class ChallengeUiState(
      * Ele **não** substitui a fase: uma ação que falhou não derruba a tela que já estava carregada
      * — o que estava lido continua válido, e o aviso explica o que não aconteceu.
      */
-    val notice: ChallengeError? = null
+    val notice: ChallengeError? = null,
+
+    /**
+     * Uma releitura da lista pedida pelo usuário ("↻" ou gesto) está em voo, **com a lista na
+     * tela** (T19.H3 §9). Separado de [ChallengeListPhase.Loading]: a primeira carga não tem o que
+     * mostrar; uma atualização tem, e não pode escondê-lo.
+     */
+    val isRefreshing: Boolean = false,
+
+    /** O mesmo, para o placar do desafio aberto. */
+    val isDetailRefreshing: Boolean = false
 ) {
     val isCreating: Boolean get() = creationPhase is ChallengeCreationPhase.Submitting
 

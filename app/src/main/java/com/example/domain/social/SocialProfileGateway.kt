@@ -51,7 +51,7 @@ interface SocialProfileGateway {
     suspend fun progressSharing(): SocialProfileOutcome<ProgressSharing>
 
     /**
-     * Altera o que eu compartilho. Parcial: `null` significa "não mexa neste campo".
+     * Altera o que eu compartilho. Parcial: um campo fora de [changes] não é mexido.
      *
      * [weekTimeZone] é o fuso do aparelho, e não uma escolha do usuário: ele existe para que a
      * semana do servidor seja a mesma semana da tela de consistência. Ele não é progresso — é o
@@ -62,10 +62,7 @@ interface SocialProfileGateway {
      * envia sequência, nível, XP nem conquista — e não existe parâmetro aqui que os aceite.
      */
     suspend fun updateProgressSharing(
-        shareLevel: Boolean? = null,
-        shareConsistencyStreak: Boolean? = null,
-        shareWeeklyWorkoutCount: Boolean? = null,
-        shareHighlightedAchievements: Boolean? = null,
+        changes: Map<ProgressSharingField, Boolean> = emptyMap(),
         weekTimeZone: String? = null,
         consistency: SocialConsistencyParameters? = null
     ): SocialProfileOutcome<ProgressSharing>

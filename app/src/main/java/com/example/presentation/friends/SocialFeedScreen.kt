@@ -163,6 +163,13 @@ fun SocialFeedScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3 §8: o gesto continua; o ↻ é a forma visível dele. Mesmo método.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing,
+                        onRefresh = viewModel::refresh
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
@@ -232,10 +239,15 @@ private fun SocialFeedBody(
         )
 
         is SocialFeedPhase.Success -> if (phase.items.isEmpty()) {
-            CenteredMessage(
-                title = SOCIAL_FEED_EMPTY_MESSAGE,
-                detail = "Ao concluir um treino, você pode escolher compartilhar um check-in."
-            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                uiState.staleNotice?.let { notice ->
+                    Box(modifier = Modifier.padding(16.dp)) { StaleNotice(notice) }
+                }
+                CenteredMessage(
+                    title = SOCIAL_FEED_EMPTY_MESSAGE,
+                    detail = "Ao concluir um treino, você pode escolher compartilhar um check-in."
+                )
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -244,6 +256,9 @@ private fun SocialFeedBody(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                uiState.staleNotice?.let { notice ->
+                    item(key = "stale-notice") { StaleNotice(notice) }
+                }
                 items(phase.items, key = { it.checkInId }) { checkIn ->
                     CheckInCard(
                         checkIn = checkIn,
@@ -376,6 +391,12 @@ private fun CheckInCard(
                         }
                     }
                 }
+            }
+
+            // O resumo do treino (T19.H3), quando o autor escolheu compartilhar algum detalhe.
+            // Compacto no Feed; o detalhe da publicação mostra série por série.
+            checkIn.workoutSummary?.let { summary ->
+                CheckInWorkoutSummaryView(summary = summary, compact = true)
             }
 
             // A foto (§119). O espaço é reservado pelas dimensões que vieram no DTO, então a
@@ -543,6 +564,28 @@ internal fun ReactionBar(
             )
             Text(text = "$commentCount", color = TextSecondary, fontSize = 13.sp)
         }
+    }
+}
+
+/**
+ * "Mostrando a última atualização" — a lista boa continua embaixo (T19.H3 §11/§45).
+ *
+ * Compartilhado com Squads e Solicitações: a mesma frase para o mesmo fato em qualquer lista
+ * social que não conseguiu se atualizar.
+ */
+@Composable
+internal fun StaleNotice(message: String) {
+    Surface(
+        color = SurfaceHighlight,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = message,
+            color = TextSecondary,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        )
     }
 }
 

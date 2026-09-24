@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthState
 import com.example.domain.social.ProgressSharing
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
@@ -132,13 +133,24 @@ class SocialProfileViewModel(
         viewModelScope.launch { loadFriendProfile(uid, socialId) }
     }
 
-    /** Relê o perfil aberto. É por aqui que "desfizeram a amizade" e "mudou a privacidade" aparecem. */
+    /**
+     * Relê o perfil aberto. É por aqui que "desfizeram a amizade" e "mudou a privacidade" aparecem.
+     *
+     * O "↻" da barra (T19.H3): com o perfil na tela, ele fica enquanto a releitura voa. Uma falha
+     * de rede mantém a última leitura boa com um aviso; uma resposta que muda o que a tela é —
+     * "perfil indisponível" depois de desfazer a amizade ou bloquear — substitui a tela, sempre.
+     */
     fun refreshFriendProfile() {
         val uid = currentUid ?: return
         val socialId = _uiState.value.openedSocialId ?: return
-        if (_uiState.value.friendPhase is FriendProfilePhase.Loading) return
+        val state = _uiState.value
+        if (state.friendPhase is FriendProfilePhase.Loading || state.isFriendProfileRefreshing) return
 
-        _uiState.value = _uiState.value.copy(friendPhase = FriendProfilePhase.Loading)
+        _uiState.value = if (state.friendPhase.showsProfile()) {
+            state.copy(isFriendProfileRefreshing = true, friendStaleNotice = null)
+        } else {
+            state.copy(friendPhase = FriendProfilePhase.Loading, friendStaleNotice = null)
+        }
         viewModelScope.launch { loadFriendProfile(uid, socialId) }
     }
 
@@ -146,7 +158,9 @@ class SocialProfileViewModel(
     fun closeFriendProfile() {
         _uiState.value = _uiState.value.copy(
             openedSocialId = null,
-            friendPhase = FriendProfilePhase.Idle
+            friendPhase = FriendProfilePhase.Idle,
+            isFriendProfileRefreshing = false,
+            friendStaleNotice = null
         )
     }
 
@@ -156,7 +170,20 @@ class SocialProfileViewModel(
         // sobrescrever o estado novo.
         if (currentUid != uid || _uiState.value.openedSocialId != socialId) return
 
+        val state = _uiState.value
+        if (outcome is SocialProfileOutcome.Failure && state.friendPhase.showsProfile() &&
+            outcome.error.isRecoverableRead()
+        ) {
+            _uiState.value = state.copy(
+                isFriendProfileRefreshing = false,
+                friendStaleNotice = outcome.error
+            )
+            return
+        }
+
         _uiState.value = _uiState.value.copy(
+            isFriendProfileRefreshing = false,
+            friendStaleNotice = null,
             friendPhase = when (outcome) {
                 is SocialProfileOutcome.Success -> {
                     val profile = outcome.value
@@ -180,19 +207,35 @@ class SocialProfileViewModel(
         refreshProgressSharing()
     }
 
-    /** Relê minhas configurações e a disponibilidade de cada campo. */
+    /**
+     * Relê minhas configurações e a disponibilidade de cada campo — o "↻" da barra e o "tentar de
+     * novo" (T19.H3).
+     *
+     * Com os interruptores na tela, eles ficam enquanto a releitura voa, e uma falha os mantém
+     * com um aviso: ler de novo não pode fazer uma tela de privacidade "esquecer" o que mostrava.
+     */
     fun refreshProgressSharing() {
         val uid = currentUid ?: return
-        if (_uiState.value.isSharingBusy) return
+        val state = _uiState.value
+        if (state.isSharingBusy || state.isSharingRefreshing) return
 
-        _uiState.value = _uiState.value.copy(
-            sharingPhase = ProgressSharingPhase.Loading,
-            notice = null
-        )
+        val showing = state.sharingPhase is ProgressSharingPhase.Ready
+        _uiState.value = if (showing) {
+            state.copy(isSharingRefreshing = true, notice = null)
+        } else {
+            state.copy(sharingPhase = ProgressSharingPhase.Loading, notice = null)
+        }
         viewModelScope.launch {
             val outcome = gateway.progressSharing()
             if (currentUid != uid) return@launch
-            applySharing(outcome, busyPhase = ProgressSharingPhase.Loading)
+            _uiState.value = _uiState.value.copy(isSharingRefreshing = false)
+            // Um interruptor foi tocado enquanto a leitura voava: a resposta do `PATCH` é mais
+            // nova que esta, e é ela quem escreve (T19.H3 §47).
+            if (showing && _uiState.value.sharingPhase is ProgressSharingPhase.Saving) return@launch
+            applySharing(
+                outcome,
+                busyPhase = if (showing) ProgressSharingPhase.Saving else ProgressSharingPhase.Loading
+            )
             if (outcome is SocialProfileOutcome.Success) {
                 alignConsistencyParameters(uid, outcome.value.settings.consistency)
             }
@@ -250,21 +293,27 @@ class SocialProfileViewModel(
      * Ele não é escolha do usuário — é o fuso do aparelho, e o servidor precisa dele para usar a
      * **mesma** semana que a tela de consistência usa.
      */
-    fun setShareLevel(enabled: Boolean) = update(shareLevel = enabled)
+    fun setShareLevel(enabled: Boolean) = setShare(ProgressSharingField.LEVEL, enabled)
 
-    fun setShareConsistencyStreak(enabled: Boolean) = update(shareConsistencyStreak = enabled)
+    fun setShareConsistencyStreak(enabled: Boolean) =
+        setShare(ProgressSharingField.CONSISTENCY_STREAK, enabled)
 
-    fun setShareWeeklyWorkoutCount(enabled: Boolean) = update(shareWeeklyWorkoutCount = enabled)
+    fun setShareWeeklyWorkoutCount(enabled: Boolean) =
+        setShare(ProgressSharingField.WEEKLY_WORKOUT_COUNT, enabled)
 
     fun setShareHighlightedAchievements(enabled: Boolean) =
-        update(shareHighlightedAchievements = enabled)
+        setShare(ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS, enabled)
 
-    private fun update(
-        shareLevel: Boolean? = null,
-        shareConsistencyStreak: Boolean? = null,
-        shareWeeklyWorkoutCount: Boolean? = null,
-        shareHighlightedAchievements: Boolean? = null
-    ) {
+    /**
+     * Liga ou desliga **um** interruptor (T19.H3: os quinze passam por aqui).
+     *
+     * Um toque, uma mudança: o `PATCH` leva só este campo, e o servidor mantém os outros. O
+     * interruptor na tela só se move quando a resposta confirma — offline, nada finge ter sido
+     * salvo (§45).
+     */
+    fun setShare(field: ProgressSharingField, enabled: Boolean) = update(mapOf(field to enabled))
+
+    private fun update(changes: Map<ProgressSharingField, Boolean>) {
         val uid = currentUid ?: return
         if (_uiState.value.isSharingBusy) return
 
@@ -285,10 +334,7 @@ class SocialProfileViewModel(
             val consistency = if (local != null && local != _uiState.value.settings.consistency) local else null
 
             val outcome = gateway.updateProgressSharing(
-                shareLevel = shareLevel,
-                shareConsistencyStreak = shareConsistencyStreak,
-                shareWeeklyWorkoutCount = shareWeeklyWorkoutCount,
-                shareHighlightedAchievements = shareHighlightedAchievements,
+                changes = changes,
                 weekTimeZone = timeZone,
                 consistency = consistency
             )
@@ -451,3 +497,13 @@ class SocialProfileViewModel(
         }
     }
 }
+
+/** O perfil do amigo está na tela (com ou sem progresso compartilhado)? */
+private fun FriendProfilePhase.showsProfile(): Boolean =
+    this is FriendProfilePhase.Ready || this is FriendProfilePhase.NoSharedProgress
+
+/** Falhas que não dizem nada sobre o perfil — só que ele não pôde ser relido agora (T19.H3). */
+private fun SocialProfileError.isRecoverableRead(): Boolean =
+    this == SocialProfileError.NETWORK ||
+        this == SocialProfileError.UNAVAILABLE ||
+        this == SocialProfileError.RATE_LIMITED

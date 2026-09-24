@@ -61,6 +61,10 @@ class SocialBoundaryInspectionTest {
         // e ele mora em `data/repository`, fora do pacote social.
         "app/src/main/java/com/example/presentation/friends/SocialFeedViewModel.kt",
         "app/src/main/java/com/example/presentation/friends/SocialFeedScreen.kt",
+        // T19.H3 — o resumo de treino do card e o "↻" compartilhado. As superfícies mais novas
+        // entram na varredura no mesmo commit em que nascem (a lição da T17.10).
+        "app/src/main/java/com/example/presentation/friends/CheckInWorkoutSummary.kt",
+        "app/src/main/java/com/example/presentation/friends/SocialRefreshAction.kt",
         // T17.4 — atividade e ranking dos amigos. Projeção efêmera: nada em Room, nada na Outbox.
         "app/src/main/java/com/example/presentation/friends/SocialActivityViewModel.kt",
         "app/src/main/java/com/example/presentation/friends/SocialActivityUiState.kt",

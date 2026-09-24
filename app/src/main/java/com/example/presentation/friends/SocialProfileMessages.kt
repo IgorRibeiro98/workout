@@ -1,5 +1,8 @@
 package com.example.presentation.friends
 
+import com.example.domain.social.ProgressSharingField
+import com.example.domain.social.ProgressSharingGroup
+import com.example.domain.social.SharedProgress
 import com.example.domain.social.SocialFieldAvailability
 import com.example.domain.social.SocialProfileError
 
@@ -121,3 +124,89 @@ fun achievementLabel(achievementId: String): String? =
 
 fun achievementIconKey(achievementId: String): String? =
     com.example.domain.evolution.model.achievement.AchievementCatalog.getDefinition(achievementId)?.icon
+
+// ------------------------------------------------------------------ Compartilhar Progresso V3
+
+/** O rótulo de cada interruptor. Os quatro primeiros são os da T17.2, e as test tags dependem deles. */
+fun progressSharingLabel(field: ProgressSharingField): String = when (field) {
+    ProgressSharingField.LEVEL -> "Nível"
+    ProgressSharingField.CONSISTENCY_STREAK -> "Consistência semanal"
+    ProgressSharingField.WEEKLY_WORKOUT_COUNT -> "Treinos da semana"
+    ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS -> "Conquistas em destaque"
+    ProgressSharingField.WEEKLY_TRAINING_MINUTES -> "Tempo treinado na semana"
+    ProgressSharingField.WEEKLY_COMPLETED_SETS -> "Séries da semana"
+    ProgressSharingField.WEEKLY_VOLUME -> "Volume da semana"
+    ProgressSharingField.TOTAL_WORKOUTS -> "Treinos totais"
+    ProgressSharingField.WORKOUT_NAME -> "Nome do treino"
+    ProgressSharingField.WORKOUT_TIME -> "Horário do treino"
+    ProgressSharingField.WORKOUT_DURATION -> "Duração"
+    ProgressSharingField.WORKOUT_EXERCISES -> "Exercícios"
+    ProgressSharingField.WORKOUT_SETS -> "Séries e repetições"
+    ProgressSharingField.WORKOUT_WEIGHTS -> "Cargas utilizadas"
+    ProgressSharingField.WORKOUT_VOLUME -> "Volume total"
+}
+
+/** Uma frase sobre o **significado** do campo, quando ele não é óbvio pelo rótulo. */
+fun progressSharingNote(field: ProgressSharingField): String? = when (field) {
+    ProgressSharingField.LEVEL -> LEVEL_SHARING_NOTE
+    ProgressSharingField.WEEKLY_VOLUME, ProgressSharingField.WORKOUT_VOLUME ->
+        "Peso × repetições das séries concluídas. Aquecimento e peso corporal não somam."
+    ProgressSharingField.WORKOUT_TIME -> "A hora em que você começou o treino."
+    ProgressSharingField.WORKOUT_SETS ->
+        "Quantas séries você concluiu. Com Exercícios ligado, mostra as repetições de cada série."
+    ProgressSharingField.WORKOUT_WEIGHTS ->
+        "A carga aparece dentro de cada série: exige Exercícios e Séries e repetições ligados."
+    else -> null
+}
+
+fun progressSharingGroupTitle(group: ProgressSharingGroup): String = when (group) {
+    ProgressSharingGroup.GENERAL -> "Progresso geral"
+    ProgressSharingGroup.TRAINING_STATS -> "Estatísticas de treino"
+    ProgressSharingGroup.CHECK_IN_DETAILS -> "Detalhes dos check-ins"
+}
+
+/**
+ * O que cada grupo publica, e **para quem** (T19.H3 §22/§37).
+ *
+ * O grupo de check-in precisa dizer duas coisas que o interruptor sozinho esconderia: que vale
+ * para as publicações antigas também, e que a audiência é a de cada publicação (amigos e Squads).
+ */
+fun progressSharingGroupDescription(group: ProgressSharingGroup): String? = when (group) {
+    ProgressSharingGroup.GENERAL -> null
+    ProgressSharingGroup.TRAINING_STATS ->
+        "Aparecem no seu perfil, somadas da semana. Calculadas pelo servidor a partir dos " +
+            "treinos sincronizados."
+    ProgressSharingGroup.CHECK_IN_DETAILS ->
+        "Aparecem nos check-ins que você publica — inclusive nos antigos — para quem pode vê-los: " +
+            "seus amigos e os Squads onde você compartilhou. Desligar remove na hora. No Feed, " +
+            "seus check-ins mostram exatamente o que eles veem."
+}
+
+/**
+ * As estatísticas de treino publicadas, como linhas rótulo → valor (T19.H3 §25).
+ *
+ * Uma função só para o perfil do amigo e para a prévia do dono: as duas telas mostram a mesma
+ * resposta do servidor, e escrever a formatação duas vezes era como a prévia passaria a divergir
+ * do que o amigo vê. Só as que vieram: nenhum `?: 0`.
+ */
+fun trainingStatLines(progress: SharedProgress): List<Pair<String, String>> = buildList {
+    progress.weeklyTrainingMinutes?.let { add("Tempo na semana" to minutesLabel(it)) }
+    progress.weeklyCompletedSets?.let {
+        add("Séries na semana" to if (it == 1) "1 série" else "$it séries")
+    }
+    progress.weeklyVolumeKg?.let { add("Volume na semana" to CheckInSummaryFormat.kilograms(it)) }
+    progress.totalWorkouts?.let {
+        add("Treinos no total" to if (it == 1) "1 treino" else "$it treinos")
+    }
+}
+
+/** "0 min", "45 min", "1 h", "2 h 05 min". Diferente da duração de um treino: zero existe aqui. */
+fun minutesLabel(minutes: Int): String {
+    val hours = minutes / 60
+    val rest = minutes % 60
+    return when {
+        hours == 0 -> "$minutes min"
+        rest == 0 -> "$hours h"
+        else -> "$hours h ${rest.toString().padStart(2, '0')} min"
+    }
+}

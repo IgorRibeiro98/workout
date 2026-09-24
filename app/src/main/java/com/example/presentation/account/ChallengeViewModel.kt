@@ -89,6 +89,15 @@ class ChallengeViewModel(
     /** A conta da qual o estado atual fala. `null` = nenhuma. */
     private var currentUid: String? = null
 
+    /**
+     * A geração da última leitura da lista e a do placar (T19.H3 §47).
+     *
+     * O refresh do usuário e a releitura depois de aceitar um convite podem voar juntos. Só a
+     * leitura de número mais alto escreve: uma resposta velha nunca sobrescreve uma mais nova.
+     */
+    private var listGeneration = 0L
+    private var detailGeneration = 0L
+
     init {
         viewModelScope.launch {
             // Observar a sessão é leitura: não abre seletor de contas, não ativa Social e não
@@ -132,33 +141,67 @@ class ChallengeViewModel(
         refresh()
     }
 
-    /** Relê a lista e os convites. É por aqui que o placar e os convites novos aparecem (§153). */
+    /**
+     * Relê a lista e os convites. É por aqui que o placar e os convites novos aparecem (§153).
+     *
+     * O "↻" da barra e o gesto de puxar chamam **este** método (T19.H3 §9). Com a lista na tela,
+     * ela **continua** na tela enquanto a releitura voa, e uma falha recuperável (rede, servidor,
+     * limite) a mantém com um aviso — a última lista boa não some por causa de uma rede instável.
+     * Sem lista (primeira carga, ou depois de um erro), é a carga inicial de sempre.
+     */
     fun refresh() {
+        if (_uiState.value.isRefreshing) return
+        reloadList()
+    }
+
+    /**
+     * A leitura da lista, sem a trava de toque duplo — é o que a releitura depois de uma mutação
+     * usa: ela **substitui** uma leitura em voo (a geração nova descarta a velha), em vez de ser
+     * ignorada por causa dela.
+     */
+    private fun reloadList() {
         // Sem endereço de Spark Backend neste build, nada é oferecido e **nada sai**: o gateway
         // recusaria de qualquer forma, e parar aqui evita uma requisição que já se sabe inútil.
         if (_uiState.value.listPhase is ChallengeListPhase.NotConfigured) return
         val uid = currentUid ?: return
         if (_uiState.value.listPhase is ChallengeListPhase.Loading) return
 
-        _uiState.value = _uiState.value.copy(
-            listPhase = ChallengeListPhase.Loading,
-            notice = null
-        )
+        val showing = _uiState.value.listPhase is ChallengeListPhase.Ready
+        _uiState.value = if (showing) {
+            _uiState.value.copy(isRefreshing = true, notice = null)
+        } else {
+            _uiState.value.copy(listPhase = ChallengeListPhase.Loading, notice = null)
+        }
+        val generation = ++listGeneration
+
         viewModelScope.launch {
             val outcome = gateway.list()
-            // A conta mudou no voo: a resposta antiga não pode sobrescrever o estado novo (§184).
-            if (currentUid != uid) return@launch
+            // A conta mudou no voo, ou uma leitura mais nova já começou: esta resposta não escreve
+            // (§184, T19.H3 §47).
+            if (currentUid != uid || generation != listGeneration) return@launch
 
-            _uiState.value = _uiState.value.copy(
-                listPhase = when (outcome) {
-                    is ChallengeOutcome.Success ->
-                        ChallengeListPhase.Ready(outcome.value.challenges)
-                    is ChallengeOutcome.Failure -> listPhaseFor(outcome.error)
-                }
-            )
+            _uiState.value = when {
+                outcome is ChallengeOutcome.Success -> _uiState.value.copy(
+                    listPhase = ChallengeListPhase.Ready(outcome.value.challenges)
+                )
+                showing && isRecoverable((outcome as ChallengeOutcome.Failure).error) ->
+                    _uiState.value.copy(notice = outcome.error)
+                else -> _uiState.value.copy(
+                    listPhase = listPhaseFor((outcome as ChallengeOutcome.Failure).error)
+                )
+            }
             loadInvites(uid)
+            if (currentUid == uid && generation == listGeneration) {
+                _uiState.value = _uiState.value.copy(isRefreshing = false)
+            }
         }
     }
+
+    /** Falhas que não dizem nada sobre a lista — só que ela não pôde ser relida agora. */
+    private fun isRecoverable(error: ChallengeError): Boolean =
+        error == ChallengeError.NETWORK ||
+            error == ChallengeError.UNAVAILABLE ||
+            error == ChallengeError.RATE_LIMITED
 
     private suspend fun loadInvites(uid: String) {
         _uiState.value = _uiState.value.copy(isLoadingInvites = true)
@@ -196,7 +239,8 @@ class ChallengeViewModel(
 
         _uiState.value = state.copy(
             openedChallengeId = challengeId,
-            detailPhase = ChallengeDetailPhase.Loading
+            detailPhase = ChallengeDetailPhase.Loading,
+            isDetailRefreshing = false
         )
         viewModelScope.launch { loadDetail(uid, challengeId) }
     }
@@ -205,9 +249,16 @@ class ChallengeViewModel(
     fun refreshChallenge() {
         val uid = currentUid ?: return
         val challengeId = _uiState.value.openedChallengeId ?: return
-        if (_uiState.value.detailPhase is ChallengeDetailPhase.Loading) return
+        val state = _uiState.value
+        if (state.detailPhase is ChallengeDetailPhase.Loading || state.isDetailRefreshing) return
 
-        _uiState.value = _uiState.value.copy(detailPhase = ChallengeDetailPhase.Loading)
+        // Com o placar na tela, ele fica enquanto a releitura voa (T19.H3): o "↻" do detalhe é
+        // para ver o placar novo, e não para perder o de agora por meio segundo.
+        _uiState.value = if (state.detailPhase is ChallengeDetailPhase.Ready) {
+            state.copy(isDetailRefreshing = true, notice = null)
+        } else {
+            state.copy(detailPhase = ChallengeDetailPhase.Loading)
+        }
         viewModelScope.launch { loadDetail(uid, challengeId) }
     }
 
@@ -215,21 +266,34 @@ class ChallengeViewModel(
     fun closeChallenge() {
         _uiState.value = _uiState.value.copy(
             openedChallengeId = null,
-            detailPhase = ChallengeDetailPhase.Idle
+            detailPhase = ChallengeDetailPhase.Idle,
+            // Uma releitura em voo será descartada (o alvo mudou): o indicador morre com ela.
+            isDetailRefreshing = false
         )
     }
 
     private suspend fun loadDetail(uid: String, challengeId: String) {
+        val generation = ++detailGeneration
         val outcome = gateway.detail(challengeId)
-        // A conta mudou, ou a tela já pediu outro desafio: descarta.
+        // A conta mudou, a tela já pediu outro desafio, ou uma leitura mais nova começou: descarta.
         if (currentUid != uid || _uiState.value.openedChallengeId != challengeId) return
+        if (generation != detailGeneration) return
 
-        _uiState.value = _uiState.value.copy(
-            detailPhase = when (outcome) {
-                is ChallengeOutcome.Success -> ChallengeDetailPhase.Ready(outcome.value)
-                is ChallengeOutcome.Failure -> detailPhaseFor(outcome.error)
-            }
-        )
+        val showing = _uiState.value.detailPhase is ChallengeDetailPhase.Ready
+        _uiState.value = when {
+            outcome is ChallengeOutcome.Success -> _uiState.value.copy(
+                isDetailRefreshing = false,
+                detailPhase = ChallengeDetailPhase.Ready(outcome.value)
+            )
+            // O placar que estava na tela continua válido como "a última leitura"; o aviso diz
+            // que ele não pôde ser atualizado agora.
+            showing && isRecoverable((outcome as ChallengeOutcome.Failure).error) ->
+                _uiState.value.copy(isDetailRefreshing = false, notice = outcome.error)
+            else -> _uiState.value.copy(
+                isDetailRefreshing = false,
+                detailPhase = detailPhaseFor((outcome as ChallengeOutcome.Failure).error)
+            )
+        }
     }
 
     // --------------------------------------------------------------------------------- convites
@@ -274,7 +338,7 @@ class ChallengeViewModel(
             if (outcome is ChallengeOutcome.Success) {
                 // O convite saiu da lista e (no aceite) um desafio entrou: as duas coisas são do
                 // servidor, e a tela relê em vez de deduzir.
-                refresh()
+                reloadList()
             }
         }
     }
@@ -312,7 +376,7 @@ class ChallengeViewModel(
                 notice = (outcome as? ChallengeOutcome.Failure)?.error
             )
             if (outcome is ChallengeOutcome.Success) {
-                refresh()
+                reloadList()
                 if (_uiState.value.openedChallengeId == challengeId) {
                     // A tela do desafio continua aberta: ela precisa mostrar o estado novo
                     // (cancelado, ou a própria linha fora do placar), e não o de antes.
@@ -462,7 +526,7 @@ class ChallengeViewModel(
                         creationPhase = ChallengeCreationPhase.Created(outcome.value),
                         draft = ChallengeDraft()
                     )
-                    refresh()
+                    reloadList()
                 }
                 is ChallengeOutcome.Failure -> {
                     // Volta para a edição com o rascunho intacto: a pessoa corrige e tenta de

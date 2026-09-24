@@ -118,6 +118,15 @@ fun SquadsScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3: o gesto já existia; o ↻ é a forma visível dele. Mesmo método.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing || uiState.phase is SquadsPhase.Loading,
+                        onRefresh = viewModel::refresh,
+                        enabled = uiState.phase !is SquadsPhase.NotConfigured &&
+                            uiState.phase !is SquadsPhase.SignedOut
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         },
@@ -226,6 +235,7 @@ private fun SquadsBody(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            uiState.staleNotice?.let { notice -> item(key = "stale-notice") { StaleNotice(notice) } }
             if (phase.invitations.isNotEmpty()) {
                 item {
                     Text(

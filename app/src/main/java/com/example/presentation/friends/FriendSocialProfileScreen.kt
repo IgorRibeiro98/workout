@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.social.FriendSocialProfile
+import com.example.domain.social.SocialProfileError
 import com.example.domain.social.ReportReason
 import com.example.presentation.account.FriendProfilePhase
 import com.example.presentation.account.SocialProfileUiState
@@ -141,6 +142,13 @@ fun FriendSocialProfileScreen(
                     }
                 },
                 actions = {
+                    // T19.H3: o que o amigo compartilha muda quando ele liga um interruptor ou
+                    // treina. O ↻ relê este perfil; ele não publica nem altera nada.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isFriendProfileRefreshing ||
+                            uiState.friendPhase is FriendProfilePhase.Loading,
+                        onRefresh = viewModel::refreshFriendProfile
+                    )
                     IconButton(onClick = { showMenu = true }) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
@@ -349,14 +357,20 @@ internal fun FriendSocialProfileBody(
             SecondaryButton("Tentar de novo", onRetry)
         }
 
-        is FriendProfilePhase.NoSharedProgress -> Message(
-            title = phase.profile.displayName,
-            // Nunca "não treina": o app não sabe disso, e o servidor não disse isso. O que ele
-            // disse é que não há nada compartilhado agora.
-            body = NO_SHARED_PROGRESS_MESSAGE
-        )
+        is FriendProfilePhase.NoSharedProgress -> {
+            uiState.friendStaleNotice?.let { StaleNotice(staleProfileNotice(it)) }
+            Message(
+                title = phase.profile.displayName,
+                // Nunca "não treina": o app não sabe disso, e o servidor não disse isso. O que ele
+                // disse é que não há nada compartilhado agora.
+                body = NO_SHARED_PROGRESS_MESSAGE
+            )
+        }
 
-        is FriendProfilePhase.Ready -> SharedProgressCard(phase.profile)
+        is FriendProfilePhase.Ready -> {
+            uiState.friendStaleNotice?.let { StaleNotice(staleProfileNotice(it)) }
+            SharedProgressCard(phase.profile)
+        }
     }
 }
 
@@ -405,6 +419,10 @@ private fun SharedProgressCard(profile: FriendSocialProfile) {
                     value = if (count == 1) "1 treino" else "$count treinos"
                 )
             }
+            // T19.H3 — estatísticas de treino, somadas no servidor. Cada linha só existe se veio.
+            trainingStatLines(profile.sharedProgress).forEach { (label, value) ->
+                ProgressRow(label = label, value = value)
+            }
             // T19.2C — as conquistas que o servidor consegue **verificar** (treino, consistência,
             // corpo). Ids que este APK não conhece são omitidos; uma lista vazia não desenha seção.
             val highlighted = profile.sharedProgress.highlightedAchievementIds
@@ -448,3 +466,11 @@ private fun FriendProfilePhase.profileOrNull(): FriendSocialProfile? = when (thi
     is FriendProfilePhase.NoSharedProgress -> profile
     else -> null
 }
+
+/** "Mostrando a última atualização" para o perfil do amigo (T19.H3 §45). */
+private fun staleProfileNotice(error: SocialProfileError): String =
+    if (error == SocialProfileError.NETWORK) {
+        "Sem conexão agora — mostrando a última atualização deste perfil."
+    } else {
+        "Não foi possível atualizar agora — mostrando a última atualização deste perfil."
+    }

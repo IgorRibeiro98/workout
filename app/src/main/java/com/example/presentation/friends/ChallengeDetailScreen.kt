@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -127,26 +128,42 @@ fun ChallengeDetailScreen(
                         )
                     }
                 },
+                actions = {
+                    // O placar muda quando os outros treinam e sincronizam (T19.H3): o ↻ relê o
+                    // desafio aberto, sem esconder o placar atual enquanto isso.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isDetailRefreshing ||
+                            uiState.detailPhase is ChallengeDetailPhase.Loading,
+                        onRefresh = viewModel::refreshChallenge
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
     ) { innerPadding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = uiState.isDetailRefreshing,
+            onRefresh = viewModel::refreshChallenge,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .semantics { contentDescription = CHALLENGE_DETAIL_DESCRIPTION },
-            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ChallengeDetailBody(
-                uiState = uiState,
-                challengeId = challengeId,
-                onRetry = viewModel::refreshChallenge,
-                onRequestLeave = { confirming = PendingAction.Leave },
-                onRequestCancel = { confirming = PendingAction.Cancel }
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .semantics { contentDescription = CHALLENGE_DETAIL_DESCRIPTION },
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ChallengeDetailBody(
+                    uiState = uiState,
+                    challengeId = challengeId,
+                    onRetry = viewModel::refreshChallenge,
+                    onRequestLeave = { confirming = PendingAction.Leave },
+                    onRequestCancel = { confirming = PendingAction.Cancel }
+                )
+            }
         }
     }
 

@@ -20,5 +20,9 @@ data class SocialActivityUiState(
     val rankingState: RankingUiState = RankingUiState.Loading,
     val activityState: ActivityFeedUiState = ActivityFeedUiState.Loading,
     val isOptingIn: Boolean = false,
-    val optInErrorMessage: String? = null
+    val optInErrorMessage: String? = null,
+    /** O "↻" está relendo, com ranking e atividade na tela (T19.H3). */
+    val isRefreshing: Boolean = false,
+    /** A última atualização falhou; o que está na tela é a última leitura boa (T19.H3 §45). */
+    val staleNotice: String? = null
 )

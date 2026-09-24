@@ -42,6 +42,9 @@ class SocialActivityViewModel(
                 if (newUid != currentUid) {
                     currentUid = newUid
                     if (newUid != null) {
+                        // O estado da conta anterior — inclusive um "↻" em voo, cuja resposta
+                        // será descartada pelo `uid` — não sobrevive à troca (T19.H3 §44).
+                        _uiState.value = SocialActivityUiState()
                         loadData()
                     } else {
                         _uiState.value = SocialActivityUiState(
@@ -133,6 +136,63 @@ class SocialActivityViewModel(
                     }
                     _uiState.update { it.copy(activityState = state) }
                 }
+            }
+        }
+    }
+
+    /**
+     * O "↻" da barra (T19.H3): relê ranking e atividade.
+     *
+     * Com as duas seções na tela, elas **ficam** enquanto a releitura voa, e uma falha mantém a
+     * última leitura boa com um aviso — sem colapsar para "carregando" nem trocar o ranking de
+     * ontem por "sem conexão". Sem conteúdo na tela (primeira carga, ou um erro), é a carga de
+     * sempre ([loadData]). Um toque durante a releitura é ignorado.
+     */
+    fun refresh() {
+        val uid = getCurrentUid() ?: return loadData()
+        val state = _uiState.value
+        if (state.isRefreshing) return
+        val showingRanking = state.rankingState is RankingUiState.Success ||
+            state.rankingState is RankingUiState.OptedOut
+        if (!showingRanking || state.activityState !is ActivityFeedUiState.Success) {
+            loadData()
+            return
+        }
+
+        _uiState.update { it.copy(isRefreshing = true, staleNotice = null) }
+        viewModelScope.launch {
+            val ranking = activityGateway.getFriendRankingLast7Days()
+            val activity = activityGateway.getRecentFriendActivity()
+            if (getCurrentUid() != uid) return@launch
+
+            val failed = (ranking is SocialActivityOutcome.Failure &&
+                ranking.error != SocialActivityError.RANKING_NOT_ENABLED) ||
+                activity is SocialActivityOutcome.Failure
+            _uiState.update { current ->
+                current.copy(
+                    isRefreshing = false,
+                    rankingState = when (ranking) {
+                        is SocialActivityOutcome.Success -> RankingUiState.Success(
+                            entries = ranking.data.entries,
+                            participantCount = ranking.data.participantCount
+                        )
+                        is SocialActivityOutcome.Failure ->
+                            if (ranking.error == SocialActivityError.RANKING_NOT_ENABLED) {
+                                RankingUiState.OptedOut
+                            } else {
+                                current.rankingState
+                            }
+                    },
+                    activityState = when (activity) {
+                        is SocialActivityOutcome.Success -> ActivityFeedUiState.Success(activity.data)
+                        is SocialActivityOutcome.Failure -> current.activityState
+                    },
+                    staleNotice = if (failed) {
+                        "Não foi possível atualizar agora — mostrando a última atualização."
+                    } else {
+                        null
+                    }
+                )
             }
         }
     }

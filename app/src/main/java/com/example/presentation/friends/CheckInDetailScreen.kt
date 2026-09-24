@@ -168,6 +168,14 @@ fun CheckInDetailScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3: comentários e reações de outras pessoas só aparecem relendo.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing ||
+                            uiState.phase is CheckInDetailPhase.Loading,
+                        onRefresh = viewModel::refresh
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
@@ -444,6 +452,11 @@ private fun DetailHeader(
                     }
                 }
             }
+        }
+
+        // O resumo completo (T19.H3): aqui cabe série por série.
+        checkIn.workoutSummary?.let { summary ->
+            CheckInWorkoutSummaryView(summary = summary, compact = false)
         }
 
         checkIn.media?.let { media ->

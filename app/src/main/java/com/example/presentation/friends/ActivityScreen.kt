@@ -85,6 +85,15 @@ fun ActivityScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3: o ranking muda quando os amigos treinam e sincronizam.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing ||
+                            uiState.rankingState is RankingUiState.Loading ||
+                            uiState.activityState is ActivityFeedUiState.Loading,
+                        onRefresh = viewModel::refresh
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = BackgroundDark
                 )
@@ -100,6 +109,8 @@ fun ActivityScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            uiState.staleNotice?.let { StaleNotice(it) }
+
             // Seção 1: Ranking Semanal
             RankingSection(
                 state = uiState.rankingState,

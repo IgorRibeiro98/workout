@@ -105,6 +105,15 @@ fun FriendRequestsScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3 §7: o gesto continua; o ↻ é a forma visível da mesma releitura.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing,
+                        onRefresh = viewModel::refreshRequests,
+                        enabled = uiState.phase !is FriendsPhase.NotConfigured &&
+                            uiState.phase !is FriendsPhase.SignedOut
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }

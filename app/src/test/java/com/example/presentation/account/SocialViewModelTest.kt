@@ -149,6 +149,60 @@ class SocialViewModelTest {
         assertEquals(SocialPhase.NotEnabled, viewModel.uiState.value.phase)
     }
 
+    // ------------------------------------------------------------------ T19.H3 refresh do SocialHome
+
+    @Test
+    fun `refresh com o perfil na tela nao o troca por Loading, e rele o servidor`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        activate(viewModel, "Igor")
+        val before = gateway.profileCalls
+
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        gateway.gate = gate
+        viewModel.refresh()
+
+        // Em voo: o perfil continua na tela e o botão gira.
+        assertTrue(viewModel.uiState.value.phase is SocialPhase.Active)
+        assertTrue(viewModel.uiState.value.isRefreshing)
+
+        gateway.gate = null
+        gate.complete(Unit)
+        viewModel.uiState.first { !it.isRefreshing }
+
+        assertEquals(before + 1, gateway.profileCalls)
+        assertTrue(viewModel.uiState.value.phase is SocialPhase.Active)
+    }
+
+    @Test
+    fun `refresh sem rede mantem o perfil na tela com o aviso ao lado`() = runBlocking {
+        val viewModel = signedIn(accountA)
+        activate(viewModel, "Igor")
+
+        gateway.failWith = SocialError.NETWORK
+        viewModel.refresh()
+
+        val phase = awaitPhase(viewModel) { it is SocialPhase.Offline }
+        // A última leitura boa não some por causa de uma rede instável (T19.H3 §45).
+        assertEquals("Igor", (phase as SocialPhase.Offline).profile?.displayName)
+        assertFalse(viewModel.uiState.value.isRefreshing)
+    }
+
+    @Test
+    fun `refresh em sequencia e so leitura — nada e ativado, renomeado ou desativado`() =
+        runBlocking {
+            val viewModel = signedIn(accountA)
+            activate(viewModel, "Igor")
+            val activations = gateway.activateCalls
+
+            repeat(3) {
+                viewModel.refresh()
+                viewModel.uiState.first { !it.isRefreshing }
+            }
+
+            assertEquals(activations, gateway.activateCalls)
+            assertEquals("Igor", viewModel.uiState.value.profile?.displayName)
+        }
+
     @Test
     fun `abrir depois de uma leitura inicial offline refaz a leitura`() = runBlocking {
         gateway.currentUid = accountA.uid

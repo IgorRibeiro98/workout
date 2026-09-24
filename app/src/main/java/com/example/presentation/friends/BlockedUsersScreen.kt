@@ -87,6 +87,14 @@ fun BlockedUsersScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3: um desbloqueio feito em outro aparelho só aparece relendo.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing ||
+                            uiState.phase is BlockedUsersPhase.Loading,
+                        onRefresh = viewModel::refresh
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }

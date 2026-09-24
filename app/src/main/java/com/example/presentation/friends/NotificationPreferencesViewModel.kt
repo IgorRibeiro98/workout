@@ -18,7 +18,9 @@ sealed interface NotificationPreferencesUiState {
     data class Loaded(
         val preferences: SocialNotificationPreferences,
         val isUpdating: Boolean = false,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        /** O "↻" está relendo, com os interruptores na tela (T19.H3). */
+        val isRefreshing: Boolean = false
     ) : NotificationPreferencesUiState
     data class Error(val message: String) : NotificationPreferencesUiState
 }
@@ -82,6 +84,47 @@ class NotificationPreferencesViewModel(
 
     private fun currentUid(): String? =
         (authGateway.state.value as? AuthState.SignedIn)?.account?.uid
+
+    /**
+     * O "↻" da barra e o "tentar de novo" (T19.H3): uma escolha feita em outro aparelho só aparece
+     * relendo. Com os interruptores na tela, eles ficam enquanto a releitura voa, e uma falha os
+     * mantém com um aviso; sem eles, é a carga de sempre.
+     */
+    fun refresh() {
+        val uid = currentUid() ?: run {
+            _uiState.value = NotificationPreferencesUiState.SignedOut
+            return
+        }
+        // Uma leitura em voo (a do `init` inclusive, que marca `Loading` antes de sair) não abre
+        // outra.
+        if (_uiState.value is NotificationPreferencesUiState.Loading) return
+        val loaded = _uiState.value as? NotificationPreferencesUiState.Loaded
+            ?: return loadPreferences()
+        if (loaded.isRefreshing || loaded.isUpdating) return
+
+        _uiState.value = loaded.copy(isRefreshing = true, errorMessage = null)
+        viewModelScope.launch {
+            val result = gateway.getPreferences()
+            if (currentUid() != uid) return@launch
+            val current = _uiState.value as? NotificationPreferencesUiState.Loaded ?: return@launch
+            // Um interruptor foi tocado no meio: a resposta dele é a mais nova (T19.H3 §47).
+            if (current.isUpdating) {
+                _uiState.value = current.copy(isRefreshing = false)
+                return@launch
+            }
+            result
+                .onSuccess { prefs ->
+                    _uiState.value = current.copy(preferences = prefs, isRefreshing = false)
+                }
+                .onFailure {
+                    _uiState.value = current.copy(
+                        isRefreshing = false,
+                        errorMessage = "Não foi possível atualizar agora — mostrando a última " +
+                            "atualização."
+                    )
+                }
+        }
+    }
 
     fun loadPreferences() {
         val uid = currentUid() ?: run {

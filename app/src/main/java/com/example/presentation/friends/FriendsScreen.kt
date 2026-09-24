@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -125,27 +126,44 @@ fun FriendsScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3 §9: a forma visível da mesma releitura do gesto.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isRefreshing,
+                        onRefresh = viewModel::refreshRequests,
+                        enabled = uiState.phase !is FriendsPhase.NotConfigured &&
+                            uiState.phase !is FriendsPhase.SignedOut
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
     ) { innerPadding ->
-        Column(
+        // O gesto e o ↻ chamam o **mesmo** método: um mecanismo de releitura, duas portas.
+        PullToRefreshBox(
+            isRefreshing = uiState.isRefreshing,
+            onRefresh = viewModel::refreshRequests,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .semantics { contentDescription = FRIENDS_LIST_DESCRIPTION },
-            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            FriendsBody(
-                uiState = uiState,
-                onAddFriend = viewModel::startAddFriend,
-                onOpenRequests = onNavigateToRequests,
-                onRemoveFriend = viewModel::startRemoveFriend,
-                onOpenProfile = onOpenProfile,
-                onRetry = viewModel::refresh
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+                    .semantics { contentDescription = FRIENDS_LIST_DESCRIPTION },
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                FriendsBody(
+                    uiState = uiState,
+                    onAddFriend = viewModel::startAddFriend,
+                    onOpenRequests = onNavigateToRequests,
+                    onRemoveFriend = viewModel::startRemoveFriend,
+                    onOpenProfile = onOpenProfile,
+                    onRetry = viewModel::refresh
+                )
+            }
         }
     }
 

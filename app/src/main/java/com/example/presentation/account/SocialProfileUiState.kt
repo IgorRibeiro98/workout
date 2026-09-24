@@ -119,7 +119,19 @@ data class SocialProfileUiState(
      * Separado de [ProgressSharingPhase.Error] porque ele **não** substitui a tela: os
      * interruptores continuam visíveis e utilizáveis, e o aviso some na próxima ação.
      */
-    val notice: SocialProfileError? = null
+    val notice: SocialProfileError? = null,
+    /**
+     * O "↻" do perfil do amigo está relendo, com o perfil na tela (T19.H3). Separado de
+     * [FriendProfilePhase.Loading]: atualizar não esconde o que já estava lido.
+     */
+    val isFriendProfileRefreshing: Boolean = false,
+    /** O "↻" de "Compartilhar progresso" está relendo, com os interruptores na tela (T19.H3). */
+    val isSharingRefreshing: Boolean = false,
+    /**
+     * A última atualização do perfil do amigo falhou; o que está na tela é a última leitura boa
+     * (T19.H3 §45). Some na próxima leitura bem-sucedida.
+     */
+    val friendStaleNotice: SocialProfileError? = null
 ) {
     /** A tela de configurações está ocupada por inteiro? */
     val isSharingBusy: Boolean

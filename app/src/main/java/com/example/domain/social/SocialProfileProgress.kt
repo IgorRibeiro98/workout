@@ -48,21 +48,69 @@ data class SharedProgress(
     /** Sequência **semanal** de consistência — a semântica canônica do Spark, não dias seguidos. */
     val consistencyStreak: Int? = null,
     val weeklyWorkoutCount: Int? = null,
-    val highlightedAchievementIds: List<String> = emptyList()
+    val highlightedAchievementIds: List<String> = emptyList(),
+    // --- T19.H3: estatísticas de treino, derivadas no servidor das sessões sincronizadas.
+    /** Minutos treinados na semana canônica. */
+    val weeklyTrainingMinutes: Int? = null,
+    /** Séries de trabalho concluídas na semana canônica (aquecimento não conta). */
+    val weeklyCompletedSets: Int? = null,
+    /** `Σ peso × reps` da semana canônica, em kg. */
+    val weeklyVolumeKg: Double? = null,
+    /** Treinos concluídos desde sempre. */
+    val totalWorkouts: Int? = null
 ) {
     /** Não há nada para mostrar? A tela diz "ainda não compartilha", nunca "não treina". */
     val isEmpty: Boolean
         get() = level == null &&
             consistencyStreak == null &&
             weeklyWorkoutCount == null &&
-            highlightedAchievementIds.isEmpty()
+            highlightedAchievementIds.isEmpty() &&
+            weeklyTrainingMinutes == null &&
+            weeklyCompletedSets == null &&
+            weeklyVolumeKg == null &&
+            totalWorkouts == null
 }
+
+/**
+ * Cada interruptor de "Compartilhar progresso", pelo nome (T17.2 + T19.H3).
+ *
+ * Uma lista só: a tela desenha os grupos a partir dela, a ViewModel envia a mudança por ela e o
+ * gateway monta o `PATCH` a partir dela. Quinze interruptores escritos à mão em três camadas seriam
+ * três chances de um deles salvar e não aparecer, ou aparecer e não salvar.
+ */
+enum class ProgressSharingField(val group: ProgressSharingGroup) {
+    LEVEL(ProgressSharingGroup.GENERAL),
+    CONSISTENCY_STREAK(ProgressSharingGroup.GENERAL),
+    WEEKLY_WORKOUT_COUNT(ProgressSharingGroup.GENERAL),
+    HIGHLIGHTED_ACHIEVEMENTS(ProgressSharingGroup.GENERAL),
+    WEEKLY_TRAINING_MINUTES(ProgressSharingGroup.TRAINING_STATS),
+    WEEKLY_COMPLETED_SETS(ProgressSharingGroup.TRAINING_STATS),
+    WEEKLY_VOLUME(ProgressSharingGroup.TRAINING_STATS),
+    TOTAL_WORKOUTS(ProgressSharingGroup.TRAINING_STATS),
+    WORKOUT_NAME(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_TIME(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_DURATION(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_EXERCISES(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_SETS(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_WEIGHTS(ProgressSharingGroup.CHECK_IN_DETAILS),
+    WORKOUT_VOLUME(ProgressSharingGroup.CHECK_IN_DETAILS)
+}
+
+/**
+ * Os três grupos da tela (T19.H3 §23).
+ *
+ * [TRAINING_STATS] aparece no **perfil**, somado; [CHECK_IN_DETAILS] aparece em **cada check-in**
+ * publicado, lido da sessão de origem. A separação é de produto e de privacidade: "como esta
+ * pessoa vem treinando?" e "o que aconteceu neste treino?" são perguntas diferentes (§22).
+ */
+enum class ProgressSharingGroup { GENERAL, TRAINING_STATS, CHECK_IN_DETAILS }
 
 /**
  * O que **eu** compartilho.
  *
- * Os quatro nascem `false` no servidor e continuam `false` aqui enquanto a leitura não chegar:
- * o estado inicial de uma tela de privacidade nunca pode ser "ligado".
+ * Todos nascem `false` no servidor e continuam `false` aqui enquanto a leitura não chegar: o
+ * estado inicial de uma tela de privacidade nunca pode ser "ligado". Os onze da T19.H3 também —
+ * a migration do servidor os criou desligados para toda conta que já existia.
  *
  * [weekTimeZone] não é preferência de privacidade — é o fuso que torna a semana canônica
  * reproduzível no servidor. O app o envia junto com a primeira alteração, a partir do próprio
@@ -73,6 +121,20 @@ data class ProgressSharingSettings(
     val shareConsistencyStreak: Boolean = false,
     val shareWeeklyWorkoutCount: Boolean = false,
     val shareHighlightedAchievements: Boolean = false,
+    // --- T19.H3: estatísticas de treino (perfil)
+    val shareWeeklyTrainingMinutes: Boolean = false,
+    val shareWeeklyCompletedSets: Boolean = false,
+    val shareWeeklyVolume: Boolean = false,
+    val shareTotalWorkouts: Boolean = false,
+    // --- T19.H3: detalhes dos check-ins
+    val shareWorkoutName: Boolean = false,
+    val shareWorkoutTime: Boolean = false,
+    val shareWorkoutDuration: Boolean = false,
+    val shareWorkoutExercises: Boolean = false,
+    val shareWorkoutSets: Boolean = false,
+    /** Só tem efeito com [shareWorkoutSets] e [shareWorkoutExercises] — a carga mora na série. */
+    val shareWorkoutWeights: Boolean = false,
+    val shareWorkoutVolume: Boolean = false,
     val weekTimeZone: String? = null,
     /**
      * Os parâmetros de consistência que o servidor conhece deste dono (T19.2A), ou `null`
@@ -83,6 +145,45 @@ data class ProgressSharingSettings(
     /** Relógio do **servidor**, epoch millis UTC. */
     val updatedAt: Long = 0L
 )
+
+/** O valor gravado de um interruptor. */
+fun ProgressSharingSettings.isShared(field: ProgressSharingField): Boolean = when (field) {
+    ProgressSharingField.LEVEL -> shareLevel
+    ProgressSharingField.CONSISTENCY_STREAK -> shareConsistencyStreak
+    ProgressSharingField.WEEKLY_WORKOUT_COUNT -> shareWeeklyWorkoutCount
+    ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS -> shareHighlightedAchievements
+    ProgressSharingField.WEEKLY_TRAINING_MINUTES -> shareWeeklyTrainingMinutes
+    ProgressSharingField.WEEKLY_COMPLETED_SETS -> shareWeeklyCompletedSets
+    ProgressSharingField.WEEKLY_VOLUME -> shareWeeklyVolume
+    ProgressSharingField.TOTAL_WORKOUTS -> shareTotalWorkouts
+    ProgressSharingField.WORKOUT_NAME -> shareWorkoutName
+    ProgressSharingField.WORKOUT_TIME -> shareWorkoutTime
+    ProgressSharingField.WORKOUT_DURATION -> shareWorkoutDuration
+    ProgressSharingField.WORKOUT_EXERCISES -> shareWorkoutExercises
+    ProgressSharingField.WORKOUT_SETS -> shareWorkoutSets
+    ProgressSharingField.WORKOUT_WEIGHTS -> shareWorkoutWeights
+    ProgressSharingField.WORKOUT_VOLUME -> shareWorkoutVolume
+}
+
+/** O mesmo conjunto, com [field] mudado. Semântica de `PATCH`: o resto fica como está. */
+fun ProgressSharingSettings.with(field: ProgressSharingField, value: Boolean): ProgressSharingSettings =
+    when (field) {
+        ProgressSharingField.LEVEL -> copy(shareLevel = value)
+        ProgressSharingField.CONSISTENCY_STREAK -> copy(shareConsistencyStreak = value)
+        ProgressSharingField.WEEKLY_WORKOUT_COUNT -> copy(shareWeeklyWorkoutCount = value)
+        ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS -> copy(shareHighlightedAchievements = value)
+        ProgressSharingField.WEEKLY_TRAINING_MINUTES -> copy(shareWeeklyTrainingMinutes = value)
+        ProgressSharingField.WEEKLY_COMPLETED_SETS -> copy(shareWeeklyCompletedSets = value)
+        ProgressSharingField.WEEKLY_VOLUME -> copy(shareWeeklyVolume = value)
+        ProgressSharingField.TOTAL_WORKOUTS -> copy(shareTotalWorkouts = value)
+        ProgressSharingField.WORKOUT_NAME -> copy(shareWorkoutName = value)
+        ProgressSharingField.WORKOUT_TIME -> copy(shareWorkoutTime = value)
+        ProgressSharingField.WORKOUT_DURATION -> copy(shareWorkoutDuration = value)
+        ProgressSharingField.WORKOUT_EXERCISES -> copy(shareWorkoutExercises = value)
+        ProgressSharingField.WORKOUT_SETS -> copy(shareWorkoutSets = value)
+        ProgressSharingField.WORKOUT_WEIGHTS -> copy(shareWorkoutWeights = value)
+        ProgressSharingField.WORKOUT_VOLUME -> copy(shareWorkoutVolume = value)
+    }
 
 /**
  * A meta semanal por semana e o início do acompanhamento — os dois insumos da consistência que não
@@ -139,8 +240,32 @@ data class ProgressSharingAvailability(
     val level: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
     val consistencyStreak: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
     val weeklyWorkoutCount: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
-    val highlightedAchievements: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE
-)
+    val highlightedAchievements: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
+    // --- T19.H3
+    val weeklyTrainingMinutes: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
+    val weeklyCompletedSets: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
+    val weeklyVolume: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
+    val totalWorkouts: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE
+) {
+    /**
+     * A disponibilidade de um campo, ou `null` quando ela não é uma pergunta do perfil.
+     *
+     * Os detalhes de check-in não têm disponibilidade aqui: eles dependem de cada publicação (a
+     * sessão de origem), e a tela explica isso em vez de mostrar "Disponível" para um campo que o
+     * servidor não avalia de antemão.
+     */
+    fun of(field: ProgressSharingField): SocialFieldAvailability? = when (field) {
+        ProgressSharingField.LEVEL -> level
+        ProgressSharingField.CONSISTENCY_STREAK -> consistencyStreak
+        ProgressSharingField.WEEKLY_WORKOUT_COUNT -> weeklyWorkoutCount
+        ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS -> highlightedAchievements
+        ProgressSharingField.WEEKLY_TRAINING_MINUTES -> weeklyTrainingMinutes
+        ProgressSharingField.WEEKLY_COMPLETED_SETS -> weeklyCompletedSets
+        ProgressSharingField.WEEKLY_VOLUME -> weeklyVolume
+        ProgressSharingField.TOTAL_WORKOUTS -> totalWorkouts
+        else -> null
+    }
+}
 
 /** Preferências e disponibilidade juntas: a tela precisa das duas para dizer a frase certa. */
 data class ProgressSharing(

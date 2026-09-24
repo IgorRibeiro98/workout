@@ -45,6 +45,11 @@ sealed interface SquadsPhase {
 data class SquadsUiState(
     val phase: SquadsPhase = SquadsPhase.Loading,
     val isRefreshing: Boolean = false,
+    /**
+     * A última atualização falhou e a lista na tela é a última boa (T19.H3 §45). Some na próxima
+     * leitura bem-sucedida.
+     */
+    val staleNotice: String? = null,
     /** `true` enquanto a criação está em voo. Ocupação **por operação**, nunca um `isLoading`. */
     val isCreating: Boolean = false,
     /** O convite cuja resposta está em andamento. Ocupação **por alvo**. */
@@ -92,6 +97,9 @@ class SquadsViewModel(
     private val authGateway: AuthGateway
 ) : ViewModel() {
 
+    /** A geração da última leitura (T19.H3 §47). */
+    private var loadGeneration = 0L
+
     private val _uiState = MutableStateFlow(SquadsUiState())
     val uiState: StateFlow<SquadsUiState> = _uiState.asStateFlow()
 
@@ -114,16 +122,22 @@ class SquadsViewModel(
         }
     }
 
-    /** Abrir a tela busca. Chamar de novo enquanto uma leitura corre não abre outra. */
+    /**
+     * Abrir a tela busca. Chamar de novo enquanto uma leitura corre não abre outra — nem a leitura
+     * inicial, que o `init` já disparou (antes da T19.H3 a primeira abertura fazia as duas
+     * requisições duas vezes). Voltar com a lista na tela relê sem trocá-la por "carregando".
+     */
     fun open() {
         val uid = currentUid() ?: run {
             _uiState.value = SquadsUiState(phase = SquadsPhase.SignedOut)
             return
         }
-        if (_uiState.value.isRefreshing) return
-        load(uid, refreshing = false)
+        val state = _uiState.value
+        if (state.isRefreshing || state.phase is SquadsPhase.Loading) return
+        load(uid, refreshing = state.phase is SquadsPhase.Success)
     }
 
+    /** O gesto de puxar e o "↻" da barra (T19.H3 §3): o mesmo método, a mesma leitura. */
     fun refresh() {
         val uid = currentUid() ?: run {
             _uiState.value = SquadsUiState(phase = SquadsPhase.SignedOut)
@@ -259,34 +273,51 @@ class SquadsViewModel(
                 phase = if (refreshing) it.phase else SquadsPhase.Loading
             )
         }
+        // A releitura depois de criar um Squad ou responder um convite **substitui** uma leitura
+        // em voo: só a geração mais nova escreve (T19.H3 §47).
+        val generation = ++loadGeneration
 
         viewModelScope.launch {
             val groupsOutcome = gateway.groups()
             // §164 — uma resposta iniciada para A que chega depois do login de B é descartada.
-            if (currentUid() != uid) return@launch
+            if (currentUid() != uid || generation != loadGeneration) return@launch
 
             if (groupsOutcome is SocialGroupOutcome.Failure) {
-                _uiState.value = SquadsUiState(phase = phaseFor(groupsOutcome.error))
+                fail(groupsOutcome.error)
                 return@launch
             }
 
             val invitationsOutcome = gateway.invitations()
-            if (currentUid() != uid) return@launch
+            if (currentUid() != uid || generation != loadGeneration) return@launch
 
             if (invitationsOutcome is SocialGroupOutcome.Failure) {
-                _uiState.value = SquadsUiState(phase = phaseFor(invitationsOutcome.error))
+                fail(invitationsOutcome.error)
                 return@launch
             }
 
             _uiState.update {
                 it.copy(
                     isRefreshing = false,
+                    staleNotice = null,
                     phase = SquadsPhase.Success(
                         groups = (groupsOutcome as SocialGroupOutcome.Success).data,
                         invitations = (invitationsOutcome as SocialGroupOutcome.Success).data
                     )
                 )
             }
+        }
+    }
+
+    /**
+     * Uma falha de leitura. Com a lista na tela e uma falha recuperável, a lista **fica** e o aviso
+     * diz que ela pode estar desatualizada (T19.H3 §45); sem lista, a fase diz o que houve.
+     */
+    private fun fail(error: SocialGroupError) {
+        val state = _uiState.value
+        _uiState.value = if (state.phase is SquadsPhase.Success && error.isRecoverableRead()) {
+            state.copy(isRefreshing = false, staleNotice = staleListNotice(error))
+        } else {
+            SquadsUiState(phase = phaseFor(error))
         }
     }
 
@@ -324,4 +355,18 @@ class SquadsViewModel(
         SocialGroupError.UNAVAILABLE -> "O servidor está indisponível. Tente novamente."
         else -> "Não foi possível concluir agora."
     }
+}
+
+/** Falhas que não dizem nada sobre o Squad — só que ele não pôde ser relido agora (T19.H3). */
+internal fun SocialGroupError.isRecoverableRead(): Boolean =
+    this == SocialGroupError.NETWORK ||
+        this == SocialGroupError.UNAVAILABLE ||
+        this == SocialGroupError.RATE_LIMITED
+
+/** "Mostrando a última atualização" para as telas de Squad (T19.H3 §45). */
+internal fun staleListNotice(error: SocialGroupError): String = when (error) {
+    SocialGroupError.NETWORK -> "Sem conexão agora — mostrando a última atualização."
+    SocialGroupError.RATE_LIMITED ->
+        "Muitas atualizações seguidas. Tente em instantes — mostrando a última atualização."
+    else -> "Não foi possível atualizar agora — mostrando a última atualização."
 }

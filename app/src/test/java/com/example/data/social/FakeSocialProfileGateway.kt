@@ -3,6 +3,7 @@ package com.example.data.social
 import com.example.domain.social.FriendSocialProfile
 import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingAvailability
+import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
 import com.example.domain.social.SocialConsistencyParameters
@@ -10,6 +11,7 @@ import com.example.domain.social.SocialFieldAvailability
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
 import com.example.domain.social.SocialProfileOutcome
+import com.example.domain.social.with
 import kotlinx.coroutines.CompletableDeferred
 
 /**
@@ -120,23 +122,18 @@ class FakeSocialProfileGateway(
     }
 
     override suspend fun updateProgressSharing(
-        shareLevel: Boolean?,
-        shareConsistencyStreak: Boolean?,
-        shareWeeklyWorkoutCount: Boolean?,
-        shareHighlightedAchievements: Boolean?,
+        changes: Map<ProgressSharingField, Boolean>,
         weekTimeZone: String?,
         consistency: SocialConsistencyParameters?
     ): SocialProfileOutcome<ProgressSharing> = respond {
         val uid = currentUid ?: return@respond fail(SocialProfileError.AUTH_REQUIRED)
-        val current = settingsOf(uid)
+        val current = changes.entries.fold(settingsOf(uid)) { settings, (field, value) ->
+            settings.with(field, value)
+        }
         consistencyUpdates += consistency
+        sentChanges += changes
         // Semântica de PATCH: o que não veio não muda. E `updatedAt` é do "servidor".
         settingsByUid[uid] = current.copy(
-            shareLevel = shareLevel ?: current.shareLevel,
-            shareConsistencyStreak = shareConsistencyStreak ?: current.shareConsistencyStreak,
-            shareWeeklyWorkoutCount = shareWeeklyWorkoutCount ?: current.shareWeeklyWorkoutCount,
-            shareHighlightedAchievements =
-                shareHighlightedAchievements ?: current.shareHighlightedAchievements,
             weekTimeZone = weekTimeZone ?: current.weekTimeZone,
             // Os parâmetros substituem o conjunto inteiro, como no servidor (T19.2A).
             consistency = consistency ?: current.consistency,
@@ -150,6 +147,9 @@ class FakeSocialProfileGateway(
      * parâmetros viajam quando divergem do que o servidor conhece — e só então.
      */
     val consistencyUpdates = mutableListOf<SocialConsistencyParameters?>()
+
+    /** As mudanças de interruptor de cada `PATCH`, na ordem (T19.H3). */
+    val sentChanges = mutableListOf<Map<ProgressSharingField, Boolean>>()
 
     // ------------------------------------------------------------------ regras do dublê
 

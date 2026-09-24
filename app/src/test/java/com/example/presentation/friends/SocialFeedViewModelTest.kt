@@ -166,6 +166,88 @@ class SocialFeedViewModelTest {
         assertTrue(viewModel.uiState.value.phase is SocialFeedPhase.Error)
     }
 
+    // ------------------------------------------------------------------ T19.H3 refresh
+
+    @Test
+    fun `refresh sem rede com a lista na tela mantem a lista e avisa (H3 11)`() =
+        runTest(testDispatcher) {
+            gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(ownCheckIn, friendCheckIn))
+            advanceUntilIdle()
+
+            gateway.feedResult = WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NETWORK)
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            // Antes da T19.H3 a lista boa virava "Feed indisponível".
+            val phase = state.phase as SocialFeedPhase.Success
+            assertEquals(2, phase.items.size)
+            assertTrue(state.staleNotice!!.contains("Sem conexão"))
+            assertFalse(state.isRefreshing)
+        }
+
+    @Test
+    fun `o proximo refresh bem-sucedido traz a publicacao nova e limpa o aviso`() =
+        runTest(testDispatcher) {
+            gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(friendCheckIn))
+            advanceUntilIdle()
+            gateway.feedResult = WorkoutCheckInOutcome.Failure(WorkoutCheckInError.NETWORK)
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(ownCheckIn, friendCheckIn))
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(2, (state.phase as SocialFeedPhase.Success).items.size)
+            assertEquals(null, state.staleNotice)
+        }
+
+    @Test
+    fun `sair da conta ou desativar o Social derruba a lista mesmo no refresh`() =
+        runTest(testDispatcher) {
+            gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(friendCheckIn))
+            advanceUntilIdle()
+
+            gateway.feedResult =
+                WorkoutCheckInOutcome.Failure(WorkoutCheckInError.SOCIAL_NOT_ENABLED)
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            assertEquals(SocialFeedPhase.SocialNotEnabled, viewModel.uiState.value.phase)
+        }
+
+    @Test
+    fun `voltar ao Feed com a lista na tela rele sem colapsar para Loading`() =
+        runTest(testDispatcher) {
+            gateway.feedResult = WorkoutCheckInOutcome.Success(listOf(friendCheckIn))
+            advanceUntilIdle()
+
+            gateway.gate = CompletableDeferred()
+            viewModel.open()
+
+            assertTrue(viewModel.uiState.value.phase is SocialFeedPhase.Success)
+            assertTrue(viewModel.uiState.value.isRefreshing)
+            gateway.gate?.complete(Unit)
+            advanceUntilIdle()
+        }
+
+    @Test
+    fun `o refresh so le o Feed — nada e publicado nem excluido (H3 8)`() =
+        runTest(testDispatcher) {
+            advanceUntilIdle()
+            val before = gateway.feedCalls
+
+            repeat(3) {
+                viewModel.refresh()
+                advanceUntilIdle()
+            }
+
+            assertEquals(before + 3, gateway.feedCalls)
+            assertEquals(emptyList<String>(), gateway.deletedIds)
+        }
+
     @Test
     fun `social desativado tem estado proprio`() = runTest(testDispatcher) {
         gateway.feedResult = WorkoutCheckInOutcome.Failure(WorkoutCheckInError.SOCIAL_NOT_ENABLED)

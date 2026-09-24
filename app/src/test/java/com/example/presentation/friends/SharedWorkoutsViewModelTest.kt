@@ -113,6 +113,9 @@ class SharedWorkoutsViewModelTest {
         var lastCancelledShareId: String? = null
         var listReceivedCalls = 0
 
+        /** T19.H3 — uma leitura que falha, para provar que a falha não vira "lista vazia". */
+        var listFailure: WorkoutShareError? = null
+
         override suspend fun createShare(
             recipientSocialId: String,
             clientRequestId: String,
@@ -124,12 +127,14 @@ class SharedWorkoutsViewModelTest {
             // A resposta é o que a lista tinha **quando a chamada saiu**: é assim que a chamada
             // atrasada da conta anterior carrega os dados dela, e não os da conta nova.
             val response = receivedShares.toList()
+            val failure = listFailure
             receivedGate?.await()
-            return WorkoutShareOutcome.Success(response)
+            return failure?.let { WorkoutShareOutcome.Failure(it) } ?: WorkoutShareOutcome.Success(response)
         }
 
         override suspend fun listSent(): WorkoutShareOutcome<List<WorkoutShareItem>> =
-            WorkoutShareOutcome.Success(sentShares.toList())
+            listFailure?.let { WorkoutShareOutcome.Failure(it) }
+                ?: WorkoutShareOutcome.Success(sentShares.toList())
 
         override suspend fun getDetail(shareId: String): WorkoutShareOutcome<WorkoutShareDetail> =
             detailResult ?: WorkoutShareOutcome.Failure(WorkoutShareError.SHARE_NOT_FOUND)
@@ -216,6 +221,49 @@ class SharedWorkoutsViewModelTest {
         assertEquals(1, state.sentItems.size)
         assertEquals("Treino Braço", state.sentItems[0].templateName)
     }
+
+    // ------------------------------------------------------------------ T19.H3 refresh
+
+    @Test
+    fun `a primeira leitura sem rede diz que nao carregou — nunca que nao ha compartilhamentos`() =
+        runTest(testDispatcher) {
+            fakeGateway.listFailure = WorkoutShareError.NETWORK
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertFalse(state.hasLoaded)
+            assertTrue(state.loadError != null)
+            assertFalse(state.isLoading)
+        }
+
+    @Test
+    fun `refresh sem rede depois de carregado mantem as listas e avisa`() =
+        runTest(testDispatcher) {
+            fakeGateway.receivedShares.add(item("share-1", "Treino PPL"))
+            advanceUntilIdle()
+            assertEquals(1, viewModel.uiState.value.receivedItems.size)
+
+            fakeGateway.listFailure = WorkoutShareError.NETWORK
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(1, state.receivedItems.size)
+            assertTrue(state.notice!!.contains("mostrando a última atualização"))
+        }
+
+    @Test
+    fun `abrir a tela durante a leitura inicial nao repete as requisicoes`() =
+        runTest(testDispatcher) {
+            fakeGateway.receivedGate = CompletableDeferred()
+            advanceUntilIdle()
+            viewModel.open()
+            viewModel.refresh()
+            fakeGateway.receivedGate?.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(1, fakeGateway.listReceivedCalls)
+        }
 
     @Test
     fun `openDetail loads preview and closeDetail clears it`() = runTest(testDispatcher) {

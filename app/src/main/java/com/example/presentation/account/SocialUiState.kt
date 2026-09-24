@@ -81,7 +81,14 @@ data class SocialUiState(
     /** O que o usuário digitou no campo de nome. Estado de formulário, não de domínio. */
     val displayNameInput: String = "",
     /** `true` quando o nome digitado já tem forma aceitável para ser enviado. */
-    val isDisplayNameAcceptable: Boolean = false
+    val isDisplayNameAcceptable: Boolean = false,
+    /**
+     * Uma releitura pedida pelo "↻" do SocialHome está em voo (T19.H3 §6).
+     *
+     * Separado de [SocialPhase.Loading] de propósito: com o perfil já na tela, atualizar não pode
+     * trocá-lo por "carregando" — nem, se falhar, por uma tela sem perfil.
+     */
+    val isRefreshing: Boolean = false
 ) {
 
     /** O perfil conhecido, em qualquer fase que o tenha. */

@@ -192,6 +192,66 @@ class SquadsViewModelTest {
         assertEquals(SquadsPhase.Offline, viewModel.uiState.value.phase)
     }
 
+    // ------------------------------------------------------------------ T19.H3 refresh
+
+    @Test
+    fun `refresh sem rede com a lista na tela mantem a lista e avisa (H3 45)`() =
+        runTest(testDispatcher) {
+            gateway.groupsResult = SocialGroupOutcome.Success(listOf(squadA))
+            advanceUntilIdle()
+
+            gateway.groupsResult = SocialGroupOutcome.Failure(SocialGroupError.NETWORK)
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(listOf("grupo-de-a"), state.groups.map { it.groupId })
+            assertTrue(state.staleNotice!!.contains("Sem conexão"))
+            assertFalse(state.isRefreshing)
+        }
+
+    @Test
+    fun `abrir a tela enquanto a leitura inicial voa nao dispara outra`() =
+        runTest(testDispatcher) {
+            advanceUntilIdle()
+            val afterInit = gateway.groupsCalls
+            // Uma segunda instância da tela abrindo com a leitura da primeira ainda em voo.
+            gateway.gate = CompletableDeferred()
+            viewModel.refresh()
+            viewModel.open()
+            gateway.gate?.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(afterInit + 1, gateway.groupsCalls)
+        }
+
+    @Test
+    fun `a resposta velha de um refresh nao sobrescreve a releitura mais nova (H3 47)`() =
+        runTest(testDispatcher) {
+            gateway.groupsResult = SocialGroupOutcome.Success(listOf(squadA))
+            advanceUntilIdle()
+
+            // O refresh sai e fica preso na rede, com a resposta de antes.
+            val slow = CompletableDeferred<Unit>()
+            gateway.gate = slow
+            viewModel.refresh()
+            advanceUntilIdle()
+
+            // Enquanto isso, criar um Squad relê — e essa leitura é mais nova.
+            gateway.gate = null
+            gateway.groupsResult = SocialGroupOutcome.Success(listOf(squadA, squadB))
+            gateway.createResult = SocialGroupOutcome.Success(squadB)
+            viewModel.createGroup("Os Monstros")
+            advanceUntilIdle()
+            assertEquals(2, viewModel.uiState.value.groups.size)
+
+            // A resposta velha chega por último, e não escreve.
+            slow.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(2, viewModel.uiState.value.groups.size)
+            assertFalse(viewModel.uiState.value.isRefreshing)
+        }
+
     @Test
     fun `social desativado tem estado proprio`() = runTest(testDispatcher) {
         gateway.groupsResult = SocialGroupOutcome.Failure(SocialGroupError.SOCIAL_NOT_ENABLED)

@@ -24,7 +24,9 @@ sealed interface BlockedUsersPhase {
 data class BlockedUsersUiState(
     val phase: BlockedUsersPhase = BlockedUsersPhase.Idle,
     val pendingUnblockSocialIds: Set<String> = emptySet(),
-    val notice: String? = null
+    val notice: String? = null,
+    /** O "↻" está relendo, com a lista na tela (T19.H3). */
+    val isRefreshing: Boolean = false
 )
 
 /**
@@ -69,28 +71,43 @@ class BlockedUsersViewModel(
             return
         }
 
-        _uiState.value = _uiState.value.copy(phase = BlockedUsersPhase.Loading, notice = null)
-        val requestUid = currentUid
+        // Sem conta não há lista de ninguém para ler (antes da T19.H3 a leitura saía com `null`).
+        val requestUid = currentUid ?: return
+        val state = _uiState.value
+        // Um toque durante uma leitura em voo não abre outra.
+        if (state.phase is BlockedUsersPhase.Loading || state.isRefreshing) return
+
+        // Com a lista na tela, ela fica enquanto a releitura voa (T19.H3 §45).
+        val showing = state.phase is BlockedUsersPhase.Ready
+        _uiState.value = if (showing) {
+            state.copy(isRefreshing = true, notice = null)
+        } else {
+            state.copy(phase = BlockedUsersPhase.Loading, notice = null)
+        }
 
         viewModelScope.launch {
-            when (val outcome = blockGateway.listBlockedUsers()) {
-                is BlockOutcome.Success -> {
-                    if (currentUid == requestUid) {
-                        _uiState.value = _uiState.value.copy(
-                            phase = BlockedUsersPhase.Ready(outcome.value)
-                        )
+            val outcome = blockGateway.listBlockedUsers()
+            if (currentUid != requestUid) return@launch
+            _uiState.value = when {
+                outcome is BlockOutcome.Success -> _uiState.value.copy(
+                    isRefreshing = false,
+                    phase = BlockedUsersPhase.Ready(outcome.value)
+                )
+                showing && (outcome as BlockOutcome.Failure).error.let {
+                    it == BlockError.NETWORK || it == BlockError.UNAVAILABLE ||
+                        it == BlockError.RATE_LIMITED
+                } -> _uiState.value.copy(
+                    isRefreshing = false,
+                    notice = "Não foi possível atualizar agora — mostrando a última atualização."
+                )
+                else -> _uiState.value.copy(
+                    isRefreshing = false,
+                    phase = if ((outcome as BlockOutcome.Failure).error == BlockError.NETWORK) {
+                        BlockedUsersPhase.Offline
+                    } else {
+                        BlockedUsersPhase.Error(outcome.error)
                     }
-                }
-                is BlockOutcome.Failure -> {
-                    if (currentUid == requestUid) {
-                        val phase = if (outcome.error == BlockError.NETWORK) {
-                            BlockedUsersPhase.Offline
-                        } else {
-                            BlockedUsersPhase.Error(outcome.error)
-                        }
-                        _uiState.value = _uiState.value.copy(phase = phase)
-                    }
-                }
+                )
             }
         }
     }

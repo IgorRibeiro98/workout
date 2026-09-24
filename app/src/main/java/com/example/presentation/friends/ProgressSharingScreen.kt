@@ -29,12 +29,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.social.FriendSocialProfile
+import com.example.domain.social.ProgressSharingField
+import com.example.domain.social.ProgressSharingGroup
+import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.isShared
 import com.example.presentation.account.ProgressSharingPhase
 import com.example.presentation.account.SocialProfileUiState
 import com.example.presentation.account.SocialProfileViewModel
@@ -63,13 +68,21 @@ const val PREVIEW_EMPTY_MESSAGE =
  * ```text
  * Compartilhar progresso
  *
- * Nível                    [ ]   Disponível / Ainda não disponível
- * Consistência             [ ]   Disponível / Ainda não disponível
- * Treinos da semana        [ ]   Disponível
- * Conquistas em destaque   [ ]   Disponível / Ainda não disponível
+ * PROGRESSO GERAL
+ * Nível · Consistência semanal · Treinos da semana · Conquistas em destaque
+ *
+ * ESTATÍSTICAS DE TREINO                       ← T19.H3: no perfil, somadas da semana
+ * Tempo treinado · Séries · Volume da semana · Treinos totais
+ *
+ * DETALHES DOS CHECK-INS                       ← T19.H3: em cada publicação, também nas antigas
+ * Nome · Horário · Duração · Exercícios · Séries e repetições · Cargas · Volume total
  *
  * [ Pré-visualizar meu perfil ]
  * ```
+ *
+ * Todos começam desligados (a migration do servidor criou os onze novos desligados para quem já
+ * existia). "Cargas utilizadas" depende de "Exercícios" e "Séries e repetições" — ver
+ * [dependencyMet].
  *
  * ## Interruptor e disponibilidade são coisas diferentes
  *
@@ -123,6 +136,17 @@ fun ProgressSharingScreen(
                         )
                     }
                 },
+                actions = {
+                    // T19.H3: uma escolha feita em outro aparelho, e a disponibilidade de cada
+                    // campo (que muda depois de sincronizar), só aparecem relendo.
+                    SocialRefreshAction(
+                        isRefreshing = uiState.isSharingRefreshing ||
+                            uiState.sharingPhase is ProgressSharingPhase.Loading,
+                        onRefresh = viewModel::refreshProgressSharing,
+                        enabled = uiState.isConfigured &&
+                            uiState.sharingPhase !is ProgressSharingPhase.Saving
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
         }
@@ -138,10 +162,7 @@ fun ProgressSharingScreen(
         ) {
             ProgressSharingBody(
                 uiState = uiState,
-                onShareLevel = viewModel::setShareLevel,
-                onShareConsistencyStreak = viewModel::setShareConsistencyStreak,
-                onShareWeeklyWorkoutCount = viewModel::setShareWeeklyWorkoutCount,
-                onShareHighlightedAchievements = viewModel::setShareHighlightedAchievements,
+                onToggle = viewModel::setShare,
                 onPreview = viewModel::loadPreview,
                 onRetry = viewModel::refreshProgressSharing
             )
@@ -153,10 +174,7 @@ fun ProgressSharingScreen(
 @Composable
 internal fun ProgressSharingBody(
     uiState: SocialProfileUiState,
-    onShareLevel: (Boolean) -> Unit = {},
-    onShareConsistencyStreak: (Boolean) -> Unit = {},
-    onShareWeeklyWorkoutCount: (Boolean) -> Unit = {},
-    onShareHighlightedAchievements: (Boolean) -> Unit = {},
+    onToggle: (ProgressSharingField, Boolean) -> Unit = { _, _ -> },
     onPreview: () -> Unit = {},
     onRetry: () -> Unit = {}
 ) {
@@ -203,35 +221,24 @@ internal fun ProgressSharingBody(
                 fontSize = 13.sp
             )
 
-            SharingToggle(
-                label = "Nível",
-                checked = uiState.settings.shareLevel,
-                availability = uiState.availability.level,
-                enabled = enabled,
-                onCheckedChange = onShareLevel,
-                note = LEVEL_SHARING_NOTE
-            )
-            SharingToggle(
-                label = "Consistência semanal",
-                checked = uiState.settings.shareConsistencyStreak,
-                availability = uiState.availability.consistencyStreak,
-                enabled = enabled,
-                onCheckedChange = onShareConsistencyStreak
-            )
-            SharingToggle(
-                label = "Treinos da semana",
-                checked = uiState.settings.shareWeeklyWorkoutCount,
-                availability = uiState.availability.weeklyWorkoutCount,
-                enabled = enabled,
-                onCheckedChange = onShareWeeklyWorkoutCount
-            )
-            SharingToggle(
-                label = "Conquistas em destaque",
-                checked = uiState.settings.shareHighlightedAchievements,
-                availability = uiState.availability.highlightedAchievements,
-                enabled = enabled,
-                onCheckedChange = onShareHighlightedAchievements
-            )
+            // Os três grupos da T19.H3 (§23), na ordem do enum. Um grupo é um título, uma frase
+            // sobre onde aquilo aparece e para quem, e os interruptores dele.
+            ProgressSharingGroup.entries.forEach { group ->
+                GroupHeader(
+                    title = progressSharingGroupTitle(group),
+                    description = progressSharingGroupDescription(group)
+                )
+                ProgressSharingField.entries.filter { it.group == group }.forEach { field ->
+                    SharingToggle(
+                        label = progressSharingLabel(field),
+                        checked = uiState.settings.isShared(field),
+                        availability = uiState.availability.of(field),
+                        enabled = enabled && dependencyMet(field, uiState.settings),
+                        onCheckedChange = { onToggle(field, it) },
+                        note = progressSharingNote(field)
+                    )
+                }
+            }
 
             if (phase == ProgressSharingPhase.Saving) {
                 Busy("Salvando...")
@@ -247,6 +254,41 @@ internal fun ProgressSharingBody(
         }
     }
 }
+
+/** O título de um grupo e, quando há, onde aquilo aparece e para quem (T19.H3 §23/§37). */
+@Composable
+private fun GroupHeader(title: String, description: String?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = title.uppercase(),
+            color = Lime400,
+            fontWeight = FontWeight.Black,
+            fontSize = 12.sp,
+            modifier = Modifier.semantics { heading() }
+        )
+        description?.let { Text(text = it, color = TextSecondary, fontSize = 12.sp) }
+    }
+}
+
+/**
+ * "Cargas utilizadas" só tem onde aparecer dentro das séries de cada exercício (§31).
+ *
+ * Desligado e sem as duas dependências, o interruptor fica desabilitado — ligá-lo não teria efeito
+ * observável. **Ligado**, ele continua clicável mesmo sem elas: é o único jeito de desligar uma
+ * escolha que sobrou de antes, e o servidor já não publica carga nenhuma nesse estado.
+ */
+internal fun dependencyMet(field: ProgressSharingField, settings: ProgressSharingSettings): Boolean =
+    when (field) {
+        ProgressSharingField.WORKOUT_WEIGHTS ->
+            settings.shareWorkoutWeights ||
+                (settings.shareWorkoutExercises && settings.shareWorkoutSets)
+        else -> true
+    }
 
 /**
  * Um interruptor e o que o servidor consegue mostrar daquele campo.
@@ -265,7 +307,8 @@ internal fun ProgressSharingBody(
 private fun SharingToggle(
     label: String,
     checked: Boolean,
-    availability: SocialFieldAvailability,
+    /** `null` para os detalhes de check-in: dependem de cada publicação, não do perfil. */
+    availability: SocialFieldAvailability?,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     /** Uma frase sobre o **significado** do campo publicado, quando ele difere do local. */
@@ -299,15 +342,17 @@ private fun SharingToggle(
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
-                Text(
-                    text = availabilityLabel(availability),
-                    color = TextSecondary,
-                    fontSize = 12.sp
-                )
-                // A explicação só aparece quando há algo a explicar. "Disponível" não precisa de
-                // uma linha dizendo que está tudo bem.
-                availabilityHint(availability)?.let { hint ->
-                    Text(text = hint, color = TextSecondary, fontSize = 11.sp)
+                if (availability != null) {
+                    Text(
+                        text = availabilityLabel(availability),
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                    // A explicação só aparece quando há algo a explicar. "Disponível" não precisa
+                    // de uma linha dizendo que está tudo bem.
+                    availabilityHint(availability)?.let { hint ->
+                        Text(text = hint, color = TextSecondary, fontSize = 11.sp)
+                    }
                 }
                 note?.let { Text(text = it, color = TextSecondary, fontSize = 11.sp) }
             }
@@ -372,6 +417,9 @@ private fun PreviewCard(profile: FriendSocialProfile) {
                         icon = Icons.Filled.FitnessCenter,
                         value = if (it == 1) "1 treino" else "$it treinos"
                     )
+                }
+                trainingStatLines(profile.sharedProgress).forEach { (label, value) ->
+                    PreviewRow(label = label, value = value)
                 }
                 val highlighted = profile.sharedProgress.highlightedAchievementIds
                     .mapNotNull { id -> achievementLabel(id)?.let { title -> achievementIconKey(id) to title } }

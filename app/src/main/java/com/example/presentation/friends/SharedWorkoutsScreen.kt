@@ -84,7 +84,7 @@ fun SharedWorkoutsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
-        viewModel.refresh()
+        viewModel.open()
     }
 
     LaunchedEffect(state.notice) {
@@ -106,6 +106,10 @@ fun SharedWorkoutsScreen(
                             tint = TextPrimary
                         )
                     }
+                },
+                actions = {
+                    // T19.H3: uma oferta nova de um amigo só aparece relendo.
+                    SocialRefreshAction(isRefreshing = state.isLoading, onRefresh = viewModel::refresh)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BackgroundDark)
             )
@@ -152,7 +156,7 @@ fun SharedWorkoutsScreen(
                 )
             }
 
-            if (state.isLoading) {
+            if (state.isLoading && !state.hasLoaded) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -160,6 +164,26 @@ fun SharedWorkoutsScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(color = Lime400)
+                }
+            } else if (!state.hasLoaded && state.loadError != null) {
+                val loadError = state.loadError.orEmpty()
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = loadError,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center,
+                            fontSize = 15.sp
+                        )
+                        TextButton(onClick = viewModel::refresh) {
+                            Text("Tentar de novo", color = Lime400)
+                        }
+                    }
                 }
             } else {
                 val currentList = if (state.selectedTab == SharedWorkoutsTab.RECEIVED) {
