@@ -12,6 +12,8 @@ import { SocialProfileErrors } from './social-profile.errors';
 import type { UpdateProgressSharingRequest } from './social-profile.validator';
 import { SocialProgressPrivacyFilter, SocialProgressProjector } from './social-progress.projector';
 import {
+  PROGRESS_SHARING_FLAGS,
+  type ProgressSharingFlags,
   SocialProgressSettingsRepository,
   type StoredProgressSettings,
 } from './social-progress.repository';
@@ -160,11 +162,13 @@ export class SocialProfileService {
 }
 
 function toSettingsDto(settings: StoredProgressSettings): SocialProgressSettingsDto {
+  // Os quinze interruptores pela mesma tabela do repositório: um novo não pode ser gravado e
+  // esquecido na resposta ao dono.
+  const flags = Object.fromEntries(
+    PROGRESS_SHARING_FLAGS.map(([flag]) => [flag, settings[flag]]),
+  ) as ProgressSharingFlags;
   return {
-    shareLevel: settings.shareLevel,
-    shareConsistencyStreak: settings.shareConsistencyStreak,
-    shareWeeklyWorkoutCount: settings.shareWeeklyWorkoutCount,
-    shareHighlightedAchievements: settings.shareHighlightedAchievements,
+    ...flags,
     weekTimeZone: settings.weekTimeZone,
     consistency: settings.consistency
       ? {

@@ -580,6 +580,85 @@ describe('T17.9 — mídia dos check-ins', () => {
   });
 
   // =====================================================================
+  // T19.H3 §16–§19 — o JPEG que o optimizer do Android produz, de ponta a ponta
+  // =====================================================================
+
+  describe('o JPEG do optimizer Android, de ponta a ponta (T19.H3 §16–§19)', () => {
+    /**
+     * Os bytes que `SocialPhotoOptimizer` produziu no decodificador nativo, a partir de uma foto
+     * de câmera 4032×3024 com EXIF de rotação (ver `contracts/social/v1/README.md`). É o corpo
+     * real que o app envia — e não um JPEG montado pelo `sharp` deste lado.
+     */
+    const androidJpeg = () =>
+      readFileSync(
+        join(__dirname, '..', '..', 'contracts', 'social', 'v1', 'checkin-photo-android.jpg'),
+      );
+
+    it('chega como Buffer, vira objeto + metadata, anexa, aparece no Feed e é baixável', async () => {
+      const syncId = await setupAuthor();
+      const clientUploadId = uuid();
+
+      // `Content-Type: image/jpeg` é exatamente o que `SparkWorkoutCheckInGateway` declara. Se o
+      // parser binário não estivesse montado nesta rota, o controller receberia `{}` e responderia
+      // INVALID_IMAGE — a montagem aqui é a mesma de produção (`createApp`/`configureApp`).
+      const uploaded = await upload(TOKEN_A, syncId, androidJpeg(), { clientUploadId }).expect(201);
+      const mediaId = uploaded.body.mediaId as string;
+      // 1440×1920: a rotação do EXIF virou geometria no aparelho, e o servidor reduz para 1600.
+      expect(uploaded.body.height).toBe(MAX_OUTPUT_EDGE_PX);
+      expect(uploaded.body.width).toBe(1200);
+
+      // Objeto no armazenamento **e** linha coerente com ele.
+      expect(filesOnDisk()).toHaveLength(1);
+      const row = inDatabase(
+        (db) =>
+          db.prepare(`SELECT id, status, byte_size AS size FROM social_checkin_media`).get() as {
+            id: string;
+            status: string;
+            size: number;
+          },
+      );
+      expect(row.id).toBe(mediaId);
+      expect(row.status).toBe('PENDING');
+      expect(Number(row.size)).toBe(statSync(filesOnDisk()[0]).size);
+
+      // Retry da mesma intenção: a mesma mídia lógica, nenhum objeto a mais.
+      const retry = await upload(TOKEN_A, syncId, androidJpeg(), { clientUploadId }).expect(201);
+      expect(retry.body.mediaId).toBe(mediaId);
+      expect(filesOnDisk()).toHaveLength(1);
+
+      const created = await createCheckIn(TOKEN_A, syncId, { mediaId }).expect(201);
+      expect(created.body.media.mediaId).toBe(mediaId);
+      expect(
+        inDatabase(
+          (db) =>
+            (db.prepare(`SELECT status FROM social_checkin_media`).get() as { status: string })
+              .status,
+        ),
+      ).toBe('ATTACHED');
+
+      const feed = await request(server())
+        .get('/v1/social/feed')
+        .set('Authorization', auth(TOKEN_A))
+        .expect(200);
+      expect(feed.body.items[0].media.mediaId).toBe(mediaId);
+
+      const bytes = await request(server())
+        .get(`/v1/social/media/${mediaId}`)
+        .set('Authorization', auth(TOKEN_A))
+        .buffer(true)
+        .parse((res, done) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(bytes.headers['content-type']).toBe('image/webp');
+      const served = await sharp(bytes.body as Buffer).metadata();
+      expect([served.width, served.height]).toEqual([1200, 1600]);
+    });
+  });
+
+  // =====================================================================
   // §29/§30/§31 — quota e teto
   // =====================================================================
 

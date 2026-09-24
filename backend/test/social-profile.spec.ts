@@ -355,6 +355,12 @@ describe('Perfil social enriquecido', () => {
         consistencyStreak: 'UNAVAILABLE',
         weeklyWorkoutCount: 'AVAILABLE',
         highlightedAchievements: 'AVAILABLE',
+        // T19.H3: com fuso e sessões, as estatísticas da semana e o total não dependem de
+        // parâmetros de consistência.
+        weeklyTrainingMinutes: 'AVAILABLE',
+        weeklyCompletedSets: 'AVAILABLE',
+        weeklyVolume: 'AVAILABLE',
+        totalWorkouts: 'AVAILABLE',
       });
       expect(owner.body.settings.shareLevel).toBe(true);
       expect(owner.body.settings.consistency).toBeNull();

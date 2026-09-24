@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import BetterSqlite3, { type Database } from 'better-sqlite3';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -23,6 +24,9 @@ const UID_B = 'uid-b';
  * pedidos pendentes iguais são recusados aqui **sem passar pelo serviço** — porque um dia alguém
  * vai escrever um caminho novo, e a garantia precisa continuar valendo nele.
  */
+/** O histórico de migrations da era SQLite (T16–T17.13), onde a `0008` é o grafo social. */
+const LEGACY_SQLITE_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+
 describe('Persistência do grafo social', () => {
   let temp: TempDb;
 
@@ -54,13 +58,13 @@ describe('Persistência do grafo social', () => {
 
   describe('a migration do grafo é aditiva', () => {
     it('sobe sobre a base T17.0 sem tocar em perfil, privacidade nem dado da T16', () => {
-      const db = new BetterSqlite3(temp.path);
+      // O histórico **SQLite** (`migrations/`), como em `challenge-persistence.spec.ts`: é nele
+      // que a `0008_friend_graph` existe. Até a T19.H3 este teste lia o diretório do PostgreSQL e
+      // se desligava por "não há migration 8" — e a `0008_social_progress_sharing_v3` do
+      // PostgreSQL o religou por engano. Ler o histórico certo é o que o mantém provando algo.
+      const db = new BetterSqlite3(join(temp.directory, 'legacy-friendship.db'));
       db.pragma('foreign_keys = ON');
-      const all = loadMigrations(MIGRATIONS_DIR);
-      if (!all.some((m) => m.version === 8)) {
-        // No PostgreSQL com baseline consolidada 0001_t17_13_baseline, não há migrations 8-23 separadas
-        return;
-      }
+      const all = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR);
       runMigrations(
         db,
         all.filter((migration) => migration.version <= 7),
@@ -135,11 +139,10 @@ describe('Persistência do grafo social', () => {
     });
 
     it('a migration só cria: nenhum DROP, DELETE, ALTER ou UPDATE', () => {
-      const migration = loadMigrations(MIGRATIONS_DIR).find((entry) => entry.version === 8);
-      if (!migration) {
-        // No PostgreSQL, a baseline 0001 consolida o schema e não possui migration 8 isolada.
-        return;
-      }
+      const migration = loadMigrations(LEGACY_SQLITE_MIGRATIONS_DIR).find(
+        (entry) => entry.version === 8,
+      );
+      expect(migration?.name).toBe('friend_graph');
       // Comentário fora: a documentação da migration cita o que ela não faz, e proibir a menção em
       // prosa apagaria a explicação junto com o defeito.
       const sql = (migration?.sql ?? '').replace(/^\s*--.*$/gm, '').toUpperCase();

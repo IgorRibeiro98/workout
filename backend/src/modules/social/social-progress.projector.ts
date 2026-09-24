@@ -105,6 +105,10 @@ export class SocialProgressPrivacyFilter {
       consistencyStreak?: number;
       weeklyWorkoutCount?: number;
       highlightedAchievementIds?: readonly string[];
+      weeklyTrainingMinutes?: number;
+      weeklyCompletedSets?: number;
+      weeklyVolumeKg?: number;
+      totalWorkouts?: number;
     } = {};
 
     if (settings.shareLevel && projection.level.kind === 'AVAILABLE') {
@@ -121,6 +125,22 @@ export class SocialProgressPrivacyFilter {
       projection.highlightedAchievementIds.kind === 'AVAILABLE'
     ) {
       shared.highlightedAchievementIds = projection.highlightedAchievementIds.value;
+    }
+    // ---- T19.H3 — estatísticas de treino. As mesmas duas condições: ligado **e** afirmável.
+    if (
+      settings.shareWeeklyTrainingMinutes &&
+      projection.weeklyTrainingMinutes.kind === 'AVAILABLE'
+    ) {
+      shared.weeklyTrainingMinutes = projection.weeklyTrainingMinutes.value;
+    }
+    if (settings.shareWeeklyCompletedSets && projection.weeklyCompletedSets.kind === 'AVAILABLE') {
+      shared.weeklyCompletedSets = projection.weeklyCompletedSets.value;
+    }
+    if (settings.shareWeeklyVolume && projection.weeklyVolumeKg.kind === 'AVAILABLE') {
+      shared.weeklyVolumeKg = projection.weeklyVolumeKg.value;
+    }
+    if (settings.shareTotalWorkouts && projection.totalWorkouts.kind === 'AVAILABLE') {
+      shared.totalWorkouts = projection.totalWorkouts.value;
     }
 
     return shared;
@@ -142,6 +162,10 @@ export class SocialProgressPrivacyFilter {
       consistencyStreak: availabilityOf(projection.consistencyStreak),
       weeklyWorkoutCount: availabilityOf(projection.weeklyWorkoutCount),
       highlightedAchievements: availabilityOf(projection.highlightedAchievementIds),
+      weeklyTrainingMinutes: availabilityOf(projection.weeklyTrainingMinutes),
+      weeklyCompletedSets: availabilityOf(projection.weeklyCompletedSets),
+      weeklyVolume: availabilityOf(projection.weeklyVolumeKg),
+      totalWorkouts: availabilityOf(projection.totalWorkouts),
     };
   }
 }

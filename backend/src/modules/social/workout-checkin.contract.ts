@@ -16,18 +16,26 @@
  * segundo Feed, e um check-in publicado pela T17.8 continua válido exatamente como está —
  * `caption = null`, `media = null`, `reactions = {}`, `commentCount = 0`, sem backfill (T17.9 §6).
  *
- * O que continua fora, e é o que mantém a fronteira de privacidade: nome de treino (§40),
- * exercício, série, repetição, carga, duração, volume, PR, caloria e horário do treino (§41–§48).
- * O nome do template é texto que o usuário digita — publicá-lo seria publicar texto livre por uma
- * porta lateral, e a legenda existe justamente para que texto livre só nasça quando a pessoa
- * escrever um (T17.9 §8/§11). Vídeo, GIF animado, múltiplas fotos, carrossel, mention, hashtag,
- * link clicável e edição de publicação também continuam fora (T17.9 §3).
+ * ## O que a T19.H3 acrescentou: o resumo do treino, por escolha do dono
  *
- * ## O único timestamp público é o da publicação
+ * Até a T19.H2 este comentário dizia que nome do treino, exercício, série, repetição, carga,
+ * duração, volume e horário **nunca** cruzavam a fronteira. A T19.H3 substituiu o "nunca" por
+ * "somente quando explicitamente autorizado **e** derivado do servidor": o [WorkoutCheckInDto]
+ * ganhou `workoutSummary`, montado **na leitura** a partir da `WORKOUT_SESSION` canônica e
+ * filtrado pelas escolhas atuais do dono (`social-workout-summary.ts`). Cada escolha nasce
+ * desligada (migration 0008), e um campo desligado não existe no JSON.
+ *
+ * O que continua fora, com ou sem escolha: nota da sessão e do exercício, `machineLabel`, motivo
+ * de substituição, RPE, RIR, PR, caloria, medidas corporais, localização e qualquer identificador
+ * (`sessionSyncId`, `templateSyncId`, `syncId` de exercício). Vídeo, GIF animado, múltiplas fotos,
+ * carrossel, mention, hashtag, link clicável e edição de publicação também continuam fora
+ * (T17.9 §3).
+ *
+ * ## `publishedAt` continua sendo o da publicação
  *
  * `publishedAt` significa **quando a pessoa publicou o check-in**, e não quando ela treinou (§49).
- * O instante do treino é dado privado e não cruza a fronteira em nenhuma forma — nem arredondado,
- * nem como "há X horas treinou".
+ * O instante do treino só aparece em `workoutSummary.startedAt`, e só quando o dono ligou
+ * "Horário do treino" — é dado de rotina, e a escolha é dele (T19.H3 §32).
  */
 
 /**
@@ -111,6 +119,55 @@ export interface WorkoutCheckInDto {
    * de amigos vem com `true` — lá a relação direta é a própria condição de aparecer.
    */
   readonly canInteract: boolean;
+  /**
+   * O resumo do treino de origem, **quando** o dono escolheu compartilhar algum detalhe
+   * (T19.H3 §28). Ausente em vez de vazio: sem escolha nenhuma — ou sem fato a afirmar —, o
+   * campo não existe, e um cliente anterior à T19.H3 simplesmente o ignora.
+   */
+  readonly workoutSummary?: WorkoutSocialSummaryDto;
+}
+
+/**
+ * O resumo de treino de um check-in (T19.H3 §28–§34).
+ *
+ * Todo campo é opcional, e a ausência é a única forma de "não": cada um corresponde a um
+ * interruptor de "Detalhes dos check-ins", e um interruptor desligado significa campo **ausente**
+ * — nunca `null`, nunca `0`. Todos os valores são derivados no servidor da sessão canônica
+ * sincronizada; nenhum é aceito do cliente.
+ */
+export interface WorkoutSocialSummaryDto {
+  /** O nome do treino no dia (`templateNameSnapshot`). "Nome do treino". */
+  readonly name?: string;
+  /** Início do treino, epoch millis UTC. "Horário do treino". */
+  readonly startedAt?: number;
+  /** `finishedAt − startedAt`, em segundos. "Duração". */
+  readonly durationSeconds?: number;
+  /** Exercícios com ao menos uma série de trabalho concluída. "Exercícios". */
+  readonly exerciseCount?: number;
+  /** Séries de trabalho concluídas (aquecimento não conta). "Séries e repetições". */
+  readonly completedSetCount?: number;
+  /** `Σ peso × reps` das séries concluídas, uma casa decimal. "Volume total". */
+  readonly totalVolumeKg?: number;
+  /** Os exercícios executados, na ordem de execução. "Exercícios". */
+  readonly exercises?: readonly WorkoutSocialExerciseDto[];
+}
+
+/** Um exercício do resumo — pelo nome que ele tinha no dia do treino (T19.H3 §29/§40). */
+export interface WorkoutSocialExerciseDto {
+  readonly name: string;
+  readonly primaryMuscle?: string;
+  /** As séries de trabalho concluídas, em ordem. Só com "Séries e repetições" (§30). */
+  readonly sets?: readonly WorkoutSocialSetDto[];
+}
+
+/**
+ * Uma série concluída. `reps` **ou** `durationSeconds` (série por tempo); `weightKg` só com
+ * "Cargas utilizadas" e só quando houve carga — peso corporal não vira "0 kg" (§31).
+ */
+export interface WorkoutSocialSetDto {
+  readonly reps?: number;
+  readonly durationSeconds?: number;
+  readonly weightKg?: number;
 }
 
 /**

@@ -22,6 +22,10 @@ import { SocialProfileService } from './social-profile.service';
 import { SocialProgressPrivacyFilter, SocialProgressProjector } from './social-progress.projector';
 import { SocialProgressSettingsRepository } from './social-progress.repository';
 import { SOCIAL_PROGRESS_SOURCE, SyncedSocialProgressSource } from './social-progress.source';
+import {
+  SOCIAL_WORKOUT_FACTS_SOURCE,
+  SyncedSocialWorkoutFactsSource,
+} from './social-workout-facts.source';
 import { SocialAccessPolicy } from './social.access-policy';
 import { SocialController } from './social.controller';
 import { SocialRepository } from './social.repository';
@@ -160,6 +164,10 @@ import { CheckInProjector } from './checkin.projector';
     SocialProgressProjector,
     SocialProgressPrivacyFilter,
     { provide: SOCIAL_PROGRESS_SOURCE, useClass: SyncedSocialProgressSource },
+    // T19.H3 — os fatos por sessão (exercícios, séries, cargas) para as estatísticas da semana e o
+    // resumo do check-in. Porta própria, com whitelist no SQL: `CanonicalTrainingSource` continua
+    // só de agregados.
+    { provide: SOCIAL_WORKOUT_FACTS_SOURCE, useClass: SyncedSocialWorkoutFactsSource },
     // T17.3 — os desafios. Eles reusam `FriendshipRepository` (a amizade é quem pode ser
     // convidado) e acrescentam a própria fonte canônica de pontuação, separada da do perfil.
     ChallengeService,

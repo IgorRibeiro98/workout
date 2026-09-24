@@ -68,6 +68,12 @@ export interface SocialProgressAvailabilityDto {
   readonly consistencyStreak: SocialFieldAvailability;
   readonly weeklyWorkoutCount: SocialFieldAvailability;
   readonly highlightedAchievements: SocialFieldAvailability;
+  // ---- T19.H3 — estatísticas de treino. Os detalhes de check-in não têm disponibilidade aqui:
+  // eles dependem de cada publicação, e não do perfil.
+  readonly weeklyTrainingMinutes: SocialFieldAvailability;
+  readonly weeklyCompletedSets: SocialFieldAvailability;
+  readonly weeklyVolume: SocialFieldAvailability;
+  readonly totalWorkouts: SocialFieldAvailability;
 }
 
 // --------------------------------------------------------------------------------- preferências
@@ -75,18 +81,35 @@ export interface SocialProgressAvailabilityDto {
 /**
  * O que o dono decidiu compartilhar.
  *
- * Os quatro nascem `false` (§13/§14). Ativar o Social não publica progresso, e subir esta versão
- * tampouco: um default `true` transformaria um deploy em uma publicação que ninguém escolheu.
+ * Todos nascem `false` (§13/§14; T19.H3 §24). Ativar o Social não publica progresso, e subir uma
+ * versão tampouco: um default `true` transformaria um deploy em uma publicação que ninguém
+ * escolheu — a migration 0008 acrescentou onze interruptores, e cada linha antiga os recebeu
+ * desligados.
  *
  * `weekTimeZone` não é privacidade — é o parâmetro que torna a semana canônica reproduzível no
  * servidor. Ele fica aqui, e não em `social_privacy_settings`, porque só a contagem semanal o usa
  * e porque ele não responde "o que os outros podem ver".
  */
 export interface SocialProgressSettingsDto {
+  // ---- Progresso geral (T17.2/T19.2)
   readonly shareLevel: boolean;
   readonly shareConsistencyStreak: boolean;
   readonly shareWeeklyWorkoutCount: boolean;
   readonly shareHighlightedAchievements: boolean;
+  // ---- Estatísticas de treino (T19.H3) — no perfil, agregadas
+  readonly shareWeeklyTrainingMinutes: boolean;
+  readonly shareWeeklyCompletedSets: boolean;
+  readonly shareWeeklyVolume: boolean;
+  readonly shareTotalWorkouts: boolean;
+  // ---- Detalhes dos check-ins (T19.H3) — em cada publicação, lidos da sessão de origem
+  readonly shareWorkoutName: boolean;
+  readonly shareWorkoutTime: boolean;
+  readonly shareWorkoutDuration: boolean;
+  readonly shareWorkoutExercises: boolean;
+  readonly shareWorkoutSets: boolean;
+  /** Só tem efeito com `shareWorkoutSets` **e** `shareWorkoutExercises` — a carga mora na série. */
+  readonly shareWorkoutWeights: boolean;
+  readonly shareWorkoutVolume: boolean;
   /** Fuso IANA do dono, ou `null` enquanto ele não for conhecido. */
   readonly weekTimeZone: string | null;
   /**
@@ -149,6 +172,15 @@ export interface SocialSharedProgressDto {
   readonly consistencyStreak?: number;
   readonly weeklyWorkoutCount?: number;
   readonly highlightedAchievementIds?: readonly string[];
+  // ---- T19.H3 — estatísticas de treino, derivadas da `WORKOUT_SESSION` canônica.
+  /** Minutos de treino da semana canônica (`Σ fim − início`). */
+  readonly weeklyTrainingMinutes?: number;
+  /** Séries de trabalho concluídas na semana canônica (aquecimento não conta). */
+  readonly weeklyCompletedSets?: number;
+  /** `Σ peso × reps` da semana canônica, uma casa decimal — mesma conta do check-in. */
+  readonly weeklyVolumeKg?: number;
+  /** Treinos concluídos desde sempre. */
+  readonly totalWorkouts?: number;
 }
 
 /**
@@ -160,9 +192,13 @@ export interface SocialSharedProgressDto {
  * redistribuível que ninguém escolheu publicar.
  *
  * O que ele nunca pode ganhar: `ownerUid`, Firebase UID, e-mail, `friendCode`, flags de
- * privacidade, `lastSyncAt`, presença, horário de treino, nome de treino, exercício, carga, nota,
- * medida corporal, PR, payload de sync e payload de backup. Há teste que varre a resposta real
- * procurando cada um deles.
+ * privacidade, `lastSyncAt`, presença, nota, medida corporal, PR, RPE, RIR, payload de sync e
+ * payload de backup. Há teste que varre a resposta real procurando cada um deles.
+ *
+ * Detalhe de **uma** sessão — nome do treino, horário, exercício, carga — também não mora aqui: ele
+ * pertence ao check-in (`WorkoutCheckInDto.workoutSummary`, T19.H3 §22), e o perfil só publica
+ * agregados. Misturar os dois faria o perfil virar "o último treino de alguém" sem que ninguém
+ * tivesse publicado aquele treino.
  */
 export interface SocialFriendProfileDto {
   readonly socialId: string;

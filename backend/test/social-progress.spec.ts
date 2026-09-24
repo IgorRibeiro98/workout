@@ -271,6 +271,10 @@ describe('Projeção de progresso social', () => {
             consistencyStreak: unsupported(),
             weeklyWorkoutCount: available(3),
             highlightedAchievementIds: unavailable(),
+            weeklyTrainingMinutes: unavailable(),
+            weeklyCompletedSets: unavailable(),
+            weeklyVolumeKg: unavailable(),
+            totalWorkouts: unavailable(),
           };
         }),
       );
@@ -304,6 +308,10 @@ describe('Projeção de progresso social', () => {
       consistencyStreak: available(4),
       weeklyWorkoutCount: available(3),
       highlightedAchievementIds: available(['first_workout']),
+      weeklyTrainingMinutes: available(165),
+      weeklyCompletedSets: available(18),
+      weeklyVolumeKg: available(5210.5),
+      totalWorkouts: available(42),
       ...overrides,
     });
 
@@ -355,6 +363,10 @@ describe('Projeção de progresso social', () => {
         consistencyStreak: 'AVAILABLE',
         weeklyWorkoutCount: 'UNAVAILABLE',
         highlightedAchievements: 'AVAILABLE',
+        weeklyTrainingMinutes: 'AVAILABLE',
+        weeklyCompletedSets: 'AVAILABLE',
+        weeklyVolume: 'AVAILABLE',
+        totalWorkouts: 'AVAILABLE',
       });
     });
   });

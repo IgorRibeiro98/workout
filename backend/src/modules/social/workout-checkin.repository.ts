@@ -168,6 +168,36 @@ export class WorkoutCheckInRepository {
   /**
    * Uma transação do agregado.
    */
+  /**
+   * A sessão de origem de cada publicação, para o resumo de treino (T19.H3 §37/§38).
+   *
+   * Uma consulta para o lote. O `source_session_sync_id` é referência **interna**: ele sai daqui
+   * para casar publicação com fato de treino no servidor, e não entra em DTO nenhum.
+   */
+  async findSourceSessions(
+    checkInIds: readonly string[],
+  ): Promise<Map<string, { authorUid: string; sessionSyncId: string }>> {
+    const result = new Map<string, { authorUid: string; sessionSyncId: string }>();
+    if (checkInIds.length === 0) {
+      return result;
+    }
+    const res = await this.db.query<{
+      id: string;
+      author_uid: string;
+      source_session_sync_id: string;
+    }>(
+      `SELECT id, author_uid, source_session_sync_id
+         FROM social_workout_checkins
+        WHERE id = ANY($1::text[])
+          AND status = 'PUBLISHED'`,
+      [checkInIds as string[]],
+    );
+    for (const row of res.rows) {
+      result.set(row.id, { authorUid: row.author_uid, sessionSyncId: row.source_session_sync_id });
+    }
+    return result;
+  }
+
   async transaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
     return this.db.transaction(work);
   }

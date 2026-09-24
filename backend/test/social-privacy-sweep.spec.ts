@@ -505,4 +505,127 @@ describe('T17.10 — varredura de privacidade em todas as superfícies sociais',
       expect(values).not.toContain(ACCOUNT_A.name);
     }
   });
+
+  /**
+   * T19.H3 §55 — o mesmo sweep com **tudo ligado**.
+   *
+   * Os testes acima rodam com os defaults (nada compartilhado), e por isso provam pouco sobre o
+   * resumo de treino: um resumo vazio não vaza nada. Aqui A liga os quinze interruptores — inclusive
+   * cargas — e o que sai precisa continuar dentro da whitelist: nenhum identificador, nota,
+   * `machineLabel`, motivo de troca, RPE, RIR ou medida. É o pior caso de privacidade por desenho.
+   */
+  it('com todos os interruptores ligados, o resumo de treino só carrega a whitelist (T19.H3 §55)', async () => {
+    const allOn = Object.fromEntries(
+      [
+        'shareLevel',
+        'shareConsistencyStreak',
+        'shareWeeklyWorkoutCount',
+        'shareHighlightedAchievements',
+        'shareWeeklyTrainingMinutes',
+        'shareWeeklyCompletedSets',
+        'shareWeeklyVolume',
+        'shareTotalWorkouts',
+        'shareWorkoutName',
+        'shareWorkoutTime',
+        'shareWorkoutDuration',
+        'shareWorkoutExercises',
+        'shareWorkoutSets',
+        'shareWorkoutWeights',
+        'shareWorkoutVolume',
+      ].map((flag) => [flag, true]),
+    );
+    const patch = (body: object) =>
+      request(s.server())
+        .patch('/v1/social/me/progress-sharing')
+        .set('Authorization', s.auth(ACCOUNT_A.token))
+        .send(body);
+    await patch({ ...allOn, weekTimeZone: 'America/Sao_Paulo' }).expect(200);
+
+    try {
+      const allowedSummaryKeys = [
+        'name',
+        'startedAt',
+        'durationSeconds',
+        'exerciseCount',
+        'completedSetCount',
+        'totalVolumeKg',
+        'exercises',
+      ];
+      const allowedExerciseKeys = ['name', 'primaryMuscle', 'sets'];
+      const allowedSetKeys = ['reps', 'durationSeconds', 'weightKg'];
+      const neverKeys = [
+        ...FORBIDDEN_KEYS,
+        'notes',
+        'machineLabel',
+        'machineLabelSnapshot',
+        'replacementReason',
+        'rpe',
+        'rir',
+        'templateId',
+        'templateSyncId',
+        'plannedExercise',
+        'actualExercise',
+        'finishedAt',
+        'personalRecord',
+        'bodyMeasurement',
+        'weightKgBody',
+        'calories',
+      ];
+
+      let summariesSeen = 0;
+      for (const [label, path] of [
+        ['feed', '/v1/social/feed'],
+        ['check-in detail', `/v1/social/workout-checkins/${ids.checkInId}`],
+        ['friend profile', `/v1/social/friends/${ids.socialIdA}/profile`],
+      ] as Array<[string, string]>) {
+        const res = await request(s.server())
+          .get(path)
+          .set('Authorization', s.auth(ACCOUNT_B.token))
+          .expect(200);
+
+        const keys = keysIn(res.body);
+        for (const forbidden of neverKeys) {
+          expect({ label, forbidden, present: keys.includes(forbidden) }).toEqual({
+            label,
+            forbidden,
+            present: false,
+          });
+        }
+        expect(stringsIn(res.body)).not.toContain(ids.sessionSyncIdA);
+
+        const checkIns: Array<Record<string, unknown>> =
+          path === '/v1/social/feed'
+            ? (res.body.items as Array<Record<string, unknown>>)
+            : path.includes('workout-checkins')
+              ? [res.body as Record<string, unknown>]
+              : [];
+        for (const checkIn of checkIns) {
+          const summary = checkIn.workoutSummary as Record<string, unknown> | undefined;
+          if (!summary) continue;
+          summariesSeen += 1;
+          for (const key of Object.keys(summary)) {
+            expect({ label, key, allowed: allowedSummaryKeys.includes(key) }).toEqual({
+              label,
+              key,
+              allowed: true,
+            });
+          }
+          for (const exercise of (summary.exercises as Array<Record<string, unknown>>) ?? []) {
+            for (const key of Object.keys(exercise)) {
+              expect(allowedExerciseKeys).toContain(key);
+            }
+            for (const set of (exercise.sets as Array<Record<string, unknown>>) ?? []) {
+              for (const key of Object.keys(set)) {
+                expect(allowedSetKeys).toContain(key);
+              }
+            }
+          }
+        }
+      }
+      // A varredura precisa ter **visto** o resumo — senão ela passaria sem provar nada (T17.10).
+      expect(summariesSeen).toBeGreaterThanOrEqual(2);
+    } finally {
+      await patch(Object.fromEntries(Object.keys(allOn).map((flag) => [flag, false]))).expect(200);
+    }
+  });
 });

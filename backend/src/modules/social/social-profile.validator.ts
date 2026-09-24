@@ -1,5 +1,6 @@
 import { type ConsistencyParameters, isMondayEpochDay } from './social-consistency';
 import { SocialProfileErrors } from './social-profile.errors';
+import { PROGRESS_SHARING_FLAGS, type ProgressSharingFlag } from './social-progress.repository';
 import { isValidTimeZone } from './social-progress.source';
 import {
   MAX_SOCIAL_WEEK_TIME_ZONE_LENGTH,
@@ -16,7 +17,12 @@ import {
  *
  * ```text
  * PODE     shareLevel, shareConsistencyStreak, shareWeeklyWorkoutCount,
- *          shareHighlightedAchievements    ← preferência: o que os outros podem ver
+ *          shareHighlightedAchievements,
+ *          shareWeeklyTrainingMinutes, shareWeeklyCompletedSets,
+ *          shareWeeklyVolume, shareTotalWorkouts,
+ *          shareWorkoutName, shareWorkoutTime, shareWorkoutDuration,
+ *          shareWorkoutExercises, shareWorkoutSets, shareWorkoutWeights,
+ *          shareWorkoutVolume              ← preferência: o que os outros podem ver (T19.H3)
  *          weekTimeZone                    ← configuração do aparelho, não progresso
  *          consistency                     ← meta por semana + início do acompanhamento (T19.2A):
  *                                            os parâmetros da regra, nunca o resultado dela
@@ -91,22 +97,35 @@ const PROGRESS_VALUE_FIELDS = [
   'missions',
   'missionsCompleted',
   'personalRecords',
+  // T19.H3 — as estatísticas e o resumo de treino também são derivados, nunca declarados. Um
+  // `PATCH { weeklyVolumeKg: 5000 }` é exatamente o "meu volume foi 5000" que §21 proíbe.
+  'weeklyTrainingMinutes',
+  'weeklyCompletedSets',
+  'weeklyVolumeKg',
+  'weeklyVolume',
+  'totalWorkouts',
+  'totalVolumeKg',
+  'volumeKg',
+  'workoutSummary',
+  'durationSeconds',
+  'completedSetCount',
+  'exerciseCount',
+  'exercises',
+  'sets',
+  'reps',
+  'weightKg',
 ] as const;
 
-export interface UpdateProgressSharingRequest {
-  readonly shareLevel?: boolean;
-  readonly shareConsistencyStreak?: boolean;
-  readonly shareWeeklyWorkoutCount?: boolean;
-  readonly shareHighlightedAchievements?: boolean;
+export type UpdateProgressSharingRequest = {
+  readonly [K in ProgressSharingFlag]?: boolean;
+} & {
   readonly weekTimeZone?: string;
   readonly consistency?: ConsistencyParameters;
-}
+};
 
+/** Os quinze interruptores (T17.2 + T19.H3), o fuso e os parâmetros — e nada mais. */
 const ALLOWED_FIELDS = [
-  'shareLevel',
-  'shareConsistencyStreak',
-  'shareWeeklyWorkoutCount',
-  'shareHighlightedAchievements',
+  ...PROGRESS_SHARING_FLAGS.map(([flag]) => flag),
   'weekTimeZone',
   'consistency',
 ] as const;
@@ -128,34 +147,13 @@ export function parseUpdateProgressSharingRequest(body: unknown): UpdateProgress
   rejectUnknownFields(object);
 
   const request: {
-    shareLevel?: boolean;
-    shareConsistencyStreak?: boolean;
-    shareWeeklyWorkoutCount?: boolean;
-    shareHighlightedAchievements?: boolean;
-    weekTimeZone?: string;
-    consistency?: ConsistencyParameters;
+    -readonly [K in keyof UpdateProgressSharingRequest]: UpdateProgressSharingRequest[K];
   } = {};
 
-  if ('shareLevel' in object) {
-    request.shareLevel = requireBoolean(object.shareLevel, 'shareLevel');
-  }
-  if ('shareConsistencyStreak' in object) {
-    request.shareConsistencyStreak = requireBoolean(
-      object.shareConsistencyStreak,
-      'shareConsistencyStreak',
-    );
-  }
-  if ('shareWeeklyWorkoutCount' in object) {
-    request.shareWeeklyWorkoutCount = requireBoolean(
-      object.shareWeeklyWorkoutCount,
-      'shareWeeklyWorkoutCount',
-    );
-  }
-  if ('shareHighlightedAchievements' in object) {
-    request.shareHighlightedAchievements = requireBoolean(
-      object.shareHighlightedAchievements,
-      'shareHighlightedAchievements',
-    );
+  for (const [flag] of PROGRESS_SHARING_FLAGS) {
+    if (flag in object) {
+      request[flag] = requireBoolean(object[flag], flag);
+    }
   }
   if ('weekTimeZone' in object) {
     request.weekTimeZone = requireTimeZone(object.weekTimeZone);

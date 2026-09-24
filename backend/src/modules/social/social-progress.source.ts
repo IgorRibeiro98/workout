@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PostgresService } from '../../database/postgres.service';
 import {
   CANONICAL_TRAINING_SOURCE,
@@ -15,7 +15,16 @@ import {
   weekStartEpochDay,
 } from './social-consistency';
 import { evaluateVerifiedAchievements, levelFor, projectVerifiedXp } from './social-gamification';
-import { MIN_SOCIAL_TRACKING_EPOCH_DAY } from './social.limits';
+import { trainingTotals } from './social-training-metrics';
+import {
+  SOCIAL_WORKOUT_FACTS_SOURCE,
+  type SocialWorkoutFactsSource,
+  SyncedSocialWorkoutFactsSource,
+} from './social-workout-facts.source';
+import {
+  MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS,
+  MIN_SOCIAL_TRACKING_EPOCH_DAY,
+} from './social.limits';
 import { DAY_MS, isValidTimeZone, localCalendarDate, localMidnightToInstant } from './social-time';
 
 /**
@@ -82,6 +91,15 @@ export interface SocialProgressProjection {
   readonly consistencyStreak: SocialProgressValue<number>;
   readonly weeklyWorkoutCount: SocialProgressValue<number>;
   readonly highlightedAchievementIds: SocialProgressValue<readonly string[]>;
+  // ---- T19.H3 — estatísticas de treino (definições em `social-training-metrics.ts`)
+  /** Minutos de treino (fim − início) das sessões da semana canônica. */
+  readonly weeklyTrainingMinutes: SocialProgressValue<number>;
+  /** Séries de trabalho concluídas na semana canônica. */
+  readonly weeklyCompletedSets: SocialProgressValue<number>;
+  /** `Σ peso × reps` da semana canônica, uma casa decimal. */
+  readonly weeklyVolumeKg: SocialProgressValue<number>;
+  /** Treinos concluídos desde sempre — não depende de fuso. */
+  readonly totalWorkouts: SocialProgressValue<number>;
 }
 
 /**
@@ -121,6 +139,8 @@ export const PROGRESS_HORIZON_EPOCH_DAY = MIN_SOCIAL_TRACKING_EPOCH_DAY;
  * | sequência semanal | `social-consistency.ts` sobre treinos por dia + parâmetros declarados | sem fuso, sem parâmetros, ou nenhuma sessão |
  * | nível | `social-gamification.ts`: XP reconstruível → curva canônica | sem fuso, sem parâmetros, ou nenhuma sessão |
  * | conquistas | `REMOTE_ACHIEVEMENTS` reconstruíveis (treino, consistência, corpo) | sem fuso, ou nenhuma conquista afirmável |
+ * | treinos totais (T19.H3) | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED`, sem janela | nenhuma sessão sincronizada |
+ * | minutos / séries / volume da semana (T19.H3) | `SocialWorkoutFactsSource` na semana canônica → `social-training-metrics.ts` | sem fuso, nenhuma sessão, ou mais sessões na semana que o teto de leitura |
  *
  * Nenhuma delas responde `UNSUPPORTED` hoje. O que continua sem autoridade remota é uma **parte**
  * de duas métricas — o XP de recorde pessoal e as conquistas de `PERFORMANCE` — e essa parte
@@ -132,7 +152,9 @@ export const PROGRESS_HORIZON_EPOCH_DAY = MIN_SOCIAL_TRACKING_EPOCH_DAY;
  * - o `SocialModule` continua **sem importar** `SyncModule`, `BackupModule` e `AiModule`. Esta
  *   classe fala com a fonte canônica (`CanonicalTrainingSource`), que fala com o `PostgresService`;
  * - **backup nunca**. `backup_snapshots`, `backup_items` e `backup_payloads` não são lidos;
- * - **nenhum payload sai**. As consultas devolvem `COUNT(*)` — total, por semana, por dia. O campo
+ * - **nenhum payload sai daqui**. As estatísticas da semana (T19.H3) leem séries e cargas pela
+ *   porta tipada `SocialWorkoutFactsSource`, e o que esta classe devolve continua sendo **um número
+ *   por métrica**. As demais consultas devolvem `COUNT(*)` — total, por semana, por dia. O campo
  *   de instante do payload entra na cláusula `WHERE`, dentro do SQL, e nenhum timestamp de treino
  *   ou valor de medida é materializado em JavaScript;
  * - **`owner_uid` é o do alvo resolvido server-side**, e está na cláusula `WHERE` de toda consulta
@@ -141,18 +163,25 @@ export const PROGRESS_HORIZON_EPOCH_DAY = MIN_SOCIAL_TRACKING_EPOCH_DAY;
 @Injectable()
 export class SyncedSocialProgressSource implements SocialProgressSource {
   private readonly trainingSource: CanonicalTrainingSource;
+  /** Os fatos por sessão (T19.H3): só as estatísticas da semana os leem. */
+  private readonly workoutFacts: SocialWorkoutFactsSource | null;
 
   constructor(
     @Inject(CANONICAL_TRAINING_SOURCE)
     trainingSourceOrDb: CanonicalTrainingSource | PostgresService,
+    @Optional()
+    @Inject(SOCIAL_WORKOUT_FACTS_SOURCE)
+    workoutFacts?: SocialWorkoutFactsSource,
   ) {
     if (
       'countCompletedWorkouts' in trainingSourceOrDb &&
       'hasAnyCompletedSession' in trainingSourceOrDb
     ) {
       this.trainingSource = trainingSourceOrDb;
+      this.workoutFacts = workoutFacts ?? null;
     } else {
       this.trainingSource = new SyncedCanonicalTrainingSource(trainingSourceOrDb);
+      this.workoutFacts = workoutFacts ?? new SyncedSocialWorkoutFactsSource(trainingSourceOrDb);
     }
   }
 
@@ -163,18 +192,32 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     const timeZone =
       context.weekTimeZone && isValidTimeZone(context.weekTimeZone) ? context.weekTimeZone : null;
 
-    // Sem fuso, o servidor não sabe que dia é para este dono — e nenhuma das quatro métricas é
-    // definível sem isso. Supor UTC produziria números plausíveis e errados.
+    const hasAnySession = await this.trainingSource.hasAnyCompletedSession(ownerUid);
+
+    // Total de sessões: a contagem direta, e não a soma por dia — um treino anterior ao horizonte
+    // continua sendo um treino concluído para "N treinos" e para o XP de conclusão. É a única
+    // métrica que não depende de fuso (T19.H3): "quantos treinos, desde sempre" não tem semana.
+    const completedWorkouts = hasAnySession
+      ? await this.trainingSource.countCompletedWorkouts(ownerUid, 0, Number.MAX_SAFE_INTEGER)
+      : 0;
+    const totalWorkouts = hasAnySession ? available(completedWorkouts) : unavailable<number>();
+
+    // Sem fuso, o servidor não sabe que dia é para este dono — e nenhuma das métricas de semana,
+    // sequência, nível ou conquista é definível sem isso. Supor UTC produziria números plausíveis
+    // e errados.
     if (!timeZone) {
       return {
         level: unavailable(),
         consistencyStreak: unavailable(),
         weeklyWorkoutCount: unavailable(),
         highlightedAchievementIds: unavailable(),
+        weeklyTrainingMinutes: unavailable(),
+        weeklyCompletedSets: unavailable(),
+        weeklyVolumeKg: unavailable(),
+        totalWorkouts,
       };
     }
 
-    const hasAnySession = await this.trainingSource.hasAnyCompletedSession(ownerUid);
     const todayEpochDay = localEpochDay(context.nowMs, timeZone);
     // Até o domingo da semana corrente, e não até hoje: a semana canônica da T17.2 é a janela
     // inteira `[segunda, segunda)`, e um treino registrado com relógio adiantado não pode sumir
@@ -192,12 +235,6 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
         : Promise.resolve(new Map<number, number>()),
       this.trainingSource.countBodyMeasurementsPerDay(ownerUid, days),
     ]);
-
-    // Total de sessões: a contagem direta, e não a soma por dia — um treino anterior ao horizonte
-    // continua sendo um treino concluído para "N treinos" e para o XP de conclusão.
-    const completedWorkouts = hasAnySession
-      ? await this.trainingSource.countCompletedWorkouts(ownerUid, 0, Number.MAX_SAFE_INTEGER)
-      : 0;
 
     const weeks: WeeklyConsistency[] | null = context.consistency
       ? calculateWeeklyConsistencies(sessionsPerDay, context.consistency, todayEpochDay)
@@ -233,7 +270,49 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     const highlightedAchievementIds =
       earned.length > 0 ? available<readonly string[]>(earned) : unavailable<readonly string[]>();
 
-    return { level, consistencyStreak, weeklyWorkoutCount, highlightedAchievementIds };
+    // ---- estatísticas de treino da semana (T19.H3): a MESMA semana canônica de "treinos da
+    // semana" — as mesmas janelas de dia local, pelo mesmo `startedAt` —, somada pelo helper único
+    // de métricas que também monta o resumo de cada check-in.
+    const week = await this.weeklyTrainingStats(ownerUid, hasAnySession, currentMonday, timeZone);
+
+    return {
+      level,
+      consistencyStreak,
+      weeklyWorkoutCount,
+      highlightedAchievementIds,
+      weeklyTrainingMinutes: week ? available(week.trainingMinutes) : unavailable<number>(),
+      weeklyCompletedSets: week ? available(week.completedSets) : unavailable<number>(),
+      weeklyVolumeKg: week ? available(week.volumeKg) : unavailable<number>(),
+      totalWorkouts,
+    };
+  }
+
+  /**
+   * Os totais da semana canônica, ou `null` quando não são afirmáveis: nenhuma sessão, fonte de
+   * fatos ausente (teste com dublê de agregados) ou mais sessões na semana que o teto de leitura.
+   */
+  private async weeklyTrainingStats(
+    ownerUid: string,
+    hasAnySession: boolean,
+    currentMonday: number,
+    timeZone: string,
+  ): Promise<ReturnType<typeof trainingTotals> | null> {
+    if (!hasAnySession || !this.workoutFacts) {
+      return null;
+    }
+    const days = localDayWindows(currentMonday, currentMonday + 6, timeZone);
+    const first = days[0];
+    const last = days[days.length - 1];
+    if (!first || !last) {
+      return null;
+    }
+    const sessions = await this.workoutFacts.findCompletedInWindow(
+      ownerUid,
+      first.startMs,
+      last.endMs,
+      MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS,
+    );
+    return sessions ? trainingTotals(sessions) : null;
   }
 }
 

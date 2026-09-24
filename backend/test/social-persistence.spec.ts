@@ -13,6 +13,8 @@ import { SocialService } from '../src/modules/social/social.service';
 import { ChallengeRepository } from '../src/modules/social/challenge.repository';
 import { BlockRepository } from '../src/modules/social/block.repository';
 import { CheckInProjector } from '../src/modules/social/checkin.projector';
+import { SocialProgressSettingsRepository } from '../src/modules/social/social-progress.repository';
+import { SyncedSocialWorkoutFactsSource } from '../src/modules/social/social-workout-facts.source';
 import { CheckInInteractionRepository } from '../src/modules/social/checkin-interaction.repository';
 import { FriendshipRepository } from '../src/modules/social/friendship.repository';
 import { SocialGroupRateLimiter } from '../src/modules/social/social-group.rate-limit';
@@ -369,6 +371,9 @@ function groupServiceFor(
     new CheckInProjector(
       new SocialMediaRepository(postgres),
       new CheckInInteractionRepository(postgres),
+      new WorkoutCheckInRepository(postgres),
+      new SocialProgressSettingsRepository(postgres),
+      new SyncedSocialWorkoutFactsSource(postgres),
     ),
     new SocialGroupRateLimiter(),
     new SystemClock(),

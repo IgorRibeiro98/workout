@@ -197,10 +197,14 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
     // é o adapter estreito da pontuação de desafio, e ele é **separado** do de perfil de
     // propósito — a projeção da T17.2 não é autoridade de pontuação. Os dois estão sujeitos ao
     // mesmo teste de `AGGREGATE_ONLY` abaixo.
+    // A T19.H3 acrescentou o quarto: `social-workout-facts.source.ts`, a porta tipada que lê
+    // **conteúdo** de sessão (exercícios, séries, cargas). Ela não é `AGGREGATE_ONLY` — é
+    // `WHITELIST_ONLY`, com regra própria no teste logo abaixo.
     const PROGRESS_SOURCES = [
       'social-progress.source.ts',
       'challenge-progress.source.ts',
       'canonical-training.source.ts',
+      'social-workout-facts.source.ts',
     ];
 
     for (const file of readdirSync(SOCIAL_SRC).filter((name) => name.endsWith('.ts'))) {
@@ -282,6 +286,69 @@ describe('Observabilidade do social: metadata sim, identidade não', () => {
         forbidden,
         present: false,
       });
+    }
+  });
+
+  it('a porta de fatos de treino só seleciona a whitelist — nada privado sai do banco (T19.H3 §39)', () => {
+    const source = readFileSync(join(SOCIAL_SRC, 'social-workout-facts.source.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    // O que nunca pode ser lido do payload, em nenhuma grafia que o snapshot de sync usa.
+    for (const forbidden of [
+      'JSON.parse',
+      'notes',
+      'machineLabel',
+      'replacementReason',
+      'rpe',
+      "'rir'",
+      ">>'rir",
+      'plannedExercise',
+      'actualExercise',
+      'templateSyncId',
+      'restDurationSeconds',
+      'INSERT',
+      'UPDATE',
+      'DELETE',
+    ]) {
+      expect({ forbidden, present: code.includes(forbidden) }).toEqual({
+        forbidden,
+        present: false,
+      });
+    }
+
+    // O payload nunca é selecionado inteiro: todo uso dele está embrulhado em
+    // `NULLIF(payload, '')::jsonb` e vira `doc` ou um filtro de `status`/`startedAt`.
+    const payloadUses = [...code.matchAll(/\bpayload\b/g)].length;
+    const wrappedUses = [
+      ...code.matchAll(
+        /NULLIF\((?:s\.)?payload, ''\)::jsonb(?: AS doc\b|->>'(?:status|startedAt)')/g,
+      ),
+    ].length;
+    expect(payloadUses).toBeGreaterThan(0);
+    expect(wrappedUses).toBe(payloadUses);
+
+    // `doc` (sessão), `e` (exercício) e `st` (série) só são lidos por chave — e cada chave está na
+    // whitelist. Um campo novo no snapshot de sync não chega aqui sem alguém escrevê-lo.
+    const WHITELIST: Record<string, string[]> = {
+      doc: ['templateNameSnapshot', 'startedAt', 'finishedAt', 'status', 'exercises'],
+      e: ['exerciseNameSnapshot', 'primaryMuscleSnapshot', 'sets'],
+      st: ['type', 'weight', 'repetitions', 'durationSeconds', 'completed'],
+    };
+    const docUses = [...code.matchAll(/\bdoc\b/g)].length;
+    const docDeclarations = [...code.matchAll(/AS doc\b/g)].length;
+    for (const [variable, allowed] of Object.entries(WHITELIST)) {
+      const keyed = [...code.matchAll(new RegExp(`\\b${variable}->>?'([A-Za-z]+)'`, 'g'))];
+      expect(keyed.length).toBeGreaterThan(0);
+      for (const match of keyed) {
+        expect({ variable, key: match[1], allowed: allowed.includes(match[1]) }).toEqual({
+          variable,
+          key: match[1],
+          allowed: true,
+        });
+      }
+      if (variable === 'doc') {
+        expect(keyed.length + docDeclarations).toBe(docUses);
+      }
     }
   });
 

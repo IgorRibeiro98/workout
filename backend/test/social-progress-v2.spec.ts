@@ -538,6 +538,11 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
         consistencyStreak: unavailable(),
         weeklyWorkoutCount: unavailable(),
         highlightedAchievementIds: unavailable(),
+        // T19.H3: sem sessão nenhuma, nem o total (que não depende de fuso) é afirmável.
+        weeklyTrainingMinutes: unavailable(),
+        weeklyCompletedSets: unavailable(),
+        weeklyVolumeKg: unavailable(),
+        totalWorkouts: unavailable(),
       });
 
       // Só uma medição: as conquistas de corpo já são afirmáveis; o resto não.
@@ -837,6 +842,10 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
         consistencyStreak: 'UNAVAILABLE',
         weeklyWorkoutCount: 'UNAVAILABLE',
         highlightedAchievements: 'UNAVAILABLE',
+        weeklyTrainingMinutes: 'UNAVAILABLE',
+        weeklyCompletedSets: 'UNAVAILABLE',
+        weeklyVolume: 'UNAVAILABLE',
+        totalWorkouts: 'UNAVAILABLE',
       });
       expect(owner.body.settings.consistency).toBeNull();
 
@@ -849,6 +858,11 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
         consistencyStreak: 'UNAVAILABLE',
         weeklyWorkoutCount: 'AVAILABLE',
         highlightedAchievements: 'AVAILABLE',
+        // T19.H3: fuso + sessões bastam para as estatísticas de treino.
+        weeklyTrainingMinutes: 'AVAILABLE',
+        weeklyCompletedSets: 'AVAILABLE',
+        weeklyVolume: 'AVAILABLE',
+        totalWorkouts: 'AVAILABLE',
       });
 
       // Parâmetros declarados: tudo disponível.
@@ -859,6 +873,10 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
         consistencyStreak: 'AVAILABLE',
         weeklyWorkoutCount: 'AVAILABLE',
         highlightedAchievements: 'AVAILABLE',
+        weeklyTrainingMinutes: 'AVAILABLE',
+        weeklyCompletedSets: 'AVAILABLE',
+        weeklyVolume: 'AVAILABLE',
+        totalWorkouts: 'AVAILABLE',
       });
       expect(JSON.stringify(owner.body)).not.toContain('UNSUPPORTED');
     });

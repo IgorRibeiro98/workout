@@ -144,3 +144,15 @@ export const MIN_SOCIAL_WEEKLY_GOAL = 1;
 export const MAX_SOCIAL_WEEKLY_GOAL = 7;
 export const MAX_SOCIAL_WEEKLY_GOAL_SNAPSHOTS = 520;
 export const MIN_SOCIAL_TRACKING_EPOCH_DAY = 18_262;
+
+/**
+ * Quantas sessões da semana canônica o perfil soma para "Tempo", "Séries" e "Volume da semana"
+ * (T19.H3 §25).
+ *
+ * Bounded: a soma lê o conteúdo de cada sessão (séries, cargas), e uma conta com milhares de
+ * sessões sincronizadas "na mesma semana" não pode transformar uma leitura de perfil numa
+ * varredura. 100 é mais de catorze treinos por dia. Acima disso a métrica responde
+ * `UNAVAILABLE` — nunca uma soma truncada, que seria um número menor que o real com a autoridade
+ * do servidor.
+ */
+export const MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS = 100;
