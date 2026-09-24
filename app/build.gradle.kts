@@ -354,8 +354,8 @@ android {
     // desde 31/08/2026: com 35 o próximo envio ao console é recusado. O `minSdk` continua 24 — o
     // que destrava `java.time` nesses aparelhos é o desugaring, não o alvo.
     targetSdk = 36
-    versionCode = 13
-    versionName = "1.0.11"
+    versionCode = 14
+    versionName = "1.0.12"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
