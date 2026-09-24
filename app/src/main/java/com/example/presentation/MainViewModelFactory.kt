@@ -445,7 +445,10 @@ class MainViewModelFactory(
                 publisher = publisher,
                 socialGateway = social,
                 authGateway = auth,
-                photoSource = checkInPhotoSource
+                photoSource = checkInPhotoSource,
+                // Fase e classe do erro, nunca conteúdo (T19.H3 §12): é o que `adb logcat -s
+                // SparkCheckInPhoto` mostra a quem reproduz uma falha de foto no aparelho.
+                photoDiagnostics = { failure -> android.util.Log.i("SparkCheckInPhoto", failure.toString()) }
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.friends.ShareWorkoutViewModel::class.java)) {

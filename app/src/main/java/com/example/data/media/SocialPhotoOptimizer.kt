@@ -64,45 +64,91 @@ class SocialPhotoOptimizer(
     /**
      * Lê, reduz e reencoda a imagem apontada por [uri].
      *
-     * `null` quando o `Uri` não pode ser lido ou não descreve uma imagem — a tela transforma isso
-     * em "não conseguimos ler essa foto", e não em uma publicação silenciosa sem ela (§43).
+     * ## O defeito que a T19.H3 corrigiu aqui
+     *
+     * Até a T19.H2 a primeira passagem era
+     * `openStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null`. Com
+     * `inJustDecodeBounds = true`, `decodeStream` **sempre** devolve `null` — é o contrato dele: as
+     * dimensões vão para `bounds.outWidth/outHeight`, e o retorno fica vazio. O `?:` lia esse
+     * `null` como "não consegui abrir", e **toda** foto parava ali, antes de qualquer requisição.
+     * Em 30 dias de produção nenhum `POST /v1/social/checkin-media` chegou ao Cloud Run. A
+     * abertura do stream e o retorno do decoder agora são perguntas separadas.
+     *
+     * ## O teto é invariante, não intenção
+     *
+     * Um [CheckInPhotoPreparation.Ready] **nunca** carrega mais que [maxBytes]. Antes, o laço de
+     * qualidade guardava o último candidato mesmo acima do teto, e o servidor recusaria depois de
+     * a pessoa ter gastado a banda do envio. Agora, se nem a menor qualidade couber, o desfecho é
+     * [CheckInPhotoPreparation.TooLarge] e nada sai do aparelho.
      */
-    override suspend fun optimize(uri: Uri): Optimized? = withContext(Dispatchers.IO) {
+    override suspend fun prepare(uri: Uri): CheckInPhotoPreparation = withContext(Dispatchers.IO) {
+        try {
+            decodeAndEncode(uri)
+        } catch (error: Exception) {
+            // Um provedor de conteúdo que falha no meio da leitura (arquivo de nuvem que não
+            // baixou, permissão revogada) lança em vez de devolver `null`. É "não consegui ler",
+            // e não um crash da tela de compartilhamento.
+            CheckInPhotoPreparation.Unreadable
+        } catch (error: OutOfMemoryError) {
+            // A subamostragem torna isto improvável; se acontecer, a foto não é legível **neste
+            // aparelho**, e a pessoa pode escolher outra — o treino não é afetado.
+            CheckInPhotoPreparation.Unreadable
+        }
+    }
+
+    private fun decodeAndEncode(uri: Uri): CheckInPhotoPreparation {
         // Primeira passagem: só o cabeçalho. `inJustDecodeBounds` lê as dimensões sem alocar os
         // pixels, e é o que permite escolher o fator de subamostragem antes de gastar memória —
         // decodificar 12 MP para depois reduzir é como um `OutOfMemoryError` acontece.
+        //
+        // O `true` no fim do bloco é o que distingue "abri o stream" de "o decoder devolveu
+        // bitmap": no modo de cabeçalho o decoder devolve `null` por contrato, sempre.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        openStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return@withContext null
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+        openStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+            true
+        } ?: return CheckInPhotoPreparation.Unreadable
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return CheckInPhotoPreparation.Unreadable
+        }
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
         }
         val decoded = openStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
-            ?: return@withContext null
+            ?: return CheckInPhotoPreparation.Unreadable
 
         val oriented = applyOrientation(uri, decoded)
+        if (oriented !== decoded) decoded.recycle()
         val scaled = scaleWithinBounds(oriented)
         if (scaled !== oriented) oriented.recycle()
 
-        // Degraus de qualidade até caber. A imagem já está reduzida em dimensão, então o primeiro
-        // degrau resolve o caso normal; os seguintes existem para a foto de textura densa que
-        // comprime mal.
-        var bytes: ByteArray? = null
-        for (quality in intArrayOf(88, 78, 68, 55)) {
-            val stream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, quality, stream)
-            val candidate = stream.toByteArray()
-            if (candidate.size <= maxBytes) {
-                bytes = candidate
-                break
-            }
-            bytes = candidate
+        return try {
+            encodeWithinLimit(scaled)
+                ?.let { CheckInPhotoPreparation.Ready(Optimized(it, scaled.width, scaled.height)) }
+                ?: CheckInPhotoPreparation.TooLarge
+        } finally {
+            scaled.recycle()
         }
+    }
 
-        val result = bytes?.let { Optimized(it, scaled.width, scaled.height) }
-        scaled.recycle()
-        result
+    /**
+     * Degraus de qualidade até caber em [maxBytes], ou `null` quando nenhum cabe.
+     *
+     * A imagem já está reduzida em dimensão, então o primeiro degrau resolve o caso normal; os
+     * seguintes existem para a foto de textura densa que comprime mal. Só um candidato **dentro**
+     * do teto é devolvido.
+     */
+    private fun encodeWithinLimit(bitmap: Bitmap): ByteArray? {
+        for (quality in QUALITY_STEPS) {
+            val stream = ByteArrayOutputStream()
+            // O encoder recusar um bitmap já decodificado não é "grande demais": é "não consegui
+            // produzir o JPEG", e o `catch` de [prepare] transforma isso em ilegível.
+            check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)) { "JPEG encoder" }
+            val candidate = stream.toByteArray()
+            if (candidate.isNotEmpty() && candidate.size <= maxBytes) return candidate
+        }
+        return null
     }
 
     private fun openStream(uri: Uri) = runCatching {
@@ -164,11 +210,26 @@ class SocialPhotoOptimizer(
             ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
             ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
             ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            // Espelhar e girar: raros, mas existem em câmeras frontais que gravam "como no
+            // espelho". Sem estes dois casos a selfie saía deitada.
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
             else -> return bitmap
         }
 
         return runCatching {
             Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         }.getOrDefault(bitmap)
+    }
+
+    private companion object {
+        /** As qualidades tentadas, em ordem, até o JPEG caber no teto de envio. */
+        val QUALITY_STEPS = intArrayOf(88, 78, 68, 55)
     }
 }

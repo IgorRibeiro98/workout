@@ -3,6 +3,7 @@ package com.example.presentation.friends
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.media.CheckInPhotoPreparation
 import com.example.data.media.CheckInPhotoSource
 import com.example.data.repository.CheckInEligibility
 import com.example.data.repository.CheckInMediaUploadResult
@@ -22,6 +23,40 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+/** A foto não pôde ser lida no aparelho. Nenhuma requisição saiu. */
+const val PHOTO_UNREADABLE_MESSAGE =
+    "Não conseguimos ler essa foto neste aparelho. Escolha outra ou publique sem foto."
+
+/** Nem a menor qualidade coube no teto de envio. Nenhuma requisição saiu (T19.H3 §14). */
+const val PHOTO_TOO_LARGE_LOCAL_MESSAGE =
+    "Essa foto é grande demais para enviar, mesmo reduzida. Escolha outra ou publique sem foto."
+
+/** O upload deu certo e o anexo foi recusado (mídia expirada, de outra sessão, já usada). */
+const val PHOTO_ATTACH_FAILED_MESSAGE =
+    "Não conseguimos anexar a foto à publicação. Tente de novo ou publique sem foto."
+
+/** Em que ponto do caminho a foto parou (T19.H3 §12). */
+enum class CheckInPhotoPhase {
+    /** No aparelho: leitura, redução e reencode. Nenhuma requisição saiu. */
+    PREPARE,
+
+    /** `POST /v1/social/checkin-media`. */
+    UPLOAD,
+
+    /** `POST /v1/social/workout-checkins` com o `mediaId`. */
+    ATTACH
+}
+
+/**
+ * Uma falha de foto, para diagnóstico: fase e classe do erro, e nada mais (T19.H3 §12).
+ *
+ * `reason` é sempre um nome de enum ou um código fixo — nunca mensagem do servidor, bytes,
+ * identificador ou caminho. `toString()` é o formato da linha de log.
+ */
+data class CheckInPhotoFailure(val phase: CheckInPhotoPhase, val reason: String) {
+    override fun toString(): String = "phase=$phase error=$reason"
+}
 
 /** O que aconteceu com a última tentativa explícita de publicar. */
 sealed interface CheckInShareFeedback {
@@ -249,7 +284,16 @@ class WorkoutCheckInViewModel(
      * Opcional porque o compositor sem foto continua funcionando sem ele — e porque um build sem
      * a capacidade de escolher imagem não deve falhar ao montar a ViewModel.
      */
-    private val photoSource: CheckInPhotoSource? = null
+    private val photoSource: CheckInPhotoSource? = null,
+    /**
+     * Uma linha de diagnóstico quando a foto falha (T19.H3 §12/§13).
+     *
+     * Só a **fase** e a **classe** do erro — `phase=UPLOAD error=MEDIA_TOO_LARGE` —, nunca bytes,
+     * `Uri`, `mediaId`, `sessionSyncId`, token ou uid: é o que permite a quem reproduz no aparelho
+     * dizer em que camada a foto parou (`adb logcat -s SparkCheckInPhoto`) sem registrar conteúdo
+     * privado. Injetado porque os testes desta ViewModel rodam em JVM pura, sem `android.util.Log`.
+     */
+    private val photoDiagnostics: (CheckInPhotoFailure) -> Unit = {}
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkoutCheckInUiState())
@@ -387,24 +431,43 @@ class WorkoutCheckInViewModel(
 
         viewModelScope.launch {
             val uid = currentUid()
-            val optimized = source.optimize(uri)
+            val prepared = source.prepare(uri)
             if (currentUid() != uid) return@launch
 
-            _uiState.update {
-                it.copy(
-                    photo = if (optimized == null) {
-                        CheckInPhotoState.None
-                    } else {
-                        CheckInPhotoState.Ready(optimized.bytes, optimized.width, optimized.height)
-                    },
-                    feedback = if (optimized == null) {
-                        CheckInShareFeedback.NotShared(
-                            "Não conseguimos ler essa foto. Escolha outra ou publique sem foto."
-                        )
-                    } else {
-                        it.feedback
-                    }
+            if (prepared !is CheckInPhotoPreparation.Ready) {
+                photoDiagnostics(
+                    CheckInPhotoFailure(
+                        phase = CheckInPhotoPhase.PREPARE,
+                        reason = if (prepared == CheckInPhotoPreparation.TooLarge) {
+                            "LOCAL_IMAGE_TOO_LARGE"
+                        } else {
+                            WorkoutCheckInError.LOCAL_IMAGE_UNREADABLE.name
+                        }
+                    )
                 )
+            }
+
+            _uiState.update {
+                when (prepared) {
+                    is CheckInPhotoPreparation.Ready -> it.copy(
+                        photo = CheckInPhotoState.Ready(
+                            prepared.photo.bytes,
+                            prepared.photo.width,
+                            prepared.photo.height
+                        )
+                    )
+                    // A falha local é dita pelo que ela é — e **nenhuma** requisição saiu. Até a
+                    // T19.H2 as duas caíam na mesma frase, e "não conseguimos ler" era dito também
+                    // quando a foto tinha sido lida e descartada por um defeito do optimizer.
+                    CheckInPhotoPreparation.Unreadable -> it.copy(
+                        photo = CheckInPhotoState.None,
+                        feedback = CheckInShareFeedback.NotShared(PHOTO_UNREADABLE_MESSAGE)
+                    )
+                    CheckInPhotoPreparation.TooLarge -> it.copy(
+                        photo = CheckInPhotoState.None,
+                        feedback = CheckInShareFeedback.NotShared(PHOTO_TOO_LARGE_LOCAL_MESSAGE)
+                    )
+                }
             }
         }
     }
@@ -548,7 +611,10 @@ class WorkoutCheckInViewModel(
                     // §43 — se a recusa foi sobre a **foto**, a publicação não aconteceu e a
                     // decisão volta para o usuário em vez de virar uma publicação sem ela.
                     if (result.error == WorkoutCheckInError.MEDIA_NOT_FOUND) {
-                        failPhoto("Não conseguimos enviar a foto.")
+                        photoDiagnostics(
+                            CheckInPhotoFailure(CheckInPhotoPhase.ATTACH, result.error.name)
+                        )
+                        failPhoto(PHOTO_ATTACH_FAILED_MESSAGE)
                     } else {
                         finishWith(CheckInShareFeedback.NotShared(messageFor(result.error)))
                     }
@@ -597,11 +663,15 @@ class WorkoutCheckInViewModel(
             }
 
             is CheckInMediaUploadResult.Failed -> {
+                photoDiagnostics(CheckInPhotoFailure(CheckInPhotoPhase.UPLOAD, result.error.name))
                 failPhoto(photoMessageFor(result.error), photo)
                 null
             }
 
             is CheckInMediaUploadResult.NotEligible -> {
+                photoDiagnostics(
+                    CheckInPhotoFailure(CheckInPhotoPhase.UPLOAD, "NOT_ELIGIBLE_${result.reason.javaClass.simpleName}")
+                )
                 failPhoto("Este treino não pode mais receber uma foto.", photo)
                 null
             }
@@ -678,7 +748,12 @@ class WorkoutCheckInViewModel(
         is SocialOutcome.Failure -> outcome.error == SocialError.ALREADY_ENABLED
     }
 
-    /** O que dizer quando a **foto** falhou. Sempre com as duas saídas de §43 na tela. */
+    /**
+     * O que dizer quando a **foto** falhou. Sempre com as duas saídas de §43 na tela.
+     *
+     * Uma frase por classe de erro (T19.H3 §13): "não conseguimos enviar a foto" sozinho não diz a
+     * ninguém se vale tentar de novo, escolher outra foto ou sincronizar o treino.
+     */
     private fun photoMessageFor(error: WorkoutCheckInError): String = when (error) {
         WorkoutCheckInError.NETWORK -> "Não conseguimos enviar a foto. Sem conexão agora."
         WorkoutCheckInError.INVALID_IMAGE ->
@@ -689,6 +764,18 @@ class WorkoutCheckInViewModel(
             "Não conseguimos enviar a foto: o espaço de fotos da sua conta está cheio."
         WorkoutCheckInError.RATE_LIMITED ->
             "Não conseguimos enviar a foto: muitos envios seguidos. Tente em instantes."
+        WorkoutCheckInError.SESSION_NOT_SYNCED, WorkoutCheckInError.SESSION_NOT_FOUND ->
+            "Não conseguimos enviar a foto: este treino ainda não chegou à nuvem. " +
+                "Seu treino continua salvo."
+        WorkoutCheckInError.CHECKIN_WINDOW_EXPIRED ->
+            "Não conseguimos enviar a foto: o prazo para compartilhar este treino já passou."
+        WorkoutCheckInError.UNAVAILABLE ->
+            "Não conseguimos enviar a foto: o armazenamento está indisponível agora. " +
+                "Tente em instantes."
+        WorkoutCheckInError.AUTH_REQUIRED ->
+            "Não conseguimos enviar a foto: entre na Conta Spark de novo."
+        WorkoutCheckInError.SOCIAL_NOT_ENABLED ->
+            "Não conseguimos enviar a foto: ative os recursos sociais no Perfil."
         else -> "Não conseguimos enviar a foto."
     }
 

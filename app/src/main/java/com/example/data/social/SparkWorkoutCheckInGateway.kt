@@ -20,6 +20,7 @@ private const val HTTP_UNAUTHORIZED = 401
 private const val HTTP_FORBIDDEN = 403
 private const val HTTP_NOT_FOUND = 404
 private const val HTTP_CONFLICT = 409
+private const val HTTP_PAYLOAD_TOO_LARGE = 413
 private const val HTTP_UNPROCESSABLE = 422
 private const val HTTP_TOO_MANY_REQUESTS = 429
 private const val HTTP_SERVER_ERROR = 500
@@ -368,6 +369,10 @@ class SparkWorkoutCheckInGateway(
                 outcome.code == HTTP_FORBIDDEN -> WorkoutCheckInError.SOCIAL_NOT_ENABLED
                 outcome.code == HTTP_NOT_FOUND -> WorkoutCheckInError.CHECKIN_NOT_FOUND
                 outcome.code == HTTP_CONFLICT -> WorkoutCheckInError.CHECKIN_ALREADY_EXISTS
+                // O parser binário do upload recusa um corpo acima do teto antes de o controller
+                // existir, e o envelope sai com o nome do status (`PAYLOAD_TOO_LARGE`), não com
+                // `MEDIA_TOO_LARGE`. Para a tela é o mesmo fato: a foto é grande demais (T19.H3 §13).
+                outcome.code == HTTP_PAYLOAD_TOO_LARGE -> WorkoutCheckInError.MEDIA_TOO_LARGE
                 outcome.code == HTTP_UNPROCESSABLE -> WorkoutCheckInError.REJECTED
                 outcome.code == HTTP_TOO_MANY_REQUESTS -> WorkoutCheckInError.RATE_LIMITED
                 outcome.code >= HTTP_SERVER_ERROR -> WorkoutCheckInError.UNAVAILABLE

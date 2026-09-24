@@ -12,6 +12,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.local.AppDatabase
 import com.example.data.local.SessionStatus
 import com.example.data.local.WorkoutSessionEntity
+import com.example.data.media.CheckInPhotoPreparation
 import com.example.data.media.CheckInPhotoSource
 import com.example.data.media.SocialPhotoOptimizer
 import com.example.data.repository.WorkoutCheckInPublisher
@@ -85,15 +86,19 @@ class CheckInContentViewModelTest {
     // ------------------------------------------------------------------ dublês
 
     private class FakePhotoSource : CheckInPhotoSource {
-        var result: SocialPhotoOptimizer.Optimized? =
+        var result: CheckInPhotoPreparation = CheckInPhotoPreparation.Ready(
             SocialPhotoOptimizer.Optimized(ByteArray(2048) { 7 }, 1080, 1350)
+        )
         var calls: Int = 0
 
-        override suspend fun optimize(uri: Uri): SocialPhotoOptimizer.Optimized? {
+        override suspend fun prepare(uri: Uri): CheckInPhotoPreparation {
             calls++
             return result
         }
     }
+
+    /** As linhas de diagnóstico de foto que a ViewModel emitiu (T19.H3 §12). */
+    private val photoFailures = mutableListOf<CheckInPhotoFailure>()
 
     private class FakeContentGateway : StubWorkoutCheckInGateway() {
         var createResult: WorkoutCheckInOutcome<WorkoutCheckIn> = WorkoutCheckInOutcome.Success(
@@ -319,7 +324,8 @@ class CheckInContentViewModelTest {
                     publisher = publisher,
                     socialGateway = FakeSocialGateway(),
                     authGateway = authGateway,
-                    photoSource = photoSource
+                    photoSource = photoSource,
+                    photoDiagnostics = { photoFailures += it }
                 ) as T
         }
         return ViewModelProvider(viewModelStore, factory)[WorkoutCheckInViewModel::class.java]
@@ -445,13 +451,51 @@ class CheckInContentViewModelTest {
     fun `uma imagem ilegivel nao vira publicacao silenciosa sem foto`() = runTest(testDispatcher) {
         val viewModel = shareViewModel()
         openComposer(viewModel)
-        photoSource.result = null
+        photoSource.result = CheckInPhotoPreparation.Unreadable
 
         viewModel.onPhotoPicked(Uri.parse("content://fake/quebrada"))
         advanceUntilIdle()
 
         assertEquals(CheckInPhotoState.None, viewModel.uiState.value.photo)
-        assertTrue(viewModel.uiState.value.feedback is CheckInShareFeedback.NotShared)
+        assertEquals(
+            CheckInShareFeedback.NotShared(PHOTO_UNREADABLE_MESSAGE),
+            viewModel.uiState.value.feedback
+        )
+        assertEquals(
+            listOf(CheckInPhotoFailure(CheckInPhotoPhase.PREPARE, "LOCAL_IMAGE_UNREADABLE")),
+            photoFailures
+        )
+        assertEquals(emptyList<String>(), gateway.uploadIds)
+    }
+
+    @Test
+    fun `uma foto que nao cabe no teto falha no aparelho e nenhuma requisicao sai (H3 14)`() =
+        runTest(testDispatcher) {
+            val viewModel = shareViewModel()
+            openComposer(viewModel)
+            photoSource.result = CheckInPhotoPreparation.TooLarge
+
+            viewModel.onPhotoPicked(Uri.parse("content://fake/enorme"))
+            advanceUntilIdle()
+
+            assertEquals(CheckInPhotoState.None, viewModel.uiState.value.photo)
+            assertEquals(
+                CheckInShareFeedback.NotShared(PHOTO_TOO_LARGE_LOCAL_MESSAGE),
+                viewModel.uiState.value.feedback
+            )
+            assertEquals(
+                listOf(CheckInPhotoFailure(CheckInPhotoPhase.PREPARE, "LOCAL_IMAGE_TOO_LARGE")),
+                photoFailures
+            )
+            // A foto recusada nunca virou `Ready`: nenhum upload saiu, e nada foi publicado.
+            assertEquals(emptyList<String>(), gateway.uploadIds)
+            assertEquals(emptyList<Pair<String?, String?>>(), gateway.createdContent)
+        }
+
+    @Test
+    fun `a linha de diagnostico diz a fase e a classe do erro, e nada mais`() {
+        val line = CheckInPhotoFailure(CheckInPhotoPhase.UPLOAD, "MEDIA_TOO_LARGE").toString()
+        assertEquals("phase=UPLOAD error=MEDIA_TOO_LARGE", line)
     }
 
     @Test
@@ -508,7 +552,43 @@ class CheckInContentViewModelTest {
             val photo = viewModel.uiState.value.photo
             assertTrue(photo is CheckInPhotoState.Failed)
             assertTrue((photo as CheckInPhotoState.Failed).message.contains("Não conseguimos enviar"))
+            assertEquals(
+                listOf(CheckInPhotoFailure(CheckInPhotoPhase.UPLOAD, "NETWORK")),
+                photoFailures
+            )
         }
+
+    @Test
+    fun `cada classe de falha do upload tem a sua frase (H3 13)`() = runTest(testDispatcher) {
+        val expected = mapOf(
+            WorkoutCheckInError.SESSION_NOT_SYNCED to "ainda não chegou à nuvem",
+            WorkoutCheckInError.CHECKIN_WINDOW_EXPIRED to "prazo",
+            WorkoutCheckInError.UNAVAILABLE to "armazenamento está indisponível",
+            WorkoutCheckInError.MEDIA_QUOTA_EXCEEDED to "espaço de fotos",
+            WorkoutCheckInError.MEDIA_TOO_LARGE to "grande demais",
+            WorkoutCheckInError.INVALID_IMAGE to "formato",
+            WorkoutCheckInError.RATE_LIMITED to "muitos envios",
+            WorkoutCheckInError.AUTH_REQUIRED to "Conta Spark"
+        )
+        for ((error, fragment) in expected) {
+            val viewModel = shareViewModel()
+            openComposer(viewModel)
+            gateway.uploadResult = WorkoutCheckInOutcome.Failure(error)
+
+            viewModel.onPhotoPicked(Uri.parse("content://fake/$error"))
+            advanceUntilIdle()
+            viewModel.confirmShare()
+            advanceUntilIdle()
+
+            val photo = viewModel.uiState.value.photo as? CheckInPhotoState.Failed
+            assertTrue("$error deveria parar em Failed", photo != null)
+            assertTrue(
+                "$error: \"${photo!!.message}\" não contém \"$fragment\"",
+                photo.message.contains(fragment)
+            )
+            viewModel.cancelShare()
+        }
+    }
 
     @Test
     fun `tentar novamente reusa o mesmo clientUploadId`() = runTest(testDispatcher) {
@@ -566,7 +646,14 @@ class CheckInContentViewModelTest {
         advanceUntilIdle()
 
         assertFalse(viewModel.uiState.value.isShared)
-        assertTrue(viewModel.uiState.value.photo is CheckInPhotoState.Failed)
+        val photo = viewModel.uiState.value.photo
+        assertTrue(photo is CheckInPhotoState.Failed)
+        // Upload ok, anexo recusado: a fase é ATTACH, e a frase diz isso (T19.H3 §19).
+        assertEquals(PHOTO_ATTACH_FAILED_MESSAGE, (photo as CheckInPhotoState.Failed).message)
+        assertEquals(
+            listOf(CheckInPhotoFailure(CheckInPhotoPhase.ATTACH, "MEDIA_NOT_FOUND")),
+            photoFailures
+        )
     }
 
     @Test
