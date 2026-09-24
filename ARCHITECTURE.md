@@ -780,6 +780,7 @@ persistência do domínio        validação da resposta
 | T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
 | T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
 | T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
+| T19.H3 | Refresh social explícito ("↻" + gesto, mesmo método, sem polling), foto do check-in consertada no optimizer (bounds `null` descartava toda foto; teto como invariante), Compartilhar Progresso V3 (estatísticas da semana no perfil + resumo de treino no check-in, derivados no servidor e filtrados por inclusão); migration backend `0008` | **implementado** (aparelho real, Cloud Run/GCS reais e duas contas reais NOT VERIFIED) |
 | T19.H2 | Estabilização pós-QA: layout responsivo (Histórico, Settings, Progress Sharing), identidade da conta no Perfil, Meta Semanal salvável, sync com próximo passo, **snapshot de compartilhamento V2** (treino vazio + CUSTOM portátil) e seletor de exercícios com IME; migration Android e backend N/A | **implementado** (aparelho real NOT VERIFIED; matriz 320/360/411dp × fontScale 1.0/1.3/1.5 VERIFIED em Robolectric) |
 
 ### Identidade global dos dados e Outbox (T16.3)
@@ -2521,8 +2522,10 @@ Invariantes bloqueantes que se somam aos de cima:
     polling, sem WebSocket e sem push.
 41. **O DTO é o contrato inteiro** — `type`, `checkInId`, `author`, `publishedAt`, `caption`,
     `media`, `reactions`, `currentUserReaction`, `commentCount`, `isCurrentUser`.
-    `publishedAt` é quando publicou, nunca quando treinou; e `sessionSyncId`, exercício, carga,
-    série, duração, horário do treino e nome do treino não cruzam a fronteira em forma nenhuma.
+    `publishedAt` é quando publicou, nunca quando treinou; e `sessionSyncId` não cruza a fronteira
+    em forma nenhuma. Nome do treino, horário, duração, exercícios, séries, cargas e volume
+    **só** cruzam dentro de `workoutSummary`, **somente quando o autor autorizou cada um, e
+    derivados pelo servidor** (T19.H3, itens 54–60).
 42. **Excluir a publicação ≠ excluir o treino**, nos dois sentidos. Depois de publicado, o check-in
     é um artefato social independente — e a tela de exclusão do Histórico diz isso.
 
@@ -2560,6 +2563,36 @@ Invariantes bloqueantes que se somam aos de cima:
     mesmo snapshot restic; o restore instala os dois; a reconciliação de tombstones purga banco
     **e** objetos — pelo mesmo provider do runtime (T18.1): com `gcs`, ela purga o bucket, e o
     `restic` não leva mídia nenhuma, porque ela não está em disco.
+
+### Refresh explícito, foto que chega ao servidor e Compartilhar Progresso V3 (T19.H3)
+
+Regras normativas em `PROJECT_RULES.md` §13.28; contrato em
+[`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md) §V3.
+
+54. **Toda superfície social server-backed tem "↻" na barra** (`SocialRefreshAction`, 48dp).
+    Gesto e botão chamam o mesmo método; nada é automático — sem polling, timer, WebSocket, SSE ou
+    FCM. Atualizar não esconde o conteúdo, e uma falha recuperável preserva a última leitura boa
+    com aviso. Respostas antigas (outra conta, ou leitura superada por uma mais nova) não escrevem.
+55. **A foto é preparada no aparelho sem mentir sobre o porquê.** O defeito real da H3.2 era o
+    optimizer: `decodeStream` em modo de cabeçalho devolve `null` por contrato, e o código lia isso
+    como "ilegível" — nenhuma foto jamais saiu do aparelho (zero `POST /v1/social/checkin-media` em
+    30 dias de logs do Cloud Run). `CheckInPhotoPreparation` separa `Ready` (bytes ≤ teto, sempre),
+    `Unreadable` e `TooLarge`; nas duas falhas nenhuma requisição sai.
+56. **Duas perguntas diferentes, dois lugares diferentes.** "Como esta pessoa vem treinando?" vai
+    para o perfil como **agregado** (minutos, séries e volume da semana canônica; treinos totais).
+    "O que aconteceu neste treino?" vai para o **check-in** como `workoutSummary` (nome, horário,
+    duração, exercícios, séries/reps, cargas, volume). Detalhe de uma sessão nunca mora no perfil.
+57. **O cliente escolhe; o servidor calcula.** Onze interruptores novos, todos `false` por migration
+    (`0008`). Os valores saem da `WORKOUT_SESSION` sincronizada por `SocialWorkoutFactsSource`
+    (whitelist no SQL) e uma definição única de métrica (`social-training-metrics.ts`); o `PATCH`
+    recusa por nome qualquer valor.
+58. **Filtro no servidor, por inclusão, e retroativo.** Campo desligado não existe no JSON. O
+    check-in guarda só a referência da sessão; o resumo é refeito a cada leitura com as escolhas
+    atuais — desligar "Cargas" tira as cargas também dos check-ins antigos.
+59. **Quem vê não mudou.** O resumo aparece onde o check-in já aparece (Feed de amigos, Squad,
+    detalhe, o próprio autor), pela mesma política de acesso; bloqueio continua superior. Nota,
+    `machineLabel`, motivo de troca, RPE, RIR, PR, medida e identificadores continuam fora.
+60. **O Feed continua bounded:** três consultas por página para o resumo, nunca uma por item.
 
 ### Exclusão de conta — resolvida na T17.6
 

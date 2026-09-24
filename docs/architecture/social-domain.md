@@ -599,6 +599,11 @@ segunda falha no `INSERT`; o serviço relê e devolve a linha vencedora.
 duração, volume, PRs, calorias, notas, medidas corporais, horário do treino e histórico. Nenhum
 deles existe no DTO, e há teste que varre a resposta real atrás de todos.
 
+> **T19.H3:** nome do treino, horário (`startedAt`), duração, exercícios, séries, repetições,
+> cargas e volume **podem** aparecer em `workoutSummary` — somente quando o autor autorizou cada
+> um em "Compartilhar progresso", e derivados pelo servidor da sessão canônica a cada leitura. O
+> resto desta lista continua valendo. Ver `social-profile-contract.md` §V3.
+
 ### 13.8 Audiência do Feed
 
 ```text
@@ -902,6 +907,11 @@ URL de qualquer tipo, base64, `startedAt`, `finishedAt`, `templateId`, nome do t
 série, repetição, carga, duração, volume, PR, caloria, nota, medida e horário do treino. Há teste
 que varre a resposta real atrás de todos.
 
+> **T19.H3:** nome do treino, horário (`startedAt`), duração, exercícios, séries, repetições,
+> cargas e volume **podem** aparecer em `workoutSummary` — somente quando o autor autorizou cada
+> um em "Compartilhar progresso", e derivados pelo servidor da sessão canônica a cada leitura. O
+> resto desta lista continua valendo. Ver `social-profile-contract.md` §V3.
+
 ### 14.12 Denúncia — a evolução da T17.6
 
 ```text
@@ -983,7 +993,7 @@ revogue.
 | Peça | Onde | Decisão |
 | --- | --- | --- |
 | Seleção de foto | `ActivityResultContracts.PickVisualMedia` | sem `READ_MEDIA_IMAGES`, sem `CAMERA` |
-| Redução local | `SocialPhotoOptimizer` | 1920 px, JPEG; orientação aplicada aos pixels |
+| Redução local | `SocialPhotoOptimizer` | 1920 px, JPEG; orientação aplicada aos pixels; desde a T19.H3 devolve `CheckInPhotoPreparation` (`Ready` ≤ teto / `Unreadable` / `TooLarge`) |
 | Cache de exibição | `SocialMediaCache` | **memória**, account-scoped, um `Mutex` por `mediaId` |
 | Compositor | `ShareCheckInSection` | preview dos bytes que serão enviados; remover é permitido |
 | Feed | `SocialFeedScreen` | foto, legenda, barra de reações, contagem de comentários |
@@ -1001,6 +1011,26 @@ outra pessoa leu. Quando o envio falha, o rascunho **permanece** no campo.
 **A foto que falha não some em silêncio.** A publicação para, e a tela oferece "Tentar novamente" e
 "Publicar sem foto". Nenhuma das duas acontece sozinha — publicar sem a foto que a pessoa escolheu
 seria tomar por ela uma decisão que é dela.
+
+**T19.H3 — o defeito que impedia toda foto.** A primeira passagem do optimizer lia só o cabeçalho
+(`inJustDecodeBounds = true`) e fazia `decodeStream(...) ?: return null`. Nesse modo o decoder
+**sempre** devolve `null` — as dimensões vão para `outWidth/outHeight` —, e o `?:` descartava toda
+foto antes de qualquer requisição. A evidência: em 30 dias de logs do Cloud Run, nenhum
+`POST /v1/social/checkin-media`; e um JPEG válido de 3,7 KB voltava `null` no decodificador
+**nativo** (Robolectric `GraphicsMode.NATIVE`). Os testes antigos não viam porque o optimizer
+nunca tinha teste — e o dublê de `BitmapFactory` devolve bitmap para qualquer coisa. Junto:
+
+- `Ready` só existe com `bytes.size ≤ MAX_UPLOAD_BYTES`; o laço de qualidade não devolve mais o
+  último candidato acima do teto — ele devolve `TooLarge`, e nada sai;
+- cada falha tem fase e classe (`PREPARE`/`UPLOAD`/`ATTACH` × `LOCAL_IMAGE_UNREADABLE`,
+  `MEDIA_TOO_LARGE`, `SESSION_NOT_SYNCED`, ...), com frase própria na tela e uma linha de
+  diagnóstico sem conteúdo (`adb logcat -s SparkCheckInPhoto`);
+- um `413` do parser binário (corpo acima do teto) passou a ser `MEDIA_TOO_LARGE` no app, e não
+  "recusado" genérico;
+- a fixture `contracts/social/v1/checkin-photo-android.jpg` é uma saída real do optimizer (foto
+  4032×3024 com EXIF de rotação → 1440×1920, sem EXIF), e `social-media.spec.ts` a envia como
+  `image/jpeg` pela montagem real do Express: Buffer → objeto → linha `PENDING` → `ATTACHED` →
+  Feed → download → retry sem duplicar.
 
 ### 14.17 O que a T17.9 deliberadamente não faz
 

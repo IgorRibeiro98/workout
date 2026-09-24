@@ -225,7 +225,7 @@ Consequências que valem como contrato:
 | `GET /v1/social/friends/{socialId}/profile` | o perfil enriquecido de um amigo |
 | `GET /v1/social/me/profile-preview` | exatamente o que um amigo veria de mim agora |
 | `GET /v1/social/me/progress-sharing` | minhas preferências + a disponibilidade de cada campo |
-| `PATCH /v1/social/me/progress-sharing` | altera preferências (**parcial**), o fuso e, desde a T19.2A, os parâmetros de consistência |
+| `PATCH /v1/social/me/progress-sharing` | altera preferências (**parcial** — os quinze interruptores desde a T19.H3), o fuso e, desde a T19.2A, os parâmetros de consistência |
 
 Todas exigem `Authorization: Bearer <Firebase ID Token>`. **Não existe rota pública**, não existe
 busca por nome, por e-mail ou listagem global, e **não existe rota de perfil em lote** — um
@@ -275,7 +275,8 @@ dono (e só a ele) para que o app saiba quando reenviar.
 `sharedProgress` está sempre presente e pode estar **vazio** — e o vazio é o mesmo para quem
 desligou tudo e para quem ligou sem ter dado. Desde a T19.2 ele pode carregar também `level`,
 `consistencyStreak` e `highlightedAchievementIds` (ids canônicos do `AchievementCatalog`, na ordem
-do catálogo); nunca parâmetros, fuso, XP ou contagens intermediárias.
+do catálogo); desde a T19.H3, `weeklyTrainingMinutes`, `weeklyCompletedSets`, `weeklyVolumeKg` e
+`totalWorkouts` (§V3.1). Nunca parâmetros, fuso, XP ou contagens intermediárias.
 
 ### Erros
 
@@ -308,21 +309,110 @@ o treino de terceiros, e não sincroniza o seu.
 Na tela do dono, o texto discreto que evita o mal-entendido:
 *"Seu progresso compartilhado é atualizado depois da sincronização."*
 
-## 8. O que nunca é social
+## 8. O que nunca é social — e o que passou a ser opt-in (T19.H3)
 
-Registrado explicitamente, porque a lista é o contrato:
+Registrado explicitamente, porque a lista é o contrato. **Nunca**, com ou sem escolha do dono:
 
 ```text
 e-mail                    Firebase UID              friendCode (no perfil)
-medidas corporais         peso                      percentual de gordura
-cargas                    séries                    repetições, RPE, RIR
-sessões individuais       horário de treino         duração de treino
-nomes de treino           exercícios                notas
+medidas corporais         peso corporal             percentual de gordura
+RPE, RIR                  notas                     machineLabel, motivo de troca
+PR                        localização, academia     presença ("online agora"), lastSyncAt
+sessionSyncId             templateSyncId            syncId/localId de exercício
 payload de sync           payload de backup         sync_entities como API
-lastSyncAt                presença ("online agora")
 ```
 
-Há teste que varre a resposta real do endpoint de amigo procurando cada um desses.
+Até a T19.H2 esta lista incluía também cargas, séries, repetições, horário, duração, nomes de
+treino e exercícios. A T19.H3 substituiu esse "nunca" por **"somente quando explicitamente
+autorizado + derivado do servidor"** — e com um lugar certo para cada coisa: agregado no perfil
+(§V3.1), detalhe de uma sessão no check-in (§V3.2). Cada um é um interruptor próprio, nascido
+desligado.
+
+Há teste que varre a resposta real do endpoint de amigo, do Feed e do detalhe procurando cada item
+da primeira lista, com os interruptores desligados **e** ligados.
+
+## V3. Compartilhar Progresso V3 (T19.H3)
+
+### V3.0 A regra central
+
+> O usuário escolhe o que compartilhar; o servidor decide os valores a partir dos fatos canônicos
+> sincronizados.
+
+```text
+WORKOUT_SESSION sincronizada ──▶ SocialWorkoutFactsSource (whitelist no SQL)
+                                        │
+                     ┌──────────────────┴──────────────────┐
+                     ▼                                     ▼
+           social-training-metrics.ts             social-training-metrics.ts
+           (soma da semana canônica)              (uma sessão)
+                     │                                     │
+         SocialProgressPrivacyFilter            projectWorkoutSummary (inclusão)
+                     │                                     │
+          sharedProgress (perfil)              workoutSummary (check-in)
+```
+
+O cliente nunca envia valor: `weeklyVolumeKg`, `totalWorkouts`, `workoutSummary`, `exercises`,
+`sets`, `reps`, `weightKg` e afins são recusados **por nome** no `PATCH`, como `level` e `streak`.
+
+### V3.1 Estatísticas de treino (perfil)
+
+| Interruptor | Campo em `sharedProgress` | Definição | Disponível quando |
+| --- | --- | --- | --- |
+| `shareWeeklyTrainingMinutes` | `weeklyTrainingMinutes` | `floor(Σ max(fim − início, 0) / 60)` das sessões da semana canônica | fuso conhecido e ≥ 1 sessão |
+| `shareWeeklyCompletedSets` | `weeklyCompletedSets` | séries de trabalho concluídas na semana canônica | idem |
+| `shareWeeklyVolume` | `weeklyVolumeKg` | `Σ peso × reps` das séries de trabalho concluídas, 1 casa | idem |
+| `shareTotalWorkouts` | `totalWorkouts` | `COUNT` de `WORKOUT_SESSION` `COMPLETED`, sem janela | ≥ 1 sessão (não depende de fuso) |
+
+A semana é a **mesma** de "Treinos da semana": segunda a domingo no fuso do dono, pelo `startedAt`.
+A leitura é bounded (100 sessões na semana); acima disso a métrica responde `UNAVAILABLE`, nunca
+uma soma truncada.
+
+### V3.2 Detalhes dos check-ins (`workoutSummary`)
+
+| Interruptor | Campo | Observação |
+| --- | --- | --- |
+| `shareWorkoutName` | `name` | `templateNameSnapshot` (treino livre não tem) |
+| `shareWorkoutTime` | `startedAt` | epoch millis; o app formata no fuso de quem lê |
+| `shareWorkoutDuration` | `durationSeconds` | `fim − início`; sem fim, ausente |
+| `shareWorkoutExercises` | `exerciseCount`, `exercises[].name`, `exercises[].primaryMuscle` | só exercícios com ≥ 1 série de trabalho; nome do **snapshot** (CUSTOM incluído) |
+| `shareWorkoutSets` | `completedSetCount`; com Exercícios, `exercises[].sets[].reps`/`durationSeconds` | séries de trabalho concluídas, em ordem |
+| `shareWorkoutWeights` | `exercises[].sets[].weightKg` | **exige** Exercícios **e** Séries; peso 0 não vira "0 kg"; 2 casas |
+| `shareWorkoutVolume` | `totalVolumeKg` | a mesma conta do agregado |
+
+Sem nenhum interruptor ligado — ou sem sessão canônica (apagada depois do check-in) — o check-in
+sai **sem** `workoutSummary`, exatamente como um check-in da T17.8.
+
+### V3.3 As definições, uma vez
+
+- **Série de trabalho concluída:** `completed = true` e tipo ≠ `WARMUP` — a regra de
+  `VolumeCalculator.countEffectiveSets` do app.
+- **Volume:** `Σ peso × reps` dessas séries, excluindo séries por tempo (`durationSeconds > 0`).
+  Série com **peso 0** (peso corporal, elástico) **não adiciona carga**: o servidor não conhece o
+  peso de ninguém e não estima peso corporal.
+- **Duração:** `finishedAt − startedAt`, derivada no servidor; nunca um valor enviado à parte.
+
+`weeklyVolumeKg` e `totalVolumeKg` saem do mesmo helper (`social-training-metrics.ts`); há teste
+que prova que a soma da semana é a soma dos check-ins da semana.
+
+### V3.4 Privacidade
+
+- **Por inclusão, no servidor.** Campo desligado não existe no JSON — nunca `null`, nunca
+  escondido no Compose. Um cliente modificado recebe exatamente o que a tela mostra.
+- **Retroativo.** O check-in guarda só `source_session_sync_id`; o resumo é refeito a cada
+  leitura com as escolhas **atuais**. Desligar "Cargas" tira as cargas dos check-ins antigos na
+  próxima leitura de qualquer amigo.
+- **Audiência.** O resumo aparece onde o check-in já aparece — Feed de amigos, Squads onde foi
+  compartilhado, detalhe e o próprio autor (que vê o mesmo que os outros). Quem vê continua
+  decidido pela política de acesso do check-in, e **bloqueio continua superior**.
+- **Defaults.** A migration `0008` criou os onze interruptores com `NOT NULL DEFAULT FALSE`;
+  nenhuma conta existente passou a publicar nada.
+
+### V3.5 Custo
+
+O Feed faz três consultas por página para o resumo (escolhas dos autores; sessão de origem das
+publicações cujos autores ligaram algum detalhe; fatos dessas sessões), independentemente do
+número de itens — há teste que compara 2 e 8 publicações. Um Feed de autores que não compartilham
+nada custa uma consulta a mais.
 
 ## 9. Cache — não existe, e é por isso que revogar funciona
 

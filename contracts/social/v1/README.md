@@ -36,7 +36,13 @@
   - [`progress-projection.json`](./progress-projection.json) — **T19.2B/C**: a matriz de
     autoridade das origens de XP, o espelho dos catálogos de missões e conquistas, a curva de nível
     e casos completos (sessões + medições → XP, nível, conquistas), verificados no Android pelo
-    motor local ao vivo e no backend por `social-gamification.ts`.
+    motor local ao vivo e no backend por `social-gamification.ts`;
+  - [`checkin-photo-android.jpg`](./checkin-photo-android.jpg) — **T19.H3**: um JPEG produzido
+    pelo `SocialPhotoOptimizer` do Android no decodificador nativo, a partir de uma foto
+    4032×3024 com EXIF `ROTATE_90` (saída 1440×1920, sem EXIF, ~39 KB). O Android prova que ela é
+    uma saída válida do optimizer (`SocialPhotoOptimizerTest`); o backend a envia como
+    `image/jpeg` pela montagem real do Express e segue objeto, metadata, anexo, Feed e download
+    (`social-media.spec.ts`). Se o formato de saída do app mudar, gere-a de novo e rode os dois.
 
   Todas são lidas pelos testes **dos dois lados**. É o que impede a cópia do Android e a regra do
   servidor de divergirem em silêncio.

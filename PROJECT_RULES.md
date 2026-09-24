@@ -1409,9 +1409,11 @@ virar uma vitrine do que o histórico tem de íntimo.
   `checkInId`.
 - **O DTO é o contrato inteiro**: `type`, `checkInId`, `author { socialId, displayName }`,
   `publishedAt`, `isCurrentUser`. `publishedAt` é quando **publicou**, nunca quando treinou. Não
-  cruzam a fronteira: uid, e-mail, `friendCode`, `sessionSyncId`, `startedAt`, `finishedAt`,
-  `templateId`, nome do treino, exercício, série, repetição, carga, duração, volume, PR, caloria,
-  nota, medida e horário do treino. Há teste que varre a resposta real atrás de todos.
+  cruzam a fronteira: uid, e-mail, `friendCode`, `sessionSyncId`, `finishedAt`, `templateId`, PR,
+  caloria, nota e medida. *Desde a T19.H3 (§13.28)*, nome do treino, horário, duração, exercícios,
+  séries, repetições, cargas e volume **podem** aparecer em `workoutSummary` — **somente quando o
+  autor autorizou cada um, e derivados pelo servidor** da sessão canônica. Há teste que varre a
+  resposta real atrás de todos, com os interruptores desligados e ligados.
 - **Sem conteúdo livre nesta fase.** Sem legenda, foto, vídeo, comentário, reação ou curtida — a
   ausência evita trazer moderação de UGC, denúncia de post, edição e sanitização junto. A T17.9
   expande **este** agregado; ela não cria um segundo feed.
@@ -2186,6 +2188,62 @@ As regras que não podem ser quebradas:
   --tests "com.example.data.restore.*" --tests "com.example.presentation.workouts.ProgramDetails*"
   --tests "com.example.presentation.today.TodayTemplateSelectorTest"` e, no backend,
   `npm test -- test/sync-push.spec.ts test/backup-contract.spec.ts test/program-share.spec.ts`.
+
+## 13.28 Refresh social, foto do check-in e Compartilhar Progresso V3 (T19.H3)
+
+Contrato do perfil e do resumo em [`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md)
+(§V3); a fixture da foto em `contracts/social/v1/checkin-photo-android.jpg`. As regras que não
+podem ser quebradas:
+
+- **Toda tela social server-backed tem um "↻" visível.** `SocialRefreshAction` (48dp, "Atualizar",
+  spinner em voo) na barra; onde havia pull-to-refresh, ele continua — e **os dois chamam o mesmo
+  método** da ViewModel. Sem polling, timer, WebSocket, SSE, FCM nem "atualizar ao voltar".
+- **Atualizar não esconde o que já estava na tela.** Com conteúdo carregado, a releitura liga um
+  `isRefreshing` próprio em vez de voltar para `Loading`; uma falha recuperável (rede, servidor,
+  limite) **mantém a última leitura boa** com um aviso. Só falhas que mudam o que a tela é (saiu da
+  conta, Social desativado, perfil indisponível) substituem o conteúdo.
+- **Resposta velha não escreve.** Um refresh manual e a releitura depois de uma mutação podem voar
+  juntos: cada leitura pega uma geração, e só a mais nova aplica. O `uid` capturado antes do voo
+  continua descartando a resposta de outra conta.
+- **`inJustDecodeBounds` devolve `null` por contrato.** O optimizer de foto lia esse `null` como
+  "ilegível" e descartava **toda** foto antes de qualquer requisição (zero uploads em produção). A
+  abertura do stream e o retorno do decoder são perguntas separadas, e `SocialPhotoOptimizerTest`
+  roda com o decodificador **nativo** (`GraphicsMode.NATIVE`) — com o dublê, o defeito não aparece.
+- **O teto de envio é invariante de tipo.** `CheckInPhotoPreparation.Ready` nunca carrega mais que
+  `MAX_UPLOAD_BYTES`; quando não cabe, o desfecho é `TooLarge` e nenhuma requisição sai. Cada falha
+  de foto tem fase (`PREPARE`/`UPLOAD`/`ATTACH`) e classe, registradas sem conteúdo
+  (`adb logcat -s SparkCheckInPhoto`).
+- **O cliente escolhe o que compartilhar; o servidor decide os valores.** Estatísticas da semana e
+  resumo do check-in são derivados na leitura da `WORKOUT_SESSION` canônica. Valor (`weeklyVolumeKg`,
+  `workoutSummary`, `exercises`, ...) é recusado por nome no `PATCH`. Uma definição de métrica só:
+  `social-training-metrics.ts` (aquecimento não conta; peso zero não soma carga; duração é
+  `fim − início`).
+- **Todo interruptor novo nasce `false`, e a migration decide o usuário antigo.** `0008` usa
+  `ADD COLUMN ... NOT NULL DEFAULT FALSE`; nenhum deploy publica carga, horário ou exercício de
+  ninguém.
+- **Privacidade no servidor, por inclusão.** Campo desligado não existe no JSON — nunca `null`,
+  nunca escondido no Compose. Cargas só aparecem dentro das séries, e séries só dentro dos
+  exercícios. Nota, `machineLabel`, motivo de troca, RPE, RIR, PR, medida e qualquer identificador
+  (`sessionSyncId`, `templateSyncId`, `syncId`) continuam fora com ou sem escolha.
+- **Retroativo por construção.** O check-in guarda só `source_session_sync_id`; o resumo é lido e
+  filtrado com as escolhas **atuais** a cada leitura. Desligar "Cargas" hoje tira as cargas dos
+  check-ins de ontem.
+- **Conteúdo de sessão só pela porta tipada.** `SocialWorkoutFactsSource` monta a whitelist no SQL
+  (`jsonb_build_object`); há teste estrutural que proíbe qualquer chave fora dela e qualquer uso do
+  payload que não seja por chave. `CanonicalTrainingSource` continua só de agregados.
+- **O Feed continua bounded.** O resumo custa três consultas por página (escolhas dos autores,
+  sessão de origem, fatos), nunca uma por item; há teste que compara o número de consultas com 2 e
+  com 8 publicações.
+- **Testes.** Backend: `social-progress-sharing-v3.spec.ts`, `social-privacy-sweep.spec.ts`,
+  `social-media.spec.ts` (fixture Android), `social-logging.spec.ts`. Android:
+  `SocialPhotoOptimizerTest`, `SparkWorkoutCheckInGatewayTest`, `SocialRefreshScreensTest`,
+  `SocialRefreshActionTest`, `ProgressSharingV3ScreenTest`, `CheckInWorkoutSummaryTest` e os testes
+  de ViewModel de Amigos, Desafios, Feed, Squads, Treinos compartilhados, SocialHome e Perfil. Em
+  runtime real (emulador ou aparelho): `SocialPhotoOptimizerDeviceTest`
+  (`:app:connectedDebugAndroidTest`, filtrado pela classe).
+- **Migration nova no PostgreSQL não reativa teste legado.** Testes da era SQLite leem
+  `backend/migrations/` explicitamente; nenhum decide "sou legado?" pelo **número** de uma migration
+  do diretório `migrations/postgres/` (a `0008` da T19.H3 religou dois assim por engano).
 
 ## 14. Tests and build are part of implementation
 

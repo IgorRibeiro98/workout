@@ -300,7 +300,8 @@ lê. Isso não abre exceção para dado de treino, e a fronteira é explícita:
 
 - **nada de treino entra nas tabelas sociais.** É proibido gravar XP, streak, contagem de treinos,
   último treino, peso corporal ou PR ali — mesmo "só para facilitar a UI". `social_progress_settings`
-  (T17.2) guarda **quatro booleanos e um fuso**: consentimento, e nenhum valor de progresso;
+  (T17.2) guarda **booleanos e um fuso** — quatro na T17.2, quinze desde a T19.H3 (`0008`, todos
+  `DEFAULT FALSE`): consentimento, e nenhum valor de progresso;
 - **o e-mail também não entra.** Ele continua sendo informação da camada de Auth (Firebase);
 - **o Firebase UID entra apenas como `owner_uid`, e nunca sai em DTO.** Identidade pública é o
   `socialId`;
@@ -328,6 +329,17 @@ recorde, conquistas de `PERFORMANCE`) fica fora do valor publicado. Ver
 
 A leitura que a projeção faz de `sync_entities` é um `COUNT(*)` por um adapter estreito
 (`SocialProgressSource`), com `owner_uid` na cláusula `WHERE` e **nenhum payload materializado**.
+
+**T19.H3 (2026-09-24)** acrescentou uma segunda porta, também estreita e com regra própria:
+`SocialWorkoutFactsSource` lê o **conteúdo** de uma `WORKOUT_SESSION` `COMPLETED` (nome do
+treino, instantes, e por exercício o nome e o grupo muscular do snapshot; por série tipo, peso,
+repetições, duração e `completed`) por uma whitelist montada no SQL (`jsonb_build_object`) — nunca
+o payload inteiro. É daí que saem as estatísticas da semana do perfil e o `workoutSummary` do
+check-in, **só** para o que o dono autorizou, filtrado na leitura. A classificação da sessão não
+muda (`WORKOUT_SESSION` continua dado pessoal canônico sincronizável, Grupo A); o que muda é que
+uma **projeção social consentida** dela passou a existir. Nota, `machineLabelSnapshot`,
+`replacementReason`, RPE, RIR, referências de exercício (`syncId`) e `templateSyncId` continuam
+fora da whitelist — há teste estrutural que a fixa.
 `backup_snapshots`/`backup_items` e os objetos `backups/…` continuam inalcançáveis para o social,
 em qualquer forma. Ver [`social-profile-contract.md`](./social-profile-contract.md).
 

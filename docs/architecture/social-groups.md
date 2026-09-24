@@ -301,6 +301,9 @@ explica nada e que some sozinha depois de um minuto.
 Um card do feed de Squad carrega: identidade **pública** do autor (`socialId`, `displayName`),
 quando a publicação foi feita, quando ela entrou neste Squad, a legenda e a foto.
 
-Nunca atravessa: exercício, série, repetição, carga, duração, volume, recorde, caloria, horário do
-treino, nota privada, `WorkoutSession`, `WorkoutTemplate`, `sessionSyncId`, uid, e-mail ou
-`friendCode`. Nenhuma das quatro tabelas desta fase tem coluna para nada disso.
+Nunca atravessa: recorde, caloria, nota privada, `WorkoutSession`, `WorkoutTemplate`,
+`sessionSyncId`, uid, e-mail ou `friendCode`. Nenhuma das quatro tabelas desta fase tem coluna
+para nada disso. Desde a T19.H3, o card do Squad pode trazer o `workoutSummary` do check-in (nome,
+horário, duração, exercícios, séries, cargas, volume) — o **mesmo** que o Feed de amigos, montado
+pelo mesmo projetor, somente com o que o autor autorizou; ele é lido da sessão canônica a cada
+leitura e nunca copiado para as tabelas do Squad.

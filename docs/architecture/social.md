@@ -299,8 +299,10 @@ type, checkInId, author { socialId, displayName }, publishedAt, isCurrentUser,
 caption, media { mediaId, width, height }, reactions, currentUserReaction, commentCount
 ```
 
-Nada de `sessionSyncId`, nome do treino, exercício, série, carga, duração, volume, PR, nota, medida
-ou horário do treino. `publishedAt` é quando **publicou**, nunca quando treinou.
+Nada de `sessionSyncId`, PR, nota ou medida. Nome do treino, exercício, série, carga, duração,
+volume e horário do treino só em `workoutSummary`, **somente quando o autor autorizou cada um, e
+derivados pelo servidor** (T19.H3 — `social-profile-contract.md` §V3). `publishedAt` é quando
+**publicou**, nunca quando treinou.
 
 Feed: `FRIENDS_ONLY`, janela de 30 dias, `limit` padrão 20 e teto 50, ordenação determinística
 (`created_at DESC, id DESC`). Custo fixo em consultas — as agregações recebem a página inteira, e
