@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { AI_PROVIDER_NAMES } from '../modules/ai/provider/ai-provider.gateway';
+import { AI_THINKING_LEVELS } from '../modules/ai/provider/groq-model-profiles';
 
 /**
  * Uma flag booleana vinda do ambiente.
@@ -151,6 +153,20 @@ export const envSchema = z.object({
    * credencial. Quando informado, é o `project_id` contra o qual o token precisa ter sido emitido.
    */
   FIREBASE_PROJECT_ID: z.string().min(1).optional(),
+
+  /**
+   * Qual provider atende o Coach (T19.H4): `gemini` ou `groq`.
+   *
+   * Escolhido **só no servidor** e num lugar só (`ai-provider.factory.ts`): prompt, schema,
+   * validação, quota e entitlement são os mesmos para qualquer provider, e o Android não sabe qual
+   * está ativo. Trocar é configuração + deploy — nunca APK novo, e nunca fallback automático: uma
+   * ação do usuário continua sendo no máximo **uma** inferência, num provider só.
+   *
+   * O default continua `gemini` até o benchmark da T19.H4 decidir; produção declara o valor
+   * explicitamente (`ops/gcp/deploy-cloud-run.sh`, `SPARK_AI_PROVIDER`).
+   */
+  AI_PROVIDER: z.enum(AI_PROVIDER_NAMES).default('gemini'),
+
   /**
    * Credencial do Gemini (T16.2). Vive **apenas** no servidor: nunca no APK, no BuildConfig, em
    * resource, em DataStore, no Git ou em teste. A partir da T16.2 o Android não fala com o Gemini.
@@ -158,7 +174,7 @@ export const envSchema = z.object({
    * Opcional: sem ela o processo sobe, o núcleo do Spark continua intacto e `/v1/ai/coach`
    * responde 503 (`AI_PROVIDER_UNAVAILABLE`) — nunca 200 sem ter chamado o modelo.
    */
-  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_API_KEY: z.string().trim().min(1).optional(),
 
   /**
    * Modelo do Coach.
@@ -175,11 +191,50 @@ export const envSchema = z.object({
    * volta a derrubar o Coach quando o `3.5` sair do free tier. A saída durável é billing na chave,
    * não outro nome de modelo.
    *
-   * Produção não define `GEMINI_MODEL`: `ops/gcp/deploy-cloud-run.sh` monta o ambiente com
-   * `--set-env-vars`, que substitui o conjunto inteiro, então uma variável posta à mão no Cloud Run
-   * sumiria no deploy seguinte. Este default **é** o lever de produção.
+   * Desde a T19.H4, produção declara o modelo explicitamente: `ops/gcp/lib.gcp.sh`
+   * (`SPARK_GEMINI_MODEL`/`SPARK_GROQ_MODEL`) é o lever versionado, e o deploy o passa em
+   * `--set-env-vars` junto com `AI_PROVIDER` — a revision diz, no próprio ambiente, que provider e
+   * que modelo atende. Este default vale para desenvolvimento, teste e ferramentas.
    */
   GEMINI_MODEL: z.string().min(1).default('gemini-3.5-flash'),
+
+  /**
+   * Credencial da Groq (T19.H4). A mesma regra da do Gemini: só no servidor — Secret Manager
+   * (`spark-groq-api-key`) em produção —, nunca no APK, no Git, em log ou em resposta.
+   *
+   * Opcional pelo mesmo motivo: sem ela, com `AI_PROVIDER=groq`, o Coach responde
+   * `AI_PROVIDER_UNAVAILABLE` e o resto do Spark segue intacto. `REQUIRE_AI_PROVIDER=true`
+   * transforma a ausência em falha de startup.
+   *
+   * As duas chaves são aparadas nas pontas: nenhuma chave tem espaço, e um secret gravado com o
+   * Enter antes do Ctrl-D chega aqui com `\n` no fim (foi o caso na T19.H4). Hoje o `fetch` apara o
+   * header e a chamada passaria por acaso — a defesa não pode depender disso.
+   */
+  GROQ_API_KEY: z.string().trim().min(1).optional(),
+
+  /**
+   * Modelo da Groq. Só vale com `AI_PROVIDER=groq`.
+   *
+   * Um id da Groq não tem significado na Gemini API, e vice-versa — por isso cada provider tem a
+   * própria variável, e não existe `AI_MODEL` global (§12). O valor precisa estar entre os modelos
+   * avaliados (`groq-model-profiles.ts`): um id desconhecido derruba o startup, em vez de chegar à
+   * Groq com um mapeamento de raciocínio e de structured output que ninguém mediu.
+   *
+   * `openai/gpt-oss-120b` é o candidato de produção (Production na Groq); `qwen/qwen3.8-27b` é
+   * Preview e, em produção, exige `GROQ_ALLOW_PREVIEW_MODEL=true`.
+   */
+  GROQ_MODEL: z
+    .string()
+    .trim()
+    .min(1, 'GROQ_MODEL não pode ser vazio')
+    .default('openai/gpt-oss-120b'),
+
+  /**
+   * "Preview risk accepted", escrito (§41). Modelos Preview da Groq são para avaliação: com
+   * `NODE_ENV=production`, selecionar um deles sem esta flag derruba o startup. Fora de produção
+   * (benchmark, desenvolvimento) ela não é necessária.
+   */
+  GROQ_ALLOW_PREVIEW_MODEL: booleanFlag(false),
 
   /**
    * Teto de tempo de uma chamada ao provider.
@@ -197,11 +252,38 @@ export const envSchema = z.object({
   /** Temperatura: análise pede consistência, não criatividade. Mesmo valor da T14. */
   AI_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
 
-  /** Teto de saída, o mesmo da T14: evita custo acidental sem cortar uma análise real. */
+  /**
+   * Teto de saída compartilhado, o mesmo da T14: evita custo acidental sem cortar uma análise real.
+   *
+   * Nos dois providers o teto **inclui o raciocínio** do modelo. Por isso cada provider pode ter o
+   * próprio (`GEMINI_MAX_OUTPUT_TOKENS`, `GROQ_MAX_OUTPUT_TOKENS`), que, quando definido, vale no
+   * lugar deste — os providers não aceitam os mesmos valores (T19.H4 §13): o `gemini-3.5-flash` com
+   * `thinkingLevel=MEDIUM` gasta quase 2 048 tokens só pensando e devolve o JSON cortado, enquanto
+   * na Groq free o teto pedido pesa no limite de tokens por minuto do plano.
+   */
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(32_768).default(2_048),
 
-  /** Esforço de raciocínio pedido ao modelo. Mesmo nível da T14. */
-  AI_THINKING_LEVEL: z.enum(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH', 'OFF']).default('MEDIUM'),
+  /** Teto de saída só do Gemini; ausente, vale `AI_MAX_OUTPUT_TOKENS`. */
+  GEMINI_MAX_OUTPUT_TOKENS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(256).max(65_536).optional(),
+  ),
+
+  /** Teto de saída só da Groq; ausente, vale `AI_MAX_OUTPUT_TOKENS`. */
+  GROQ_MAX_OUTPUT_TOKENS: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(256).max(32_768).optional(),
+  ),
+
+  /**
+   * Esforço de raciocínio pedido ao modelo. Mesmo nível da T14.
+   *
+   * O vocabulário é do Spark; cada provider o traduz explicitamente (T19.H4 §14). No Gemini,
+   * `MINIMAL`..`HIGH` viram `thinkingLevel` e `OFF` omite a configuração. Na Groq a tradução é por
+   * modelo (`groq-model-profiles.ts`), e um nível que o modelo não suporta derruba o startup — por
+   * exemplo `OFF` com `openai/gpt-oss-120b`, cujo raciocínio não desliga.
+   */
+  AI_THINKING_LEVEL: z.enum(AI_THINKING_LEVELS).default('MEDIUM'),
 
   /**
    * Teto diário de chamadas ao provider **por conta**.
@@ -258,11 +340,23 @@ export const envSchema = z.object({
   REQUIRE_FIREBASE_ADMIN: booleanFlag(false),
 
   /**
-   * Exige credencial do Gemini no startup.
+   * Exige, no startup, a credencial do provider **selecionado** (T19.H4 §54).
    *
-   * Default `false` de propósito, e a assimetria com o Firebase é o desenho: o Coach é uma
-   * capacidade opcional cuja ausência o Spark já sabe representar (`AI_PROVIDER_UNAVAILABLE`),
+   * `AI_PROVIDER=groq` sem `GROQ_API_KEY`, ou `AI_PROVIDER=gemini` sem `GEMINI_API_KEY`, derruba o
+   * processo. Default `false` de propósito, e a assimetria com o Firebase é o desenho: o Coach é
+   * uma capacidade opcional cuja ausência o Spark já sabe representar (`AI_PROVIDER_UNAVAILABLE`),
    * enquanto identidade é pré-requisito de tudo o que é autenticado.
+   */
+  REQUIRE_AI_PROVIDER: booleanFlag(false),
+
+  /**
+   * **Legado** (T16.8), substituída por `REQUIRE_AI_PROVIDER` na T19.H4.
+   *
+   * Continua aceita para que uma configuração antiga não mude de sentido em silêncio — `zod`
+   * descartaria uma variável desconhecida, e `REQUIRE_GEMINI=true` deixaria de proteger nada sem
+   * ninguém perceber. Com `AI_PROVIDER=gemini` ela significa exatamente o que sempre significou;
+   * com `AI_PROVIDER=groq`, `true` é ambíguo (exigir a chave de um provider que não atende) e
+   * derruba o startup pedindo `REQUIRE_AI_PROVIDER`.
    */
   REQUIRE_GEMINI: booleanFlag(false),
 

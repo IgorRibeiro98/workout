@@ -23,6 +23,9 @@
     "migrate:deletion-ledger": "node dist/cli/migrate-deletion-ledger-to-object-storage.js",
     "reconcile:account-deletions": "node dist/cli/reconcile-account-deletions.js",
     "capabilities:ai": "node dist/cli/manage-ai-capabilities.js",
+    "ai:usage-report": "node dist/cli/ai-usage-report.js",
+    "ai:benchmark": "node dist/cli/ai-benchmark.js",
+    "ai:provider-smoke": "node dist/cli/ai-provider-smoke.js",
     "dr:backup": "node dist/cli/db-backup.js",
     "dr:restore-drill": "node dist/cli/db-restore-drill.js",
     "audit:storage": "node dist/cli/storage-audit.js"
@@ -34,6 +37,7 @@
     "@nestjs/core": "11.2.3",
     "@nestjs/platform-express": "11.2.3",
     "firebase-admin": "14.4.0",
+    "groq-sdk": "1.6.0",
     "pg": "8.23.0",
     "pino": "9.13.1",
     "reflect-metadata": "0.2.2",

@@ -13,6 +13,11 @@ data
 Caddyfile
 *.md
 
+# Avaliação do Coach (T19.H4): dataset, relatórios e o diretório privado com respostas cruas de
+# modelo nunca entram no contexto de build — a imagem só precisa de `src` e das migrations.
+ai-eval
+.private
+
 # Credenciais: nunca entram na imagem, nem por engano num `COPY .`.
 service-account*.json
 firebase-adminsdk*.json

@@ -1,0 +1,283 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.5-flash",
+  "answeredBy": [
+    "gemini-3.5-flash"
+  ],
+  "startedAt": "2026-09-24T22:36:02.145Z",
+  "finishedAt": "2026-09-24T22:37:01.572Z",
+  "datasetFingerprint": "53c776905184",
+  "settings": {
+    "temperature": 0.2,
+    "maxOutputTokens": 8192,
+    "thinkingLevel": "MEDIUM",
+    "timeoutMs": 60000,
+    "dataset": "coach-synthetic.v1.json",
+    "scenarios": 4
+  },
+  "overall": {
+    "requests": 4,
+    "providerErrors": 1,
+    "providerErrorsByKind": {
+      "UNAVAILABLE/503": 1
+    },
+    "responses": 3,
+    "rejectedJson": 0,
+    "rejectedStructure": 0,
+    "rejectedSemantic": 0,
+    "accepted": 3,
+    "latencyMs": {
+      "n": 3,
+      "avg": 18582.930603666668,
+      "p50": 20874.250037,
+      "p95": 24263.166979,
+      "max": 24263.166979
+    },
+    "promptTokens": {
+      "n": 3,
+      "avg": 2949,
+      "p50": 2293,
+      "p95": 5157,
+      "max": 5157
+    },
+    "outputTokens": {
+      "n": 3,
+      "avg": 2975.3333333333335,
+      "p50": 2631,
+      "p95": 3949,
+      "max": 3949
+    },
+    "totalTokens": {
+      "n": 3,
+      "avg": 5924.333333333333,
+      "p50": 4639,
+      "p95": 9106,
+      "max": 9106
+    },
+    "expectationsEvaluated": 1,
+    "expectationsMet": 1
+  },
+  "byFamily": {
+    "ANALYZE": {
+      "requests": 2,
+      "providerErrors": 1,
+      "providerErrorsByKind": {
+        "UNAVAILABLE/503": 1
+      },
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 20874.250037,
+        "p50": 20874.250037,
+        "p95": 20874.250037,
+        "max": 20874.250037
+      },
+      "promptTokens": {
+        "n": 1,
+        "avg": 5157,
+        "p50": 5157,
+        "p95": 5157,
+        "max": 5157
+      },
+      "outputTokens": {
+        "n": 1,
+        "avg": 3949,
+        "p50": 3949,
+        "p95": 3949,
+        "max": 3949
+      },
+      "totalTokens": {
+        "n": 1,
+        "avg": 9106,
+        "p50": 9106,
+        "p95": 9106,
+        "max": 9106
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "GENERATE": {
+      "requests": 0,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "ADAPT": {
+      "requests": 1,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 24263.166979,
+        "p50": 24263.166979,
+        "p95": 24263.166979,
+        "max": 24263.166979
+      },
+      "promptTokens": {
+        "n": 1,
+        "avg": 2293,
+        "p50": 2293,
+        "p95": 2293,
+        "max": 2293
+      },
+      "outputTokens": {
+        "n": 1,
+        "avg": 2346,
+        "p50": 2346,
+        "p95": 2346,
+        "max": 2346
+      },
+      "totalTokens": {
+        "n": 1,
+        "avg": 4639,
+        "p50": 4639,
+        "p95": 4639,
+        "max": 4639
+      },
+      "expectationsEvaluated": 1,
+      "expectationsMet": 1
+    },
+    "EXPLAIN": {
+      "requests": 1,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 10611.374795000003,
+        "p50": 10611.374795000003,
+        "p95": 10611.374795000003,
+        "max": 10611.374795000003
+      },
+      "promptTokens": {
+        "n": 1,
+        "avg": 1397,
+        "p50": 1397,
+        "p95": 1397,
+        "max": 1397
+      },
+      "outputTokens": {
+        "n": 1,
+        "avg": 2631,
+        "p50": 2631,
+        "p95": 2631,
+        "max": 2631
+      },
+      "totalTokens": {
+        "n": 1,
+        "avg": 4028,
+        "p50": 4028,
+        "p95": 4028,
+        "max": 4028
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    }
+  },
+  "criticalViolations": [],
+  "verdict": "ELIGIBLE",
+  "capacity": {
+    "limits": {
+      "tier": "Gemini API Free (projeto da chave com billing desabilitado)",
+      "rpm": 5,
+      "rpd": 20,
+      "inputTpm": 250000,
+      "lifecycle": "GA",
+      "verifiedAt": "2026-09-24",
+      "source": "gcloud alpha services quota list (generativelanguage.googleapis.com, projeto dono da chave)"
+    },
+    "p95TotalPerCall": 9106,
+    "maxTotalPerCall": 9106,
+    "rpdCeiling": 20,
+    "safeDaily": 20,
+    "sparkGlobalQuota": 500,
+    "peakDailyDemand": 9,
+    "verdict": "MARGINAL"
+  },
+  "outcomes": [
+    {
+      "scenarioId": "analyze-historico-bom",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "historico-bom",
+        "good"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "UNAVAILABLE",
+      "providerStatus": 503,
+      "latencyMs": 3601.0183779999998,
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "analyze-muitos-exercicios",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "muitos-exercicios",
+        "contexto-maximo",
+        "good"
+      ],
+      "latencyMs": 20874.250037,
+      "usage": {
+        "promptTokens": 5157,
+        "outputTokens": 3949,
+        "totalTokens": 9106
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "adapt-ajustar-carga",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-load",
+        "good"
+      ],
+      "latencyMs": 24263.166979,
+      "usage": {
+        "promptTokens": 2293,
+        "outputTokens": 2346,
+        "totalTokens": 4639
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true
+    },
+    {
+      "scenarioId": "explain-adaptacao-carga",
+      "requestType": "EXPLAIN_ADAPTATION",
+      "tags": [
+        "adaptation"
+      ],
+      "latencyMs": 10611.374795000003,
+      "usage": {
+        "promptTokens": 1397,
+        "outputTokens": 2631,
+        "totalTokens": 4028
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": []
+    }
+  ]
+}

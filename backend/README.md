@@ -143,12 +143,17 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `FIREBASE_ADMIN_CREDENTIAL_MODE` | não | `file` | `file` (`GOOGLE_APPLICATION_CREDENTIALS`, VPS/dev/teste) \| `adc` (Cloud Run, T18.2 — identidade da service account anexada, sem arquivo) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | não | — | **Caminho** do service account do Firebase Admin. Só lido em modo `file`. Sem ele, rota autenticada responde `503` |
 | `FIREBASE_PROJECT_ID` | não | — | Projeto esperado pelo verificador; normalmente vem do próprio arquivo de credencial (ou é declarado explicitamente em modo `adc`) |
-| `GEMINI_API_KEY` | não | — | Credencial do Gemini. **Server-only.** Sem ela, `/v1/ai/coach` responde `503` e o núcleo do Spark segue intacto |
-| `GEMINI_MODEL` | não | `gemini-3.5-flash` | Trocar é decisão explícita. O default saiu de `gemini-3.6-flash` em 2026-09-23: a chave de produção é free tier e o Gemini deixou de servir o `3.6` (e `3.7`/`3.8`/`flash-latest`) nesse tier, devolvendo `503` em toda chamada. Produção não define esta variável — o deploy usa `--set-env-vars`, então o default do código **é** o valor de produção |
+| `AI_PROVIDER` | não | `gemini` | `gemini` \| `groq` (T19.H4). Escolhido só aqui, num ponto do código (`ai-provider.factory.ts`); sem fallback automático. Produção declara o valor em `ops/gcp/lib.gcp.sh` — ver `docs/operations/AI_PROVIDERS.md` |
+| `GEMINI_API_KEY` | não | — | Credencial do Gemini. **Server-only.** Sem ela (com `AI_PROVIDER=gemini`), `/v1/ai/coach` responde `503` e o núcleo do Spark segue intacto |
+| `GEMINI_MODEL` | não | `gemini-3.5-flash` | Trocar é decisão explícita. O default saiu de `gemini-3.6-flash` em 2026-09-23: a chave de produção é free tier e o Gemini deixou de servir o `3.6` (e `3.7`/`3.8`/`flash-latest`) nesse tier. Desde a T19.H4 produção declara o modelo em `ops/gcp/lib.gcp.sh` |
+| `GROQ_API_KEY` | não | — | Credencial da Groq (T19.H4). **Server-only**, Secret Manager `spark-groq-api-key` em produção |
+| `GROQ_MODEL` | não | `openai/gpt-oss-120b` | Precisa estar entre os modelos avaliados (`groq-model-profiles.ts`); vazio ou desconhecido derruba o startup |
+| `GROQ_ALLOW_PREVIEW_MODEL` | não | `false` | Com `NODE_ENV=production`, modelo Preview (`qwen/qwen3.8-27b`) só sobe com `true` |
 | `AI_TIMEOUT_MS` | não | `60000` | Teto de uma chamada ao provider. Máximo `60000`: a cadeia de timeout do Coach no Android (T18.3.1) é provider < HTTP do Coach (75 s) < absoluto (90 s) |
 | `AI_TEMPERATURE` | não | `0.2` | Análise pede consistência, não criatividade |
-| `AI_MAX_OUTPUT_TOKENS` | não | `2048` | Teto de saída |
-| `AI_THINKING_LEVEL` | não | `MEDIUM` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` \| `OFF` |
+| `AI_MAX_OUTPUT_TOKENS` | não | `2048` | Teto de saída compartilhado — inclui o raciocínio do modelo |
+| `GEMINI_MAX_OUTPUT_TOKENS` / `GROQ_MAX_OUTPUT_TOKENS` | não | — | Teto de saída de um provider só (sobrepõe o compartilhado). Produção: Gemini `8192` (com raciocínio MEDIUM, `2048` truncava o JSON) |
+| `AI_THINKING_LEVEL` | não | `MEDIUM` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` \| `OFF`. Traduzido por provider; na Groq, combinação que o modelo não suporta derruba o startup |
 | `AI_MAX_REQUESTS_PER_USER_DAY` | não | `50` | Quota diária por conta (UTC) |
 | `AI_MAX_REQUESTS_GLOBAL_DAY` | não | `500` | Quota diária do servidor inteiro |
 | `AI_MAX_CONCURRENT_REQUESTS_PER_USER` | não | `1` | Chamadas simultâneas ao provider por conta |
@@ -156,7 +161,8 @@ Toda configuração vem do ambiente e é validada no startup. Configuração obr
 | `HTTP_REQUEST_TIMEOUT_MS` | não | `120000` | Teto de uma requisição. Não são 30 s: um backup de 4 MiB em rede móvel ruim não cabe |
 | `HTTP_KEEP_ALIVE_TIMEOUT_MS` | não | `65000` | Precisa ser maior que o keep-alive do proxy, senão o Caddy reaproveita conexão fechada e o cliente vê 502 |
 | `REQUIRE_FIREBASE_ADMIN` | não | `false` | `true` derruba o processo no startup sem credencial — falha visível em vez de 503 em toda requisição |
-| `REQUIRE_GEMINI` | não | `false` | Idem para o Gemini. Default `false`: o Coach é opcional, identidade não é |
+| `REQUIRE_AI_PROVIDER` | não | `false` | Exige no startup a chave do provider **selecionado**. Default `false`: o Coach é opcional, identidade não é |
+| `REQUIRE_GEMINI` | não | `false` | Legado (substituída por `REQUIRE_AI_PROVIDER`): vale com `AI_PROVIDER=gemini`; com `groq`, `true` derruba o startup |
 | `AI_ENABLED` | não | `true` | `false` desliga o Coach sem tocar em backup e sync |
 | `SYNC_WRITE_ENABLED` | não | `true` | `false` pausa `POST /v1/sync/push`; o pull continua |
 | `MAINTENANCE_MODE` | não | `false` | `true` faz todo `/v1` responder `503`; `/health/*` continua |
@@ -369,6 +375,22 @@ npm run capabilities:ai -- list   <uid>
 
 Mesmo padrão dos outros comandos de `src/cli/`: fala com o banco diretamente, sem servidor HTTP e
 sem admin secret — a proteção é quem tem acesso ao ambiente que roda o comando.
+
+### Provider do Coach: Gemini ou Groq (T19.H4)
+
+`AI_PROVIDER` escolhe o gateway (`GeminiAiProviderGateway` ou `GroqAiProviderGateway`) num ponto só
+(`ai-provider.factory.ts`). Prompt, schema, validação, quota, entitlement e concorrência não mudam
+com o provider, e o Android não sabe qual respondeu. Três comandos operacionais, todos opt-in (nenhum
+roda em `npm test` nem no CI):
+
+```bash
+npm run ai:usage-report -- --days 30 [--calls export.json]   # consumo real, sem conteúdo (somente leitura)
+npm run ai:benchmark -- --provider groq --model openai/gpt-oss-120b \
+  --dataset ai-eval/datasets/coach-synthetic.v1.json [--dry-run] [--save-responses]
+npm run ai:provider-smoke [-- --type explain]                  # uma chamada sintética ao provider selecionado
+```
+
+Operação, limites, capacidade, privacidade e resultados: `docs/operations/AI_PROVIDERS.md`.
 
 ### Backup (T16.4)
 

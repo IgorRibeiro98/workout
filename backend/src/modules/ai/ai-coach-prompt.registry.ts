@@ -24,8 +24,16 @@ import {
  * Uma versão só para todos os tipos: as instruções mudam juntas (são o mesmo contrato de
  * comportamento em quatro recortes) e um número por prompt só produziria combinações que ninguém
  * consegue reproduzir depois.
+ *
+ * - `1`: os prompts da T14, trazidos do Android sem mudança na T16.2.
+ * - `2` (T19.H4): a regra 6 do ADAPT passou a dizer, com todas as letras, que cada mudança
+ *   preenche só os campos do próprio tipo e deixa os outros nulos. A regra já existia no
+ *   validador (aqui e no Android) e nunca tinha sido dita ao modelo; com o structured output
+ *   strict da Groq — que obriga todo campo a aparecer —, o GPT-OSS 120B repetia séries, reps e
+ *   descanso em toda mudança, e 100% das adaptações eram recusadas. O mesmo prompt vale para
+ *   qualquer provider.
  */
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 export interface PromptEntry {
   readonly systemInstruction: string;
@@ -140,7 +148,11 @@ Dados e identidade:
 Estado atual do treino:
 6. Em toda mudança, repita o valor atual do treino exatamente como está no contexto
    (carga, séries, repetições ou descanso). Se você não tem certeza do valor atual, não
-   proponha a mudança.
+   proponha a mudança. Preencha somente os campos do tipo da mudança — ADJUST_LOAD:
+   currentWeightKg e suggestedWeightKg; ADJUST_SETS: currentSets e suggestedSets;
+   ADJUST_REPS: currentMinReps, currentMaxReps, suggestedMinReps e suggestedMaxReps;
+   ADJUST_REST: currentRestSeconds e suggestedRestSeconds; REPLACE_EXERCISE:
+   replacementExerciseId. Todos os outros vão nulos: uma mudança altera uma coisa só.
 7. O valor sugerido precisa ser diferente do atual e precisa fazer sentido para o
    formato do aplicativo: repetições são uma faixa (mínimo e máximo) e descanso é em
    segundos.

@@ -16,6 +16,12 @@ import type { AiCoachRequestType } from './ai-coach.contract';
  * Os campos são exatamente os que o Android desserializa hoje (`AiCoachResponse`,
  * `AiGeneratedWorkoutResponse`, `AiWorkoutAdaptationResponse`, `AiCoachExplanationResponse`): a
  * migração troca o transporte, não o formato da conversa.
+ *
+ * Toda regra que o validador aplica e o modelo consegue cumprir sozinho está **escrita** na
+ * descrição do campo (T19.H4, prompt v2): os tetos de texto saem das mesmas constantes de
+ * `RESPONSE_LIMITS` que o validador usa, e cada campo de adaptação diz a que tipo pertence. Uma
+ * regra só do validador vira recusa sistemática para qualquer modelo que não a adivinhe — o
+ * benchmark mostrou isso nos dois modelos da Groq.
  */
 
 /**
@@ -81,10 +87,13 @@ function observationsSchema(description: string): AiOutputSchema {
           description:
             'exerciseId exatamente como recebido no contexto, ou nulo quando a observação for do treino como um todo.',
         },
-        title: { type: 'STRING', description: 'Rótulo curto da observação.' },
+        title: {
+          type: 'STRING',
+          description: `Rótulo curto da observação, no máximo ${R.maxTitleLength} caracteres.`,
+        },
         description: {
           type: 'STRING',
-          description: 'O fato observado nos dados, sem interpretação.',
+          description: `O fato observado nos dados, sem interpretação, no máximo ${R.maxDescriptionLength} caracteres.`,
         },
       },
       required: ['title', 'description'],
@@ -100,7 +109,10 @@ const dataQualitySchema: AiOutputSchema = {
       enum: [...DATA_QUALITY_LEVELS],
       description: 'Nunca maior que evidence.maxDataQuality do contexto.',
     },
-    description: { type: 'STRING', description: 'Em uma frase, no que a análise se baseou.' },
+    description: {
+      type: 'STRING',
+      description: `Em uma frase, no que a análise se baseou, no máximo ${R.maxDescriptionLength} caracteres.`,
+    },
   },
   required: ['level', 'description'],
 };
@@ -108,7 +120,10 @@ const dataQualitySchema: AiOutputSchema = {
 const analysisResponseSchema: AiOutputSchema = {
   type: 'OBJECT',
   properties: {
-    summary: { type: 'STRING', description: 'Resumo curto da análise, em português do Brasil.' },
+    summary: {
+      type: 'STRING',
+      description: `Resumo curto da análise, em português do Brasil, no máximo ${R.maxSummaryLength} caracteres.`,
+    },
     positiveSignals: observationsSchema('O que os dados mostram de positivo. Podem ser zero.'),
     attentionPoints: observationsSchema('O que merece atenção nos dados. Podem ser zero.'),
     recommendations: {
@@ -131,7 +146,7 @@ const analysisResponseSchema: AiOutputSchema = {
           },
           reason: {
             type: 'STRING',
-            description: 'Justificativa curta baseada apenas nos dados fornecidos.',
+            description: `Justificativa curta baseada apenas nos dados fornecidos, no máximo ${R.maxReasonLength} caracteres.`,
           },
           confidence: {
             type: 'NUMBER',
@@ -142,8 +157,7 @@ const analysisResponseSchema: AiOutputSchema = {
           evidence: {
             type: 'STRING',
             nullable: true,
-            description:
-              'Dado do contexto que sustenta a recomendação. Obrigatório quando houver exerciseId.',
+            description: `Dado do contexto que sustenta a recomendação, no máximo ${R.maxEvidenceLength} caracteres. Obrigatório quando houver exerciseId.`,
           },
         },
         required: ['type', 'reason', 'confidence'],
@@ -203,7 +217,7 @@ const generationResponseSchema: AiOutputSchema = {
           },
           reason: {
             type: 'STRING',
-            description: 'Em uma frase, por que este exercício está aqui.',
+            description: `Em uma frase, por que este exercício está aqui, no máximo ${R.maxExerciseReasonLength} caracteres.`,
           },
         },
         required: ['exerciseId', 'order', 'sets', 'minReps', 'maxReps', 'restSeconds', 'reason'],
@@ -211,7 +225,7 @@ const generationResponseSchema: AiOutputSchema = {
     },
     explanation: {
       type: 'STRING',
-      description: 'Em poucas frases, por que o treino foi montado assim.',
+      description: `Em poucas frases, por que o treino foi montado assim, no máximo ${R.maxExplanationLength} caracteres.`,
     },
     insufficientCandidates: {
       type: 'BOOLEAN',
@@ -227,8 +241,7 @@ const adaptationResponseSchema: AiOutputSchema = {
   properties: {
     summary: {
       type: 'STRING',
-      description:
-        'Resumo curto da adaptação. Explique aqui quando não houver nenhuma mudança a propor.',
+      description: `Resumo curto da adaptação, no máximo ${R.maxSummaryLength} caracteres. Explique aqui quando não houver nenhuma mudança a propor.`,
     },
     changes: {
       type: 'ARRAY',
@@ -257,63 +270,69 @@ const adaptationResponseSchema: AiOutputSchema = {
           currentWeightKg: {
             type: 'NUMBER',
             nullable: true,
-            description: 'ADJUST_LOAD: carga planejada hoje, exatamente como está no contexto.',
+            description:
+              'ADJUST_LOAD: carga planejada hoje, exatamente como está no contexto. Nulo nos outros tipos.',
           },
           suggestedWeightKg: {
             type: 'NUMBER',
             nullable: true,
-            description: 'ADJUST_LOAD: nova carga em kg.',
+            description: 'ADJUST_LOAD: nova carga em kg. Nulo nos outros tipos.',
           },
           currentSets: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_SETS: séries de hoje, exatamente como no contexto.',
+            description:
+              'ADJUST_SETS: séries de hoje, exatamente como no contexto. Nulo nos outros tipos.',
           },
           suggestedSets: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_SETS: novo número de séries.',
+            description: 'ADJUST_SETS: novo número de séries. Nulo nos outros tipos.',
           },
           currentMinReps: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REPS: mínimo da faixa de hoje.',
+            description: 'ADJUST_REPS: mínimo da faixa de hoje. Nulo nos outros tipos.',
           },
           currentMaxReps: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REPS: máximo da faixa de hoje.',
+            description: 'ADJUST_REPS: máximo da faixa de hoje. Nulo nos outros tipos.',
           },
           suggestedMinReps: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REPS: novo mínimo da faixa.',
+            description: 'ADJUST_REPS: novo mínimo da faixa. Nulo nos outros tipos.',
           },
           suggestedMaxReps: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REPS: novo máximo da faixa, nunca menor que o mínimo.',
+            description:
+              'ADJUST_REPS: novo máximo da faixa, nunca menor que o mínimo. Nulo nos outros tipos.',
           },
           currentRestSeconds: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REST: descanso de hoje em segundos.',
+            description: 'ADJUST_REST: descanso de hoje em segundos. Nulo nos outros tipos.',
           },
           suggestedRestSeconds: {
             type: 'INTEGER',
             nullable: true,
-            description: 'ADJUST_REST: novo descanso em segundos.',
+            description: 'ADJUST_REST: novo descanso em segundos. Nulo nos outros tipos.',
           },
           replacementExerciseId: {
             type: 'STRING',
             nullable: true,
             description:
-              'REPLACE_EXERCISE: exerciseId do substituto, copiado de replacementCandidates.',
+              'REPLACE_EXERCISE: exerciseId do substituto, copiado de replacementCandidates. Nulo nos outros tipos.',
           },
-          reason: { type: 'STRING', description: 'Em uma frase, por que esta mudança.' },
+          reason: {
+            type: 'STRING',
+            description: `Em uma frase, por que esta mudança, no máximo ${R.maxReasonLength} caracteres.`,
+          },
           evidence: {
             type: 'STRING',
-            description: 'O dado do contexto que sustenta a mudança. Obrigatório.',
+            description: `O dado do contexto que sustenta a mudança, no máximo ${R.maxEvidenceLength} caracteres. Obrigatório.`,
           },
           confidence: {
             type: 'NUMBER',
@@ -339,15 +358,17 @@ const explanationResponseSchema: AiOutputSchema = {
     },
     explanation: {
       type: 'STRING',
-      description:
-        'A explicação em no máximo dois parágrafos curtos, usando somente os dados do contexto.',
+      description: `A explicação em no máximo dois parágrafos curtos (até ${R.maxExplanationTextLength} caracteres), usando somente os dados do contexto.`,
     },
     limitations: {
       type: 'ARRAY',
       description:
         'Repita as limitações recebidas em knownLimitations e acrescente outras somente se o contexto as sustentar. Pode ser vazia.',
       maxItems: String(R.maxLimitations),
-      items: { type: 'STRING', description: 'Uma limitação desta explicação, em uma frase.' },
+      items: {
+        type: 'STRING',
+        description: `Uma limitação desta explicação, em uma frase, no máximo ${R.maxDescriptionLength} caracteres.`,
+      },
     },
     referencedExerciseIds: {
       type: 'ARRAY',

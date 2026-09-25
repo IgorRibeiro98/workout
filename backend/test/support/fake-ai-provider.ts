@@ -5,6 +5,9 @@ import type {
 } from '../../src/modules/ai/provider/ai-provider.gateway';
 import { AiProviderError } from '../../src/modules/ai/provider/ai-provider.gateway';
 
+/** O rótulo do dublê em log: nunca se passa por `gemini` ou `groq`. */
+const FAKE_DESCRIPTOR = { provider: 'fake', model: 'fake-model' } as const;
+
 /**
  * Provider de teste.
  *
@@ -17,6 +20,7 @@ import { AiProviderError } from '../../src/modules/ai/provider/ai-provider.gatew
  * que o texto do usuário atravessou como dado.
  */
 export class FakeAiProviderGateway implements AiProviderGateway {
+  readonly descriptor = FAKE_DESCRIPTOR;
   readonly calls: AiProviderRequest[] = [];
 
   constructor(
@@ -31,6 +35,7 @@ export class FakeAiProviderGateway implements AiProviderGateway {
   static respondingWith(payload: unknown, model = 'fake-model'): FakeAiProviderGateway {
     return new FakeAiProviderGateway(() => ({
       text: JSON.stringify(payload),
+      provider: FAKE_DESCRIPTOR.provider,
       model,
       usage: { promptTokens: 100, outputTokens: 50, totalTokens: 150 },
     }));
@@ -38,7 +43,11 @@ export class FakeAiProviderGateway implements AiProviderGateway {
 
   /** Responde texto cru — para o teste de JSON inválido. */
   static respondingWithText(text: string): FakeAiProviderGateway {
-    return new FakeAiProviderGateway(() => ({ text, model: 'fake-model' }));
+    return new FakeAiProviderGateway(() => ({
+      text,
+      provider: FAKE_DESCRIPTOR.provider,
+      model: FAKE_DESCRIPTOR.model,
+    }));
   }
 
   static failingWith(error: AiProviderError): FakeAiProviderGateway {
@@ -60,6 +69,7 @@ export class FakeAiProviderGateway implements AiProviderGateway {
 
 /** Um provider que fica pendurado até o teste liberar. */
 export class BlockingFakeAiProviderGateway implements AiProviderGateway {
+  readonly descriptor = FAKE_DESCRIPTOR;
   readonly calls: AiProviderRequest[] = [];
   private readonly pending: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
 
@@ -73,7 +83,12 @@ export class BlockingFakeAiProviderGateway implements AiProviderGateway {
     this.calls.push(request);
     return new Promise<AiProviderResult>((resolve, reject) => {
       this.pending.push({
-        resolve: () => resolve({ text: JSON.stringify(this.payload), model: 'fake-model' }),
+        resolve: () =>
+          resolve({
+            text: JSON.stringify(this.payload),
+            provider: FAKE_DESCRIPTOR.provider,
+            model: FAKE_DESCRIPTOR.model,
+          }),
         reject,
       });
     });

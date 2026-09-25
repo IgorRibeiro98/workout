@@ -1,0 +1,32 @@
+{
+  "groq:openai/gpt-oss-120b": {
+    "tier": "Groq Free",
+    "rpm": 30,
+    "rpd": 1000,
+    "tpm": 8000,
+    "tpd": 200000,
+    "lifecycle": "PRODUCTION",
+    "verifiedAt": "2026-09-25",
+    "source": "console.groq.com/docs/rate-limits e /docs/models; x-ratelimit-* da API em 2026-09-25 (1000 req/dia, 8000 tokens/min)"
+  },
+  "groq:qwen/qwen3.8-27b": {
+    "tier": "Groq Free",
+    "rpm": 30,
+    "rpd": 1000,
+    "tpm": 8000,
+    "tpd": 200000,
+    "lifecycle": "PREVIEW",
+    "verifiedAt": "2026-09-25",
+    "source": "console.groq.com/docs/rate-limits e /docs/models; OTPM 1000 medido na API (429 \"output tokens per minute (OTPM): Limit 1000\"), 2026-09-25",
+    "otpm": 1000
+  },
+  "gemini:gemini-3.5-flash": {
+    "tier": "Gemini API Free (projeto da chave com billing desabilitado)",
+    "rpm": 5,
+    "rpd": 20,
+    "inputTpm": 250000,
+    "lifecycle": "GA",
+    "verifiedAt": "2026-09-24",
+    "source": "gcloud alpha services quota list (generativelanguage.googleapis.com, projeto dono da chave)"
+  }
+}

@@ -27,3 +27,8 @@ data/
 
 # Caddyfile real (o exemplo e o modelo de produção são versionados).
 Caddyfile
+
+# Avaliação do Coach com dado que não pode ir para o Git (T19.H4): respostas cruas dos modelos,
+# pacotes de revisão humana e qualquer dataset real anonimizado. O `ai:benchmark` só grava texto
+# de modelo aqui dentro, e recusa gravá-lo em qualquer outro lugar.
+.private/

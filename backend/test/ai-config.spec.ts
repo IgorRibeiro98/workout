@@ -124,7 +124,12 @@ describe('Configuração do provider de IA', () => {
   });
 
   it('nenhuma chave de API está versionada na árvore do backend', () => {
-    const patterns = [/AIza[0-9A-Za-z_-]{20,}/, /-----BEGIN [A-Z ]*PRIVATE KEY/];
+    // Gemini (`AIza…`), Groq (`gsk_…`) e chave privada PEM.
+    const patterns = [
+      /AIza[0-9A-Za-z_-]{20,}/,
+      /gsk_[0-9A-Za-z]{20,}/,
+      /-----BEGIN [A-Z ]*PRIVATE KEY/,
+    ];
     const offenders = textFiles().filter((file) => {
       const content = readFileSync(file, 'utf8');
       return patterns.some((pattern) => pattern.test(content));
@@ -133,19 +138,28 @@ describe('Configuração do provider de IA', () => {
     expect(offenders.map((file) => file.slice(BACKEND_ROOT.length))).toEqual([]);
   });
 
-  it('.env.example documenta a chave do Gemini sem trazer valor', () => {
+  it('.env.example documenta as chaves dos dois providers sem trazer valor', () => {
     const example = readFileSync(join(BACKEND_ROOT, '.env.example'), 'utf8');
 
-    expect(example).toContain('GEMINI_API_KEY');
+    for (const key of ['GEMINI_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'GROQ_MODEL']) {
+      expect(example).toContain(key);
+    }
     expect(example).not.toMatch(/^GEMINI_API_KEY\s*=\s*\S/m);
+    expect(example).not.toMatch(/^GROQ_API_KEY\s*=\s*\S/m);
     expect(example).not.toMatch(/AIza/);
+    expect(example).not.toMatch(/gsk_/);
   });
 
-  it('o docker-compose versionado não carrega a chave do Gemini', () => {
-    const compose = readFileSync(join(BACKEND_ROOT, 'docker-compose.yml'), 'utf8');
-
-    expect(compose).not.toMatch(/AIza/);
-    expect(compose).not.toMatch(/^\s*GEMINI_API_KEY:\s*\S/m);
+  it('os docker-compose versionados não carregam chave de provider', () => {
+    for (const file of [
+      'docker-compose.yml',
+      'docker-compose.prod.yml',
+      'docker-compose.ci-topology.yml',
+    ]) {
+      const compose = readFileSync(join(BACKEND_ROOT, file), 'utf8');
+      expect(compose).not.toMatch(/AIza|gsk_/);
+      expect(compose).not.toMatch(/^\s*(GEMINI|GROQ)_API_KEY:\s*\S/m);
+    }
   });
 });
 

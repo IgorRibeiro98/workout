@@ -1,0 +1,348 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.5-flash",
+  "answeredBy": [
+    "gemini-3.5-flash"
+  ],
+  "startedAt": "2026-09-24T21:55:28.130Z",
+  "finishedAt": "2026-09-24T21:58:16.577Z",
+  "datasetFingerprint": "c39f57990926",
+  "settings": {
+    "temperature": 0.2,
+    "maxOutputTokens": 2048,
+    "thinkingLevel": "MEDIUM",
+    "timeoutMs": 60000,
+    "dataset": "coach-synthetic.v1.json",
+    "scenarios": 8
+  },
+  "overall": {
+    "requests": 8,
+    "providerErrors": 6,
+    "providerErrorsByKind": {
+      "EMPTY_RESPONSE/MAX_TOKENS": 4,
+      "UNAVAILABLE/503": 2
+    },
+    "responses": 2,
+    "rejectedJson": 0,
+    "rejectedStructure": 0,
+    "rejectedSemantic": 0,
+    "accepted": 2,
+    "latencyMs": {
+      "n": 2,
+      "avg": 5160.189798499996,
+      "p50": 3556.8695540000044,
+      "p95": 6763.5100429999875,
+      "max": 6763.5100429999875
+    },
+    "promptTokens": {
+      "n": 6,
+      "avg": 2318.6666666666665,
+      "p50": 1487,
+      "p95": 5157,
+      "max": 5157
+    },
+    "outputTokens": {
+      "n": 6,
+      "avg": 1761.8333333333333,
+      "p50": 2032,
+      "p95": 2033,
+      "max": 2033
+    },
+    "totalTokens": {
+      "n": 6,
+      "avg": 4080.5,
+      "p50": 3428,
+      "p95": 7190,
+      "max": 7190
+    },
+    "expectationsEvaluated": 1,
+    "expectationsMet": 1
+  },
+  "byFamily": {
+    "ANALYZE": {
+      "requests": 2,
+      "providerErrors": 2,
+      "providerErrorsByKind": {
+        "EMPTY_RESPONSE/MAX_TOKENS": 2
+      },
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "promptTokens": {
+        "n": 2,
+        "avg": 3719.5,
+        "p50": 2282,
+        "p95": 5157,
+        "max": 5157
+      },
+      "outputTokens": {
+        "n": 2,
+        "avg": 2032.5,
+        "p50": 2032,
+        "p95": 2033,
+        "max": 2033
+      },
+      "totalTokens": {
+        "n": 2,
+        "avg": 5752,
+        "p50": 4314,
+        "p95": 7190,
+        "max": 7190
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "GENERATE": {
+      "requests": 2,
+      "providerErrors": 2,
+      "providerErrorsByKind": {
+        "UNAVAILABLE/503": 2
+      },
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "ADAPT": {
+      "requests": 2,
+      "providerErrors": 1,
+      "providerErrorsByKind": {
+        "EMPTY_RESPONSE/MAX_TOKENS": 1
+      },
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 3556.8695540000044,
+        "p50": 3556.8695540000044,
+        "p95": 3556.8695540000044,
+        "max": 3556.8695540000044
+      },
+      "promptTokens": {
+        "n": 2,
+        "avg": 1795,
+        "p50": 1297,
+        "p95": 2293,
+        "max": 2293
+      },
+      "outputTokens": {
+        "n": 2,
+        "avg": 1372,
+        "p50": 712,
+        "p95": 2032,
+        "max": 2032
+      },
+      "totalTokens": {
+        "n": 2,
+        "avg": 3167,
+        "p50": 2009,
+        "p95": 4325,
+        "max": 4325
+      },
+      "expectationsEvaluated": 1,
+      "expectationsMet": 1
+    },
+    "EXPLAIN": {
+      "requests": 2,
+      "providerErrors": 1,
+      "providerErrorsByKind": {
+        "EMPTY_RESPONSE/MAX_TOKENS": 1
+      },
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 6763.5100429999875,
+        "p50": 6763.5100429999875,
+        "p95": 6763.5100429999875,
+        "max": 6763.5100429999875
+      },
+      "promptTokens": {
+        "n": 2,
+        "avg": 1441.5,
+        "p50": 1396,
+        "p95": 1487,
+        "max": 1487
+      },
+      "outputTokens": {
+        "n": 2,
+        "avg": 1881,
+        "p50": 1730,
+        "p95": 2032,
+        "max": 2032
+      },
+      "totalTokens": {
+        "n": 2,
+        "avg": 3322.5,
+        "p50": 3217,
+        "p95": 3428,
+        "max": 3428
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    }
+  },
+  "criticalViolations": [],
+  "verdict": "ELIGIBLE",
+  "capacity": {
+    "limits": {
+      "tier": "Gemini API Free (projeto da chave com billing desabilitado)",
+      "rpm": 5,
+      "rpd": 20,
+      "inputTpm": 250000,
+      "lifecycle": "GA",
+      "verifiedAt": "2026-09-24",
+      "source": "gcloud alpha services quota list (generativelanguage.googleapis.com, projeto dono da chave)"
+    },
+    "p95TotalPerCall": 7190,
+    "maxTotalPerCall": 7190,
+    "rpdCeiling": 20,
+    "safeDaily": 20,
+    "sparkGlobalQuota": 500,
+    "peakDailyDemand": 9,
+    "verdict": "MARGINAL"
+  },
+  "outcomes": [
+    {
+      "scenarioId": "analyze-historico-bom",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "historico-bom",
+        "good"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "EMPTY_RESPONSE",
+      "finishReason": "MAX_TOKENS",
+      "latencyMs": 7771.520119,
+      "usage": {
+        "promptTokens": 2282,
+        "outputTokens": 2032,
+        "totalTokens": 4314
+      },
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "analyze-muitos-exercicios",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "muitos-exercicios",
+        "contexto-maximo",
+        "good"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "EMPTY_RESPONSE",
+      "finishReason": "MAX_TOKENS",
+      "latencyMs": 41852.827412,
+      "usage": {
+        "promptTokens": 5157,
+        "outputTokens": 2033,
+        "totalTokens": 7190
+      },
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "generate-hipertrofia",
+      "requestType": "GENERATE_WORKOUT",
+      "tags": [
+        "hipertrofia",
+        "carga-com-evidencia"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "UNAVAILABLE",
+      "providerStatus": 503,
+      "latencyMs": 41102.660409000004,
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "generate-candidatos-insuficientes",
+      "requestType": "GENERATE_WORKOUT",
+      "tags": [
+        "insufficient-candidates"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "UNAVAILABLE",
+      "providerStatus": 503,
+      "latencyMs": 51034.433838,
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "adapt-ajustar-carga",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-load",
+        "good"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "EMPTY_RESPONSE",
+      "finishReason": "MAX_TOKENS",
+      "latencyMs": 7825.427587000013,
+      "usage": {
+        "promptTokens": 2293,
+        "outputTokens": 2032,
+        "totalTokens": 4325
+      },
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "adapt-dados-insuficientes",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "insufficient"
+      ],
+      "latencyMs": 3556.8695540000044,
+      "usage": {
+        "promptTokens": 1297,
+        "outputTokens": 712,
+        "totalTokens": 2009
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true
+    },
+    {
+      "scenarioId": "explain-treino-gerado",
+      "requestType": "EXPLAIN_WORKOUT",
+      "tags": [
+        "generation"
+      ],
+      "latencyMs": 6763.5100429999875,
+      "usage": {
+        "promptTokens": 1487,
+        "outputTokens": 1730,
+        "totalTokens": 3217
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": []
+    },
+    {
+      "scenarioId": "explain-adaptacao-carga",
+      "requestType": "EXPLAIN_ADAPTATION",
+      "tags": [
+        "adaptation"
+      ],
+      "status": "PROVIDER_ERROR",
+      "failureKind": "EMPTY_RESPONSE",
+      "finishReason": "MAX_TOKENS",
+      "latencyMs": 8460.583855000004,
+      "usage": {
+        "promptTokens": 1396,
+        "outputTokens": 2032,
+        "totalTokens": 3428
+      },
+      "criticalViolations": []
+    }
+  ]
+}

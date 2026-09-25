@@ -10,21 +10,10 @@ import {
   type AiCoachRequestType,
 } from './ai-coach.contract';
 import { AiCoachErrors } from './ai-coach.errors';
-import {
-  rawAdaptationOutputSchema,
-  rawAnalysisOutputSchema,
-  rawExplanationOutputSchema,
-  rawGenerationOutputSchema,
-} from './ai-coach.output.schema';
 import { AiCoachPromptRegistry } from './ai-coach-prompt.registry';
+import { coachProviderRequest } from './ai-coach.provider-request';
 import { aiCoachRequestSchema, type AiCoachRequestBody } from './ai-coach.request.schema';
-import {
-  validateAdaptation,
-  validateAnalysis,
-  validateExplanation,
-  validateGeneration,
-  type AiCoachValidation,
-} from './ai-coach.validator';
+import { validateCoachOutput } from './ai-coach.response-validation';
 import { AiRequestRegistry } from './ai-request.registry';
 import { AiUsageRepository, utcDateOf } from './ai-usage.repository';
 import { capabilityFor } from './entitlement/ai-capability';
@@ -34,10 +23,15 @@ import {
   AiProviderError,
   type AiProviderGateway,
   type AiProviderResult,
+  type AiProviderUsage,
 } from './provider/ai-provider.gateway';
 
 /**
- * A orquestração do Coach no servidor — e o único lugar que decide se o Gemini será chamado.
+ * A orquestração do Coach no servidor — e o único lugar que decide se o provider será chamado.
+ *
+ * Qual provider (Gemini ou Groq) é assunto de `ai-provider.factory.ts`: este serviço não sabe, não
+ * pergunta e não se comporta diferente por causa disso (T19.H4 §16). Quota, entitlement,
+ * concorrência, prompt, schema e validação são os mesmos para qualquer um.
  *
  * A ordem existe por causa de custo, e não é cosmética:
  *
@@ -117,27 +111,100 @@ export class AiCoachService {
     try {
       await this.reserveQuota(uid, utcDate, requestType, requestId, clientRequestId);
 
-      const result = await this.callProvider(request, requestId);
-      const validated = this.validate(request, result.text);
-
-      if (result.usage) {
-        await this.usage.recordTokens(uid, utcDate, requestType, result.usage);
-      }
-
-      this.logger.info('ai.request.finished', {
+      // Um registro por chamada que chegou ao provider, com o mesmo evento para sucesso e falha:
+      // é ele que responde "qual provider, qual modelo, quanto custou, quanto demorou e por que
+      // falhou" — e nunca "o que o usuário treinou" nem "o que o modelo escreveu" (T19.H4 §27).
+      const finished = (fields: Record<string, unknown>, usage?: AiProviderUsage) => ({
         requestId,
         clientRequestId,
         uidPrefix: uidPrefix(uid),
         requestType,
-        status: 'SUCCESS',
-        model: result.model,
         promptVersion: AiCoachPromptRegistry.promptVersion,
         schemaVersion: request.schemaVersion,
         durationMs: Date.now() - startedAt,
-        promptTokens: result.usage?.promptTokens,
-        outputTokens: result.usage?.outputTokens,
-        totalTokens: result.usage?.totalTokens,
+        promptTokens: usage?.promptTokens,
+        outputTokens: usage?.outputTokens,
+        totalTokens: usage?.totalTokens,
+        ...fields,
       });
+
+      let result: AiProviderResult;
+      try {
+        result = await this.callProvider(request, requestId);
+      } catch (error) {
+        const failure = error instanceof AiProviderError ? error : undefined;
+        // Uma resposta truncada ou recusada pelo provider também consumiu tokens dele.
+        if (failure?.detail.usage) {
+          await this.recordTokens(uid, utcDate, requestType, failure.detail.usage, requestId);
+        }
+        this.logger.warn(
+          'ai.request.finished',
+          finished(
+            {
+              status: 'PROVIDER_FAILED',
+              provider: this.provider.descriptor.provider,
+              model: this.provider.descriptor.model,
+              failureKind: failure?.kind ?? 'UNAVAILABLE',
+              failureReason: failure?.reason,
+              providerStatus: failure?.detail.status,
+              providerCode: failure?.detail.providerCode,
+              finishReason: failure?.detail.finishReason,
+              // §29 — "limite estourado" precisa dizer de quem: aqui é sempre o do provider
+              // (o do Spark é `ai.quota.exceeded`, com `limitSource: 'SPARK'`).
+              limitSource: failure?.kind === 'RATE_LIMITED' ? 'PROVIDER' : undefined,
+              limit: failure?.detail.limit,
+              requestTooLarge: failure?.detail.requestTooLarge,
+              retryAfterSeconds: failure?.detail.retryAfterSeconds,
+            },
+            failure?.detail.usage,
+          ),
+        );
+        throw this.translateProviderError(error);
+      }
+
+      // Antes da validação, de propósito: uma resposta que a validação recusa custou igual, e o
+      // consumo medido (`ai:usage-report`) precisa enxergá-la — é justamente o modo de falha que
+      // mais gasta sem entregar nada.
+      if (result.usage) {
+        await this.recordTokens(uid, utcDate, requestType, result.usage, requestId);
+      }
+
+      const verdict = validateCoachOutput(request, result.text);
+      if (!verdict.ok) {
+        // A razão é técnica (campo + regra violada) e nunca o texto do modelo. Ainda assim ela
+        // pode conter um fragmento escrito pelo modelo — o `exerciseId` inventado, por exemplo,
+        // que é justamente o que torna a rejeição diagnosticável. Por isso passa por `safeReason`:
+        // uma linha, sem caractere de controle, com tamanho fechado.
+        this.logger.warn('ai.response.rejected', {
+          requestId,
+          requestType,
+          provider: result.provider,
+          model: result.model,
+          stage: verdict.stage,
+          reason: safeReason(verdict.reason),
+        });
+        this.logger.warn(
+          'ai.request.finished',
+          finished(
+            {
+              status: 'INVALID_RESPONSE',
+              provider: result.provider,
+              model: result.model,
+              rejectionStage: verdict.stage,
+            },
+            result.usage,
+          ),
+        );
+        throw AiCoachErrors.invalidResponse();
+      }
+
+      this.logger.info(
+        'ai.request.finished',
+        finished(
+          { status: 'SUCCESS', provider: result.provider, model: result.model },
+          result.usage,
+        ),
+      );
 
       return {
         requestId,
@@ -145,7 +212,7 @@ export class AiCoachService {
         schemaVersion: AI_SCHEMA_VERSION,
         promptVersion: AiCoachPromptRegistry.promptVersion,
         model: result.model,
-        result: validated,
+        result: verdict.result,
       };
     } finally {
       this.registry.release(uid, clientRequestId);
@@ -243,30 +310,45 @@ export class AiCoachService {
       uidPrefix: uidPrefix(uid),
       requestType,
       scope: overGlobal ? 'GLOBAL' : 'USER',
+      // §29 — o limite é do Spark, não do provider (esse sai em `ai.request.finished` com
+      // `limitSource: 'PROVIDER'`). Para o app os dois são 429; para quem opera, não.
+      limitSource: 'SPARK',
     });
     throw overGlobal ? AiCoachErrors.globalQuotaExceeded() : AiCoachErrors.userQuotaExceeded();
   }
 
-  /** Uma chamada. Sem retry, sem segunda passada, sem provider alternativo. */
-  private async callProvider(
-    request: AiCoachRequestBody,
+  /**
+   * Uma chamada. Sem retry, sem segunda passada, sem provider alternativo.
+   *
+   * O erro do provider sobe **cru** (`AiProviderError`): quem chama registra os tokens que ele
+   * consumiu e o loga com a metadata dele antes de traduzi-lo para o contrato HTTP.
+   */
+  private callProvider(request: AiCoachRequestBody, requestId: string): Promise<AiProviderResult> {
+    return this.provider.generate(coachProviderRequest(request, requestId));
+  }
+
+  /**
+   * Tokens são metadata de custo, gravados depois que o provider já respondeu — best-effort de
+   * propósito. Uma falha de banco aqui não pode trocar o erro real do provider por um 500, nem
+   * jogar fora uma resposta válida que o usuário já pagou para receber; o que se perde é a contagem
+   * desta chamada, e o log diz qual.
+   */
+  private async recordTokens(
+    uid: string,
+    utcDate: string,
+    requestType: AiCoachRequestType,
+    usage: AiProviderUsage,
     requestId: string,
-  ): Promise<AiProviderResult> {
-    const entry = AiCoachPromptRegistry.entryFor(request.requestType);
+  ): Promise<void> {
     try {
-      return await this.provider.generate({
-        requestId,
-        systemInstruction: entry.systemInstruction,
-        userPrompt: AiCoachPromptRegistry.userPrompt({
-          type: request.requestType,
-          requestId,
-          schemaVersion: request.schemaVersion,
-          context: request.context,
-        }),
-        responseSchema: entry.responseSchema,
-      });
+      await this.usage.recordTokens(uid, utcDate, requestType, usage);
     } catch (error) {
-      throw this.translateProviderError(error);
+      this.logger.error('ai.usage.tokens_not_recorded', {
+        requestId,
+        requestType,
+        totalTokens: usage.totalTokens,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      });
     }
   }
 
@@ -285,62 +367,6 @@ export class AiCoachService {
       default:
         return AiCoachErrors.providerUnavailable();
     }
-  }
-
-  /**
-   * Parse + validação estrutural + validação semântica.
-   *
-   * Uma violação invalida a resposta inteira: nada é corrigido por aproximação e nenhum
-   * `exerciseId` desconhecido é resolvido por nome. O motivo detalhado fica no log do servidor —
-   * a resposta HTTP diz apenas que a validação recusou.
-   */
-  private validate(request: AiCoachRequestBody, text: string): unknown {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw AiCoachErrors.invalidResponse();
-    }
-
-    switch (request.requestType) {
-      case 'ANALYZE_WORKOUT': {
-        const output = rawAnalysisOutputSchema.safeParse(parsed);
-        if (!output.success) throw AiCoachErrors.invalidResponse();
-        this.assertValid(validateAnalysis(request.context, output.data), request.requestType);
-        return output.data;
-      }
-      case 'GENERATE_WORKOUT': {
-        const output = rawGenerationOutputSchema.safeParse(parsed);
-        if (!output.success) throw AiCoachErrors.invalidResponse();
-        this.assertValid(validateGeneration(request.context, output.data), request.requestType);
-        return output.data;
-      }
-      case 'ADAPT_WORKOUT': {
-        const output = rawAdaptationOutputSchema.safeParse(parsed);
-        if (!output.success) throw AiCoachErrors.invalidResponse();
-        this.assertValid(validateAdaptation(request.context, output.data), request.requestType);
-        return output.data;
-      }
-      default: {
-        const output = rawExplanationOutputSchema.safeParse(parsed);
-        if (!output.success) throw AiCoachErrors.invalidResponse();
-        this.assertValid(validateExplanation(request.context, output.data), request.requestType);
-        return output.data;
-      }
-    }
-  }
-
-  private assertValid(validation: AiCoachValidation, requestType: AiCoachRequestType): void {
-    if (validation.ok) return;
-    // A razão é técnica (campo + regra violada) e nunca o texto do modelo. Ainda assim ela pode
-    // conter um fragmento escrito pelo modelo — o `exerciseId` inventado, por exemplo, que é
-    // justamente o que torna a rejeição diagnosticável. Por isso passa por `safeReason`: uma
-    // linha, sem caractere de controle, com tamanho fechado.
-    this.logger.warn('ai.response.rejected', {
-      requestType,
-      reason: safeReason(validation.reason),
-    });
-    throw AiCoachErrors.invalidResponse();
   }
 }
 

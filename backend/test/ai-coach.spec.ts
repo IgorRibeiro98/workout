@@ -87,7 +87,7 @@ describe('Coach IA pelo Spark Backend', () => {
     expect(response.body).toMatchObject({
       clientRequestId: 'cli-11111111-2222-3333',
       schemaVersion: 1,
-      promptVersion: 1,
+      promptVersion: 2,
       model: 'gemini-teste',
     });
     expect(typeof response.body.requestId).toBe('string');
@@ -389,6 +389,7 @@ describe('Coach IA pelo Spark Backend', () => {
           ? fixtures.generationOutput()
           : fixtures.analysisOutput(),
       ),
+      provider: 'fake',
       model: 'fake-model',
     }));
     await start(provider, { AI_MAX_REQUESTS_PER_USER_DAY: '10' });

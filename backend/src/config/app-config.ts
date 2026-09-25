@@ -4,6 +4,11 @@ import {
   PostgresUrlIdentityError,
   productionSslViolation,
 } from '../database/postgres-url';
+import {
+  aiProviderConfigurationIssues,
+  API_KEY_ENV_BY_PROVIDER,
+  selectedProviderApiKey,
+} from './ai-provider-settings';
 import { DEVELOPMENT_DELETION_HMAC_KEY, envSchema, SparkEnv } from './env.schema';
 
 /** Onde os bytes de mídia e de backup vivem (T18.1). A escolha mora em `object-storage.factory.ts`. */
@@ -45,7 +50,19 @@ export class AppConfig {
       throw new ConfigValidationError(issues);
     }
 
-    return new AppConfig(result.data);
+    const config = new AppConfig(result.data);
+
+    // T19.H4 §14/§41 — modelo e esforço de raciocínio que o provider selecionado não sustenta são
+    // configuração inválida, não "o provider que escolha": o processo não sobe.
+    const aiIssues = aiProviderConfigurationIssues(config, {
+      isProduction: config.isProduction,
+      groqAllowPreviewModel: result.data.GROQ_ALLOW_PREVIEW_MODEL,
+    });
+    if (aiIssues.length > 0) {
+      throw new ConfigValidationError(aiIssues);
+    }
+
+    return config;
   }
 
   get nodeEnv(): SparkEnv['NODE_ENV'] {
@@ -140,10 +157,16 @@ export class AppConfig {
   get firebaseProjectId(): string | undefined {
     return this.env.FIREBASE_PROJECT_ID;
   }
-  // --- Coach IA (T16.2) -----------------------------------------------------------------
+  // --- Coach IA (T16.2; multi-provider na T19.H4) ---------------------------------------
   //
-  // O backend é a única fronteira com o Gemini. Estes valores existem aqui, e só aqui: nenhum
-  // controller, serviço ou gateway escolhe modelo, temperatura, timeout ou teto por conta.
+  // O backend é a única fronteira com o provider de modelo. Estes valores existem aqui, e só
+  // aqui: nenhum controller, serviço ou gateway escolhe provider, modelo, temperatura, timeout ou
+  // teto por conta. `AppConfig` satisfaz `AiProviderSettings` por estrutura.
+
+  /** Quem atende o Coach. A escolha da implementação mora em `ai-provider.factory.ts`. */
+  get aiProvider(): SparkEnv['AI_PROVIDER'] {
+    return this.env.AI_PROVIDER;
+  }
 
   /** Credencial do Gemini. `undefined` = Coach indisponível neste servidor, nunca inseguro. */
   get geminiApiKey(): string | undefined {
@@ -152,6 +175,15 @@ export class AppConfig {
 
   get geminiModel(): string {
     return this.env.GEMINI_MODEL;
+  }
+
+  /** Credencial da Groq. `undefined` = Coach indisponível com `AI_PROVIDER=groq`. */
+  get groqApiKey(): string | undefined {
+    return this.env.GROQ_API_KEY;
+  }
+
+  get groqModel(): string {
+    return this.env.GROQ_MODEL;
   }
 
   get aiTimeoutMs(): number {
@@ -164,6 +196,16 @@ export class AppConfig {
 
   get aiMaxOutputTokens(): number {
     return this.env.AI_MAX_OUTPUT_TOKENS;
+  }
+
+  /** O teto de saída do Gemini: `GEMINI_MAX_OUTPUT_TOKENS`, ou o compartilhado. */
+  get geminiMaxOutputTokens(): number {
+    return this.env.GEMINI_MAX_OUTPUT_TOKENS ?? this.env.AI_MAX_OUTPUT_TOKENS;
+  }
+
+  /** O teto de saída da Groq: `GROQ_MAX_OUTPUT_TOKENS`, ou o compartilhado. */
+  get groqMaxOutputTokens(): number {
+    return this.env.GROQ_MAX_OUTPUT_TOKENS ?? this.env.AI_MAX_OUTPUT_TOKENS;
   }
 
   get aiThinkingLevel(): SparkEnv['AI_THINKING_LEVEL'] {
@@ -195,6 +237,12 @@ export class AppConfig {
     return this.env.REQUIRE_FIREBASE_ADMIN;
   }
 
+  /** Exige a credencial do provider selecionado no startup (T19.H4). */
+  get requireAiProvider(): boolean {
+    return this.env.REQUIRE_AI_PROVIDER;
+  }
+
+  /** Legado (T16.8): ver `REQUIRE_GEMINI` em `env.schema.ts`. */
   get requireGemini(): boolean {
     return this.env.REQUIRE_GEMINI;
   }
@@ -346,7 +394,24 @@ export class AppConfig {
         'REQUIRE_FIREBASE_ADMIN=true e FIREBASE_ADMIN_CREDENTIAL_MODE=file, mas GOOGLE_APPLICATION_CREDENTIALS não está definido',
       );
     }
-    if (this.requireGemini && !this.geminiApiKey) {
+    // T19.H4 §54 — a credencial exigida é a do provider **selecionado**.
+    if (this.requireAiProvider && !selectedProviderApiKey(this)) {
+      missing.push(
+        `REQUIRE_AI_PROVIDER=true e AI_PROVIDER=${this.aiProvider}, mas ${API_KEY_ENV_BY_PROVIDER[this.aiProvider]} não está definido`,
+      );
+    }
+    if (this.requireAiProvider && !this.aiEnabled) {
+      missing.push('REQUIRE_AI_PROVIDER=true e AI_ENABLED=false são contraditórios');
+    }
+    // `REQUIRE_GEMINI` (T16.8) continua significando o que significava — mas só onde isso ainda
+    // tem sentido. Com outro provider selecionado, exigir a chave do Gemini não protege nada, e
+    // aceitar em silêncio esconderia que a proteção mudou de variável.
+    if (this.requireGemini && this.aiProvider !== 'gemini') {
+      missing.push(
+        `REQUIRE_GEMINI=true é da configuração anterior à T19.H4 e só vale com AI_PROVIDER=gemini; com AI_PROVIDER=${this.aiProvider} use REQUIRE_AI_PROVIDER=true`,
+      );
+    }
+    if (this.requireGemini && this.aiProvider === 'gemini' && !this.geminiApiKey) {
       missing.push('REQUIRE_GEMINI=true, mas GEMINI_API_KEY não está definido');
     }
     if (this.requireGemini && !this.aiEnabled) {

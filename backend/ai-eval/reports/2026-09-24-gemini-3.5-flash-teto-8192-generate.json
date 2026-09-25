@@ -1,0 +1,174 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.5-flash",
+  "answeredBy": [
+    "gemini-3.5-flash"
+  ],
+  "startedAt": "2026-09-24T22:46:40.845Z",
+  "finishedAt": "2026-09-24T22:47:05.191Z",
+  "datasetFingerprint": "b8047dbd2198",
+  "settings": {
+    "temperature": 0.2,
+    "maxOutputTokens": 8192,
+    "thinkingLevel": "MEDIUM",
+    "timeoutMs": 60000,
+    "dataset": "coach-synthetic.v1.json",
+    "scenarios": 1
+  },
+  "overall": {
+    "requests": 1,
+    "providerErrors": 0,
+    "providerErrorsByKind": {},
+    "responses": 1,
+    "rejectedJson": 0,
+    "rejectedStructure": 0,
+    "rejectedSemantic": 0,
+    "accepted": 1,
+    "latencyMs": {
+      "n": 1,
+      "avg": 24272.006765,
+      "p50": 24272.006765,
+      "p95": 24272.006765,
+      "max": 24272.006765
+    },
+    "promptTokens": {
+      "n": 1,
+      "avg": 1420,
+      "p50": 1420,
+      "p95": 1420,
+      "max": 1420
+    },
+    "outputTokens": {
+      "n": 1,
+      "avg": 2106,
+      "p50": 2106,
+      "p95": 2106,
+      "max": 2106
+    },
+    "totalTokens": {
+      "n": 1,
+      "avg": 3526,
+      "p50": 3526,
+      "p95": 3526,
+      "max": 3526
+    },
+    "expectationsEvaluated": 0,
+    "expectationsMet": 0
+  },
+  "byFamily": {
+    "ANALYZE": {
+      "requests": 0,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "GENERATE": {
+      "requests": 1,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 1,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 1,
+      "latencyMs": {
+        "n": 1,
+        "avg": 24272.006765,
+        "p50": 24272.006765,
+        "p95": 24272.006765,
+        "max": 24272.006765
+      },
+      "promptTokens": {
+        "n": 1,
+        "avg": 1420,
+        "p50": 1420,
+        "p95": 1420,
+        "max": 1420
+      },
+      "outputTokens": {
+        "n": 1,
+        "avg": 2106,
+        "p50": 2106,
+        "p95": 2106,
+        "max": 2106
+      },
+      "totalTokens": {
+        "n": 1,
+        "avg": 3526,
+        "p50": 3526,
+        "p95": 3526,
+        "max": 3526
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "ADAPT": {
+      "requests": 0,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    },
+    "EXPLAIN": {
+      "requests": 0,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0
+    }
+  },
+  "criticalViolations": [],
+  "verdict": "ELIGIBLE",
+  "capacity": {
+    "limits": {
+      "tier": "Gemini API Free (projeto da chave com billing desabilitado)",
+      "rpm": 5,
+      "rpd": 20,
+      "inputTpm": 250000,
+      "lifecycle": "GA",
+      "verifiedAt": "2026-09-24",
+      "source": "gcloud alpha services quota list (generativelanguage.googleapis.com, projeto dono da chave)"
+    },
+    "p95TotalPerCall": 3526,
+    "maxTotalPerCall": 3526,
+    "rpdCeiling": 20,
+    "safeDaily": 20,
+    "sparkGlobalQuota": 500,
+    "verdict": "MARGINAL"
+  },
+  "outcomes": [
+    {
+      "scenarioId": "generate-hipertrofia",
+      "requestType": "GENERATE_WORKOUT",
+      "tags": [
+        "hipertrofia",
+        "carga-com-evidencia"
+      ],
+      "latencyMs": 24272.006765,
+      "usage": {
+        "promptTokens": 1420,
+        "outputTokens": 2106,
+        "totalTokens": 3526
+      },
+      "model": "gemini-3.5-flash",
+      "status": "ACCEPTED",
+      "criticalViolations": []
+    }
+  ]
+}

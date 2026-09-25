@@ -1,0 +1,593 @@
+{
+  "provider": "groq",
+  "model": "openai/gpt-oss-120b",
+  "answeredBy": [
+    "openai/gpt-oss-120b"
+  ],
+  "startedAt": "2026-09-25T00:33:10.561Z",
+  "finishedAt": "2026-09-25T00:47:18.675Z",
+  "datasetFingerprint": "4a645a9f6677",
+  "settings": {
+    "temperature": 0.2,
+    "maxOutputTokens": 3000,
+    "thinkingLevel": "MEDIUM",
+    "timeoutMs": 60000,
+    "dataset": "coach-synthetic.v1.json",
+    "scenarios": 20
+  },
+  "overall": {
+    "requests": 20,
+    "providerErrors": 0,
+    "providerErrorsByKind": {},
+    "responses": 20,
+    "rejectedJson": 0,
+    "rejectedStructure": 0,
+    "rejectedSemantic": 2,
+    "accepted": 18,
+    "latencyMs": {
+      "n": 20,
+      "avg": 3327.4147662000005,
+      "p50": 3057.9271810000064,
+      "p95": 5667.871794000001,
+      "max": 6132.667447000007
+    },
+    "promptTokens": {
+      "n": 20,
+      "avg": 2273.05,
+      "p50": 2225,
+      "p95": 3069,
+      "max": 5012
+    },
+    "outputTokens": {
+      "n": 20,
+      "avg": 1330.65,
+      "p50": 1124,
+      "p95": 2354,
+      "max": 2719
+    },
+    "totalTokens": {
+      "n": 20,
+      "avg": 3603.7,
+      "p50": 3741,
+      "p95": 5424,
+      "max": 6920
+    },
+    "expectationsEvaluated": 6,
+    "expectationsMet": 5,
+    "pacingRetries": 0
+  },
+  "byFamily": {
+    "ANALYZE": {
+      "requests": 7,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 7,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 7,
+      "latencyMs": {
+        "n": 7,
+        "avg": 4643.495723285713,
+        "p50": 5264.041452000005,
+        "p95": 6132.667447000007,
+        "max": 6132.667447000007
+      },
+      "promptTokens": {
+        "n": 7,
+        "avg": 2653.285714285714,
+        "p50": 2300,
+        "p95": 5012,
+        "max": 5012
+      },
+      "outputTokens": {
+        "n": 7,
+        "avg": 1952.7142857142858,
+        "p50": 2182,
+        "p95": 2719,
+        "max": 2719
+      },
+      "totalTokens": {
+        "n": 7,
+        "avg": 4606,
+        "p50": 4469,
+        "p95": 6920,
+        "max": 6920
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0,
+      "pacingRetries": 0
+    },
+    "GENERATE": {
+      "requests": 0,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 0,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 0,
+      "accepted": 0,
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0,
+      "pacingRetries": 0
+    },
+    "ADAPT": {
+      "requests": 7,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 7,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 1,
+      "accepted": 6,
+      "latencyMs": {
+        "n": 7,
+        "avg": 3220.2972134285956,
+        "p50": 3186.64895100001,
+        "p95": 4979.564746999997,
+        "max": 4979.564746999997
+      },
+      "promptTokens": {
+        "n": 7,
+        "avg": 2608,
+        "p50": 2680,
+        "p95": 3069,
+        "max": 3069
+      },
+      "outputTokens": {
+        "n": 7,
+        "avg": 1275.2857142857142,
+        "p50": 1178,
+        "p95": 2175,
+        "max": 2175
+      },
+      "totalTokens": {
+        "n": 7,
+        "avg": 3883.285714285714,
+        "p50": 3895,
+        "p95": 4879,
+        "max": 4879
+      },
+      "expectationsEvaluated": 6,
+      "expectationsMet": 5,
+      "pacingRetries": 0
+    },
+    "EXPLAIN": {
+      "requests": 6,
+      "providerErrors": 0,
+      "providerErrorsByKind": {},
+      "responses": 6,
+      "rejectedJson": 0,
+      "rejectedStructure": 0,
+      "rejectedSemantic": 1,
+      "accepted": 5,
+      "latencyMs": {
+        "n": 6,
+        "avg": 1916.957461166642,
+        "p50": 1676.3744469999801,
+        "p95": 2927.0916410000063,
+        "max": 2927.0916410000063
+      },
+      "promptTokens": {
+        "n": 6,
+        "avg": 1438.6666666666667,
+        "p50": 1319,
+        "p95": 1741,
+        "max": 1741
+      },
+      "outputTokens": {
+        "n": 6,
+        "avg": 669.5,
+        "p50": 515,
+        "p95": 959,
+        "max": 959
+      },
+      "totalTokens": {
+        "n": 6,
+        "avg": 2108.1666666666665,
+        "p50": 1989,
+        "p95": 2700,
+        "max": 2700
+      },
+      "expectationsEvaluated": 0,
+      "expectationsMet": 0,
+      "pacingRetries": 0
+    }
+  },
+  "criticalViolations": [],
+  "verdict": "ELIGIBLE",
+  "capacity": {
+    "limits": {
+      "tier": "Groq Free",
+      "rpm": 30,
+      "rpd": 1000,
+      "tpm": 8000,
+      "tpd": 200000,
+      "lifecycle": "PRODUCTION",
+      "verifiedAt": "2026-09-24",
+      "source": "console.groq.com/docs/rate-limits e /docs/models"
+    },
+    "p95TotalPerCall": 5424,
+    "maxTotalPerCall": 6920,
+    "tpdCeiling": 36,
+    "safeByTokens": 29,
+    "rpdCeiling": 1000,
+    "safeDaily": 29,
+    "p95FitsTpm": true,
+    "maxFitsTpm": true,
+    "callsPerMinuteAtP95": 1,
+    "sparkGlobalQuota": 25,
+    "peakDailyDemand": 9,
+    "verdict": "SUFFICIENT"
+  },
+  "outcomes": [
+    {
+      "scenarioId": "analyze-sem-historico",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "historico-escasso",
+        "insufficient"
+      ],
+      "latencyMs": 1480.162961,
+      "usage": {
+        "promptTokens": 1890,
+        "outputTokens": 431,
+        "totalTokens": 2321
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-evidencia-limitada",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "evidencia-limitada",
+        "limited"
+      ],
+      "latencyMs": 5667.871794000001,
+      "usage": {
+        "promptTokens": 2131,
+        "outputTokens": 2182,
+        "totalTokens": 4313
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-historico-bom",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "historico-bom",
+        "good"
+      ],
+      "latencyMs": 6132.667447000007,
+      "usage": {
+        "promptTokens": 2705,
+        "outputTokens": 2719,
+        "totalTokens": 5424
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-carga-estavel",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "carga-estavel",
+        "plato",
+        "good"
+      ],
+      "latencyMs": 5265.968041,
+      "usage": {
+        "promptTokens": 2115,
+        "outputTokens": 2354,
+        "totalTokens": 4469
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-progressao-evidente",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "progressao",
+        "good"
+      ],
+      "latencyMs": 4254.827380999981,
+      "usage": {
+        "promptTokens": 2300,
+        "outputTokens": 1770,
+        "totalTokens": 4070
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-queda-desempenho",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "queda",
+        "good"
+      ],
+      "latencyMs": 5264.041452000005,
+      "usage": {
+        "promptTokens": 2420,
+        "outputTokens": 2305,
+        "totalTokens": 4725
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "analyze-muitos-exercicios",
+      "requestType": "ANALYZE_WORKOUT",
+      "tags": [
+        "muitos-exercicios",
+        "contexto-maximo",
+        "good"
+      ],
+      "latencyMs": 4438.930987,
+      "usage": {
+        "promptTokens": 5012,
+        "outputTokens": 1908,
+        "totalTokens": 6920
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-ajustar-carga",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-load",
+        "good"
+      ],
+      "latencyMs": 3186.64895100001,
+      "usage": {
+        "promptTokens": 3069,
+        "outputTokens": 1124,
+        "totalTokens": 4193
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-ajustar-reps",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-reps",
+        "good",
+        "sem-carga"
+      ],
+      "latencyMs": 2617.350225000002,
+      "usage": {
+        "promptTokens": 2411,
+        "outputTokens": 1008,
+        "totalTokens": 3419
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "REJECTED",
+      "rejectionStage": "SEMANTIC",
+      "rejectionRule": "campo '…' não pertence a ADJUST_REPS em [0]",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-ajustar-series",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-sets",
+        "good"
+      ],
+      "latencyMs": 3335.6501709999866,
+      "usage": {
+        "promptTokens": 2717,
+        "outputTokens": 1178,
+        "totalTokens": 3895
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-ajustar-descanso",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "adjust-rest",
+        "good"
+      ],
+      "latencyMs": 4320.261307000066,
+      "usage": {
+        "promptTokens": 2680,
+        "outputTokens": 1884,
+        "totalTokens": 4564
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-substituir-exercicio",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "replace-exercise",
+        "good"
+      ],
+      "latencyMs": 4979.564746999997,
+      "usage": {
+        "promptTokens": 2704,
+        "outputTokens": 2175,
+        "totalTokens": 4879
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-sem-mudanca",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "no-change",
+        "good"
+      ],
+      "latencyMs": 3057.9271810000064,
+      "usage": {
+        "promptTokens": 2450,
+        "outputTokens": 1291,
+        "totalTokens": 3741
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": false,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "adapt-dados-insuficientes",
+      "requestType": "ADAPT_WORKOUT",
+      "tags": [
+        "insufficient"
+      ],
+      "latencyMs": 1044.677912000101,
+      "usage": {
+        "promptTokens": 2225,
+        "outputTokens": 267,
+        "totalTokens": 2492
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "expectationMet": true,
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-recomendacao",
+      "requestType": "EXPLAIN_RECOMMENDATION",
+      "tags": [
+        "recommendation"
+      ],
+      "latencyMs": 1471.3681319999741,
+      "usage": {
+        "promptTokens": 1253,
+        "outputTokens": 498,
+        "totalTokens": 1751
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-treino-gerado",
+      "requestType": "EXPLAIN_WORKOUT",
+      "tags": [
+        "generation"
+      ],
+      "latencyMs": 2927.0916410000063,
+      "usage": {
+        "promptTokens": 1741,
+        "outputTokens": 959,
+        "totalTokens": 2700
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "REJECTED",
+      "rejectionStage": "SEMANTIC",
+      "rejectionRule": "explanation excede 900 caracteres",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-adaptacao-carga",
+      "requestType": "EXPLAIN_ADAPTATION",
+      "tags": [
+        "adaptation"
+      ],
+      "latencyMs": 1676.3744469999801,
+      "usage": {
+        "promptTokens": 1620,
+        "outputTokens": 452,
+        "totalTokens": 2072
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-adaptacao-sem-historico",
+      "requestType": "EXPLAIN_ADAPTATION",
+      "tags": [
+        "adaptation",
+        "insufficient"
+      ],
+      "latencyMs": 1420.5609979999717,
+      "usage": {
+        "promptTokens": 1411,
+        "outputTokens": 515,
+        "totalTokens": 1926
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-progresso",
+      "requestType": "EXPLAIN_PROGRESS",
+      "tags": [
+        "progress"
+      ],
+      "latencyMs": 2305.7828039999586,
+      "usage": {
+        "promptTokens": 1288,
+        "outputTokens": 923,
+        "totalTokens": 2211
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    },
+    {
+      "scenarioId": "explain-progresso-sem-treino",
+      "requestType": "EXPLAIN_PROGRESS",
+      "tags": [
+        "progress",
+        "insufficient"
+      ],
+      "latencyMs": 1700.56674499996,
+      "usage": {
+        "promptTokens": 1319,
+        "outputTokens": 670,
+        "totalTokens": 1989
+      },
+      "model": "openai/gpt-oss-120b",
+      "status": "ACCEPTED",
+      "criticalViolations": [],
+      "pacingRetries": 0
+    }
+  ]
+}
