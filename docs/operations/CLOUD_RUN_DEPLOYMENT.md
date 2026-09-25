@@ -159,15 +159,28 @@ O Migration Job (`spark-db-migrate`) não ganha nenhuma configuração de Fireba
 
 Teste: `ops/tests/gcp-cross-project.test.sh` — com um `gcloud` fake (sem rede, sem projeto real).
 
-**Nunca imprime valor de secret.** Os valores reais de `DATABASE_URL`, `DATABASE_URL_DIRECT` e
-`GEMINI_API_KEY` são responsabilidade do operador, fora deste script e fora do Git:
+**Nunca imprime valor de secret.** Os valores reais de `DATABASE_URL`, `DATABASE_URL_DIRECT`,
+`GEMINI_API_KEY` e `GROQ_API_KEY` (T19.H4) são responsabilidade do operador, fora deste script e
+fora do Git:
 
 ```bash
-printf '%s' "postgresql://...">/dev/null  # nunca conte um secret em ARGV visível no histórico
-gcloud secrets versions add spark-database-url --data-file=- <<< "postgresql://usuario:senha@host-pooled/spark"
-gcloud secrets versions add spark-database-url-direct --data-file=- <<< "postgresql://usuario:senha@host-direct/spark"
-gcloud secrets versions add spark-gemini-api-key --data-file=- <<< "<chave real>"
+# O valor é digitado sem eco, não entra no histórico do shell nem em ARGV, e é gravado SEM quebra
+# de linha no fim — um here-string (`<<<`) ou um Enter antes do Ctrl-D gravariam o `\n` junto
+# (visto na T19.H4: a chave da Groq ficou com 57 bytes em vez de 56).
+add_secret() {
+  read -rsp "valor de $1: " V && printf '%s' "$V" \
+    | gcloud secrets versions add "$1" --data-file=- --project "$SPARK_GCP_PROJECT"
+  unset V; echo
+}
+add_secret spark-database-url          # postgresql://usuario:senha@host-pooled/spark
+add_secret spark-database-url-direct   # postgresql://usuario:senha@host-direct/spark
+add_secret spark-gemini-api-key
+add_secret spark-groq-api-key
 ```
+
+Só o secret do provider **selecionado** (`SPARK_AI_PROVIDER` em `lib.gcp.sh`) precisa de versão
+para o deploy passar; o outro é a reserva do failover — ver
+[AI_PROVIDERS.md](./AI_PROVIDERS.md).
 
 ## 4. Deploy
 
@@ -178,6 +191,8 @@ ops/gcp/deploy-cloud-run.sh
 Ordem obrigatória (§10; endurecida na T18.3), cada etapa falha cedo:
 
 ```text
+provider de IA (SPARK_AI_PROVIDER), modelo, quota e política de smoke válidos (T19.H4)
+      ↓
 árvore Git limpa
       ↓
 build (tag = git SHA; --provenance=false --sbom=false: um digest por release)
@@ -187,6 +202,7 @@ push no Artifact Registry
 resolve o digest exato
       ↓
 resolve a versão HABILITADA de cada secret → revision X usa secret:versão Y, nunca :latest (T18.3 §19)
+  (da chave de IA, só a do provider selecionado — T19.H4)
       ↓
 atualiza os Jobs spark-db-backup e spark-storage-audit com o MESMO digest
       ↓
@@ -205,8 +221,10 @@ deploy do candidate — --no-traffic --tag candidate    deploy da MESMA imagem/c
       ↓                                               TEMPORÁRIO e PRIVADO (spark-backend-validate)
 smoke contra o candidate                                    ↓
       ↓                                              smoke com o identity token do operador
-falha do smoke → tráfego antigo permanece                  ↓
-      ↓                                              remove o temporário, cria spark-backend
+smoke do provider de IA (Job spark-ai-provider-smoke,       ↓
+  T19.H4) — uma chamada real, sintética               smoke do provider de IA (idem)
+      ↓                                                     ↓
+falha de um dos smokes → tráfego antigo permanece    remove o temporário, cria spark-backend
 100% do tráfego para o candidate                      de verdade (já validado)
       ↓                                                     ↓
               deploy de spark-maintenance com o MESMO digest (privado, sem troca de tráfego)
@@ -351,7 +369,8 @@ GCP de infraestrutura onde a própria Service Account vive — ver §3.1 (T18.2.
 | --- | --- | --- |
 | `spark-database-url` | API, Maintenance, Job storage-audit | `spark-backend-runtime` |
 | `spark-database-url-direct` | Jobs migrate e backup | `spark-backend-migrator`, `spark-backend-backup` **apenas** |
-| `spark-gemini-api-key` | API, Maintenance | `spark-backend-runtime` |
+| `spark-gemini-api-key` | API, Maintenance e Job `spark-ai-provider-smoke` — só quando `SPARK_AI_PROVIDER=gemini` | `spark-backend-runtime` |
+| `spark-groq-api-key` (T19.H4) | API, Maintenance e Job `spark-ai-provider-smoke` — só quando `SPARK_AI_PROVIDER=groq` | `spark-backend-runtime` |
 | `spark-account-deletion-hmac-key` | API, Maintenance | `spark-backend-runtime` |
 
 `roles/secretmanager.secretAccessor` é concedido **por secret**, nunca
@@ -512,7 +531,11 @@ não é declarado funcional.
 | `FIREBASE_ADMIN_CREDENTIAL_MODE` | `adc` |
 | `FIREBASE_PROJECT_ID` | `${SPARK_FIREBASE_PROJECT}` — pode ser diferente de `${SPARK_GCP_PROJECT}` (§3.1) |
 | `AI_ENABLED` | `true` |
-| `REQUIRE_GEMINI` | `false` |
+| `AI_PROVIDER` | `${SPARK_AI_PROVIDER}` — `groq` desde 2026-09-25 (T19.H4, [AI_PROVIDERS.md](./AI_PROVIDERS.md)) |
+| `GEMINI_MODEL` / `GEMINI_MAX_OUTPUT_TOKENS` | `gemini-3.5-flash` / `8192` — com `AI_PROVIDER=gemini` |
+| `GROQ_MODEL` / `GROQ_MAX_OUTPUT_TOKENS` / `GROQ_ALLOW_PREVIEW_MODEL` | `openai/gpt-oss-120b` / `3000` / `false` — com `AI_PROVIDER=groq` |
+| `AI_MAX_REQUESTS_GLOBAL_DAY` / `AI_MAX_REQUESTS_PER_USER_DAY` | `15` (gemini) ou `25` (groq) / `8` — abaixo da capacidade do provider |
+| `REQUIRE_AI_PROVIDER` | `false` (substitui `REQUIRE_GEMINI`, que não é mais declarada) |
 | `SYNC_WRITE_ENABLED` | `true` |
 | `MAINTENANCE_MODE` | `false` |
 | `BACKGROUND_JOBS_MODE` | `disabled` |
@@ -521,8 +544,16 @@ não é declarado funcional.
 
 **Nunca definidas na API:** `GOOGLE_APPLICATION_CREDENTIALS`, `DATABASE_URL_DIRECT`.
 
-Secrets por referência: `DATABASE_URL` ← `spark-database-url`; `GEMINI_API_KEY` ←
-`spark-gemini-api-key`; `ACCOUNT_DELETION_HMAC_KEY` ← `spark-account-deletion-hmac-key`.
+Secrets por referência: `DATABASE_URL` ← `spark-database-url`; a chave do provider selecionado
+(`GEMINI_API_KEY` ← `spark-gemini-api-key` **ou** `GROQ_API_KEY` ← `spark-groq-api-key`, nunca as
+duas); `ACCOUNT_DELETION_HMAC_KEY` ← `spark-account-deletion-hmac-key`.
+
+### Job `spark-ai-provider-smoke` (T19.H4)
+
+Publicado e executado a cada deploy **antes** da troca de tráfego (§4): mesma imagem, runtime SA,
+`node dist/cli/ai-provider-smoke.js`, a mesma configuração de IA da API e **só** a chave do provider
+— nem banco, nem HMAC. Uma chamada sintética real; falha bloqueia o tráfego
+(`SPARK_AI_SMOKE_POLICY=warn|skip` para emergência). Nunca agendado.
 
 ### Configuração produtiva — `spark-maintenance`
 

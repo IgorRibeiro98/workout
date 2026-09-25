@@ -588,6 +588,38 @@ HTTP com um interceptor terminal, sem abrir socket. Avaliação com o caminho re
 Spark Backend → Gemini) é opt-in e instrumentada
 (`app/src/androidTest/.../RealProviderEvaluationTest`).
 
+### 15.9 Provider do Coach: Gemini ou Groq, escolhido no servidor (T19.H4)
+
+> **Status (2026-09-25): implementado — CODE COMPLETE / PRODUCTION VALIDATION PENDING.** O
+> benchmark escolheu `groq/openai/gpt-oss-120b` (90% fim a fim com o prompt v2, p95 ~5,7 s, zero
+> violação crítica aceita), o ZDR da organização Groq foi verificado pelo dono da conta e
+> `ops/gcp/lib.gcp.sh` declara a Groq; falta o deploy (até ele, a revision no ar atende com
+> `gemini/gemini-3.5-flash`) e o Coach num aparelho. Operação e números em
+> [`docs/operations/AI_PROVIDERS.md`](docs/operations/AI_PROVIDERS.md); regras em
+> `PROJECT_RULES.md` §13.29.
+
+```text
+AiCoachService ──► AiProviderGateway ◄── ai-provider.factory.ts (AI_PROVIDER, único ponto)
+                     ├── GeminiAiProviderGateway (@google/genai)
+                     └── GroqAiProviderGateway   (groq-sdk: openai/gpt-oss-120b | qwen/qwen3.8-27b)
+```
+
+- **O Android não mudou.** Mesmo `POST /v1/ai/coach`, mesmo contrato; nenhuma chave de provider
+  no aplicativo; o app não sabe qual provider respondeu.
+- **Um Coach só.** Prompt (`coachProviderRequest`), schema (`responseSchemaFor`), validação
+  (`validateCoachOutput`: JSON → `zod` → semântica), quota, entitlement e concorrência são os
+  mesmos para qualquer provider. O provider é só transporte/inferência.
+- **Uma ação = no máximo uma inferência.** Sem fallback automático entre providers, sem retry
+  (o `groq-sdk` repetiria 429/5xx duas vezes; `maxRetries: 0`).
+- **Tradução explícita por provider.** O schema do Coach (vocabulário do Gemini) vira JSON Schema
+  strict só na fronteira da Groq (`groq-json-schema.ts`); `AI_THINKING_LEVEL` vira
+  `reasoning_effort` por modelo avaliado (`groq-model-profiles.ts`) e combinação não suportada
+  derruba o startup; o teto de saída é por provider porque os dois contam o raciocínio dentro dele.
+- **Medir antes de decidir.** `ai:usage-report` (consumo real a partir de `ai_usage_daily` e do log
+  por chamada), `ai:benchmark` (o Coach real contra um provider/modelo, com oráculo independente
+  das invariantes críticas e revisão humana cega) e `ai:provider-smoke` (a chave, a quota e o schema
+  provados antes do tráfego, a cada deploy).
+
 ## 16. Important known regression patterns
 
 Be especially cautious around:
@@ -780,6 +812,7 @@ persistência do domínio        validação da resposta
 | T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
 | T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
 | T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
+| T19.H4 | Coach IA multi-provider: `GroqAiProviderGateway` (GPT-OSS 120B / Qwen 3.8 27B, structured output strict) ao lado do Gemini atrás de `AiProviderGateway`, escolhido por `AI_PROVIDER` num ponto só, sem fallback; teto de saída e quota por provider; benchmark reproduzível, relatório de uso e smoke do provider antes do tráfego; Android e migrations N/A | **CODE COMPLETE / PRODUCTION VALIDATION PENDING** (GPT-OSS 120B declarado em `lib.gcp.sh`, ZDR verificado; falta deploy, aparelho e revisão humana cega) |
 | T19.H3 | Refresh social explícito ("↻" + gesto, mesmo método, sem polling), foto do check-in consertada no optimizer (bounds `null` descartava toda foto; teto como invariante), Compartilhar Progresso V3 (estatísticas da semana no perfil + resumo de treino no check-in, derivados no servidor e filtrados por inclusão); migration backend `0008` | **implementado** (aparelho real, Cloud Run/GCS reais e duas contas reais NOT VERIFIED) |
 | T19.H2 | Estabilização pós-QA: layout responsivo (Histórico, Settings, Progress Sharing), identidade da conta no Perfil, Meta Semanal salvável, sync com próximo passo, **snapshot de compartilhamento V2** (treino vazio + CUSTOM portátil) e seletor de exercícios com IME; migration Android e backend N/A | **implementado** (aparelho real NOT VERIFIED; matriz 320/360/411dp × fontScale 1.0/1.3/1.5 VERIFIED em Robolectric) |
 

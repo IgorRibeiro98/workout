@@ -2245,6 +2245,57 @@ podem ser quebradas:
   `backend/migrations/` explicitamente; nenhum decide "sou legado?" pelo **número** de uma migration
   do diretório `migrations/postgres/` (a `0008` da T19.H3 religou dois assim por engano).
 
+## 13.29 Coach IA multi-provider (T19.H4)
+
+Operação em [`docs/operations/AI_PROVIDERS.md`](docs/operations/AI_PROVIDERS.md). As regras que não
+podem ser quebradas:
+
+- **Adicionar um provider nunca cria um segundo Coach.** Prompt, schema de saída, validação
+  (`validateCoachOutput`), quota, entitlement e concorrência são únicos; o provider é transporte e
+  inferência. `AiCoachService`, controller, validador, registry de prompt e quota não conhecem
+  provider — há teste estrutural (`ai-provider-structure.spec.ts`) que recusa `aiProvider`/
+  `AI_PROVIDER`/`=== 'groq'` fora da configuração, da factory e das ferramentas.
+- **A escolha mora em um lugar.** `ai-provider.factory.ts` é o único que instancia gateway; cada SDK
+  tem exatamente um importador (`gemini-ai-provider.gateway.ts`, `groq-ai-provider.gateway.ts`).
+- **Uma ação do usuário = no máximo uma inferência.** Nada de fallback automático, segunda opinião,
+  ensemble, roteamento por usuário/tipo, streaming, tools ou retry. SDK que repete por padrão recebe
+  `maxRetries: 0`.
+- **Tradução explícita, nunca default silencioso.** Um `GROQ_MODEL` fora dos perfis avaliados, um
+  `AI_THINKING_LEVEL` que o modelo não suporta ou um modelo Preview em produção sem
+  `GROQ_ALLOW_PREVIEW_MODEL=true` derrubam o startup. `REQUIRE_GEMINI=true` com `AI_PROVIDER=groq`
+  também (a variável nova é `REQUIRE_AI_PROVIDER`).
+- **Structured output é strict, e não substitui validação.** A conversão para JSON Schema acontece
+  só na fronteira da Groq; o schema do Coach não é reescrito. `zod` e o validador semântico rodam
+  depois, para qualquer provider.
+- **Nada de conteúdo em log, nem a mensagem do provider.** Metadata sim (provider, modelo, tipo,
+  duração, tokens, `failureKind`, status, `limitSource`/`limit`); prompt, resposta, contexto,
+  raciocínio, chave e a mensagem crua da Groq (que carrega o id da organização), nunca. O raciocínio
+  do modelo é pedido para **não** voltar.
+- **"429" diz de quem é.** Quota do Spark → `ai.quota.exceeded limitSource=SPARK`; limite do
+  provider → `ai.request.finished limitSource=PROVIDER limit=RPM|RPD|TPM|TPD|OTPM` (e
+  `requestTooLarge=true` quando esperar não resolve). Para o app, o mesmo código de sempre.
+- **A quota do Spark fica abaixo da capacidade do provider** (seguro/dia = min(0,8 × TPD ÷ p95, RPD))
+  e é declarada junto com o provider em `ops/gcp/lib.gcp.sh`. Resposta recusada pela validação
+  também registra tokens — ela custou.
+- **O que o validador cobra, o prompt diz.** Todo limite semântico (tamanho de texto, campos por
+  tipo de mudança) está escrito no prompt ou nas descrições do schema — as de texto geradas de
+  `RESPONSE_LIMITS`, nunca copiadas à mão. O modelo não adivinha: com o strict obrigando todo campo a
+  aparecer, o GPT-OSS preenchia campo de outro tipo, e o ADAPT foi de 14% a 86% só com a regra 6
+  (prompt v2). Mudou o texto de instrução ou de descrição → sobe `PROMPT_VERSION` e roda o benchmark.
+- **Provider decidido por medição.** Troca de provider exige benchmark do Coach real
+  (`npm run ai:benchmark`, relatório só de metadata em `backend/ai-eval/reports/`), sem violação
+  crítica aceita, revisão humana cega e o smoke do provider verde antes do tráfego. Nenhum benchmark
+  ou chamada real roda em teste, CI ou deploy fora do smoke de uma chamada.
+- **Privacidade antes de dado real.** Nenhum contexto real de usuário vai para a Groq sem Zero Data
+  Retention verificado na organização; dataset commitado é sintético, dataset real anonimizado e
+  respostas cruas vivem só em `backend/.private/` (fora do Git e da imagem).
+- **Testes.** `ai-groq-provider.spec.ts` (SDK real com `fetch` falso: requisição, strict, retry zero,
+  timeout, erros), `ai-groq-json-schema.spec.ts`, `ai-provider-config.spec.ts`,
+  `ai-provider-structure.spec.ts`, `ai-provider-observability.spec.ts`, `ai-eval.spec.ts`,
+  `ai-usage-report.spec.ts`, `ai-provider-smoke-cli.spec.ts`; ops: `deploy-hardening.test.sh`
+  (seção T19.H4), `deploy-first-run.test.sh`, `gcp-audits.test.sh`, `gcp-cross-project.test.sh`,
+  `bootstrap-github-deploy.test.sh`.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

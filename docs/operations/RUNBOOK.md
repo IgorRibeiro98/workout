@@ -268,7 +268,29 @@ O detalhe técnico está em `journalctl -u spark-backup.service`.
 
 ## O Coach está caro, lento ou fora
 
-**Sintoma:** `429` no app, custo inesperado, ou o Gemini indisponível.
+**Sintoma:** `429` no app, custo inesperado, ou o provider de IA (Gemini ou Groq) indisponível.
+
+**Primeiro, quem recusou (T19.H4)** — no Cloud Run:
+
+```bash
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="spark-backend"
+  AND (jsonPayload.event="ai.request.finished" OR jsonPayload.event="ai.quota.exceeded")' \
+  --project project-47b17b25-909d-4ae8-943 --freshness=1d \
+  --format='table(timestamp,jsonPayload.event,jsonPayload.provider,jsonPayload.status,jsonPayload.failureKind,jsonPayload.providerStatus,jsonPayload.limitSource,jsonPayload.limit,jsonPayload.requestTooLarge,jsonPayload.finishReason)'
+```
+
+| O log diz | Causa | O que fazer |
+| --- | --- | --- |
+| `ai.quota.exceeded limitSource=SPARK` | quota do próprio Spark | esperar o dia UTC virar, ou revisar a quota em `ops/gcp/lib.gcp.sh` — sem passar da capacidade do provider |
+| `failureKind=RATE_LIMITED limitSource=PROVIDER limit=RPD/TPD` | cota diária do provider | esperar o dia do provider virar (Gemini: 07:00 UTC); se recorrente, a quota do Spark está acima da capacidade |
+| `limit=TPM`/`OTPM` com `requestTooLarge=true`, ou `providerStatus=413` | a chamada, sozinha, não cabe no minuto do plano (Groq free: 8 000 tokens, e o teto de saída é reservado na chegada) | esperar não resolve: reduzir `GROQ_MAX_OUTPUT_TOKENS`, plano pago, ou contexto menor decidido no app |
+| `limit=TPM`/`RPM` sem `requestTooLarge` | o minuto do plano foi dividido com outras chamadas (Groq free: ~1–2 chamadas do Coach por minuto, todos os usuários somados) | transitório — o app recebe o mesmo 429 de sempre; se recorrente, o volume passou do free tier |
+| `failureKind=EMPTY_RESPONSE finishReason=MAX_TOKENS/length` | o raciocínio consumiu o teto de saída | subir `SPARK_*_MAX_OUTPUT_TOKENS` (o Gemini com MEDIUM precisa de 8 192) |
+| `failureKind=UNAVAILABLE providerStatus=503` | provider sobrecarregado (o free tier do Gemini é o primeiro a ser cortado) | trocar de provider — [AI_PROVIDERS.md](./AI_PROVIDERS.md) |
+| `failureKind=NOT_CONFIGURED` | chave ausente no provider selecionado | `gcloud secrets versions list spark-<provider>-api-key` e deploy |
+
+Para reproduzir fora do app (uma chamada sintética, gasta uma requisição da cota):
+`AI_PROVIDER=… <CHAVE>=… npm run ai:provider-smoke` em `backend/`.
 
 ```bash
 docker compose -f docker-compose.prod.yml logs backend | grep -E 'ai\.(quota|provider|request)'
@@ -289,8 +311,9 @@ T16.2: não é preciso publicar APK novo. Backup, restore e sync continuam intac
 Para apenas **apertar** a quota em vez de desligar: `AI_MAX_REQUESTS_PER_USER_DAY` e
 `AI_MAX_REQUESTS_GLOBAL_DAY`.
 
-Se o Gemini está fora e a chave está certa, não há o que fazer no servidor — e nada mais quebra:
-readiness não depende do Gemini, por decisão (§61).
+Se o provider está fora e a chave está certa, o que o servidor pode fazer é **trocar de provider**
+(configuração + deploy, sem APK — [AI_PROVIDERS.md](./AI_PROVIDERS.md)); nunca há fallback
+automático. E nada mais quebra: readiness não depende de provider de IA, por decisão (§61).
 
 ---
 

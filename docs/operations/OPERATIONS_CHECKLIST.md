@@ -71,7 +71,12 @@ build (sem provenance/SBOM) → push → digest → **versões dos secrets** (pi
 habilitada, para) → jobs `spark-db-backup` e `spark-storage-audit` → **gate de DR** (backup válido ≤
 `SPARK_DR_MAX_BACKUP_AGE_HOURS`, senão executa `spark-db-backup` e espera; com
 `SPARK_DR_PREDEPLOY_POLICY=fail` aborta) → job `spark-db-migrate` (falha aborta) → candidate
-`--no-traffic` → smoke → 100% do tráfego → `spark-maintenance` → schedulers.
+`--no-traffic` → smoke → **smoke do provider de IA** (Job `spark-ai-provider-smoke`, T19.H4: uma
+chamada real ao provider selecionado; falha aborta, salvo `SPARK_AI_SMOKE_POLICY=warn`) → 100% do
+tráfego → `spark-maintenance` → schedulers.
+
+O provider do Coach, o modelo, o teto de saída e a quota vêm de `ops/gcp/lib.gcp.sh`
+(`SPARK_AI_PROVIDER` & cia.) — o log do deploy imprime `Coach IA desta release: provider=… model=…`.
 
 O deploy imprime `secrets pinados nesta release: …=vN …` — é a correlação revision → versão de
 secret. Guarde-a com o relatório do deploy (no caminho do GitHub Actions, isto vai para o log do
@@ -101,6 +106,23 @@ Ensaio de rollback (prova que voltar funciona, e volta):
 ```bash
 ops/gcp/rollback-drill.sh --to <revision-B>                # muda: tráfego, A → B → A, smoke em cada passo
 ```
+
+## Trocar o provider do Coach IA (muda) — T19.H4
+
+Passo a passo completo em [`AI_PROVIDERS.md`](./AI_PROVIDERS.md#trocar-de-provider). O mínimo antes
+do deploy:
+
+- [ ] benchmark do candidato com os números de produção (`npm run ai:benchmark`, relatório em
+      `backend/ai-eval/reports/`), sem violação crítica, e revisão humana cega de uma amostra;
+- [ ] chave com versão habilitada: `gcloud secrets versions list spark-<provider>-api-key`;
+- [ ] **Groq: Zero Data Retention ativado** na organização (console → Settings → Data Controls) —
+      estado em 2026-09-25: **VERIFIED** pelo dono da conta. Sem isso, nenhum contexto real de
+      usuário vai para a Groq;
+- [ ] quota global em `lib.gcp.sh` abaixo da capacidade do provider (0,8 × TPD ÷ p95 e o RPD);
+- [ ] modelo Preview só com `SPARK_GROQ_ALLOW_PREVIEW_MODEL=true` e a decisão registrada.
+
+Depois do deploy: `ai.request.finished` com o provider novo nos logs e o Coach usado num aparelho
+real (Analyze, Generate, Adapt, Explain).
 
 ## Rotação de um secret (muda)
 

@@ -10,7 +10,7 @@ pessoais de um grupo pequeno realmente enfrenta.
 
 | Ameaça | Consequência | Mitigação |
 | --- | --- | --- |
-| **Vazamento de credencial** | Acesso ao Firebase, ao Gemini ou aos backups | Nada versionado; teste varre a árvore; `.gitignore`/`.dockerignore`; credencial por caminho montado somente-leitura; `600` nos segredos só do host e `640` no grupo compartilhado na service account |
+| **Vazamento de credencial** | Acesso ao Firebase, ao Gemini, à Groq ou aos backups | Nada versionado; teste varre a árvore; `.gitignore`/`.dockerignore`; credencial por caminho montado somente-leitura; `600` nos segredos só do host e `640` no grupo compartilhado na service account |
 | **Acesso entre contas** | Um usuário lê o dado de outro | `uid` vem **só** do token verificado; corpo e query não influenciam identidade; dado de outra conta é `404`, nunca `403` |
 | **Perda do banco** | Backups, sync e change log de todo mundo | Snapshot consistente diário + off-site criptografado + ensaio de restauração |
 | **Disco cheio** | Mídia e ledger param de ser escritos; backup falha na área de trabalho | Rotação de log (10 MB × 5 por container); `check-health.sh` alerta em 80 % e falha em 90 % |
@@ -66,7 +66,8 @@ montar nada. A matriz muda de forma, não de princípio:
 | Credencial do Firebase Admin | identidade da Service Account anexada à revision (`applicationDefault()`) | ADC — nenhum arquivo, nenhuma variável de credencial | Service Account `spark-backend-runtime`; `roles/firebaseauth.admin` + `roles/firebasecloudmessaging.admin`, nunca `Owner`/`Editor` |
 | `DATABASE_URL` (pooled) | Secret Manager (`spark-database-url`) | `--set-secrets` na revision | `spark-backend-runtime` — `secretAccessor` só deste secret |
 | `DATABASE_URL_DIRECT` | Secret Manager (`spark-database-url-direct`) | `--set-secrets` **só no Job de migration** | `spark-backend-migrator` — nunca `spark-backend-runtime` |
-| `GEMINI_API_KEY` | Secret Manager (`spark-gemini-api-key`) | `--set-secrets` na revision | `spark-backend-runtime` |
+| `GEMINI_API_KEY` | Secret Manager (`spark-gemini-api-key`) | `--set-secrets` na revision — só com `SPARK_AI_PROVIDER=gemini` | `spark-backend-runtime` |
+| `GROQ_API_KEY` (T19.H4) | Secret Manager (`spark-groq-api-key`) | `--set-secrets` na revision — só com `SPARK_AI_PROVIDER=groq` | `spark-backend-runtime` |
 | `ACCOUNT_DELETION_HMAC_KEY` | Secret Manager (`spark-account-deletion-hmac-key`) | `--set-secrets` na revision | `spark-backend-runtime` |
 | Credencial do bucket (GCS) | identidade da Service Account anexada (ADC) | nenhum arquivo, nenhuma `GCS_PRIVATE_KEY`/`GCS_CLIENT_EMAIL` | mesma runtime SA, `roles/storage.objectAdmin` só sobre `spark-private-assets-prod` |
 
@@ -181,6 +182,23 @@ docker compose -f docker-compose.prod.yml up -d backend
 ```
 
 Impacto: nenhum, se a ordem for essa. O núcleo do Spark não depende do Coach.
+
+### Chave da Groq (T19.H4) — e a do Gemini no Cloud Run
+
+```bash
+# 1. gere a chave nova no console da Groq (não revogue a antiga ainda)
+# sem eco, fora do histórico e sem `\n` no fim (um Enter antes do Ctrl-D grava a quebra de linha)
+read -rsp 'Chave Groq: ' K && printf '%s' "$K" | gcloud secrets versions add spark-groq-api-key --data-file=- --project=project-47b17b25-909d-4ae8-943; unset K
+# 2. deploy (a revision nova pina a versão nova; o smoke do provider prova a chave antes do tráfego)
+ops/gcp/deploy-cloud-run.sh
+# 3. só então revogue a antiga no console e desabilite a versão antiga do secret
+```
+
+A chave nunca entra em APK, BuildConfig, DataStore, Git, workflow, Dockerfile, `.env.example`,
+variável do GitHub, log ou resposta. O deploy registra provider e modelo, nunca a chave; o log do
+gateway nunca carrega a mensagem crua da Groq (ela traz o id da organização). Antes de contexto real
+de usuário ir para a Groq: **Zero Data Retention** ativado na organização (Data Controls) — ver
+[AI_PROVIDERS.md](./AI_PROVIDERS.md#privacidade-o-que-chega-ao-provider).
 
 ### Service account do Firebase Admin
 

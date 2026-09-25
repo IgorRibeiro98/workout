@@ -1,6 +1,6 @@
-# `docs/operations/` — operação do Spark em produção (T16.8 → T18.4)
+# `docs/operations/` — operação do Spark em produção (T16.8 → T19.H4)
 
-Dez documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
+Onze documentos, cada um com uma pergunta. Eles apontam uns para os outros em vez de repetir o
 mesmo comando dez vezes.
 
 | Documento | A pergunta que ele responde |
@@ -15,6 +15,7 @@ mesmo comando dez vezes.
 | [BACKUP_AND_RESTORE.md](./BACKUP_AND_RESTORE.md) | Como o banco da topologia VPS é protegido (restic off-site), e como eu o restauro? |
 | [SECURITY.md](./SECURITY.md) | Quais são as ameaças, onde vivem os segredos, como rotacioná-los, qual a política de TLS do banco, a postura de dependências e o que sai do aparelho. |
 | [RUNBOOK.md](./RUNBOOK.md) | Uma coisa quebrou. O que eu faço? Por sintoma — nas duas topologias. |
+| [AI_PROVIDERS.md](./AI_PROVIDERS.md) | Qual provider atende o Coach (Gemini ou Groq), como troco sem APK novo, quanto ele aguenta, o que chega a ele e como meço antes de decidir (benchmark, uso real, smoke)? (T19.H4) |
 
 Os scripts da VPS estão em [`../../ops/`](../../ops/); os do Cloud Run em
 [`../../ops/gcp/`](../../ops/gcp/); o do bundle Android para o Play em

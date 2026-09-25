@@ -35,7 +35,7 @@ Duas camadas, deliberadamente:
 
 Todo evento carrega, quando aplicável: `event`, `operation`, `status`, `durationMs`, `backupId`,
 `objectKey`, `sizeBytes`, `sha256`, `databaseSizeBytes`, `level`, `threshold`, `errorName`,
-`imageDigest`. Nunca: connection string, senha, HMAC, chave do Gemini, token, conteúdo de usuário.
+`imageDigest`. Nunca: connection string, senha, HMAC, chave de provider de IA (Gemini/Groq), token, conteúdo de usuário.
 
 | Evento | Emitido por | Significa |
 | --- | --- | --- |
