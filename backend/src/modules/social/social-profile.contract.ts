@@ -50,7 +50,8 @@
  * - `AVAILABLE` — "Disponível". Há dado canônico agora; ligar o interruptor publica um valor real;
  * - `UNAVAILABLE` — "Ainda não disponível". O campo **é** suportado por esta versão, e o servidor
  *   ainda não tem o que afirmar (a conta nunca sincronizou uma sessão concluída, ou o fuso da
- *   semana ainda não é conhecido). Sincronizar resolve;
+ *   semana ainda não é conhecido). Desde a T19.H5 o **motivo** acompanha o estado
+ *   ([SocialAvailabilityReason]) — nem todo `UNAVAILABLE` se resolve sincronizando;
  * - `UNSUPPORTED` — "Não disponível nesta versão". Não existe autoridade **remota** para a
  *   métrica: ela é calculada no aparelho, a partir de dado que nunca sai dele. Sincronizar não
  *   resolve; só uma decisão de arquitetura futura resolve.
@@ -61,6 +62,56 @@
  */
 export const SOCIAL_FIELD_AVAILABILITIES = ['AVAILABLE', 'UNAVAILABLE', 'UNSUPPORTED'] as const;
 export type SocialFieldAvailability = (typeof SOCIAL_FIELD_AVAILABILITIES)[number];
+
+/**
+ * **Por que** um campo está `UNAVAILABLE` — a pergunta do dono que a T19.H5 passou a responder.
+ *
+ * Até a T19.H3 a tela dizia "Ainda não disponível" para tudo, e "sincronize" não resolvia metade
+ * dos casos. Cada motivo aqui corresponde a uma condição **real** da projeção, com um produtor em
+ * `social-progress.source.ts` e um teste que o alcança. Na ordem de precedência — quando mais de
+ * um vale para o mesmo campo, o primeiro da lista é o que o dono lê:
+ *
+ * - `WEEK_TIME_ZONE_MISSING` — o servidor não conhece o fuso da semana do dono. É o primeiro elo do
+ *   caminho (sem ele não há semana), e o app o declara sozinho ao abrir "Compartilhar progresso"
+ *   com conexão. Treinos totais não dependem dele;
+ * - `NO_SYNCED_WORKOUTS` — nenhuma `WORKOUT_SESSION` `COMPLETED` desta conta chegou ao servidor.
+ *   Sincronizar resolve quando há treino no aparelho; o app oferece "Sincronizar dados";
+ * - `CONSISTENCY_PARAMETERS_MISSING` — nível e sequência precisam da meta semanal e do início do
+ *   acompanhamento (T19.2A). O app os declara sozinho, também ao abrir a tela;
+ * - `SOURCE_LIMIT_REACHED` — a semana tem mais sessões do que a leitura bounded das estatísticas
+ *   aceita (`MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS`). Publicar uma soma truncada seria pior.
+ *
+ * `UNSUPPORTED` não tem motivo: ele já é o motivo ("esta versão não sabe calcular").
+ *
+ * **Só o dono** recebe motivo. O amigo recebe campo presente ou ausente, e nada que diga por quê.
+ */
+export const SOCIAL_AVAILABILITY_REASONS = [
+  'WEEK_TIME_ZONE_MISSING',
+  'NO_SYNCED_WORKOUTS',
+  'CONSISTENCY_PARAMETERS_MISSING',
+  'SOURCE_LIMIT_REACHED',
+] as const;
+export type SocialAvailabilityReason = (typeof SOCIAL_AVAILABILITY_REASONS)[number];
+
+/**
+ * A versão do contrato de `GET`/`PATCH /v1/social/me/progress-sharing` (T19.H5).
+ *
+ * ```text
+ * (ausente)  v1  T17.2 + T19.2 — os quatro interruptores de progresso geral
+ *            v2  T19.H3 — estatísticas de treino e detalhes dos check-ins (onze interruptores);
+ *                desde a T19.H5, também `availabilityReasons`
+ * ```
+ *
+ * Existe porque um campo ausente na resposta não diz **por que** está ausente: um app novo contra
+ * um servidor anterior à T19.H3 lia a falta de `totalWorkouts` como "Ainda não disponível", e o
+ * `PATCH` de um interruptor que aquele servidor não conhecia voltava `400`. Com a versão
+ * declarada, o app distingue "o servidor não tem o dado" de "o servidor não conhece o recurso".
+ *
+ * Sobe **somente** quando o contrato ganha recurso que um app precisa saber se existe antes de
+ * oferecê-lo. Campo novo e opcional numa resposta não sobe a versão: todo APK publicado lê com
+ * `ignoreUnknownKeys`.
+ */
+export const PROGRESS_SHARING_CONTRACT_VERSION = 2;
 
 /** A disponibilidade de cada campo do perfil, como o **dono** a vê. */
 export interface SocialProgressAvailabilityDto {
@@ -75,6 +126,18 @@ export interface SocialProgressAvailabilityDto {
   readonly weeklyVolume: SocialFieldAvailability;
   readonly totalWorkouts: SocialFieldAvailability;
 }
+
+/**
+ * O motivo de cada campo que **não** está `AVAILABLE` nem `UNSUPPORTED` (T19.H5).
+ *
+ * Um mapa ao lado de [SocialProgressAvailabilityDto], e não um objeto `{ status, reason }` dentro
+ * dele: `availability.level` continua sendo a string que todo APK publicado lê — trocar a forma
+ * quebraria a leitura inteira da tela nos aparelhos antigos. O estado mora num lugar só; o motivo,
+ * em outro, e só existe para quem não está disponível.
+ */
+export type SocialProgressAvailabilityReasonsDto = {
+  readonly [K in keyof SocialProgressAvailabilityDto]?: SocialAvailabilityReason;
+};
 
 // --------------------------------------------------------------------------------- preferências
 
@@ -151,10 +214,16 @@ export interface SocialWeeklyGoalDto {
  * Preferência **e** disponibilidade na mesma resposta, porque a tela precisa das duas juntas para
  * dizer a frase certa: "Nível — ligado, ainda não disponível" é um estado real, e nenhuma das
  * duas metades sozinha o descreve.
+ *
+ * `contractVersion` e `availabilityReasons` (T19.H5) são do **dono**, como o resto desta resposta:
+ * nenhum dos dois aparece no perfil que um amigo recebe.
  */
 export interface SocialProgressSharingResponse {
+  /** [PROGRESS_SHARING_CONTRACT_VERSION]. Ausente = servidor anterior à T19.H5 (tratado como v1). */
+  readonly contractVersion: number;
   readonly settings: SocialProgressSettingsDto;
   readonly availability: SocialProgressAvailabilityDto;
+  readonly availabilityReasons: SocialProgressAvailabilityReasonsDto;
 }
 
 // --------------------------------------------------------------------------------- perfil

@@ -84,6 +84,9 @@ const PROGRESS_VALUE_FIELDS = [
   'highlightedAchievementIds',
   'sharedProgress',
   'availability',
+  // T19.H5 — o motivo de indisponibilidade é o servidor dizendo o que falta a ele; um cliente que
+  // o envie acredita que pode declará-lo.
+  'availabilityReasons',
   // T19.2 — o que a autoridade remota passou a derivar. Recusado por nome pelo mesmo motivo: o
   // servidor calcula, e um cliente que envie o resultado acredita que ele significa alguma coisa.
   'currentStreakWeeks',

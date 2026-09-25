@@ -210,7 +210,7 @@ describe('Projeção de progresso social', () => {
     it('quem nunca sincronizou uma sessão recebe UNAVAILABLE, e não zero', async () => {
       // A diferença que importa: "treinou zero vezes esta semana" é um fato; "nunca sincronizou"
       // é ausência de informação, e o servidor não pode transformar uma na outra (§4/§74).
-      expect(await weeklyCount(UID_A, TZ)).toEqual(unavailable());
+      expect(await weeklyCount(UID_A, TZ)).toEqual(unavailable('NO_SYNCED_WORKOUTS'));
     });
 
     it('quem já sincronizou e não treinou nesta semana recebe zero — aí o zero é verdade', async () => {
@@ -220,8 +220,11 @@ describe('Projeção de progresso social', () => {
 
     it('sem fuso declarado, a contagem é UNAVAILABLE', async () => {
       insertSession(UID_A, Date.parse('2026-09-08T12:00:00Z'));
-      expect(await weeklyCount(UID_A, null)).toEqual(unavailable());
-      expect(await weeklyCount(UID_A, 'Terra/Media')).toEqual(unavailable());
+      expect(await weeklyCount(UID_A, null)).toEqual(unavailable('WEEK_TIME_ZONE_MISSING'));
+      // Um fuso que o runtime não reconhece é tratado como fuso ausente: nenhum palpite de UTC.
+      expect(await weeklyCount(UID_A, 'Terra/Media')).toEqual(
+        unavailable('WEEK_TIME_ZONE_MISSING'),
+      );
     });
 
     it('nível, sequência e conquistas ficam UNAVAILABLE enquanto o dono não declara os parâmetros', async () => {
@@ -232,8 +235,8 @@ describe('Projeção de progresso social', () => {
       insertSession(UID_A, Date.parse('2026-09-08T12:00:00Z'));
 
       const projection = await source.project(UID_A, contextOf(TZ));
-      expect(projection.level).toEqual(unavailable());
-      expect(projection.consistencyStreak).toEqual(unavailable());
+      expect(projection.level).toEqual(unavailable('CONSISTENCY_PARAMETERS_MISSING'));
+      expect(projection.consistencyStreak).toEqual(unavailable('CONSISTENCY_PARAMETERS_MISSING'));
       expect(projection.highlightedAchievementIds).toEqual(available(['first_workout']));
     });
 
@@ -270,11 +273,11 @@ describe('Projeção de progresso social', () => {
             level: available(14),
             consistencyStreak: unsupported(),
             weeklyWorkoutCount: available(3),
-            highlightedAchievementIds: unavailable(),
-            weeklyTrainingMinutes: unavailable(),
-            weeklyCompletedSets: unavailable(),
-            weeklyVolumeKg: unavailable(),
-            totalWorkouts: unavailable(),
+            highlightedAchievementIds: unavailable('NO_SYNCED_WORKOUTS'),
+            weeklyTrainingMinutes: unavailable('NO_SYNCED_WORKOUTS'),
+            weeklyCompletedSets: unavailable('NO_SYNCED_WORKOUTS'),
+            weeklyVolumeKg: unavailable('NO_SYNCED_WORKOUTS'),
+            totalWorkouts: unavailable('NO_SYNCED_WORKOUTS'),
           };
         }),
       );
@@ -335,7 +338,7 @@ describe('Projeção de progresso social', () => {
     it('ligado sem dado não publica zero — publica nada', () => {
       expect(
         filter.apply(
-          projection({ weeklyWorkoutCount: unavailable() }),
+          projection({ weeklyWorkoutCount: unavailable('NO_SYNCED_WORKOUTS') }),
           settings({ shareWeeklyWorkoutCount: true }),
         ),
       ).toEqual({});
@@ -347,7 +350,7 @@ describe('Projeção de progresso social', () => {
     it('escondido e indisponível produzem exatamente a mesma resposta', () => {
       const hidden = filter.apply(projection(), settings({ shareLevel: false }));
       const missing = filter.apply(
-        projection({ level: unavailable() }),
+        projection({ level: unavailable('CONSISTENCY_PARAMETERS_MISSING') }),
         settings({ shareLevel: true }),
       );
       expect(hidden).toEqual(missing);
@@ -355,9 +358,15 @@ describe('Projeção de progresso social', () => {
     });
 
     it('a disponibilidade não passa por privacidade — ela é a pergunta do dono', () => {
-      const availability = filter.availabilityOf(
-        projection({ weeklyWorkoutCount: unavailable(), level: unsupported() }),
-      );
+      const owner = projection({
+        weeklyWorkoutCount: unavailable('WEEK_TIME_ZONE_MISSING'),
+        level: unsupported(),
+      });
+      const availability = filter.availabilityOf(owner);
+      // T19.H5: o motivo acompanha só o que está `UNAVAILABLE` — `UNSUPPORTED` já é o motivo.
+      expect(filter.availabilityReasonsOf(owner)).toEqual({
+        weeklyWorkoutCount: 'WEEK_TIME_ZONE_MISSING',
+      });
       expect(availability).toEqual({
         level: 'UNSUPPORTED',
         consistencyStreak: 'AVAILABLE',

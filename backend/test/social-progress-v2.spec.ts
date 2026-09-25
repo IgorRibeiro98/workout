@@ -435,8 +435,12 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
             available(entry.expected.currentStreakWeeks),
           );
         } else {
-          expect(projection.level).toEqual(unavailable());
-          expect(projection.consistencyStreak).toEqual(unavailable());
+          // O único caso sem nível na fixture é "sem-parametros-declarados": há sessões e fuso, e
+          // falta a meta semanal — e é esse o motivo que o dono precisa ler (T19.H5).
+          expect(projection.level).toEqual(unavailable('CONSISTENCY_PARAMETERS_MISSING'));
+          expect(projection.consistencyStreak).toEqual(
+            unavailable('CONSISTENCY_PARAMETERS_MISSING'),
+          );
         }
         expect(projection.highlightedAchievementIds).toEqual(
           available(entry.expected.earnedAchievementIds),
@@ -454,7 +458,7 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
         if (entry.completedSessions.length === 0) {
           // Nenhuma sessão sincronizada: o servidor não sabe se são zero treinos ou zero
           // sincronizações, e não afirma sequência zero.
-          expect(projection.consistencyStreak).toEqual(unavailable());
+          expect(projection.consistencyStreak).toEqual(unavailable('NO_SYNCED_WORKOUTS'));
         } else {
           expect(projection.consistencyStreak).toEqual(
             available(entry.expected.currentStreakWeeks),
@@ -533,24 +537,26 @@ describe('Social Progress V2 — autoridade remota de gamificação (T19.2)', ()
     });
 
     it('sem fuso declarado nada é afirmado; sem sessão sincronizada nível e sequência ficam UNAVAILABLE', async () => {
+      // T19.H5: o fuso é conferido antes de tudo nas métricas de semana — ele é o primeiro elo que
+      // falta, e o app o declara sozinho.
       expect(await source.project(UID_A, { ...contextFor(TEN), weekTimeZone: null })).toEqual({
-        level: unavailable(),
-        consistencyStreak: unavailable(),
-        weeklyWorkoutCount: unavailable(),
-        highlightedAchievementIds: unavailable(),
+        level: unavailable('WEEK_TIME_ZONE_MISSING'),
+        consistencyStreak: unavailable('WEEK_TIME_ZONE_MISSING'),
+        weeklyWorkoutCount: unavailable('WEEK_TIME_ZONE_MISSING'),
+        highlightedAchievementIds: unavailable('WEEK_TIME_ZONE_MISSING'),
+        weeklyTrainingMinutes: unavailable('WEEK_TIME_ZONE_MISSING'),
+        weeklyCompletedSets: unavailable('WEEK_TIME_ZONE_MISSING'),
+        weeklyVolumeKg: unavailable('WEEK_TIME_ZONE_MISSING'),
         // T19.H3: sem sessão nenhuma, nem o total (que não depende de fuso) é afirmável.
-        weeklyTrainingMinutes: unavailable(),
-        weeklyCompletedSets: unavailable(),
-        weeklyVolumeKg: unavailable(),
-        totalWorkouts: unavailable(),
+        totalWorkouts: unavailable('NO_SYNCED_WORKOUTS'),
       });
 
       // Só uma medição: as conquistas de corpo já são afirmáveis; o resto não.
       insertMeasurement(UID_A, TEN.bodyMeasurements[0].millis);
       const projection = await source.project(UID_A, contextFor(TEN));
-      expect(projection.level).toEqual(unavailable());
-      expect(projection.consistencyStreak).toEqual(unavailable());
-      expect(projection.weeklyWorkoutCount).toEqual(unavailable());
+      expect(projection.level).toEqual(unavailable('NO_SYNCED_WORKOUTS'));
+      expect(projection.consistencyStreak).toEqual(unavailable('NO_SYNCED_WORKOUTS'));
+      expect(projection.weeklyWorkoutCount).toEqual(unavailable('NO_SYNCED_WORKOUTS'));
       expect(projection.highlightedAchievementIds).toEqual(available(['first_measurement']));
     });
 

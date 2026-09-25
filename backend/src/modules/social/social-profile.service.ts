@@ -2,11 +2,12 @@ import { Injectable, Optional } from '@nestjs/common';
 import { SparkLogger } from '../../common/logger';
 import type { AuthenticatedPrincipal } from '../auth/authenticated-principal';
 import { uidPrefix } from '../auth/bearer-auth.guard';
-import type {
-  SocialFriendProfileDto,
-  SocialFriendProfileResponse,
-  SocialProgressSettingsDto,
-  SocialProgressSharingResponse,
+import {
+  PROGRESS_SHARING_CONTRACT_VERSION,
+  type SocialFriendProfileDto,
+  type SocialFriendProfileResponse,
+  type SocialProgressSettingsDto,
+  type SocialProgressSharingResponse,
 } from './social-profile.contract';
 import { SocialProfileErrors } from './social-profile.errors';
 import type { UpdateProgressSharingRequest } from './social-profile.validator';
@@ -135,8 +136,12 @@ export class SocialProfileService {
     const projection = await this.projector.project(ownerUid, settings, Date.now());
 
     return {
+      // T19.H5: o servidor declara o que conhece. Sem isto, um app novo não distinguia "o servidor
+      // não tem o dado" de "o servidor não conhece o recurso" — e mostrava o segundo como o primeiro.
+      contractVersion: PROGRESS_SHARING_CONTRACT_VERSION,
       settings: toSettingsDto(settings),
       availability: this.privacy.availabilityOf(projection),
+      availabilityReasons: this.privacy.availabilityReasonsOf(projection),
     };
   }
 

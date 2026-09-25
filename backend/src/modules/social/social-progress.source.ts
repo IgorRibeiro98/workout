@@ -15,7 +15,8 @@ import {
   weekStartEpochDay,
 } from './social-consistency';
 import { evaluateVerifiedAchievements, levelFor, projectVerifiedXp } from './social-gamification';
-import { trainingTotals } from './social-training-metrics';
+import type { SocialAvailabilityReason } from './social-profile.contract';
+import { type TrainingTotals, trainingTotals } from './social-training-metrics';
 import {
   SOCIAL_WORKOUT_FACTS_SOURCE,
   type SocialWorkoutFactsSource,
@@ -111,13 +112,20 @@ export interface SocialProgressProjection {
  */
 export type SocialProgressValue<T> =
   | { readonly kind: 'AVAILABLE'; readonly value: T }
-  /** Suportado, e o servidor ainda não tem o que afirmar. Sincronizar (ou declarar fuso/parâmetros) resolve. */
-  | { readonly kind: 'UNAVAILABLE' }
+  /**
+   * Suportado, e o servidor ainda não tem o que afirmar — e [reason] diz por quê (T19.H5). O tipo
+   * exige o motivo: um `UNAVAILABLE` sem causa é exatamente o "Ainda não disponível" sem
+   * explicação que a T19.H5 existe para acabar.
+   */
+  | { readonly kind: 'UNAVAILABLE'; readonly reason: SocialAvailabilityReason }
   /** Sem autoridade remota nesta versão do Spark. Sincronizar **não** resolve. */
   | { readonly kind: 'UNSUPPORTED' };
 
 export const available = <T>(value: T): SocialProgressValue<T> => ({ kind: 'AVAILABLE', value });
-export const unavailable = <T>(): SocialProgressValue<T> => ({ kind: 'UNAVAILABLE' });
+export const unavailable = <T>(reason: SocialAvailabilityReason): SocialProgressValue<T> => ({
+  kind: 'UNAVAILABLE',
+  reason,
+});
 export const unsupported = <T>(): SocialProgressValue<T> => ({ kind: 'UNSUPPORTED' });
 
 /**
@@ -133,16 +141,20 @@ export const PROGRESS_HORIZON_EPOCH_DAY = MIN_SOCIAL_TRACKING_EPOCH_DAY;
  *
  * ## O que existe remotamente, verificado no código e não na documentação (T19.2)
  *
- * | Métrica | Como o servidor afirma | Quando responde `UNAVAILABLE` |
+ * | Métrica | Como o servidor afirma | Quando responde `UNAVAILABLE`, e com que motivo (T19.H5) |
  * | --- | --- | --- |
- * | treinos da semana | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED` na semana canônica | sem fuso, ou nenhuma sessão sincronizada |
- * | sequência semanal | `social-consistency.ts` sobre treinos por dia + parâmetros declarados | sem fuso, sem parâmetros, ou nenhuma sessão |
- * | nível | `social-gamification.ts`: XP reconstruível → curva canônica | sem fuso, sem parâmetros, ou nenhuma sessão |
- * | conquistas | `REMOTE_ACHIEVEMENTS` reconstruíveis (treino, consistência, corpo) | sem fuso, ou nenhuma conquista afirmável |
- * | treinos totais (T19.H3) | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED`, sem janela | nenhuma sessão sincronizada |
- * | minutos / séries / volume da semana (T19.H3) | `SocialWorkoutFactsSource` na semana canônica → `social-training-metrics.ts` | sem fuso, nenhuma sessão, ou mais sessões na semana que o teto de leitura |
+ * | treinos da semana | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED` na semana canônica | sem fuso (`WEEK_TIME_ZONE_MISSING`), nenhuma sessão (`NO_SYNCED_WORKOUTS`) |
+ * | sequência semanal | `social-consistency.ts` sobre treinos por dia + parâmetros declarados | sem fuso, nenhuma sessão, sem parâmetros (`CONSISTENCY_PARAMETERS_MISSING`) — nesta ordem |
+ * | nível | `social-gamification.ts`: XP reconstruível → curva canônica | idem |
+ * | conquistas | `REMOTE_ACHIEVEMENTS` reconstruíveis (treino, consistência, corpo) | sem fuso, ou lista vazia — o que só acontece sem nenhuma sessão nem medição (`NO_SYNCED_WORKOUTS`) |
+ * | treinos totais (T19.H3) | `COUNT(*)` de `WORKOUT_SESSION` `COMPLETED`, sem janela | nenhuma sessão (`NO_SYNCED_WORKOUTS`); **nunca** por fuso ou parâmetro |
+ * | minutos / séries / volume da semana (T19.H3) | `SocialWorkoutFactsSource` na semana canônica → `social-training-metrics.ts` | sem fuso, nenhuma sessão, ou mais sessões na semana que o teto de leitura (`SOURCE_LIMIT_REACHED`) |
  *
- * Nenhuma delas responde `UNSUPPORTED` hoje. O que continua sem autoridade remota é uma **parte**
+ * Zero é valor, não ausência: com uma sessão sincronizada e fuso conhecido, uma semana sem treino
+ * responde `AVAILABLE(0)` em treinos, minutos, séries e volume — e uma semana só de peso corporal,
+ * volume `AVAILABLE(0)`.
+ *
+ * Nenhuma delas responde `UNSUPPORTED` em produção. O que continua sem autoridade remota é uma **parte**
  * de duas métricas — o XP de recorde pessoal e as conquistas de `PERFORMANCE` — e essa parte
  * simplesmente não entra no valor publicado (nível verificado ≤ nível local; conquistas de recorde
  * nunca na lista). Ver `docs/architecture/social-progress-authority.md`.
@@ -196,24 +208,31 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
 
     // Total de sessões: a contagem direta, e não a soma por dia — um treino anterior ao horizonte
     // continua sendo um treino concluído para "N treinos" e para o XP de conclusão. É a única
-    // métrica que não depende de fuso (T19.H3): "quantos treinos, desde sempre" não tem semana.
+    // métrica que não depende de fuso (T19.H3): "quantos treinos, desde sempre" não tem semana — e
+    // por isso ela fica disponível com uma sessão sincronizada, com ou sem fuso e parâmetros.
     const completedWorkouts = hasAnySession
       ? await this.trainingSource.countCompletedWorkouts(ownerUid, 0, Number.MAX_SAFE_INTEGER)
       : 0;
-    const totalWorkouts = hasAnySession ? available(completedWorkouts) : unavailable<number>();
+    const totalWorkouts = hasAnySession
+      ? available(completedWorkouts)
+      : unavailable<number>('NO_SYNCED_WORKOUTS');
 
     // Sem fuso, o servidor não sabe que dia é para este dono — e nenhuma das métricas de semana,
     // sequência, nível ou conquista é definível sem isso. Supor UTC produziria números plausíveis
-    // e errados.
+    // e errados. O fuso é conferido antes de tudo nestas métricas (T19.H5): é a primeira coisa que
+    // falta no caminho, e o app a declara sozinho ao abrir a tela.
     if (!timeZone) {
+      const noTimeZone = <T>(): SocialProgressValue<T> => unavailable('WEEK_TIME_ZONE_MISSING');
+      const weeklyStat = <T>(): SocialProgressValue<T> =>
+        this.workoutFacts ? noTimeZone<T>() : unsupported<T>();
       return {
-        level: unavailable(),
-        consistencyStreak: unavailable(),
-        weeklyWorkoutCount: unavailable(),
-        highlightedAchievementIds: unavailable(),
-        weeklyTrainingMinutes: unavailable(),
-        weeklyCompletedSets: unavailable(),
-        weeklyVolumeKg: unavailable(),
+        level: noTimeZone(),
+        consistencyStreak: noTimeZone(),
+        weeklyWorkoutCount: noTimeZone(),
+        highlightedAchievementIds: noTimeZone(),
+        weeklyTrainingMinutes: weeklyStat(),
+        weeklyCompletedSets: weeklyStat(),
+        weeklyVolumeKg: weeklyStat(),
         totalWorkouts,
       };
     }
@@ -244,23 +263,28 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
     // ---- treinos da semana (T17.2, inalterado): a semana canônica que contém "agora".
     const weeklyWorkoutCount = hasAnySession
       ? available(weeklyCount(sessionsPerDay, weekStartEpochDay(todayEpochDay)))
-      : unavailable<number>();
+      : unavailable<number>('NO_SYNCED_WORKOUTS');
 
     // ---- sequência semanal (T19.2A): sessões + parâmetros declarados, pela regra canônica.
-    const consistencyStreak =
-      hasAnySession && progress ? available(progress.currentStreakWeeks) : unavailable<number>();
+    const consistencyStreak = fromSessionsAndParameters(hasAnySession, progress, (declared) =>
+      available(declared.currentStreakWeeks),
+    );
 
     // ---- nível (T19.2B/C): XP reconstruível → curva canônica. Só com parâmetros: sem eles a
     // meta semanal (150 XP + missão) ficaria fora, e o nível publicado seria mais baixo do que o
     // servidor já consegue defender.
-    const level =
-      hasAnySession && weeks
-        ? available(
-            levelFor(projectVerifiedXp({ completedWorkouts, sessionsPerDay, weeks }).total).level,
-          )
-        : unavailable<number>();
+    const level = fromSessionsAndParameters(hasAnySession, weeks, (declared) =>
+      available(
+        levelFor(projectVerifiedXp({ completedWorkouts, sessionsPerDay, weeks: declared }).total)
+          .level,
+      ),
+    );
 
     // ---- conquistas (T19.2C): só as reconstruíveis; lista vazia é "nada a afirmar", não "zero".
+    // Com uma sessão concluída, `first_workout` (alvo 1) sempre é obtida; com uma medição,
+    // `first_measurement`. Lista vazia significa, portanto, que nada chegou por sync — e o motivo
+    // é o mesmo das outras métricas. `social-progress-availability.spec.ts` prende essa premissa ao
+    // catálogo: se um dia ela deixar de valer, o teste quebra antes de o motivo mentir.
     const measurementDays = [...measurementsPerDay.values()].filter((count) => count > 0).length;
     const earned = evaluateVerifiedAchievements({
       completedWorkouts,
@@ -268,52 +292,100 @@ export class SyncedSocialProgressSource implements SocialProgressSource {
       measurementDays,
     });
     const highlightedAchievementIds =
-      earned.length > 0 ? available<readonly string[]>(earned) : unavailable<readonly string[]>();
+      earned.length > 0
+        ? available<readonly string[]>(earned)
+        : unavailable<readonly string[]>('NO_SYNCED_WORKOUTS');
 
     // ---- estatísticas de treino da semana (T19.H3): a MESMA semana canônica de "treinos da
     // semana" — as mesmas janelas de dia local, pelo mesmo `startedAt` —, somada pelo helper único
     // de métricas que também monta o resumo de cada check-in.
     const week = await this.weeklyTrainingStats(ownerUid, hasAnySession, currentMonday, timeZone);
+    const weeklyStat = (value: (totals: TrainingTotals) => number): SocialProgressValue<number> => {
+      switch (week.kind) {
+        case 'AVAILABLE':
+          // Zero é valor (T19.H5 §20): uma semana só de peso corporal tem volume 0, e uma semana
+          // sem treino ainda — com sessões em semanas anteriores — tem 0 minutos. Nenhum dos dois
+          // vira "indisponível".
+          return available(value(week.totals));
+        case 'UNAVAILABLE':
+          return unavailable(week.reason);
+        case 'UNSUPPORTED':
+          return unsupported();
+      }
+    };
 
     return {
       level,
       consistencyStreak,
       weeklyWorkoutCount,
       highlightedAchievementIds,
-      weeklyTrainingMinutes: week ? available(week.trainingMinutes) : unavailable<number>(),
-      weeklyCompletedSets: week ? available(week.completedSets) : unavailable<number>(),
-      weeklyVolumeKg: week ? available(week.volumeKg) : unavailable<number>(),
+      weeklyTrainingMinutes: weeklyStat((totals) => totals.trainingMinutes),
+      weeklyCompletedSets: weeklyStat((totals) => totals.completedSets),
+      weeklyVolumeKg: weeklyStat((totals) => totals.volumeKg),
       totalWorkouts,
     };
   }
 
   /**
-   * Os totais da semana canônica, ou `null` quando não são afirmáveis: nenhuma sessão, fonte de
-   * fatos ausente (teste com dublê de agregados) ou mais sessões na semana que o teto de leitura.
+   * Os totais da semana canônica, ou por que eles não são afirmáveis.
+   *
+   * - nenhuma sessão sincronizada → `NO_SYNCED_WORKOUTS`;
+   * - mais sessões na semana que o teto de leitura → `SOURCE_LIMIT_REACHED` (ver
+   *   `MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS`: a soma lê séries e cargas de cada sessão, e a
+   *   definição única das métricas mora em TypeScript — reescrevê-la em SQL para agregar sem teto
+   *   criaria uma segunda definição de volume e de série);
+   * - fonte de fatos ausente → `UNSUPPORTED`: é a montagem com dublê de agregados, em que este
+   *   servidor não tem de onde ler séries. Produção sempre injeta a fonte (`SocialModule`).
    */
   private async weeklyTrainingStats(
     ownerUid: string,
     hasAnySession: boolean,
     currentMonday: number,
     timeZone: string,
-  ): Promise<ReturnType<typeof trainingTotals> | null> {
-    if (!hasAnySession || !this.workoutFacts) {
-      return null;
+  ): Promise<WeeklyTrainingStats> {
+    if (!this.workoutFacts) {
+      return { kind: 'UNSUPPORTED' };
     }
-    const days = localDayWindows(currentMonday, currentMonday + 6, timeZone);
-    const first = days[0];
-    const last = days[days.length - 1];
-    if (!first || !last) {
-      return null;
+    if (!hasAnySession) {
+      return { kind: 'UNAVAILABLE', reason: 'NO_SYNCED_WORKOUTS' };
     }
+    // `[segunda 00:00, próxima segunda 00:00)` no fuso do dono: as mesmas bordas das janelas de
+    // dia de "treinos da semana" (`localDayWindows`), sem montar as sete.
     const sessions = await this.workoutFacts.findCompletedInWindow(
       ownerUid,
-      first.startMs,
-      last.endMs,
+      localMidnightToInstant(currentMonday * DAY_MS, timeZone),
+      localMidnightToInstant((currentMonday + 7) * DAY_MS, timeZone),
       MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS,
     );
-    return sessions ? trainingTotals(sessions) : null;
+    return sessions
+      ? { kind: 'AVAILABLE', totals: trainingTotals(sessions) }
+      : { kind: 'UNAVAILABLE', reason: 'SOURCE_LIMIT_REACHED' };
   }
+}
+
+/** O que a leitura da semana conseguiu afirmar (T19.H5): os totais, ou o motivo de não haver. */
+type WeeklyTrainingStats =
+  | { readonly kind: 'AVAILABLE'; readonly totals: TrainingTotals }
+  | { readonly kind: 'UNAVAILABLE'; readonly reason: SocialAvailabilityReason }
+  | { readonly kind: 'UNSUPPORTED' };
+
+/**
+ * Nível e sequência precisam de duas coisas além do fuso: sessões sincronizadas **e** os
+ * parâmetros de consistência declarados (T19.2A). A precedência dos motivos é essa: sem sessão,
+ * declarar parâmetro não publicaria nada; sem parâmetro, sincronizar mais não resolve.
+ */
+function fromSessionsAndParameters<P, T>(
+  hasAnySession: boolean,
+  parameters: P | null,
+  project: (declared: P) => SocialProgressValue<T>,
+): SocialProgressValue<T> {
+  if (!hasAnySession) {
+    return unavailable('NO_SYNCED_WORKOUTS');
+  }
+  if (parameters === null) {
+    return unavailable('CONSISTENCY_PARAMETERS_MISSING');
+  }
+  return project(parameters);
 }
 
 /** Soma dos treinos dos sete dias locais da semana que começa em [weekStart]. */

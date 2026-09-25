@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type {
+  SocialAvailabilityReason,
   SocialFieldAvailability,
   SocialProgressAvailabilityDto,
+  SocialProgressAvailabilityReasonsDto,
   SocialSharedProgressDto,
 } from './social-profile.contract';
 import type { StoredProgressSettings } from './social-progress.repository';
@@ -167,6 +169,38 @@ export class SocialProgressPrivacyFilter {
       weeklyVolume: availabilityOf(projection.weeklyVolumeKg),
       totalWorkouts: availabilityOf(projection.totalWorkouts),
     };
+  }
+
+  /**
+   * Por que cada campo `UNAVAILABLE` está assim (T19.H5) — com as **mesmas** chaves de
+   * [availabilityOf], e só para os campos indisponíveis.
+   *
+   * Como a disponibilidade, é informação do **dono** e não passa por privacidade: o motivo diz o
+   * que falta ao servidor, e nada sobre o que o dono escolheu mostrar. Nunca entra no perfil de
+   * um amigo — lá, ausente continua sendo a única resposta.
+   */
+  availabilityReasonsOf(
+    projection: SocialProgressProjection,
+  ): SocialProgressAvailabilityReasonsDto {
+    const entries: Array<[keyof SocialProgressAvailabilityDto, SocialProgressValue<unknown>]> = [
+      ['level', projection.level],
+      ['consistencyStreak', projection.consistencyStreak],
+      ['weeklyWorkoutCount', projection.weeklyWorkoutCount],
+      ['highlightedAchievements', projection.highlightedAchievementIds],
+      ['weeklyTrainingMinutes', projection.weeklyTrainingMinutes],
+      ['weeklyCompletedSets', projection.weeklyCompletedSets],
+      ['weeklyVolume', projection.weeklyVolumeKg],
+      ['totalWorkouts', projection.totalWorkouts],
+    ];
+    const reasons: {
+      -readonly [K in keyof SocialProgressAvailabilityDto]?: SocialAvailabilityReason;
+    } = {};
+    for (const [field, value] of entries) {
+      if (value.kind === 'UNAVAILABLE') {
+        reasons[field] = value.reason;
+      }
+    }
+    return reasons;
   }
 }
 
