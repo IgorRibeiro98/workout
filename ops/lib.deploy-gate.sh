@@ -37,6 +37,16 @@
 # o commit backend-relevante É `sha`, e o comportamento é idêntico ao de antes (CI do próprio
 # commit, obrigatório).
 #
+# ## Onde o CI pode ter rodado: o commit backend-relevante ou um descendente idêntico (T19.H4)
+#
+# O GitHub dispara `backend.yml` uma vez por **push**, no commit do topo — não em cada commit do
+# push. Um push `feat(backend)` + `docs` roda o CI só no commit de docs, e o commit backend-relevante
+# nunca ganha execução própria: o deploy do T19.H3 (`02c1289`) parou exatamente aí, com o CI verde no
+# topo. Por isso a execução pode ser a do commit backend-relevante **ou** a de qualquer commit entre
+# ele e o HEAD (`git rev-list --ancestry-path`) cuja superfície de backend é **idêntica** à dele —
+# provado por `git diff --quiet` nos mesmos caminhos, e não suposto: o CI verde ali testou
+# exatamente o backend que vai subir. Um descendente com backend diferente nunca conta.
+#
 # `--branch main`: sem ele, uma execução verde de `backend.yml` num PR/branch de feature (antes do
 # merge) casaria pelo SHA e liberaria o deploy sem o commit ter passado pelo CI de `main` — CI de
 # outra branch (T19.10 §6.15).
@@ -66,7 +76,7 @@ SPARK_CI_PATHS=(
 
 # Uso: require_reviewed_commit <diretório do repositório> <sha>
 require_reviewed_commit() {
-  local repo_dir="$1" sha="$2" runs backend_sha
+  local repo_dir="$1" sha="$2" runs backend_sha candidate candidates all_runs green_sha
 
   if [ "${SPARK_DEPLOY_ALLOW_UNVERIFIED:-0}" = "1" ]; then
     log "AVISO: SPARK_DEPLOY_ALLOW_UNVERIFIED=1 — procedência de ${sha} NÃO verificada (origin/main + CI verde). Deploy de emergência: registre o motivo no runbook."
@@ -99,26 +109,53 @@ require_reviewed_commit() {
     log "procedência: ${sha} não altera ${SPARK_CI_PATHS[*]} — procedência de backend é ${backend_sha} (o commit backend-relevante mais recente na ancestralidade)"
   fi
 
-  log "procedência: conferindo o workflow '${SPARK_CI_WORKFLOW}' em ${backend_sha} (branch main)"
-  # `--jq` é o do próprio `gh`: não exige o binário `jq` na máquina que faz o deploy. `--branch main`
-  # recusa uma execução verde de outra branch/PR que só coincide no SHA (T19.10 §6.15).
-  runs="$(
-    cd "${repo_dir}" && gh run list \
-      --workflow "${SPARK_CI_WORKFLOW}" \
-      --commit "${backend_sha}" \
-      --branch main \
-      --limit 20 \
-      --json status,conclusion \
-      --jq 'map(.status + ":" + (.conclusion // "")) | join(" ")' 2> /dev/null
-  )" || fail "não foi possível consultar o GitHub Actions para ${backend_sha} (o 'gh' está autenticado?). Sem isso não há como afirmar que o CI passou — corrija, ou rode com SPARK_DEPLOY_ALLOW_UNVERIFIED=1 conscientemente."
+  # O commit backend-relevante e os descendentes dele até `sha` com a MESMA superfície de backend
+  # (ver o cabeçalho): em qualquer um deles, um CI verde testou exatamente o backend que vai subir.
+  candidates="${backend_sha}"
+  if [ "${backend_sha}" != "${sha}" ]; then
+    local descendants
+    descendants="$(git -C "${repo_dir}" rev-list --ancestry-path "${backend_sha}..${sha}" 2> /dev/null)" \
+      || fail "não foi possível listar os commits entre ${backend_sha} e ${sha}."
+    for candidate in ${descendants}; do
+      if git -C "${repo_dir}" diff --quiet "${backend_sha}" "${candidate}" -- "${SPARK_CI_PATHS[@]}"; then
+        candidates="${candidates} ${candidate}"
+      fi
+    done
+  fi
 
-  runs="$(printf '%s' "${runs}" | tr -d '\r')"
+  all_runs="" green_sha=""
+  for candidate in ${candidates}; do
+    log "procedência: conferindo o workflow '${SPARK_CI_WORKFLOW}' em ${candidate} (branch main)"
+    # `--jq` é o do próprio `gh`: não exige o binário `jq` na máquina que faz o deploy. `--branch
+    # main` recusa uma execução verde de outra branch/PR que só coincide no SHA (T19.10 §6.15).
+    runs="$(
+      cd "${repo_dir}" && gh run list \
+        --workflow "${SPARK_CI_WORKFLOW}" \
+        --commit "${candidate}" \
+        --branch main \
+        --limit 20 \
+        --json status,conclusion \
+        --jq 'map(.status + ":" + (.conclusion // "")) | join(" ")' 2> /dev/null
+    )" || fail "não foi possível consultar o GitHub Actions para ${candidate} (o 'gh' está autenticado?). Sem isso não há como afirmar que o CI passou — corrija, ou rode com SPARK_DEPLOY_ALLOW_UNVERIFIED=1 conscientemente."
+    runs="$(printf '%s' "${runs}" | tr -d '\r')"
+    case "${runs}" in
+      *completed:success*) green_sha="${candidate}"; break ;;
+    esac
+    all_runs="${all_runs:+${all_runs} }${runs}"
+  done
+  if [ -n "${green_sha}" ]; then
+    if [ "${green_sha}" = "${backend_sha}" ]; then
+      log "procedência: CI verde em ${backend_sha}"
+    else
+      log "procedência: CI verde em ${green_sha}, descendente de ${backend_sha} com a mesma superfície de backend"
+    fi
+    return 0
+  fi
+  runs="${all_runs}"
+
   case "${runs}" in
     '')
-      fail "HEAD ${sha}: procedência de backend é ${backend_sha}, mas nenhuma execução de '${SPARK_CI_WORKFLOW}' em main foi encontrada para esse commit. Motivo mais comum: o commit backend-relevante nunca foi integrado em main com CI, ou o workflow foi renomeado depois dele. Corrija (ou SPARK_DEPLOY_ALLOW_UNVERIFIED=1 conscientemente)."
-      ;;
-    *completed:success*)
-      log "procedência: CI verde em ${backend_sha}"
+      fail "HEAD ${sha}: procedência de backend é ${backend_sha}, mas nenhuma execução de '${SPARK_CI_WORKFLOW}' em main foi encontrada para esse commit nem para um descendente dele com o mesmo backend. Motivo mais comum: o commit backend-relevante nunca foi integrado em main com CI, ou o workflow foi renomeado depois dele. Corrija (ou SPARK_DEPLOY_ALLOW_UNVERIFIED=1 conscientemente)."
       ;;
     *queued:*|*in_progress:*|*waiting:*|*requested:*|*pending:*)
       fail "HEAD ${sha}: procedência de backend é ${backend_sha}, e o CI de '${SPARK_CI_WORKFLOW}' ainda está rodando lá (${runs}). Espere o resultado — um deploy não corre na frente do gate que ele depende."

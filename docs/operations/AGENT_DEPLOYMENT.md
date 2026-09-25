@@ -32,7 +32,8 @@ gh run view <RUN_ID> --log   # ou: abra a URL do run e leia o Step Summary
 ```text
 1. confirmar que o trabalho foi commitado/pushado em main
 2. confirmar que o CI do backend (backend.yml) concluiu com sucesso no commit backend-relevante
-   mais recente na ancestralidade de main (não necessariamente o HEAD)
+   mais recente na ancestralidade de main, ou num descendente dele com o mesmo backend (o topo do
+   push que o trouxe) — não necessariamente o HEAD
 3. disparar "Deploy Spark Backend" (gh workflow run deploy-backend.yml --ref main)
 4. se o GitHub pedir aprovação do Environment:
      informar o usuário e aguardar

@@ -768,6 +768,13 @@ existir, o gate recusa — a procedência nunca "sobe" para um commit de backend
 mais recente na ancestralidade. Um commit sem CI verde, com CI em andamento, com CI vermelho, ou
 cujo CI verde é de **outra** branch/SHA — todos abortam antes do build.
 
+**Push com vários commits (T19.H4).** O GitHub roda `backend.yml` uma vez por push, no commit do
+**topo** — num push `feat(backend)` + `docs`, o commit backend-relevante nunca ganha execução
+própria. Foi o que travou o deploy do T19.H3 (`02c1289`: CI verde no topo, nenhuma execução em
+`1333d4c`). O gate aceita, além do commit backend-relevante, qualquer descendente dele até o HEAD
+cuja superfície de backend (`backend/`, `ops/` e os dois workflows) seja **idêntica** — provado por
+`git diff --quiet`, não suposto. Um descendente com backend diferente nunca conta.
+
 ### 20.1 Configuração inicial (MANUAL SETUP REQUIRED)
 
 ```bash

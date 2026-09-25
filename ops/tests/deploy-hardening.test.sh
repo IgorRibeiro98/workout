@@ -314,6 +314,53 @@ check "Caso 6 — CI verde de outra branch: DENY" "sim" "$( [ "$CODIGO" != "0" ]
 check "...a mensagem não finge evidência que não existe em main" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q 'nenhuma execução' && echo sim || echo não)"
 
+# Caso 7 (T19.H4) — push com vários commits: `feat(backend)` + `docs` sobem juntos e o GitHub roda
+# `backend.yml` uma vez, no topo. O commit backend-relevante não tem execução própria, mas o topo tem
+# a mesma superfície de backend e CI verde em main: ALLOW. Era o que travava o deploy do T19.H3.
+GH_LOG="$(mktemp)"
+PUSH_TOP="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_BACKEND_SHA="${BACKEND_ANCESTOR}" GIT_ANCESTRY_PATH="${PUSH_TOP}" GH_RUNS_ONLY_FOR="${PUSH_TOP}" \
+  GH_CALL_LOG="${GH_LOG}" || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; GHCALLS="$(cat "${GH_LOG}")"; cleanup_logs; rm -f "${GH_LOG}"
+check "Caso 7 — CI verde só no topo do push, mesmo backend do commit backend-relevante: ALLOW" "0" "${CODIGO}"
+check "...consultou primeiro o commit backend-relevante e depois o descendente" "sim" \
+  "$( [ "$(printf '%s\n' "$GHCALLS" | grep -c -- "--commit ${BACKEND_ANCESTOR}")" = "1" ] \
+      && [ "$(printf '%s\n' "$GHCALLS" | grep -c -- "--commit ${PUSH_TOP}")" = "1" ] && echo sim || echo não)"
+check "...o log diz em qual descendente achou o CI verde" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q "CI verde em ${PUSH_TOP}, descendente de ${BACKEND_ANCESTOR}" && echo sim || echo não)"
+
+# Caso 8 (T19.H4) — o descendente com CI verde tem OUTRO backend (o diff acusa diferença): o verde
+# dele não prova nada sobre o backend que vai subir. DENY.
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_BACKEND_SHA="${BACKEND_ANCESTOR}" GIT_ANCESTRY_PATH="${PUSH_TOP}" GH_RUNS_ONLY_FOR="${PUSH_TOP}" \
+  GIT_DIFF_DIFFERS_FOR="${PUSH_TOP}" || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "Caso 8 — CI verde num descendente com backend diferente: DENY" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...a mensagem diz que não achou execução válida" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'nenhuma execução' && echo sim || echo não)"
+
+# Caso 9 (T19.H4) — o descendente tem o mesmo backend, mas o CI dele ainda está rodando: o deploy
+# espera, não corre na frente do gate.
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_BACKEND_SHA="${BACKEND_ANCESTOR}" GIT_ANCESTRY_PATH="${PUSH_TOP}" GH_RUNS_ONLY_FOR="${PUSH_TOP}" \
+  GH_RUN_RESULT=in_progress: || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; cleanup_logs
+check "Caso 9 — CI do topo do push ainda rodando: DENY" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...explicando que o CI ainda está rodando" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'ainda está rodando' && echo sim || echo não)"
+
+# Caso 10 (T19.H4) — CI verde de outra branch no descendente continua não contando (`--branch main`).
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  GIT_BACKEND_SHA="${BACKEND_ANCESTOR}" GIT_ANCESTRY_PATH="${PUSH_TOP}" GH_RUNS_ONLY_FOR="${PUSH_TOP}" \
+  GH_RUN_WRONG_BRANCH=1 || CODIGO=$?
+cleanup_logs
+check "Caso 10 — CI verde do descendente só em outra branch: DENY" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+
 # Nenhum commit na ancestralidade toca backend/ops — não há procedência alguma para verificar.
 # Sem isto o gate poderia devolver string vazia e silenciosamente pular a checagem de CI.
 CODIGO=0

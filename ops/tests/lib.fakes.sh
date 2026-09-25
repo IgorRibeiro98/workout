@@ -54,6 +54,10 @@ install_fakes() {
   #   default (nenhuma das duas acima)                → devolve o próprio <sha> pedido (o commit
   #                             sendo publicado É o commit backend-relevante — preserva o
   #                             comportamento anterior à T19.10 em todo teste que não opta por um)
+  #   GIT_ANCESTRY_PATH="<sha> …" → o que `git rev-list --ancestry-path A..B` devolve (T19.H4: os
+  #                             descendentes do commit backend-relevante até o HEAD); default vazio
+  #   GIT_DIFF_DIFFERS_FOR=<sha> → `git diff --quiet <a> <sha> -- …` acusa diferença para esse
+  #                             commit (superfície de backend diferente); default: idêntica
   cat > "${dir}/git" <<'FAKE_GIT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -71,7 +75,14 @@ case "${1:-}" in
     ;;
   fetch) [ -z "${GIT_FETCH_FAILS:-}" ] || exit 1 ;;
   merge-base) [ -z "${GIT_NOT_ANCESTOR:-}" ] || exit 1 ;;
-  diff) exit 0 ;;
+  diff)
+    # `git diff --quiet <a> <b> -- <caminhos>`: 0 = idênticos, 1 = diferentes.
+    [ -n "${GIT_DIFF_DIFFERS_FOR:-}" ] && [ "${4:-}" = "${GIT_DIFF_DIFFERS_FOR}" ] && exit 1
+    exit 0
+    ;;
+  rev-list)
+    for commit in ${GIT_ANCESTRY_PATH:-}; do printf '%s\n' "${commit}"; done
+    ;;
   log)
     # `git log --format=%H -1 <sha> -- <caminhos...>` (T19.10, ops/lib.deploy-gate.sh): localizar
     # o commit backend-relevante mais recente na ancestralidade de <sha>.
@@ -102,6 +113,8 @@ FAKE_GIT
   #   GH_RUN_LIST_FAILS=1      → a consulta falha (gh não autenticado, sem rede)
   #   GH_RUN_WRONG_BRANCH=1    → existe execução para o commit, mas não na branch pedida (nunca
   #                             deveria satisfazer `--branch main` — T19.10 §6.15)
+  #   GH_RUNS_ONLY_FOR=<sha>   → só esse commit tem execução; os outros, nenhuma (T19.H4: o CI
+  #                             roda uma vez por push, no commit do topo)
   cat > "${dir}/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -124,6 +137,9 @@ if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
     printf '\n'; exit 0
   fi
   [ -z "${GH_NO_RUN:-}" ] || { printf '\n'; exit 0; }
+  if [ -n "${GH_RUNS_ONLY_FOR:-}" ] && [ "${commit}" != "${GH_RUNS_ONLY_FOR}" ]; then
+    printf '\n'; exit 0
+  fi
   printf '%s\n' "${GH_RUN_RESULT:-completed:success}"
   exit 0
 fi
