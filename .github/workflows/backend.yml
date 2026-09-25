@@ -575,6 +575,12 @@ jobs:
       - name: Rollback e rollback drill (offline)
         run: ops/tests/rollback-drill.test.sh
 
+      # T19.H5 §53 — o smoke do Cloud Run: sem token, o de sempre (e "Compartilhar progresso"
+      # exige conta); com o token de uma conta de teste, o contrato v2 de progress-sharing, sem
+      # imprimir o corpo. O `jq` já vem no runner do GitHub.
+      - name: Smoke do Cloud Run e contrato de progress-sharing (offline)
+        run: ops/tests/smoke-cloud-run.test.sh
+
       # T18.3 §16/§18/§25 — as três auditorias (drift de configuração, IAM, custo) contra
       # fixtures: PASS no cenário esperado, DRIFT em cada desvio injetado (inclusive o drift REAL
       # encontrado nesta tarefa: runtime SA com acesso ao secret direto), NOT_VERIFIED quando uma

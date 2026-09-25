@@ -71,7 +71,8 @@ run_script "${OPS_DIR}/gcp/rollback-drill.sh" --to spark-backend-00002-abc || CO
 LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"; CURLS="$(cat "${CURL_CALL_LOG}")"; cleanup_logs
 check "o ensaio termina com sucesso" "0" "${CODIGO}"
 check "sequência de tráfego: B, depois A" "spark-backend-00002-abc spark-backend-00001-xyz" "$(traffic_moves "$LOG" | paste -sd' ' -)"
-check "smoke antes, depois de B e depois de A (3 × 6 rotas = 18 chamadas)" "18" "$(printf '%s\n' "$CURLS" | grep -c 'a.run.app' || true)"
+# 7 rotas desde a T19.H5: o smoke também confere que "Compartilhar progresso" exige conta.
+check "smoke antes, depois de B e depois de A (3 × 7 rotas = 21 chamadas)" "21" "$(printf '%s\n' "$CURLS" | grep -c 'a.run.app' || true)"
 check "o veredito é ROLLBACK_DRILL_PASS terminando em A" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q 'ROLLBACK_DRILL_PASS: spark-backend-00001-xyz → spark-backend-00002-abc → spark-backend-00001-xyz (tráfego ficou em spark-backend-00001-xyz)' && echo sim || echo não)"
 check "os timestamps de cada movimento estão no relatório" "2" "$(printf '%s' "$SAIDA" | grep -c '→ 100% do tráfego para' || true)"
