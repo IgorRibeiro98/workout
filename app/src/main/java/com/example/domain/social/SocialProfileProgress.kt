@@ -72,6 +72,24 @@ data class SharedProgress(
 }
 
 /**
+ * A versão do contrato de "Compartilhar progresso" que este APK conhece (T19.H5).
+ *
+ * ```text
+ * 1  T17.2 + T19.2 — os quatro interruptores de progresso geral
+ * 2  T19.H3 — estatísticas de treino e detalhes dos check-ins; desde a T19.H5, motivos
+ * ```
+ *
+ * O servidor a **declara** em `contractVersion`. Um servidor que não declara nada é anterior à
+ * T19.H5 e é lido como [LEGACY_PROGRESS_SHARING_CONTRACT_VERSION] — mesmo que ele por acaso já
+ * conheça os campos da T19.H3: supor que conhece foi exatamente o que fez um APK novo mostrar
+ * "Ainda não disponível" e tomar "O servidor recusou esta configuração" contra um servidor antigo.
+ */
+const val PROGRESS_SHARING_CONTRACT_VERSION = 2
+
+/** O que um servidor que não declara `contractVersion` suporta: os interruptores da T17.2. */
+const val LEGACY_PROGRESS_SHARING_CONTRACT_VERSION = 1
+
+/**
  * Cada interruptor de "Compartilhar progresso", pelo nome (T17.2 + T19.H3).
  *
  * Uma lista só: a tela desenha os grupos a partir dela, a ViewModel envia a mudança por ela e o
@@ -102,8 +120,19 @@ enum class ProgressSharingField(val group: ProgressSharingGroup) {
  * [TRAINING_STATS] aparece no **perfil**, somado; [CHECK_IN_DETAILS] aparece em **cada check-in**
  * publicado, lido da sessão de origem. A separação é de produto e de privacidade: "como esta
  * pessoa vem treinando?" e "o que aconteceu neste treino?" são perguntas diferentes (§22).
+ *
+ * [sinceContractVersion] (T19.H5) é a versão de contrato a partir da qual o servidor conhece o
+ * grupo. Um servidor abaixo dela recusaria o `PATCH` do interruptor — então a tela não o oferece.
  */
-enum class ProgressSharingGroup { GENERAL, TRAINING_STATS, CHECK_IN_DETAILS }
+enum class ProgressSharingGroup(val sinceContractVersion: Int) {
+    GENERAL(LEGACY_PROGRESS_SHARING_CONTRACT_VERSION),
+    TRAINING_STATS(PROGRESS_SHARING_CONTRACT_VERSION),
+    CHECK_IN_DETAILS(PROGRESS_SHARING_CONTRACT_VERSION)
+}
+
+/** O servidor que declarou [contractVersion] conhece este interruptor? */
+fun ProgressSharingField.isSupportedBy(contractVersion: Int): Boolean =
+    contractVersion >= group.sinceContractVersion
 
 /**
  * O que **eu** compartilho.
@@ -235,6 +264,45 @@ enum class SocialFieldAvailability {
     UNSUPPORTED
 }
 
+/**
+ * **Por que** um campo não está disponível — informação do dono, e só dele (T19.H5).
+ *
+ * Até a T19.H3 a tela dizia "Seu progresso compartilhado é atualizado depois da sincronização"
+ * para qualquer indisponibilidade — e sincronizar não resolvia metade delas. Os quatro primeiros
+ * valores vêm do servidor (`availabilityReasons`) e correspondem a condições reais da projeção; os
+ * dois últimos são do app.
+ */
+enum class SocialAvailabilityReason {
+    /** Nenhum treino concluído desta conta chegou ao servidor. Sincronizar resolve, se houver treino. */
+    NO_SYNCED_WORKOUTS,
+
+    /** O servidor não conhece o fuso da semana. O app o declara sozinho ao abrir a tela com conexão. */
+    WEEK_TIME_ZONE_MISSING,
+
+    /** Faltam a meta semanal e o início do acompanhamento. O app os declara sozinho, também ao abrir. */
+    CONSISTENCY_PARAMETERS_MISSING,
+
+    /** Mais treinos nesta semana do que o servidor soma de uma vez; ele não publica soma truncada. */
+    SOURCE_LIMIT_REACHED,
+
+    /**
+     * O servidor não declarou conhecer este campo (contrato abaixo da versão do grupo). Derivado
+     * aqui — o servidor não sabe que o app o conhece. Não é "ainda não disponível": sincronizar
+     * nunca resolve, só a atualização do servidor.
+     */
+    LEGACY_BACKEND,
+
+    /** O servidor não disse por quê, ou disse algo que este APK não conhece. */
+    UNKNOWN
+}
+
+/** O estado de um campo e, quando ele não está disponível, o motivo (T19.H5). */
+data class SocialFieldAvailabilityDetail(
+    val status: SocialFieldAvailability,
+    /** `null` quando o campo está [SocialFieldAvailability.AVAILABLE]. */
+    val reason: SocialAvailabilityReason?
+)
+
 /** A disponibilidade de cada campo do perfil, como o dono a vê. */
 data class ProgressSharingAvailability(
     val level: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
@@ -245,8 +313,36 @@ data class ProgressSharingAvailability(
     val weeklyTrainingMinutes: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
     val weeklyCompletedSets: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
     val weeklyVolume: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
-    val totalWorkouts: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE
+    val totalWorkouts: SocialFieldAvailability = SocialFieldAvailability.UNAVAILABLE,
+    /**
+     * O motivo de cada campo indisponível (T19.H5). Um campo `UNAVAILABLE` fora do mapa tem motivo
+     * [SocialAvailabilityReason.UNKNOWN] — o servidor não disse, e o app não inventa.
+     */
+    val reasons: Map<ProgressSharingField, SocialAvailabilityReason> = emptyMap()
 ) {
+    /**
+     * O estado e o motivo de um campo, ou `null` quando disponibilidade não é pergunta do perfil
+     * (os detalhes de check-in — ver [of]).
+     */
+    fun detailOf(field: ProgressSharingField): SocialFieldAvailabilityDetail? {
+        val status = of(field) ?: return null
+        val reason = when (status) {
+            SocialFieldAvailability.AVAILABLE -> null
+            SocialFieldAvailability.UNAVAILABLE -> reasons[field] ?: SocialAvailabilityReason.UNKNOWN
+            SocialFieldAvailability.UNSUPPORTED -> reasons[field]
+        }
+        return SocialFieldAvailabilityDetail(status, reason)
+    }
+
+    /**
+     * Algum campo falta porque o servidor não tem treino desta conta? É o único motivo que
+     * sincronizar resolve — e é quando a tela oferece "Sincronizar dados" (T19.H5 §13).
+     */
+    val needsSync: Boolean
+        get() = ProgressSharingField.entries.any {
+            detailOf(it)?.reason == SocialAvailabilityReason.NO_SYNCED_WORKOUTS
+        }
+
     /**
      * A disponibilidade de um campo, ou `null` quando ela não é uma pergunta do perfil.
      *
@@ -270,8 +366,48 @@ data class ProgressSharingAvailability(
 /** Preferências e disponibilidade juntas: a tela precisa das duas para dizer a frase certa. */
 data class ProgressSharing(
     val settings: ProgressSharingSettings,
-    val availability: ProgressSharingAvailability
+    val availability: ProgressSharingAvailability,
+    /**
+     * O que o servidor declarou conhecer (T19.H5). Abaixo de [PROGRESS_SHARING_CONTRACT_VERSION], os
+     * grupos mais novos não são oferecidos — o `PATCH` deles seria recusado.
+     */
+    val contractVersion: Int = PROGRESS_SHARING_CONTRACT_VERSION
 )
+
+/**
+ * O desfecho de "Sincronizar dados" pedido pela tela de compartilhamento (T19.H5), no vocabulário
+ * do Social.
+ *
+ * O Social não conhece o protocolo de sync — Outbox, cursor, revisão — e não pode conhecer: é a
+ * fronteira da T17.0, e um teste estrutural a vigia. Quem roda o ciclo é o `SyncCoordinator` da
+ * T16, montado **fora** do pacote social; o que atravessa a fronteira é só esta tradução. Não existe
+ * sync social: é o mesmo ciclo do "Sincronizar agora" do Perfil.
+ */
+enum class SocialSyncResult {
+    /** O ciclo terminou. A tela relê o compartilhamento: é o servidor quem reprojeta. */
+    SYNCED,
+
+    /** O ciclo terminou com itens que precisam de decisão ou de atualização do app (Perfil › Sincronização). */
+    NEEDS_ATTENTION,
+
+    /** Este aparelho não sincroniza (nenhum backup ativado para a conta). Nada foi enviado. */
+    NOT_ENABLED,
+
+    /** É preciso entrar na Conta Spark. */
+    AUTH_REQUIRED,
+
+    /** Os dados deste aparelho pertencem a outra Conta Spark. Nada foi enviado. */
+    ACCOUNT_MISMATCH,
+
+    /** Sem rede. A fila local continua intacta; nada se perdeu. */
+    OFFLINE,
+
+    /** O servidor recusou ou está indisponível. Recuperável. */
+    FAILED,
+
+    /** Já havia um ciclo rodando, e ele não terminou a tempo de a tela esperar por ele. */
+    ALREADY_RUNNING
+}
 
 /**
  * Por que uma operação do perfil social não completou.

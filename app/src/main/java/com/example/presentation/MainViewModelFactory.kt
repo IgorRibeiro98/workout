@@ -359,13 +359,29 @@ class MainViewModelFactory(
                         }
                     }
                 }
+            // T19.H5 — "Sincronizar dados" em "Compartilhar progresso" é o ciclo da T16, pelo mesmo
+            // coordenador do "Sincronizar agora" do Perfil. Entra como função, pelo mesmo motivo dos
+            // parâmetros acima: o pacote social não conhece o protocolo de sync.
+            val coordinator = syncCoordinator
+            val assistedSync: (suspend () -> com.example.domain.social.SocialSyncResult)? =
+                if (coordinator == null) {
+                    null
+                } else {
+                    suspend {
+                        runSocialAssistedSync(
+                            runOnce = coordinator::runOnce,
+                            activity = coordinator.activity
+                        )
+                    }
+                }
             @Suppress("UNCHECKED_CAST")
             return com.example.presentation.account.SocialProfileViewModel(
                 gateway = profile,
                 authGateway = gateway,
                 consistencyParameters = consistencyParameters,
                 blockGateway = blockGateway,
-                reportGateway = reportGateway
+                reportGateway = reportGateway,
+                assistedSync = assistedSync
             ) as T
         }
         if (modelClass.isAssignableFrom(com.example.presentation.friends.BlockedUsersViewModel::class.java)) {

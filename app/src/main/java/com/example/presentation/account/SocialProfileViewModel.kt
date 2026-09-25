@@ -6,10 +6,13 @@ import com.example.domain.auth.AuthGateway
 import com.example.domain.auth.AuthState
 import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingField
+import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileGateway
 import com.example.domain.social.SocialProfileOutcome
+import com.example.domain.social.SocialSyncResult
+import com.example.domain.social.isSupportedBy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,14 +76,35 @@ class SocialProfileViewModel(
      */
     private val consistencyParameters: (suspend () -> SocialConsistencyParameters?)? = null,
     private val blockGateway: com.example.domain.social.BlockGateway? = null,
-    private val reportGateway: com.example.domain.social.ReportGateway? = null
+    private val reportGateway: com.example.domain.social.ReportGateway? = null,
+    /**
+     * "Sincronizar dados" (T19.H5): o ciclo da T16 — o mesmo do "Sincronizar agora" do Perfil —,
+     * montado por quem cria a ViewModel (`MainViewModelFactory`) sobre o `SyncCoordinator`. O pacote
+     * social não conhece o protocolo de sync; ele recebe só o desfecho, no próprio vocabulário.
+     * `null` quando o build não sincroniza: a tela não oferece a ação.
+     */
+    private val assistedSync: (suspend () -> SocialSyncResult)? = null
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(SocialProfileUiState(isConfigured = gateway.isConfigured))
+    private val _uiState = MutableStateFlow(initialState())
     val uiState: StateFlow<SocialProfileUiState> = _uiState.asStateFlow()
 
     /** A conta da qual o estado atual fala. `null` = nenhuma. */
     private var currentUid: String? = null
+
+    /**
+     * A geração da operação mais nova de "Compartilhar progresso" (T19.H5 §41).
+     *
+     * Um "↻", a releitura depois de "Sincronizar dados", o alinhamento de fuso e parâmetros e um
+     * toque num interruptor podem voar ao mesmo tempo. Cada leitura e cada escrita pega um número
+     * ao sair, e só a resposta da mais nova escreve na tela: uma leitura que saiu antes de um
+     * `PATCH` traz o interruptor antigo, e aplicá-la depois dele desfaria na tela o que o servidor
+     * acabou de gravar.
+     *
+     * Declarada antes do `init`: ele observa a conta e zera esta geração, e propriedades são
+     * inicializadas em ordem textual (a armadilha da T19.H3).
+     */
+    private var sharingGeneration = 0L
 
     init {
         viewModelScope.launch {
@@ -101,10 +125,18 @@ class SocialProfileViewModel(
     private fun onAccountChanged(uid: String?) {
         if (uid == currentUid) return
         currentUid = uid
-        // Estado novo por completo: perfil aberto, configurações, disponibilidade e prévia.
-        // Tudo pertencia à conta anterior.
-        _uiState.value = SocialProfileUiState(isConfigured = gateway.isConfigured)
+        // Nenhuma resposta em voo — leitura, escrita ou releitura depois de sincronizar — escreve
+        // mais nada: todas falavam da conta anterior.
+        sharingGeneration++
+        // Estado novo por completo: perfil aberto, configurações, disponibilidade, motivos, versão
+        // do contrato, resultado de sincronização e prévia. Tudo pertencia à conta anterior.
+        _uiState.value = initialState()
     }
+
+    private fun initialState() = SocialProfileUiState(
+        isConfigured = gateway.isConfigured,
+        canSyncData = assistedSync != null
+    )
 
     // --------------------------------------------------------------------------- perfil do amigo
 
@@ -225,54 +257,109 @@ class SocialProfileViewModel(
         } else {
             state.copy(sharingPhase = ProgressSharingPhase.Loading, notice = null)
         }
-        viewModelScope.launch {
-            val outcome = gateway.progressSharing()
-            if (currentUid != uid) return@launch
-            _uiState.value = _uiState.value.copy(isSharingRefreshing = false)
-            // Um interruptor foi tocado enquanto a leitura voava: a resposta do `PATCH` é mais
-            // nova que esta, e é ela quem escreve (T19.H3 §47).
-            if (showing && _uiState.value.sharingPhase is ProgressSharingPhase.Saving) return@launch
-            applySharing(
-                outcome,
-                busyPhase = if (showing) ProgressSharingPhase.Saving else ProgressSharingPhase.Loading
-            )
-            if (outcome is SocialProfileOutcome.Success) {
-                alignConsistencyParameters(uid, outcome.value.settings.consistency)
-            }
-        }
+        viewModelScope.launch { readSharing(uid, showing) }
     }
 
     /**
-     * Declara ao servidor os parâmetros de consistência deste aparelho quando ele ainda não os
-     * conhece — ou conhece uma versão antiga (a meta semanal mudou desde a última visita).
+     * Uma leitura de "Compartilhar progresso". `true` quando a resposta chegou e é a que está na
+     * tela.
+     *
+     * [showing]: os interruptores já estão na tela. Uma falha então **mantém** a última leitura boa
+     * com um aviso, em vez de trocar a tela por um erro (T19.H3 §45).
+     */
+    private suspend fun readSharing(uid: String, showing: Boolean): Boolean {
+        val generation = ++sharingGeneration
+        val outcome = gateway.progressSharing()
+        // A conta mudou no voo, ou uma operação mais nova já saiu — um toque num interruptor, um
+        // "↻" mais recente: esta resposta é mais velha que a tela, e não escreve (T19.H5 §41).
+        if (currentUid != uid || generation != sharingGeneration) return false
+        applySharing(
+            outcome,
+            busyPhase = if (showing) ProgressSharingPhase.Saving else ProgressSharingPhase.Loading
+        )
+        if (outcome !is SocialProfileOutcome.Success) return false
+        alignSharingConfiguration(uid, outcome.value.settings)
+        return true
+    }
+
+    /**
+     * Declara ao servidor a configuração deste aparelho que ele ainda não conhece — o fuso da
+     * semana e os parâmetros de consistência (T19.2A, T19.H5).
      *
      * É a única escrita que esta tela faz sem um toque: ela não move interruptor nenhum e não
-     * altera privacidade. Sem ela, quem ligou "Consistência semanal" numa versão anterior veria o
-     * campo indisponível para sempre, porque nada mais o faria chegar ao servidor. Falhar aqui
-     * não gera aviso: a disponibilidade na tela já diz "ainda não disponível", e a próxima abertura
-     * tenta de novo.
+     * altera privacidade. Sem ela, os motivos `WEEK_TIME_ZONE_MISSING` e
+     * `CONSISTENCY_PARAMETERS_MISSING` não teriam remédio: até a T19.H3 o fuso só viajava com o
+     * primeiro toque num interruptor, e quem nunca tocou em nenhum via as métricas da semana
+     * indisponíveis para sempre. Cada um só vai quando o servidor não o tem — o fuso não é
+     * reenviado a cada abertura, porque reenviar mudaria a semana de quem viaja no meio dela.
+     *
+     * Falhar aqui não gera aviso: o motivo na tela já diz o que falta, e o próximo "↻" tenta de novo.
      */
-    private suspend fun alignConsistencyParameters(
-        uid: String,
-        known: SocialConsistencyParameters?
-    ) {
-        val local = localConsistencyParameters() ?: return
-        if (local == known) return
+    private suspend fun alignSharingConfiguration(uid: String, known: ProgressSharingSettings) {
+        val local = localConsistencyParameters()
+        val consistency = local?.takeIf { it != known.consistency }
+        val timeZone = if (known.weekTimeZone == null) deviceTimeZoneId() else null
+        if (consistency == null && timeZone == null) return
         if (currentUid != uid || _uiState.value.isSharingBusy) return
 
         // `Saving` enquanto a escrita voa: um toque neste intervalo esperaria a resposta e, se as
         // duas respostas se cruzassem, a mais antiga poderia sobrescrever o interruptor mais novo.
         _uiState.value = _uiState.value.copy(sharingPhase = ProgressSharingPhase.Saving)
-        val outcome = gateway.updateProgressSharing(consistency = local)
-        if (currentUid != uid) return
+        val generation = ++sharingGeneration
+        val outcome = gateway.updateProgressSharing(weekTimeZone = timeZone, consistency = consistency)
+        if (currentUid != uid || generation != sharingGeneration) return
         _uiState.value = when (outcome) {
             is SocialProfileOutcome.Success -> _uiState.value.copy(
                 sharingPhase = ProgressSharingPhase.Ready,
                 settings = outcome.value.settings,
-                availability = outcome.value.availability
+                availability = outcome.value.availability,
+                contractVersion = outcome.value.contractVersion
             )
-            // Sem aviso: nenhum interruptor foi tocado, e a disponibilidade já diz o que falta.
+            // Sem aviso: nenhum interruptor foi tocado, e o motivo na tela já diz o que falta.
             is SocialProfileOutcome.Failure -> _uiState.value.copy(sharingPhase = ProgressSharingPhase.Ready)
+        }
+    }
+
+    /**
+     * "Sincronizar dados" (T19.H5 §13–§17): o ciclo da T16 e, se ele rodou, uma releitura.
+     *
+     * Não é o "↻". O "↻" só relê o servidor e nunca envia treino; isto converge o aparelho com o
+     * servidor e **depois** relê, porque a disponibilidade só muda quando o servidor reprojeta a
+     * partir do que chegou. Nunca roda sozinho — nem ao abrir a tela: só com o toque.
+     *
+     * O resultado fica na tela até a próxima ação: "sincronizou e o dado apareceu", "sincronizou e
+     * o servidor continua sem treino" e "não sincronizou, e por quê" são três frases diferentes —
+     * nunca um spinner que volta ao mesmo estado sem explicação.
+     */
+    fun syncData() {
+        val uid = currentUid ?: return
+        val sync = assistedSync ?: return
+        val state = _uiState.value
+        if (state.dataSync is SharingDataSync.Running || state.isSharingBusy) return
+
+        _uiState.value = state.copy(dataSync = SharingDataSync.Running, notice = null)
+        viewModelScope.launch {
+            val result = try {
+                sync()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SocialSyncResult.FAILED
+            }
+            if (currentUid != uid) return@launch
+
+            val reread = if (result.ranCycle()) {
+                // A releitura mantém a tela no lugar: o spinner do "↻" gira enquanto ela voa, e uma
+                // falha vira aviso, não uma tela de erro.
+                val phase = _uiState.value.sharingPhase
+                val showing = phase is ProgressSharingPhase.Ready || phase is ProgressSharingPhase.Saving
+                if (showing) _uiState.value = _uiState.value.copy(isSharingRefreshing = true)
+                readSharing(uid, showing)
+            } else {
+                false
+            }
+            if (currentUid != uid) return@launch
+            _uiState.value = _uiState.value.copy(dataSync = SharingDataSync.Finished(result, reread))
         }
     }
 
@@ -315,16 +402,26 @@ class SocialProfileViewModel(
 
     private fun update(changes: Map<ProgressSharingField, Boolean>) {
         val uid = currentUid ?: return
-        if (_uiState.value.isSharingBusy) return
+        val state = _uiState.value
+        // Durante "Sincronizar dados" os interruptores esperam: a releitura que vem depois do ciclo
+        // e um `PATCH` cruzados poderiam deixar na tela o interruptor anterior ao toque.
+        if (state.isSharingBusy || state.dataSync is SharingDataSync.Running) return
+        // T19.H5: um servidor que não declarou conhecer o campo recusaria o `PATCH` com
+        // `INVALID_PROGRESS_SETTINGS`. A tela nem oferece o interruptor; a ViewModel também não o
+        // envia.
+        if (changes.keys.any { !it.isSupportedBy(state.contractVersion) }) return
 
         // O fuso só é enviado quando o servidor ainda não o conhece: ele descreve o aparelho, e
         // reenviá-lo a cada toque mudaria a semana de quem viaja no meio de uma configuração.
-        val timeZone = if (_uiState.value.settings.weekTimeZone == null) deviceTimeZoneId() else null
+        val timeZone = if (state.settings.weekTimeZone == null) deviceTimeZoneId() else null
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.value = state.copy(
             sharingPhase = ProgressSharingPhase.Saving,
             notice = null
         )
+        // Pega a geração no toque: qualquer leitura que já estava no ar é mais velha que este
+        // `PATCH`, e a resposta dela não pode desfazer o interruptor na tela.
+        val generation = ++sharingGeneration
 
         viewModelScope.launch {
             // Os parâmetros de consistência viajam quando o servidor não os tem ou tem outros —
@@ -338,7 +435,7 @@ class SocialProfileViewModel(
                 weekTimeZone = timeZone,
                 consistency = consistency
             )
-            if (currentUid != uid) return@launch
+            if (currentUid != uid || generation != sharingGeneration) return@launch
             applySharing(outcome, busyPhase = ProgressSharingPhase.Saving)
 
             // Uma configuração nova muda o que o amigo vê: a prévia que estava na tela deixou de
@@ -364,8 +461,10 @@ class SocialProfileViewModel(
             is SocialProfileOutcome.Success -> {
                 _uiState.value = _uiState.value.copy(
                     sharingPhase = ProgressSharingPhase.Ready,
+                    isSharingRefreshing = false,
                     settings = outcome.value.settings,
-                    availability = outcome.value.availability
+                    availability = outcome.value.availability,
+                    contractVersion = outcome.value.contractVersion
                 )
             }
             is SocialProfileOutcome.Failure -> {
@@ -375,6 +474,7 @@ class SocialProfileViewModel(
                     // válido, e o aviso explica. Uma leitura que falhou não tem o que mostrar.
                     sharingPhase = if (wasSaving) ProgressSharingPhase.Ready
                     else sharingPhaseFor(outcome.error),
+                    isSharingRefreshing = false,
                     notice = if (wasSaving) outcome.error else null
                 )
             }
@@ -501,6 +601,13 @@ class SocialProfileViewModel(
 /** O perfil do amigo está na tela (com ou sem progresso compartilhado)? */
 private fun FriendProfilePhase.showsProfile(): Boolean =
     this is FriendProfilePhase.Ready || this is FriendProfilePhase.NoSharedProgress
+
+/**
+ * O ciclo de sync rodou — por inteiro ou deixando itens para a seção Sincronização —, e o servidor
+ * pode ter recebido treino novo. Só então vale reler: nos outros desfechos nada chegou até ele.
+ */
+private fun SocialSyncResult.ranCycle(): Boolean =
+    this == SocialSyncResult.SYNCED || this == SocialSyncResult.NEEDS_ATTENTION
 
 /** Falhas que não dizem nada sobre o perfil — só que ele não pôde ser relido agora (T19.H3). */
 private fun SocialProfileError.isRecoverableRead(): Boolean =

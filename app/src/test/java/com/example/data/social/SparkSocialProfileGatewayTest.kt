@@ -7,9 +7,13 @@ import com.example.data.remote.spark.SparkBackendClient
 import com.example.domain.auth.AuthTokenProvider
 import com.example.domain.auth.AuthTokenResult
 import com.example.domain.social.ProgressSharingField
+import com.example.domain.social.ProgressSharingGroup
+import com.example.domain.social.SocialAvailabilityReason
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.SocialFieldAvailabilityDetail
 import com.example.domain.social.SocialProfileError
 import com.example.domain.social.SocialProfileOutcome
+import com.example.domain.social.isSupportedBy
 import java.io.IOException
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
@@ -130,8 +134,11 @@ class SparkSocialProfileGatewayTest {
     @Test
     fun `as configuracoes V3 e a disponibilidade nova sao lidas do texto do servidor`() =
         runBlocking {
+            // T19.H5: o servidor da T19.H3 em diante declara a versão. Sem ela, a resposta é de um
+            // servidor legado — ver `sem contractVersion o servidor e legado`.
             val gateway = gatewayWith(
-                body = """{"settings":{"shareLevel":false,"shareWorkoutExercises":true,
+                body = """{"contractVersion":2,
+                           "settings":{"shareLevel":false,"shareWorkoutExercises":true,
                            "shareWorkoutWeights":true,"shareTotalWorkouts":true,"updatedAt":7},
                            "availability":{"weeklyTrainingMinutes":"AVAILABLE",
                            "weeklyVolume":"UNAVAILABLE","totalWorkouts":"AVAILABLE"}}"""
@@ -144,8 +151,156 @@ class SparkSocialProfileGatewayTest {
             assertFalse(sharing.settings.shareWorkoutSets)
             assertEquals(SocialFieldAvailability.AVAILABLE, sharing.availability.weeklyTrainingMinutes)
             assertEquals(SocialFieldAvailability.UNAVAILABLE, sharing.availability.weeklyVolume)
-            // Ausente no JSON (servidor anterior à 0008): o valor conservador, nunca "Disponível".
+            // Ausente no JSON de um servidor v2: o valor conservador, nunca "Disponível".
             assertEquals(SocialFieldAvailability.UNAVAILABLE, sharing.availability.weeklyCompletedSets)
+        }
+
+    // ------------------------------------------------------------------ T19.H5 contrato versionado
+
+    @Test
+    fun `contrato v2 — o motivo de cada campo indisponivel e lido do texto do servidor`() =
+        runBlocking {
+            val gateway = gatewayWith(
+                body = """{"contractVersion":2,
+                           "settings":{"shareLevel":true,"weekTimeZone":"America/Sao_Paulo","updatedAt":3},
+                           "availability":{"level":"UNAVAILABLE","consistencyStreak":"UNAVAILABLE",
+                             "weeklyWorkoutCount":"AVAILABLE","highlightedAchievements":"AVAILABLE",
+                             "weeklyTrainingMinutes":"UNAVAILABLE","weeklyCompletedSets":"UNAVAILABLE",
+                             "weeklyVolume":"UNAVAILABLE","totalWorkouts":"AVAILABLE"},
+                           "availabilityReasons":{"level":"CONSISTENCY_PARAMETERS_MISSING",
+                             "consistencyStreak":"CONSISTENCY_PARAMETERS_MISSING",
+                             "weeklyTrainingMinutes":"SOURCE_LIMIT_REACHED",
+                             "weeklyCompletedSets":"UM_MOTIVO_DO_FUTURO"}}"""
+            )
+
+            val sharing = (gateway.progressSharing() as SocialProfileOutcome.Success).value
+            val availability = sharing.availability
+            assertEquals(2, sharing.contractVersion)
+            assertEquals(
+                SocialFieldAvailabilityDetail(
+                    SocialFieldAvailability.UNAVAILABLE,
+                    SocialAvailabilityReason.CONSISTENCY_PARAMETERS_MISSING
+                ),
+                availability.detailOf(ProgressSharingField.LEVEL)
+            )
+            assertEquals(
+                SocialFieldAvailabilityDetail(
+                    SocialFieldAvailability.UNAVAILABLE,
+                    SocialAvailabilityReason.SOURCE_LIMIT_REACHED
+                ),
+                availability.detailOf(ProgressSharingField.WEEKLY_TRAINING_MINUTES)
+            )
+            // Motivo que este APK não conhece, e indisponível sem motivo: a tela diz menos, e não
+            // adivinha.
+            for (field in listOf(
+                ProgressSharingField.WEEKLY_COMPLETED_SETS,
+                ProgressSharingField.WEEKLY_VOLUME
+            )) {
+                assertEquals(
+                    SocialFieldAvailabilityDetail(
+                        SocialFieldAvailability.UNAVAILABLE,
+                        SocialAvailabilityReason.UNKNOWN
+                    ),
+                    availability.detailOf(field)
+                )
+            }
+            // Disponível não tem motivo, e detalhe de check-in não tem disponibilidade.
+            assertEquals(
+                SocialFieldAvailabilityDetail(SocialFieldAvailability.AVAILABLE, null),
+                availability.detailOf(ProgressSharingField.TOTAL_WORKOUTS)
+            )
+            assertNull(availability.detailOf(ProgressSharingField.WORKOUT_NAME))
+            // Nenhum desses motivos se resolve sincronizando.
+            assertFalse(availability.needsSync)
+            for (field in ProgressSharingField.entries) {
+                assertTrue("$field é oferecido num servidor v2", field.isSupportedBy(sharing.contractVersion))
+            }
+        }
+
+    @Test
+    fun `sem contractVersion o servidor e legado — os campos da T19H3 nao viram ainda nao disponivel`() =
+        runBlocking {
+            // A resposta do servidor anterior à T19.H3 — a que a produção deu até 2026-09-25:
+            // quatro disponibilidades, nenhum interruptor novo e nenhuma versão.
+            val gateway = gatewayWith(
+                body = """{"settings":{"shareLevel":true,"shareConsistencyStreak":false,
+                           "shareWeeklyWorkoutCount":true,"shareHighlightedAchievements":false,
+                           "weekTimeZone":"America/Sao_Paulo","updatedAt":1},
+                           "availability":{"level":"AVAILABLE","consistencyStreak":"AVAILABLE",
+                           "weeklyWorkoutCount":"AVAILABLE","highlightedAchievements":"AVAILABLE"}}"""
+            )
+
+            val sharing = (gateway.progressSharing() as SocialProfileOutcome.Success).value
+            assertEquals(1, sharing.contractVersion)
+            assertEquals(
+                SocialFieldAvailabilityDetail(SocialFieldAvailability.AVAILABLE, null),
+                sharing.availability.detailOf(ProgressSharingField.LEVEL)
+            )
+            for (field in listOf(
+                ProgressSharingField.WEEKLY_TRAINING_MINUTES,
+                ProgressSharingField.WEEKLY_COMPLETED_SETS,
+                ProgressSharingField.WEEKLY_VOLUME,
+                ProgressSharingField.TOTAL_WORKOUTS
+            )) {
+                // Não é UNAVAILABLE ("sincronize"): é um recurso que aquele servidor não tem.
+                assertEquals(
+                    SocialFieldAvailabilityDetail(
+                        SocialFieldAvailability.UNSUPPORTED,
+                        SocialAvailabilityReason.LEGACY_BACKEND
+                    ),
+                    sharing.availability.detailOf(field)
+                )
+            }
+            assertFalse(sharing.availability.needsSync)
+            // Nenhum interruptor que aquele servidor recusaria é oferecido.
+            for (field in ProgressSharingField.entries) {
+                assertEquals(
+                    "$field num servidor legado",
+                    field.group == ProgressSharingGroup.GENERAL,
+                    field.isSupportedBy(sharing.contractVersion)
+                )
+            }
+        }
+
+    @Test
+    fun `um servidor nao se declara legado — esses motivos sao do app`() = runBlocking {
+        val gateway = gatewayWith(
+            body = """{"contractVersion":2,"settings":{},
+                       "availability":{"level":"UNAVAILABLE","totalWorkouts":"UNAVAILABLE"},
+                       "availabilityReasons":{"level":"LEGACY_BACKEND","totalWorkouts":"UNKNOWN"}}"""
+        )
+
+        val availability = (gateway.progressSharing() as SocialProfileOutcome.Success).value.availability
+        assertEquals(SocialAvailabilityReason.UNKNOWN, availability.detailOf(ProgressSharingField.LEVEL)?.reason)
+        assertEquals(
+            SocialAvailabilityReason.UNKNOWN,
+            availability.detailOf(ProgressSharingField.TOTAL_WORKOUTS)?.reason
+        )
+    }
+
+    @Test
+    fun `sem treino no servidor e o motivo que pede sincronizacao`() = runBlocking {
+        val gateway = gatewayWith(
+            body = """{"contractVersion":2,"settings":{},
+                       "availability":{"totalWorkouts":"UNAVAILABLE"},
+                       "availabilityReasons":{"totalWorkouts":"NO_SYNCED_WORKOUTS"}}"""
+        )
+
+        val availability = (gateway.progressSharing() as SocialProfileOutcome.Success).value.availability
+        assertTrue(availability.needsSync)
+    }
+
+    @Test
+    fun `um servidor de contrato futuro continua oferecendo tudo o que este APK conhece`() =
+        runBlocking {
+            val gateway = gatewayWith(
+                body = """{"contractVersion":7,"settings":{},"availability":{},
+                           "algumaCoisaNova":{"x":1}}"""
+            )
+
+            val sharing = (gateway.progressSharing() as SocialProfileOutcome.Success).value
+            assertEquals(7, sharing.contractVersion)
+            assertTrue(ProgressSharingField.entries.all { it.isSupportedBy(sharing.contractVersion) })
         }
 
     @Test

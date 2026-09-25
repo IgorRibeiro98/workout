@@ -1,9 +1,11 @@
 package com.example.presentation.account
 
 import com.example.domain.social.FriendSocialProfile
+import com.example.domain.social.PROGRESS_SHARING_CONTRACT_VERSION
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SocialProfileError
+import com.example.domain.social.SocialSyncResult
 
 /**
  * O estado do perfil social enriquecido na tela (T17.2).
@@ -82,6 +84,27 @@ sealed interface ProgressSharingPhase {
 }
 
 /**
+ * "Sincronizar dados" em "Compartilhar progresso" (T19.H5 §13–§17).
+ *
+ * Separado de [ProgressSharingPhase] e do "↻" (`isSharingRefreshing`) porque são ações diferentes:
+ * o "↻" relê o servidor; isto roda o ciclo de sync da T16 e **depois** relê.
+ */
+sealed interface SharingDataSync {
+
+    /** Nada foi pedido nesta tela. */
+    data object Idle : SharingDataSync
+
+    /** O ciclo — e, se ele rodou, a releitura — está em andamento. */
+    data object Running : SharingDataSync
+
+    /**
+     * Terminou assim. [reread]: a tela foi relida depois do ciclo, então o que ela mostra já é o que
+     * o servidor projeta com os treinos que chegaram. Sem releitura, a frase manda tocar no "↻".
+     */
+    data class Finished(val result: SocialSyncResult, val reread: Boolean) : SharingDataSync
+}
+
+/**
  * O que a UI do perfil social precisa saber.
  *
  * Tudo aqui é **cache de leitura**, não fonte de verdade — a autoridade é o Spark Backend. Vive só
@@ -103,6 +126,15 @@ data class SocialProfileUiState(
     val sharingPhase: ProgressSharingPhase = ProgressSharingPhase.Idle,
     val settings: ProgressSharingSettings = ProgressSharingSettings(),
     val availability: ProgressSharingAvailability = ProgressSharingAvailability(),
+    /**
+     * O contrato que o servidor declarou na última leitura (T19.H5). Abaixo de
+     * [PROGRESS_SHARING_CONTRACT_VERSION], a tela esconde os grupos que ele não conhece e diz isso
+     * uma vez — em vez de oferecer interruptores que ele recusaria.
+     */
+    val contractVersion: Int = PROGRESS_SHARING_CONTRACT_VERSION,
+    /** Este build sincroniza (há `SyncCoordinator`)? Sem isso, "Sincronizar dados" não é oferecido. */
+    val canSyncData: Boolean = false,
+    val dataSync: SharingDataSync = SharingDataSync.Idle,
 
     /**
      * A prévia do que um amigo veria de mim — a mesma resposta do servidor, pelo mesmo caminho.

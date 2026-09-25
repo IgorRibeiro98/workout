@@ -1,14 +1,18 @@
 package com.example.data.social
 
 import com.example.domain.social.FriendSocialProfile
+import com.example.domain.social.LEGACY_PROGRESS_SHARING_CONTRACT_VERSION
+import com.example.domain.social.PROGRESS_SHARING_CONTRACT_VERSION
 import com.example.domain.social.ProgressSharing
 import com.example.domain.social.ProgressSharingAvailability
 import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
+import com.example.domain.social.SocialAvailabilityReason
 import com.example.domain.social.SocialConsistencyParameters
 import com.example.domain.social.SocialFieldAvailability
 import com.example.domain.social.SocialWeeklyGoal
+import com.example.domain.social.isSupportedBy
 import kotlinx.serialization.Serializable
 
 /**
@@ -115,10 +119,36 @@ data class ProgressSharingAvailabilityDto(
     val totalWorkouts: String? = null
 )
 
+/**
+ * O motivo de cada campo indisponível (T19.H5), com as mesmas chaves de
+ * [ProgressSharingAvailabilityDto]. Um mapa ao lado — e não `{ status, reason }` dentro — porque é
+ * a forma que os APKs anteriores continuam lendo sem quebrar.
+ */
+@Serializable
+data class ProgressSharingAvailabilityReasonsDto(
+    val level: String? = null,
+    val consistencyStreak: String? = null,
+    val weeklyWorkoutCount: String? = null,
+    val highlightedAchievements: String? = null,
+    val weeklyTrainingMinutes: String? = null,
+    val weeklyCompletedSets: String? = null,
+    val weeklyVolume: String? = null,
+    val totalWorkouts: String? = null
+)
+
+/**
+ * `GET`/`PATCH /v1/social/me/progress-sharing`.
+ *
+ * [contractVersion] ausente é o servidor anterior à T19.H5, e ele é lido como v1 (ver
+ * [PROGRESS_SHARING_CONTRACT_VERSION]): um campo ausente não pode mais ser confundido com
+ * "ainda não disponível" quando o servidor simplesmente não conhece o recurso.
+ */
 @Serializable
 data class ProgressSharingResponseDto(
+    val contractVersion: Int? = null,
     val settings: ProgressSharingSettingsDto,
-    val availability: ProgressSharingAvailabilityDto = ProgressSharingAvailabilityDto()
+    val availability: ProgressSharingAvailabilityDto = ProgressSharingAvailabilityDto(),
+    val availabilityReasons: ProgressSharingAvailabilityReasonsDto = ProgressSharingAvailabilityReasonsDto()
 )
 
 /**
@@ -219,8 +249,64 @@ fun SharedProgressDto.toDomain(): SharedProgress = SharedProgress(
     totalWorkouts = totalWorkouts
 )
 
-fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
-    settings = ProgressSharingSettings(
+fun ProgressSharingResponseDto.toDomain(): ProgressSharing {
+    // Sem declaração, é o servidor anterior à T19.H5 — v1, mesmo que ele por acaso já conheça os
+    // campos da T19.H3. Supor o contrário foi o que fez a tela oferecer interruptores que aquele
+    // servidor recusava.
+    val version = contractVersion ?: LEGACY_PROGRESS_SHARING_CONTRACT_VERSION
+    val statuses = mapOf(
+        ProgressSharingField.LEVEL to availability.level,
+        ProgressSharingField.CONSISTENCY_STREAK to availability.consistencyStreak,
+        ProgressSharingField.WEEKLY_WORKOUT_COUNT to availability.weeklyWorkoutCount,
+        ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS to availability.highlightedAchievements,
+        ProgressSharingField.WEEKLY_TRAINING_MINUTES to availability.weeklyTrainingMinutes,
+        ProgressSharingField.WEEKLY_COMPLETED_SETS to availability.weeklyCompletedSets,
+        ProgressSharingField.WEEKLY_VOLUME to availability.weeklyVolume,
+        ProgressSharingField.TOTAL_WORKOUTS to availability.totalWorkouts
+    ).mapValues { (field, raw) ->
+        // Um campo que o servidor não declarou conhecer não é "ainda não disponível": é um
+        // recurso que ele não tem. Sincronizar nunca resolveria.
+        if (field.isSupportedBy(version)) parseAvailability(raw) else SocialFieldAvailability.UNSUPPORTED
+    }
+    val rawReasons = mapOf(
+        ProgressSharingField.LEVEL to availabilityReasons.level,
+        ProgressSharingField.CONSISTENCY_STREAK to availabilityReasons.consistencyStreak,
+        ProgressSharingField.WEEKLY_WORKOUT_COUNT to availabilityReasons.weeklyWorkoutCount,
+        ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS to availabilityReasons.highlightedAchievements,
+        ProgressSharingField.WEEKLY_TRAINING_MINUTES to availabilityReasons.weeklyTrainingMinutes,
+        ProgressSharingField.WEEKLY_COMPLETED_SETS to availabilityReasons.weeklyCompletedSets,
+        ProgressSharingField.WEEKLY_VOLUME to availabilityReasons.weeklyVolume,
+        ProgressSharingField.TOTAL_WORKOUTS to availabilityReasons.totalWorkouts
+    )
+    val reasons = buildMap {
+        for ((field, status) in statuses) {
+            when {
+                !field.isSupportedBy(version) -> put(field, SocialAvailabilityReason.LEGACY_BACKEND)
+                status == SocialFieldAvailability.UNAVAILABLE ->
+                    parseReason(rawReasons[field])?.let { put(field, it) }
+                else -> Unit
+            }
+        }
+    }
+    return ProgressSharing(
+        settings = settingsToDomain(),
+        availability = ProgressSharingAvailability(
+            level = statuses.getValue(ProgressSharingField.LEVEL),
+            consistencyStreak = statuses.getValue(ProgressSharingField.CONSISTENCY_STREAK),
+            weeklyWorkoutCount = statuses.getValue(ProgressSharingField.WEEKLY_WORKOUT_COUNT),
+            highlightedAchievements = statuses.getValue(ProgressSharingField.HIGHLIGHTED_ACHIEVEMENTS),
+            weeklyTrainingMinutes = statuses.getValue(ProgressSharingField.WEEKLY_TRAINING_MINUTES),
+            weeklyCompletedSets = statuses.getValue(ProgressSharingField.WEEKLY_COMPLETED_SETS),
+            weeklyVolume = statuses.getValue(ProgressSharingField.WEEKLY_VOLUME),
+            totalWorkouts = statuses.getValue(ProgressSharingField.TOTAL_WORKOUTS),
+            reasons = reasons
+        ),
+        contractVersion = version
+    )
+}
+
+private fun ProgressSharingResponseDto.settingsToDomain(): ProgressSharingSettings =
+    ProgressSharingSettings(
         shareLevel = settings.shareLevel,
         shareConsistencyStreak = settings.shareConsistencyStreak,
         shareWeeklyWorkoutCount = settings.shareWeeklyWorkoutCount,
@@ -239,18 +325,7 @@ fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
         weekTimeZone = settings.weekTimeZone,
         consistency = settings.consistency?.toDomain(),
         updatedAt = settings.updatedAt
-    ),
-    availability = ProgressSharingAvailability(
-        level = parseAvailability(availability.level),
-        consistencyStreak = parseAvailability(availability.consistencyStreak),
-        weeklyWorkoutCount = parseAvailability(availability.weeklyWorkoutCount),
-        highlightedAchievements = parseAvailability(availability.highlightedAchievements),
-        weeklyTrainingMinutes = parseAvailability(availability.weeklyTrainingMinutes),
-        weeklyCompletedSets = parseAvailability(availability.weeklyCompletedSets),
-        weeklyVolume = parseAvailability(availability.weeklyVolume),
-        totalWorkouts = parseAvailability(availability.totalWorkouts)
     )
-)
 
 /**
  * Um valor de disponibilidade que este APK não conhece vira [SocialFieldAvailability.UNAVAILABLE].
@@ -262,3 +337,18 @@ fun ProgressSharingResponseDto.toDomain(): ProgressSharing = ProgressSharing(
 private fun parseAvailability(raw: String?): SocialFieldAvailability =
     SocialFieldAvailability.entries.firstOrNull { it.name == raw }
         ?: SocialFieldAvailability.UNAVAILABLE
+
+/**
+ * Um motivo do servidor (T19.H5). Desconhecido vira [SocialAvailabilityReason.UNKNOWN] — a tela diz
+ * menos em vez de adivinhar. Os dois motivos que só o app deriva não são aceitos do corpo: um
+ * servidor não diz de si mesmo que é antigo.
+ */
+private fun parseReason(raw: String?): SocialAvailabilityReason? {
+    if (raw == null) return null
+    val known = SocialAvailabilityReason.entries.firstOrNull { it.name == raw }
+    return when (known) {
+        null, SocialAvailabilityReason.LEGACY_BACKEND, SocialAvailabilityReason.UNKNOWN ->
+            SocialAvailabilityReason.UNKNOWN
+        else -> known
+    }
+}

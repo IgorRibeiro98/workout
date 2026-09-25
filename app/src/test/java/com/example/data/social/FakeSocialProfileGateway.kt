@@ -91,6 +91,20 @@ class FakeSocialProfileGateway(
     fun settingsOf(uid: String): ProgressSharingSettings =
         settingsByUid[uid] ?: ProgressSharingSettings()
 
+    /**
+     * O que o servidor passa a conseguir afirmar sobre [uid] — é assim que um teste simula o
+     * servidor reprojetando depois de uma sincronização (T19.H5).
+     */
+    fun setAvailability(uid: String, availability: ProgressSharingAvailability) {
+        availabilityByUid[uid] = availability
+    }
+
+    /**
+     * A versão de contrato que este "servidor" declara (T19.H5). `1` é o servidor anterior à
+     * T19.H5: o gateway real a deriva da ausência de `contractVersion`, e o dublê responde igual.
+     */
+    var contractVersion: Int = com.example.domain.social.PROGRESS_SHARING_CONTRACT_VERSION
+
     // ------------------------------------------------------------------ o "servidor"
 
     override suspend fun friendProfile(
@@ -118,8 +132,24 @@ class FakeSocialProfileGateway(
 
     override suspend fun progressSharing(): SocialProfileOutcome<ProgressSharing> = respond {
         val uid = currentUid ?: return@respond fail(SocialProfileError.AUTH_REQUIRED)
-        SocialProfileOutcome.Success(sharingOf(uid))
+        // O estado do momento do **pedido**: é o que uma resposta atrasada de verdade carrega.
+        val snapshot = sharingOf(uid)
+        sharingReadGate?.let { gate ->
+            sharingReadGate = null
+            gate.await()
+        }
+        SocialProfileOutcome.Success(snapshot)
     }
+
+    /**
+     * Quando presente, a **próxima** leitura de "Compartilhar progresso" responde o estado do
+     * momento em que foi pedida, mas só depois deste portão (T19.H5 §41).
+     *
+     * É o que prova que uma leitura que saiu antes de um `PATCH` — ou antes de "Sincronizar dados"
+     * — e voltou depois dele não desfaz na tela o que o servidor acabou de gravar. Com o [gate]
+     * comum isso não é observável: ele segura a requisição **antes** de ela ler o estado.
+     */
+    var sharingReadGate: CompletableDeferred<Unit>? = null
 
     override suspend fun updateProgressSharing(
         changes: Map<ProgressSharingField, Boolean>,
@@ -131,6 +161,7 @@ class FakeSocialProfileGateway(
             settings.with(field, value)
         }
         consistencyUpdates += consistency
+        weekTimeZoneUpdates += weekTimeZone
         sentChanges += changes
         // Semântica de PATCH: o que não veio não muda. E `updatedAt` é do "servidor".
         settingsByUid[uid] = current.copy(
@@ -150,6 +181,9 @@ class FakeSocialProfileGateway(
 
     /** As mudanças de interruptor de cada `PATCH`, na ordem (T19.H3). */
     val sentChanges = mutableListOf<Map<ProgressSharingField, Boolean>>()
+
+    /** O fuso de cada `PATCH` (`null` = não veio). Prova quando o app o declara (T19.H5). */
+    val weekTimeZoneUpdates = mutableListOf<String?>()
 
     // ------------------------------------------------------------------ regras do dublê
 
@@ -193,7 +227,8 @@ class FakeSocialProfileGateway(
 
     private fun sharingOf(uid: String) = ProgressSharing(
         settings = settingsOf(uid),
-        availability = availabilityByUid[uid] ?: ProgressSharingAvailability()
+        availability = availabilityByUid[uid] ?: ProgressSharingAvailability(),
+        contractVersion = contractVersion
     )
 
     private suspend fun <T> respond(

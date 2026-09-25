@@ -2,9 +2,13 @@ package com.example.presentation.friends
 
 import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingGroup
+import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SharedProgress
+import com.example.domain.social.SocialAvailabilityReason
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.SocialFieldAvailabilityDetail
 import com.example.domain.social.SocialProfileError
+import com.example.domain.social.SocialSyncResult
 
 /**
  * O texto de cada classe de falha e de cada disponibilidade do perfil social (T17.2).
@@ -81,22 +85,112 @@ fun availabilityLabel(availability: SocialFieldAvailability): String = when (ava
     SocialFieldAvailability.UNSUPPORTED -> "Em breve"
 }
 
-/** A explicação de por que um campo não está disponível. `null` quando ele está. */
-fun availabilityHint(availability: SocialFieldAvailability): String? = when (availability) {
-    SocialFieldAvailability.AVAILABLE -> null
+/**
+ * A explicação de por que um campo não está disponível — pelo **motivo**, e não uma frase só para
+ * todos (T19.H5 §12). `null` quando ele está disponível.
+ *
+ * Até a T19.H3 todo `UNAVAILABLE` dizia "Seu progresso compartilhado é atualizado depois da
+ * sincronização", e sincronizar não resolvia metade dos casos: fuso e meta semanal são o app quem
+ * declara, e o teto de leitura não se resolve com sync nenhum.
+ *
+ * [syncConfirmed]: um "Sincronizar dados" desta tela terminou e a releitura veio. Aí
+ * `NO_SYNCED_WORKOUTS` deixa de ser "sincronize" — já sincronizou — e passa a ser o que é: o
+ * servidor não tem treino concluído desta conta.
+ */
+fun availabilityHint(detail: SocialFieldAvailabilityDetail, syncConfirmed: Boolean = false): String? =
+    when (detail.status) {
+        SocialFieldAvailability.AVAILABLE -> null
 
-    // O caso real: a conta ainda não sincronizou treino concluído nenhum, ou o servidor ainda não
-    // conhece o fuso e a meta semanal desta pessoa. Tudo se resolve sincronizando e abrindo esta
-    // tela conectado.
-    SocialFieldAvailability.UNAVAILABLE ->
-        "Seu progresso compartilhado é atualizado depois da sincronização."
+        SocialFieldAvailability.UNAVAILABLE ->
+            availabilityReasonHint(detail.reason ?: SocialAvailabilityReason.UNKNOWN, syncConfirmed)
 
-    // O caso estrutural: esta informação ainda não tem autoridade remota (T19.H0). Não é a versão
-    // do app, não é uma sincronização pendente e não há prazo — só não pode ser afirmada por
-    // enquanto.
-    SocialFieldAvailability.UNSUPPORTED ->
-        "Esta informação ainda não pode ser compartilhada."
-}
+        // O caso estrutural: esta informação não tem autoridade remota (T19.H0). Não é a versão do
+        // app, não é uma sincronização pendente e não há prazo. O servidor legado (T19.H5) também
+        // chega aqui, mas a tela o mostra como aviso único do grupo, e não campo a campo.
+        SocialFieldAvailability.UNSUPPORTED ->
+            if (detail.reason == SocialAvailabilityReason.LEGACY_BACKEND) LEGACY_BACKEND_MESSAGE
+            else "Esta informação ainda não pode ser compartilhada."
+    }
+
+/** A frase de cada motivo de `UNAVAILABLE` (T19.H5). */
+fun availabilityReasonHint(reason: SocialAvailabilityReason, syncConfirmed: Boolean = false): String =
+    when (reason) {
+        SocialAvailabilityReason.NO_SYNCED_WORKOUTS ->
+            if (syncConfirmed) {
+                "Nenhum treino concluído chegou ao servidor ainda. Conclua um treino para " +
+                    "disponibilizar este dado."
+            } else {
+                "Sincronize seus treinos para disponibilizar este dado."
+            }
+
+        // O app declara o fuso sozinho ao ler esta tela com conexão; sobrar este motivo significa
+        // que a declaração não chegou — e o "↻" tenta de novo.
+        SocialAvailabilityReason.WEEK_TIME_ZONE_MISSING ->
+            "Precisamos atualizar sua configuração de semana. Com conexão isso é feito sozinho — " +
+                "toque em ↻."
+
+        SocialAvailabilityReason.CONSISTENCY_PARAMETERS_MISSING ->
+            "Precisamos enviar sua meta semanal ao servidor. Com conexão isso é feito sozinho — " +
+                "toque em ↻."
+
+        SocialAvailabilityReason.SOURCE_LIMIT_REACHED ->
+            "Há mais treinos nesta semana do que o servidor soma de uma vez. Este dado volta na " +
+                "próxima semana."
+
+        SocialAvailabilityReason.LEGACY_BACKEND -> LEGACY_BACKEND_MESSAGE
+
+        SocialAvailabilityReason.UNKNOWN -> "O servidor ainda não consegue calcular este dado."
+    }
+
+/**
+ * O servidor não declarou conhecer os grupos da T19.H3 (contrato abaixo de 2). Não é "ainda não
+ * disponível" — sincronizar não resolve —, e os interruptores não aparecem, porque o servidor os
+ * recusaria (T19.H5 §8).
+ */
+const val LEGACY_BACKEND_MESSAGE = "Este recurso ainda não está disponível no servidor atual."
+
+/** O título do aviso único que substitui os grupos que o servidor legado não conhece. */
+const val LEGACY_BACKEND_TITLE = "Estatísticas de treino e detalhes dos check-ins"
+
+// ------------------------------------------------------------------ Sincronizar dados (T19.H5)
+
+const val SYNC_DATA_BUTTON = "Sincronizar dados"
+const val SYNC_DATA_RUNNING = "Sincronizando..."
+const val SYNC_DATA_TITLE = "Seus treinos no servidor"
+const val SYNC_DATA_DESCRIPTION =
+    "O que você compartilha é calculado pelo servidor a partir dos treinos sincronizados. " +
+        "Sincronizar envia os treinos deste aparelho; o ↻ só relê o servidor."
+
+/**
+ * O que aconteceu com o "Sincronizar dados" (T19.H5 §17). Uma frase para cada desfecho — o que
+ * não pode existir é o spinner que volta ao mesmo estado sem explicação.
+ *
+ * [stillMissing]: depois da releitura, algum campo ainda falta por falta de treino no servidor.
+ */
+fun syncDataResultMessage(result: SocialSyncResult, reread: Boolean, stillMissing: Boolean): String =
+    when (result) {
+        SocialSyncResult.SYNCED -> when {
+            !reread -> "Sincronização concluída. Toque em ↻ para ver os dados atualizados."
+            stillMissing ->
+                "Sincronização concluída, mas nenhum treino concluído desta conta chegou ao " +
+                    "servidor. Conclua um treino para disponibilizar estes dados."
+            else -> "Dados sincronizados. O que está acima já é o que o servidor calcula."
+        }
+        SocialSyncResult.NEEDS_ATTENTION ->
+            "A sincronização terminou, mas alguns itens precisam de atenção. Veja Sincronização, " +
+                "no Perfil."
+        SocialSyncResult.NOT_ENABLED ->
+            "Este aparelho ainda não sincroniza com a Conta Spark. Ative o backup no Perfil para " +
+                "seus treinos chegarem ao servidor."
+        SocialSyncResult.AUTH_REQUIRED -> "Entre na Conta Spark para sincronizar."
+        SocialSyncResult.ACCOUNT_MISMATCH ->
+            "Os treinos deste aparelho pertencem a outra Conta Spark, então nada foi enviado."
+        SocialSyncResult.OFFLINE ->
+            "Sem conexão, então nada foi sincronizado. Seus treinos continuam salvos no aparelho."
+        SocialSyncResult.FAILED -> "Não foi possível sincronizar agora. Tente de novo em instantes."
+        SocialSyncResult.ALREADY_RUNNING ->
+            "Já há uma sincronização em andamento. Toque em ↻ em instantes para ver o resultado."
+    }
 
 /**
  * O que os amigos veem do nível (T19.2C).
@@ -145,6 +239,28 @@ fun progressSharingLabel(field: ProgressSharingField): String = when (field) {
     ProgressSharingField.WORKOUT_WEIGHTS -> "Cargas utilizadas"
     ProgressSharingField.WORKOUT_VOLUME -> "Volume total"
 }
+
+/**
+ * Uma frase sobre o **significado** do campo, quando ele não é óbvio pelo rótulo — e, para
+ * "Cargas utilizadas", sobre o **efeito** dele agora (T19.H5 §29).
+ *
+ * "Cargas" ligada sem Exercícios e Séries e repetições não publica nada: a carga mora dentro da
+ * série. O servidor já não a publica nesse estado; a tela precisa dizer isso, senão o interruptor
+ * ligado parece prometer um dado que nenhum amigo vê.
+ */
+fun progressSharingNote(field: ProgressSharingField, settings: ProgressSharingSettings): String? =
+    if (field == ProgressSharingField.WORKOUT_WEIGHTS &&
+        settings.shareWorkoutWeights &&
+        !(settings.shareWorkoutExercises && settings.shareWorkoutSets)
+    ) {
+        WEIGHTS_WITHOUT_EFFECT_NOTE
+    } else {
+        progressSharingNote(field)
+    }
+
+/** "Cargas" ligada sem as dependências (T19.H5 §29). */
+const val WEIGHTS_WITHOUT_EFFECT_NOTE =
+    "Sem efeito agora: ligue Exercícios e Séries e repetições para as cargas aparecerem."
 
 /** Uma frase sobre o **significado** do campo, quando ele não é óbvio pelo rótulo. */
 fun progressSharingNote(field: ProgressSharingField): String? = when (field) {

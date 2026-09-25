@@ -339,8 +339,9 @@ class SocialProfileViewModelTest {
         awaitSharing(viewModel) { it is ProgressSharingPhase.Ready }
 
         assertTrue(viewModel.uiState.value.settings.shareWeeklyWorkoutCount)
-        // O fuso viaja junto na primeira alteração: sem ele o servidor não conseguiria usar a
-        // mesma semana canônica da tela de consistência.
+        // O fuso chegou ao servidor — desde a T19.H5 já na abertura da tela, e antes dela na
+        // primeira alteração: sem ele o servidor não usaria a mesma semana canônica da tela de
+        // consistência.
         assertEquals(gateway.settingsOf(UID_A).weekTimeZone, viewModel.uiState.value.settings.weekTimeZone)
         assertTrue(viewModel.uiState.value.settings.weekTimeZone != null)
         // E os outros três não foram tocados: a semântica é de PATCH.
@@ -666,6 +667,15 @@ class SocialProfileViewModelTest {
 
     @Test
     fun `sem parametros locais nada e enviado — e abrir a tela continua sendo uma leitura so`() = runBlocking {
+        // O servidor já conhece o fuso: sem nada a declarar, abrir é uma leitura só. Com o fuso
+        // desconhecido, a abertura o declara (T19.H5) — ver SocialProfileSharingAvailabilityTest.
+        gateway.register(
+            uid = UID_A,
+            socialId = SOCIAL_A,
+            displayName = "Ana",
+            availability = allAvailable(),
+            settings = ProgressSharingSettings(weekTimeZone = "America/Sao_Paulo")
+        )
         gateway.currentUid = UID_A
         val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { null }
         viewModel.openProgressSharing()
@@ -683,7 +693,10 @@ class SocialProfileViewModelTest {
             socialId = SOCIAL_A,
             displayName = "Ana",
             availability = allAvailable(),
-            settings = ProgressSharingSettings(consistency = localParameters)
+            settings = ProgressSharingSettings(
+                weekTimeZone = "America/Sao_Paulo",
+                consistency = localParameters
+            )
         )
         gateway.currentUid = UID_A
         val viewModel = viewModel(FakeAuthGateway(initialAccount = accountA)) { localParameters }

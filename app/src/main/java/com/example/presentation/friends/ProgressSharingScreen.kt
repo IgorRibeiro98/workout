@@ -39,8 +39,11 @@ import com.example.domain.social.ProgressSharingField
 import com.example.domain.social.ProgressSharingGroup
 import com.example.domain.social.ProgressSharingSettings
 import com.example.domain.social.SocialFieldAvailability
+import com.example.domain.social.SocialFieldAvailabilityDetail
+import com.example.domain.social.SocialSyncResult
 import com.example.domain.social.isShared
 import com.example.presentation.account.ProgressSharingPhase
+import com.example.presentation.account.SharingDataSync
 import com.example.presentation.account.SocialProfileUiState
 import com.example.presentation.account.SocialProfileViewModel
 import com.example.ui.theme.BackgroundDark
@@ -68,6 +71,8 @@ const val PREVIEW_EMPTY_MESSAGE =
  * ```text
  * Compartilhar progresso
  *
+ * [ Seus treinos no servidor · Sincronizar dados ]   ← T19.H5: só quando falta treino no servidor
+ *
  * PROGRESSO GERAL
  * Nível · Consistência semanal · Treinos da semana · Conquistas em destaque
  *
@@ -83,6 +88,9 @@ const val PREVIEW_EMPTY_MESSAGE =
  * Todos começam desligados (a migration do servidor criou os onze novos desligados para quem já
  * existia). "Cargas utilizadas" depende de "Exercícios" e "Séries e repetições" — ver
  * [dependencyMet].
+ *
+ * Um servidor que não declara `contractVersion` 2 (T19.H5) não conhece os dois últimos grupos: no
+ * lugar deles aparece um aviso só, e nenhum interruptor que ele recusaria.
  *
  * ## Interruptor e disponibilidade são coisas diferentes
  *
@@ -164,7 +172,8 @@ fun ProgressSharingScreen(
                 uiState = uiState,
                 onToggle = viewModel::setShare,
                 onPreview = viewModel::loadPreview,
-                onRetry = viewModel::refreshProgressSharing
+                onRetry = viewModel::refreshProgressSharing,
+                onSyncData = viewModel::syncData
             )
         }
     }
@@ -176,7 +185,8 @@ internal fun ProgressSharingBody(
     uiState: SocialProfileUiState,
     onToggle: (ProgressSharingField, Boolean) -> Unit = { _, _ -> },
     onPreview: () -> Unit = {},
-    onRetry: () -> Unit = {}
+    onRetry: () -> Unit = {},
+    onSyncData: () -> Unit = {}
 ) {
     if (!uiState.isConfigured) {
         Message(
@@ -212,7 +222,10 @@ internal fun ProgressSharingBody(
         }
 
         ProgressSharingPhase.Ready, ProgressSharingPhase.Saving -> {
-            val enabled = phase == ProgressSharingPhase.Ready
+            // Durante "Sincronizar dados" os interruptores esperam: a releitura depois do ciclo e
+            // um `PATCH` cruzados poderiam deixar na tela o interruptor anterior ao toque.
+            val enabled = phase == ProgressSharingPhase.Ready &&
+                uiState.dataSync !is SharingDataSync.Running
 
             Text(
                 text = "Escolha o que seus amigos podem ver. Tudo começa desligado, e nada é " +
@@ -221,9 +234,31 @@ internal fun ProgressSharingBody(
                 fontSize = 13.sp
             )
 
+            // T19.H5 §13: quando o que falta é treino no servidor — e só então, ou para mostrar o
+            // resultado de uma sincronização desta tela —, a ação que resolve fica à mão.
+            if (uiState.canSyncData &&
+                (uiState.availability.needsSync || uiState.dataSync !is SharingDataSync.Idle)
+            ) {
+                SyncDataCard(
+                    dataSync = uiState.dataSync,
+                    stillMissing = uiState.availability.needsSync,
+                    enabled = phase == ProgressSharingPhase.Ready,
+                    onSyncData = onSyncData
+                )
+            }
+
+            // A releitura depois de um "Sincronizar dados" que o servidor confirmou: aí "sem treino
+            // no servidor" deixa de ser "sincronize" e passa a ser "não há treino".
+            val syncConfirmed = (uiState.dataSync as? SharingDataSync.Finished)
+                ?.let { it.result == SocialSyncResult.SYNCED && it.reread } == true
+
             // Os três grupos da T19.H3 (§23), na ordem do enum. Um grupo é um título, uma frase
-            // sobre onde aquilo aparece e para quem, e os interruptores dele.
-            ProgressSharingGroup.entries.forEach { group ->
+            // sobre onde aquilo aparece e para quem, e os interruptores dele. Um grupo que o
+            // servidor não declarou conhecer (T19.H5) não oferece interruptor nenhum: o `PATCH`
+            // seria recusado. Os grupos assim viram **um** aviso só.
+            val (supported, unknownToServer) = ProgressSharingGroup.entries
+                .partition { uiState.contractVersion >= it.sinceContractVersion }
+            supported.forEach { group ->
                 GroupHeader(
                     title = progressSharingGroupTitle(group),
                     description = progressSharingGroupDescription(group)
@@ -232,12 +267,16 @@ internal fun ProgressSharingBody(
                     SharingToggle(
                         label = progressSharingLabel(field),
                         checked = uiState.settings.isShared(field),
-                        availability = uiState.availability.of(field),
+                        detail = uiState.availability.detailOf(field),
                         enabled = enabled && dependencyMet(field, uiState.settings),
                         onCheckedChange = { onToggle(field, it) },
-                        note = progressSharingNote(field)
+                        note = progressSharingNote(field, uiState.settings),
+                        syncConfirmed = syncConfirmed
                     )
                 }
+            }
+            if (unknownToServer.isNotEmpty()) {
+                LegacyBackendNotice()
             }
 
             if (phase == ProgressSharingPhase.Saving) {
@@ -307,13 +346,19 @@ internal fun dependencyMet(field: ProgressSharingField, settings: ProgressSharin
 private fun SharingToggle(
     label: String,
     checked: Boolean,
-    /** `null` para os detalhes de check-in: dependem de cada publicação, não do perfil. */
-    availability: SocialFieldAvailability?,
+    /**
+     * Estado e motivo (T19.H5). `null` para os detalhes de check-in: são preferência de
+     * privacidade, sem disponibilidade global — dependem de cada publicação, não do perfil.
+     */
+    detail: SocialFieldAvailabilityDetail?,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     /** Uma frase sobre o **significado** do campo publicado, quando ele difere do local. */
-    note: String? = null
+    note: String? = null,
+    /** Um "Sincronizar dados" desta tela já terminou e a releitura veio — ver [availabilityHint]. */
+    syncConfirmed: Boolean = false
 ) {
+    val availability = detail?.status
     val switchEnabled = enabled && availability != SocialFieldAvailability.UNSUPPORTED
     Surface(
         color = SurfaceDark,
@@ -342,15 +387,16 @@ private fun SharingToggle(
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
-                if (availability != null) {
+                if (detail != null) {
                     Text(
-                        text = availabilityLabel(availability),
+                        text = availabilityLabel(detail.status),
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
-                    // A explicação só aparece quando há algo a explicar. "Disponível" não precisa
-                    // de uma linha dizendo que está tudo bem.
-                    availabilityHint(availability)?.let { hint ->
+                    // A explicação só aparece quando há algo a explicar, e é a do **motivo**
+                    // (T19.H5): "sincronize", "falta o fuso", "semana acima do limite" pedem coisas
+                    // diferentes. "Disponível" não precisa de uma linha dizendo que está tudo bem.
+                    availabilityHint(detail, syncConfirmed)?.let { hint ->
                         Text(text = hint, color = TextSecondary, fontSize = 11.sp)
                     }
                 }
@@ -366,6 +412,75 @@ private fun SharingToggle(
         }
     }
 }
+
+/**
+ * "Sincronizar dados" (T19.H5 §13–§17): aparece quando o que falta é treino no servidor, e continua
+ * na tela com o resultado depois de um toque.
+ *
+ * É o ciclo da T16 — o mesmo do "Sincronizar agora" do Perfil. O "↻" da barra continua só
+ * relendo o servidor: são ações diferentes, e o texto diz isso.
+ */
+@Composable
+private fun SyncDataCard(
+    dataSync: SharingDataSync,
+    stillMissing: Boolean,
+    enabled: Boolean,
+    onSyncData: () -> Unit
+) {
+    Surface(
+        color = SurfaceDark,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, BorderLight),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(SYNC_DATA_CARD_TAG)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = SYNC_DATA_TITLE,
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            Text(text = SYNC_DATA_DESCRIPTION, color = TextSecondary, fontSize = 13.sp)
+            when (dataSync) {
+                SharingDataSync.Running -> Busy(SYNC_DATA_RUNNING)
+                else -> {
+                    if (dataSync is SharingDataSync.Finished) {
+                        Text(
+                            text = syncDataResultMessage(dataSync.result, dataSync.reread, stillMissing),
+                            color = TextPrimary,
+                            fontSize = 13.sp
+                        )
+                    }
+                    // Depois de um desfecho que ainda deixa treino faltando, sincronizar de novo
+                    // continua sendo a ação que resolve — o treino pode ter sido concluído agora.
+                    if (stillMissing || dataSync !is SharingDataSync.Finished) {
+                        PrimaryButton(text = SYNC_DATA_BUTTON, onClick = onSyncData, enabled = enabled)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * O servidor não declarou conhecer as estatísticas e os detalhes da T19.H3 (T19.H5 §8): um aviso
+ * só, no lugar dos onze interruptores que ele recusaria. Não é "Ainda não disponível" — sincronizar
+ * não resolve; resolve o servidor ser atualizado.
+ */
+@Composable
+private fun LegacyBackendNotice() {
+    Column(modifier = Modifier.testTag(LEGACY_BACKEND_NOTICE_TAG)) {
+        Message(title = LEGACY_BACKEND_TITLE, body = "$LEGACY_BACKEND_MESSAGE Nada foi alterado.")
+    }
+}
+
+internal const val SYNC_DATA_CARD_TAG = "progress_sharing_sync_data"
+internal const val LEGACY_BACKEND_NOTICE_TAG = "progress_sharing_legacy_backend"
 
 /**
  * A prévia: o que um amigo veria de mim **agora**.

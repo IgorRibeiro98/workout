@@ -10,15 +10,18 @@ package com.example.data.social
  * ## O que o app envia, e o que ele nunca envia
  *
  * ```text
- * ENVIA    shareLevel, shareConsistencyStreak, shareWeeklyWorkoutCount,
- *          shareHighlightedAchievements, weekTimeZone
+ * ENVIA    os quinze interruptores (T17.2 + T19.H3), weekTimeZone, consistency (T19.2A)
  *
- * NUNCA    level, streak, weeklyWorkoutCount, xp, conquistas obtidas
+ * NUNCA    level, streak, weeklyWorkoutCount, xp, conquistas obtidas, estatísticas de treino,
+ *          availabilityReasons, contractVersion
  * ```
  *
  * A segunda lista não é uma disciplina deste arquivo: o servidor **recusa a requisição inteira** se
  * qualquer um daqueles campos aparecer no corpo. O app não tem como afirmar progresso sobre si
  * mesmo, e é assim que "o perfil social do Igor diz nível 14" continua significando alguma coisa.
+ *
+ * Desde a T19.H5 a resposta declara `contractVersion`; sem ela, o servidor é tratado como v1 e os
+ * interruptores da T19.H3 não são enviados (ver `PROGRESS_SHARING_CONTRACT_VERSION`).
  */
 object SocialProfileContract {
 
