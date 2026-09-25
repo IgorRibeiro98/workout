@@ -224,7 +224,7 @@ Consequências que valem como contrato:
 | --- | --- |
 | `GET /v1/social/friends/{socialId}/profile` | o perfil enriquecido de um amigo |
 | `GET /v1/social/me/profile-preview` | exatamente o que um amigo veria de mim agora |
-| `GET /v1/social/me/progress-sharing` | minhas preferências + a disponibilidade de cada campo |
+| `GET /v1/social/me/progress-sharing` | minhas preferências + a disponibilidade de cada campo, o motivo de cada indisponível e a versão do contrato (T19.H5, §H5) |
 | `PATCH /v1/social/me/progress-sharing` | altera preferências (**parcial** — os quinze interruptores desde a T19.H3), o fuso e, desde a T19.2A, os parâmetros de consistência |
 
 Todas exigem `Authorization: Bearer <Firebase ID Token>`. **Não existe rota pública**, não existe
@@ -364,8 +364,10 @@ O cliente nunca envia valor: `weeklyVolumeKg`, `totalWorkouts`, `workoutSummary`
 | `shareTotalWorkouts` | `totalWorkouts` | `COUNT` de `WORKOUT_SESSION` `COMPLETED`, sem janela | ≥ 1 sessão (não depende de fuso) |
 
 A semana é a **mesma** de "Treinos da semana": segunda a domingo no fuso do dono, pelo `startedAt`.
-A leitura é bounded (100 sessões na semana); acima disso a métrica responde `UNAVAILABLE`, nunca
-uma soma truncada.
+A leitura é bounded (100 sessões na semana); acima disso a métrica responde `UNAVAILABLE` com
+motivo `SOURCE_LIMIT_REACHED` (T19.H5), nunca uma soma truncada. Zero é valor: com uma sessão
+sincronizada e fuso conhecido, uma semana sem treino publica `0` minutos, `0` séries e `0` kg, e
+uma semana só de peso corporal publica volume `0` (§H5.4).
 
 ### V3.2 Detalhes dos check-ins (`workoutSummary`)
 
@@ -413,6 +415,131 @@ O Feed faz três consultas por página para o resumo (escolhas dos autores; sess
 publicações cujos autores ligaram algum detalhe; fatos dessas sessões), independentemente do
 número de itens — há teste que compara 2 e 8 publicações. Um Feed de autores que não compartilham
 nada custa uma consulta a mais.
+
+## H5. Disponibilidade real, sync assistido e contrato versionado (T19.H5)
+
+### H5.0 O que aconteceu, e o que a T19.H5 corrigiu
+
+O deploy da T19.H3 (`02c1289`) falhou em 2026-09-24 no portão de procedência, e a produção ficou
+num backend anterior a ela até 2026-09-25 (`7a748db`, revision `spark-backend-00024-zan`, migration
+`0008` aplicada). O APK da T19.H3 falou com esse backend antigo e:
+
+- leu a falta de `weeklyTrainingMinutes`/`totalWorkouts`/... como `UNAVAILABLE` — "Ainda não
+  disponível" — para um recurso que o servidor **não conhecia**;
+- mandou `PATCH { shareWorkoutName: true }` e tomou `400 INVALID_PROGRESS_SETTINGS` (cinco nos
+  request logs de 2026-09-24T21:00Z, todos em `spark-backend-00022-jom`).
+
+O cálculo da T19.H3 estava certo: com o backend dela, `level AVAILABLE` implica sessão sincronizada,
+que implica `totalWorkouts AVAILABLE`. O defeito era o **contrato** não conseguir dizer "não conheço
+este recurso", e a tela não conseguir dizer **por que** um campo faltava.
+
+### H5.1 Versão explícita
+
+`GET`/`PATCH /v1/social/me/progress-sharing` respondem `contractVersion` (`2` hoje;
+`PROGRESS_SHARING_CONTRACT_VERSION` nos dois lados).
+
+| Versão | O que o servidor conhece |
+| --- | --- |
+| ausente → **v1** | T17.2 + T19.2: os quatro interruptores de progresso geral |
+| **2** | T19.H3: estatísticas de treino e detalhes dos check-ins; desde a T19.H5, `availabilityReasons` |
+
+O app lê **ausência como v1**, mesmo que o servidor por acaso conheça os campos da T19.H3 — supor
+que conhece foi o defeito. Com um servidor abaixo da versão de um grupo
+(`ProgressSharingGroup.sinceContractVersion`):
+
+- os interruptores do grupo **não aparecem**, e a ViewModel também não os envia;
+- a tela mostra **um** aviso para os grupos que faltam: "Este recurso ainda não está disponível no
+  servidor atual" — nunca "Ainda não disponível" campo a campo;
+- no domínio, esses campos são `UNSUPPORTED` com motivo `LEGACY_BACKEND` (derivado pelo app; um
+  motivo `LEGACY_BACKEND` vindo do servidor é lido como `UNKNOWN`).
+
+A versão sobe **só** quando o contrato ganha recurso que o app precisa saber se existe antes de
+oferecer. Campo opcional novo numa resposta não sobe: todo APK publicado lê com
+`ignoreUnknownKeys` (verificado de `6d29dab` a `abbfa28`).
+
+### H5.2 Motivo de cada indisponibilidade
+
+`availabilityReasons` é um mapa **ao lado** de `availability`, com as mesmas chaves, só para campos
+`UNAVAILABLE`. `availability` continua um mapa de strings — trocar para `{ status, reason }`
+quebraria a leitura inteira nos aparelhos antigos. No app, estado e motivo se juntam em
+`SocialFieldAvailabilityDetail`.
+
+| Motivo | Produtor (`social-progress.source.ts`) | Campos | O que resolve |
+| --- | --- | --- | --- |
+| `NO_SYNCED_WORKOUTS` | nenhuma `WORKOUT_SESSION` `COMPLETED` sem tombstone | todos os oito; conquistas só quando a lista sai vazia | "Sincronizar dados" |
+| `WEEK_TIME_ZONE_MISSING` | `weekTimeZone` ausente ou inválido | todos, exceto treinos totais | o app declara ao abrir a tela |
+| `CONSISTENCY_PARAMETERS_MISSING` | sem meta semanal/início do acompanhamento | nível, sequência | o app declara ao abrir a tela |
+| `SOURCE_LIMIT_REACHED` | mais de `MAX_WEEKLY_SESSIONS_FOR_TRAINING_STATS` sessões na semana | minutos, séries, volume | a próxima semana |
+
+Precedência, quando mais de um vale: **fuso → sessão → parâmetros → teto**. O fuso vem primeiro
+porque é o primeiro elo do caminho e o app o corrige sozinho.
+
+Investigados e **não** criados, por não corresponderem a estado real: `NO_RECONSTRUCTABLE_DATA` (com
+uma sessão, `first_workout` sempre é obtida; com uma medição, `first_measurement` — lista vazia só
+existe sem sync, e um teste prende essa premissa ao catálogo) e `TEMPORARILY_UNAVAILABLE` (nenhuma
+falha parcial da projeção é transformada em disponibilidade; uma falha de banco é `5xx` da leitura
+inteira). `NEEDS_SYNC` é a **ação** que o app oferece para `NO_SYNCED_WORKOUTS`, não um motivo do
+servidor: só o aparelho sabe se tem treino a enviar — e, depois de um "Sincronizar dados" bem-
+sucedido, a frase muda para "Nenhum treino concluído chegou ao servidor ainda".
+
+A montagem sem fonte de fatos (dublê de agregados) responde as estatísticas da semana como
+`UNSUPPORTED`: aquela instância não tem de onde ler séries. Produção sempre injeta a fonte.
+
+### H5.3 Sincronizar dados ≠ ↻
+
+| Ação | O que faz | O que nunca faz |
+| --- | --- | --- |
+| **↻** (`refreshProgressSharing`) | relê o servidor; declara fuso/parâmetros que ele não conhece | enviar treino, rodar ciclo de sync |
+| **Sincronizar dados** (`syncData`) | roda o ciclo da T16 (`SyncCoordinator.runOnce`) e, se ele rodou, relê | rodar sozinho, rodar ao abrir a tela |
+
+- **Não existe sync social.** A ViewModel recebe `suspend () -> SocialSyncResult`, montada em
+  `MainViewModelFactory` por `runSocialAssistedSync` (`presentation/SocialAssistedSync.kt`) — o
+  pacote social continua sem conhecer Outbox, cursor ou desfecho da T16
+  (`SocialBoundaryInspectionTest`). Dois toques produzem um ciclo; um ciclo que já estava rodando
+  (app voltando ao primeiro plano) é **esperado** por até 60 s, não duplicado.
+- **Cada desfecho tem frase:** sincronizou e o dado apareceu; sincronizou e o servidor continua sem
+  treino; itens que precisam de atenção (conflito, cursor expirado, mudança que o app não lê); este
+  aparelho não sincroniza; outra conta; offline; falha; já em andamento. Nunca um spinner que volta
+  ao mesmo estado sem explicação.
+- **Durante o ciclo os interruptores esperam**, e cada leitura/escrita da tela pega uma geração: a
+  resposta mais velha — um "↻" que saiu antes de um `PATCH` ou do sync — não escreve.
+- **Offline**, o sync não relê, não mexe em preferência e a Outbox fica intacta; o interruptor
+  continua não fingindo salvar (§10).
+
+### H5.4 As regras de domínio, reafirmadas com teste
+
+- **Treinos totais** ficam `AVAILABLE` com uma sessão sincronizada, com ou sem fuso e parâmetros.
+- **Minutos/séries/volume** ficam `AVAILABLE` com sessão (em qualquer semana) e fuso — inclusive
+  `AVAILABLE(0)`.
+- **Tempo treinado** é `floor(Σ max(fim − início, 0) / 60)`: sessão sem fim ou com fim antes do
+  início soma zero, nunca negativo.
+- **Séries** não contam aquecimento nem série não concluída; `targetSets` do template não entra.
+- **Volume** é `Σ peso × reps`; peso `0` não é erro nem peso corporal estimado.
+- **O teto de 100 sessões por semana fica**, justificado: a soma lê séries e cargas de cada sessão
+  pela definição única em `social-training-metrics.ts` (compartilhada com o resumo do check-in).
+  Agregar em SQL sem teto exigiria uma segunda definição de série e volume. 100 é mais de catorze
+  treinos por dia; acima disso, o motivo é explícito.
+
+### H5.5 Detalhes do check-in e "Cargas"
+
+Os sete interruptores de detalhe são **preferência de privacidade**, sem disponibilidade global:
+num servidor v2 eles são configuráveis mesmo sem check-in publicado, e cada `PATCH` isolado responde
+`200` (idempotente — `true` três vezes, uma linha). "Cargas utilizadas" ligada sem Exercícios **e**
+Séries e repetições não publica nada (a carga mora dentro da série); a tela diz "Sem efeito agora"
+nesse estado. O check-in só é publicado com a sessão já sincronizada (T17.8, `SESSION_NOT_FOUND`),
+então "check-in sem sessão no servidor" só existe quando a sessão foi apagada depois — e aí o
+resumo some, sem nada fabricado.
+
+### H5.6 Rollout contract-first
+
+```text
+backend (contrato novo) → migration → smoke (com conta de teste: contrato vN) → Android
+```
+
+Um APK que depende de uma versão de contrato só vai para o Play depois que a produção a declara —
+`ops/gcp/smoke-cloud-run.sh` com `SPARK_SMOKE_FIREBASE_ID_TOKEN` confere `contractVersion ≥ 2`, os
+quinze interruptores, as oito disponibilidades e `availabilityReasons`, sem imprimir o corpo. Se o
+app chegar antes, ele degrada: mostra o aviso de servidor legado em vez de interruptores recusados.
 
 ## 9. Cache — não existe, e é por isso que revogar funciona
 

@@ -2296,6 +2296,47 @@ podem ser quebradas:
   (seção T19.H4), `deploy-first-run.test.sh`, `gcp-audits.test.sh`, `gcp-cross-project.test.sh`,
   `bootstrap-github-deploy.test.sh`.
 
+## 13.30 Compartilhar Progresso: disponibilidade real, sync assistido e contrato versionado (T19.H5)
+
+Contrato em [`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md)
+§H5. As regras que não podem ser quebradas:
+
+- **O servidor declara o contrato; o app não adivinha.** `progress-sharing` responde
+  `contractVersion`. Ausente é **v1**, mesmo que o servidor por acaso conheça campos mais novos. Um
+  grupo acima da versão declarada (`ProgressSharingGroup.sinceContractVersion`) não oferece
+  interruptor — a ViewModel também não o envia — e a tela mostra **um** aviso de servidor legado,
+  nunca "Ainda não disponível". A versão sobe só quando o app precisa saber se um recurso existe
+  antes de oferecê-lo; campo opcional novo não sobe versão.
+- **Mudar a forma de um campo que APK publicado lê é proibido.** `availability` continua um mapa de
+  strings; informação nova vai em chave nova ao lado (`availabilityReasons`). Todo APK lê com
+  `ignoreUnknownKeys`, e é isso — não a disciplina — que permite acrescentar.
+- **`UNAVAILABLE` sempre tem motivo, e motivo só existe com estado real.** O tipo
+  `SocialProgressValue` exige o motivo; cada um tem produtor na fonte e teste que o alcança. Motivo
+  sem estado real não entra no enum (`NO_RECONSTRUCTABLE_DATA` e `TEMPORARILY_UNAVAILABLE` foram
+  investigados e recusados). Precedência: fuso → sessão → parâmetros → teto. Motivo e versão são do
+  **dono**; o perfil do amigo e a prévia não carregam nenhum dos dois.
+- **Uma frase por motivo, e uma ação quando existe.** `NO_SYNCED_WORKOUTS` oferece "Sincronizar
+  dados"; fuso e parâmetros o app declara sozinho ao abrir a tela; teto de leitura diz quando volta.
+  A frase única "atualizado depois da sincronização" não volta.
+- **"Sincronizar dados" é o ciclo da T16, e não existe sync social.** A ViewModel recebe
+  `suspend () -> SocialSyncResult` montada em `MainViewModelFactory` (`runSocialAssistedSync` sobre
+  `SyncCoordinator.runOnce`); o pacote social continua sem conhecer Outbox, cursor ou `SyncOutcome`.
+  O "↻" relê o servidor e **nunca** sincroniza; nada sincroniza por abrir a tela. Cada desfecho tem
+  frase — nunca spinner que volta ao mesmo estado sem explicação.
+- **Resposta velha não escreve.** Toda leitura e escrita de "Compartilhar progresso" pega uma
+  geração (declarada antes do `init`); só a mais nova aplica. Durante o sync os interruptores
+  esperam. Troca de conta zera a geração e o estado inteiro — versão e resultado de sync inclusos.
+- **Zero é valor.** Com sessão sincronizada e fuso, semana sem treino é `AVAILABLE(0)`; treino só
+  de peso corporal é volume `AVAILABLE(0)`; treinos totais não dependem de fuso nem de parâmetro.
+- **Rollout contract-first:** backend → migration → smoke → Android. Um APK que precisa de uma
+  versão de contrato só vai ao Play depois que a produção a declara;
+  `ops/gcp/smoke-cloud-run.sh` com `SPARK_SMOKE_FIREBASE_ID_TOKEN` (conta de teste) confere o
+  contrato v2 sem imprimir o corpo.
+- **Testes.** Backend: `social-progress-availability.spec.ts` (além dos da §13.22/§13.28). Android:
+  `SparkSocialProfileGatewayTest`, `SocialProfileSharingAvailabilityTest`,
+  `SocialProfileViewModelTest`, `SocialAssistedSyncTest`, `ProgressSharingAvailabilityScreenTest`,
+  `ProgressSharingV3ScreenTest`, `SocialBoundaryInspectionTest`. Ops: `smoke-cloud-run.test.sh`.
+
 ## 14. Tests and build are part of implementation
 
 A task is not complete because the code looks correct.

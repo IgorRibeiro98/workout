@@ -250,6 +250,15 @@ conta linhas de `social_notification_events`, `social_workout_checkins`,
 remota — XP de recorde e conquistas de `PERFORMANCE` — é uma **parte** de duas métricas, e essa
 parte simplesmente não entra no valor publicado.
 
+**Desde a T19.H5 todo `UNAVAILABLE` carrega o motivo** (`availabilityReasons`, só para o dono), na
+precedência fuso → sessão → parâmetros: `WEEK_TIME_ZONE_MISSING`, `NO_SYNCED_WORKOUTS`,
+`CONSISTENCY_PARAMETERS_MISSING`. Conquistas vazias só existem sem sessão e sem medição sincronizada
+(`first_workout` e `first_measurement` têm alvo 1), e respondem `NO_SYNCED_WORKOUTS`;
+`social-progress-availability.spec.ts` prende essa premissa ao catálogo. O app declara fuso e
+parâmetros sozinho ao abrir "Compartilhar progresso" com conexão; `NO_SYNCED_WORKOUTS` ganha a ação
+"Sincronizar dados", que é o ciclo da T16 e não um sync social. Tabela completa, com as estatísticas
+da T19.H3, em [`social-profile-contract.md`](./social-profile-contract.md) §H5.
+
 ---
 
 ## 6. Idempotência, rebuild e concorrência

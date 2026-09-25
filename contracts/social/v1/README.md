@@ -422,18 +422,49 @@ sync ou de backup.
 | Valor | Significa | Ação |
 | --- | --- | --- |
 | `AVAILABLE` | há dado canônico agora | — |
-| `UNAVAILABLE` | suportado, e o servidor ainda não sabe (sem sessão sincronizada, sem fuso, ou — T19.2 — sem parâmetros de consistência declarados) | sincronizar / abrir "Compartilhar progresso" conectado resolve |
+| `UNAVAILABLE` | suportado, e o servidor ainda não sabe — **o motivo vai em `availabilityReasons`** (T19.H5) | depende do motivo (tabela abaixo) |
 | `UNSUPPORTED` | não há autoridade remota nesta versão | sincronizar **não** resolve |
 
-Desde a T19.2 **nenhuma** das quatro métricas responde `UNSUPPORTED` no servidor atual; o valor
+Desde a T19.2 **nenhuma** das métricas responde `UNSUPPORTED` no servidor atual; o valor
 permanece no contrato porque um servidor anterior o responde e o app precisa interpretá-lo.
+
+### Motivos e versão do contrato (T19.H5)
+
+```json
+{
+  "contractVersion": 2,
+  "settings": { "shareLevel": true, "...": "os quinze interruptores, weekTimeZone, consistency, updatedAt" },
+  "availability": { "level": "UNAVAILABLE", "totalWorkouts": "AVAILABLE", "...": "oito chaves, strings" },
+  "availabilityReasons": { "level": "CONSISTENCY_PARAMETERS_MISSING" }
+}
+```
+
+| Motivo (`availabilityReasons`) | Condição real | O que resolve |
+| --- | --- | --- |
+| `NO_SYNCED_WORKOUTS` | nenhuma `WORKOUT_SESSION` `COMPLETED` da conta no servidor | sincronizar — o app oferece "Sincronizar dados" (o ciclo da T16) |
+| `WEEK_TIME_ZONE_MISSING` | o servidor não conhece o fuso da semana | o app declara sozinho ao abrir a tela com conexão |
+| `CONSISTENCY_PARAMETERS_MISSING` | nível/sequência sem meta semanal e início do acompanhamento | o app declara sozinho ao abrir a tela |
+| `SOURCE_LIMIT_REACHED` | mais sessões na semana que a leitura bounded das estatísticas (100) | nada imediato; a próxima semana — nunca uma soma truncada |
+
+- **`availability` não mudou de forma.** Continua um mapa de strings — é o que todo APK publicado
+  lê. O motivo vai num mapa **ao lado**, só para campos `UNAVAILABLE`.
+- **`contractVersion` ausente = servidor anterior à T19.H5**, lido como **v1**: só os quatro
+  interruptores de progresso geral. O app não oferece os onze da T19.H3 a esse servidor — ele os
+  recusaria com `INVALID_PROGRESS_SETTINGS` — e mostra **um** aviso ("Este recurso ainda não está
+  disponível no servidor atual"), nunca "Ainda não disponível".
+- **v2** = T19.H3 (estatísticas de treino e detalhes dos check-ins); os motivos chegaram na T19.H5
+  sem subir a versão, porque são opcionais e todo APK lê com `ignoreUnknownKeys`.
+- **Motivo, versão e disponibilidade são do dono.** O perfil de um amigo e a prévia não carregam
+  nenhum dos três.
+- **Rollout contract-first:** backend → migration → smoke → Android. Um APK que precisa de uma
+  versão de contrato só é publicado depois que o servidor a declara em produção.
 
 ### Erros da T17.2
 
 | `code` | HTTP | Quando |
 | --- | --- | --- |
 | `FRIEND_PROFILE_NOT_FOUND` | 404 | alvo inexistente, desativado, sem amizade, ou só com pedido pendente — **a mesma resposta para os quatro** |
-| `INVALID_PROGRESS_SETTINGS` | 400 | corpo fora do contrato, valor de progresso enviado, fuso inválido |
+| `INVALID_PROGRESS_SETTINGS` | 400 | corpo fora do contrato, valor de progresso enviado, fuso inválido; desde a T19.H5 também `availabilityReasons`/`contractVersion` no corpo — o servidor declara, o cliente não |
 
 ### Regras que a T17.2 acrescentou
 

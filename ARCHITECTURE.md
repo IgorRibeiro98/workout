@@ -812,6 +812,7 @@ persistência do domínio        validação da resposta
 | T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
 | T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
 | T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
+| T19.H5 | Compartilhar Progresso com disponibilidade real: `contractVersion` explícito (ausente = v1 legado, sem interruptores da T19.H3), motivo tipado para cada `UNAVAILABLE` (`availabilityReasons`), "Sincronizar dados" sobre o `SyncCoordinator` da T16, fuso declarado na abertura, geração contra resposta velha, smoke com conta de teste confere o contrato v2; migrations N/A | **CODE COMPLETE / REAL SOCIAL VALIDATION PENDING** (produção com T19.H3 + `0008` confirmada; deploy do contrato v2, aparelho e duas contas reais NOT VERIFIED) |
 | T19.H4 | Coach IA multi-provider: `GroqAiProviderGateway` (GPT-OSS 120B / Qwen 3.8 27B, structured output strict) ao lado do Gemini atrás de `AiProviderGateway`, escolhido por `AI_PROVIDER` num ponto só, sem fallback; teto de saída e quota por provider; benchmark reproduzível, relatório de uso e smoke do provider antes do tráfego; Android e migrations N/A | **CODE COMPLETE / PRODUCTION VALIDATION PENDING** (GPT-OSS 120B declarado em `lib.gcp.sh`, ZDR verificado; falta deploy, aparelho e revisão humana cega) |
 | T19.H3 | Refresh social explícito ("↻" + gesto, mesmo método, sem polling), foto do check-in consertada no optimizer (bounds `null` descartava toda foto; teto como invariante), Compartilhar Progresso V3 (estatísticas da semana no perfil + resumo de treino no check-in, derivados no servidor e filtrados por inclusão); migration backend `0008` | **implementado** (aparelho real, Cloud Run/GCS reais e duas contas reais NOT VERIFIED) |
 | T19.H2 | Estabilização pós-QA: layout responsivo (Histórico, Settings, Progress Sharing), identidade da conta no Perfil, Meta Semanal salvável, sync com próximo passo, **snapshot de compartilhamento V2** (treino vazio + CUSTOM portátil) e seletor de exercícios com IME; migration Android e backend N/A | **implementado** (aparelho real NOT VERIFIED; matriz 320/360/411dp × fontScale 1.0/1.3/1.5 VERIFIED em Robolectric) |
@@ -2626,6 +2627,27 @@ Regras normativas em `PROJECT_RULES.md` §13.28; contrato em
     detalhe, o próprio autor), pela mesma política de acesso; bloqueio continua superior. Nota,
     `machineLabel`, motivo de troca, RPE, RIR, PR, medida e identificadores continuam fora.
 60. **O Feed continua bounded:** três consultas por página para o resumo, nunca uma por item.
+
+### Compartilhar Progresso com disponibilidade real (T19.H5)
+
+Regras normativas em `PROJECT_RULES.md` §13.30; contrato em
+[`docs/architecture/social-profile-contract.md`](docs/architecture/social-profile-contract.md) §H5.
+
+61. **O servidor declara o contrato que conhece.** `progress-sharing` responde `contractVersion`
+    (2); sem ele o app lê **v1** e não oferece os onze interruptores da T19.H3 — mostra um aviso só
+    ("ainda não disponível no servidor atual"), nunca "Ainda não disponível" campo a campo. Foi o
+    que a produção expôs em 2026-09-24: app da T19.H3 contra backend anterior a ela.
+62. **`UNAVAILABLE` sempre tem motivo**, no mapa `availabilityReasons` ao lado de `availability`
+    (cuja forma de strings não mudou): `NO_SYNCED_WORKOUTS`, `WEEK_TIME_ZONE_MISSING`,
+    `CONSISTENCY_PARAMETERS_MISSING`, `SOURCE_LIMIT_REACHED` — cada um com produtor real na fonte e
+    teste que o alcança. Motivo e versão são do dono; o amigo recebe campo presente ou ausente.
+63. **"Sincronizar dados" é o ciclo da T16, e o "↻" nunca sincroniza.** A ViewModel social recebe
+    uma função (`runSocialAssistedSync` sobre `SyncCoordinator.runOnce`), montada fora do pacote
+    social; ela relê depois do ciclo e cada desfecho tem frase. Nada roda sozinho ao abrir a tela.
+64. **O app declara o que falta ao servidor e só ele sabe**: fuso e parâmetros de consistência vão
+    na abertura de "Compartilhar progresso" quando o servidor não os tem — sem mover interruptor.
+65. **Resposta velha não escreve.** Cada leitura/escrita da tela pega uma geração; um "↻" que saiu
+    antes de um `PATCH` ou de um sync não desfaz a tela. Durante o sync, os interruptores esperam.
 
 ### Exclusão de conta — resolvida na T17.6
 

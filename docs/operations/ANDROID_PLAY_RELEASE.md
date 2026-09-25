@@ -128,6 +128,13 @@ Duas barreiras, que respondem a perguntas diferentes:
    texto em arquivo — o que está em `~/.gradle/gradle.properties`, em `gradle.properties` ou em
    `-P` é resolvido pelo próprio Gradle.
 
+**O backend precisa estar na frente (T19.H5).** O endereço certo não basta: o servidor de produção
+precisa já declarar o contrato que o APK usa. O APK da T19.H3 foi para aparelho com a produção num
+backend anterior a ela e tomou "O servidor recusou esta configuração". A ordem é deploy do backend →
+migration → `SPARK_SMOKE_FIREBASE_ID_TOKEN=… ops/gcp/smoke-cloud-run.sh <url>` com conta de teste
+(confere `contractVersion` ≥ 2 em `progress-sharing`) → só então o bundle. Ver
+[`OPERATIONS_CHECKLIST.md`](./OPERATIONS_CHECKLIST.md).
+
 ### `app/google-services.json`
 
 Configuração do projeto Firebase do Spark, baixada do console, **não versionada**

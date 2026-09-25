@@ -151,7 +151,17 @@ O smoke prova que `/v1/auth/me` responde `401` sem token. Para provar o caminho 
 3. Esperado: `OK: GET /v1/auth/me → 200`. Um `503` significa Firebase Admin sem credencial/IAM
    (`roles/firebaseauth.admin` no projeto Firebase para `spark-backend-runtime`); um `401` com token
    válido significa `FIREBASE_PROJECT_ID` errado na revision.
+   Desde a T19.H5 o mesmo token também confere, só lendo, o contrato de "Compartilhar progresso":
+   `OK: GET /v1/social/me/progress-sharing → contrato v2 (...)`. O corpo — as escolhas de
+   privacidade da conta — nunca é impresso; numa falha saem só os **nomes** das chaves ausentes. Uma
+   conta de teste sem perfil social pula essa verificação (e diz que ela não foi feita).
 4. Descarte o token (`unset SPARK_SMOKE_FIREBASE_ID_TOKEN`). O token expira em 1 h de qualquer forma.
+
+**Contract-first (T19.H5).** Um APK que depende de uma versão nova de contrato — como o da T19.H5,
+que só oferece estatísticas e detalhes de check-in a um servidor que declara `contractVersion` 2 —
+só vai ao Play **depois** que a produção a declara: deploy do backend → migration → este smoke com
+conta de teste → Android. Invertida, a ordem não quebra nada (o app mostra "ainda não disponível no
+servidor atual"), mas esconde o recurso até o deploy.
 
 ## Incidente: "não existe backup recente"
 

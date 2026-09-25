@@ -603,6 +603,12 @@ deles existe no DTO, e há teste que varre a resposta real atrás de todos.
 > cargas e volume **podem** aparecer em `workoutSummary` — somente quando o autor autorizou cada
 > um em "Compartilhar progresso", e derivados pelo servidor da sessão canônica a cada leitura. O
 > resto desta lista continua valendo. Ver `social-profile-contract.md` §V3.
+>
+> **T19.H5:** os sete interruptores de detalhe são preferência, sem disponibilidade global — num
+> servidor que declara `contractVersion` 2 eles são configuráveis mesmo sem check-in publicado. O
+> dono vê o **motivo** de cada estatística indisponível e pode "Sincronizar dados" (o ciclo da
+> T16); nenhum motivo, versão ou disponibilidade chega a quem lê o Feed. Ver
+> `social-profile-contract.md` §H5.
 
 ### 13.8 Audiência do Feed
 
