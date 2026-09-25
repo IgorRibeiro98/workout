@@ -29,6 +29,9 @@
 #         ↓                                         ↓
 #     smoke contra o candidate                  smoke contra o temporário, com o identity token
 #         ↓                                     do operador em X-Serverless-Authorization
+#     smoke do PROVIDER DE IA (T19.H4 §70): Job spark-ai-provider-smoke com a MESMA imagem e a
+#     MESMA configuração de IA da revision — uma chamada real, pequena e sintética
+#         ↓                                         ↓
 #     100% do tráfego para o candidate               ↓
 #                                                remove o temporário, cria SPARK_RUN_API_SERVICE
 #                                                de verdade (já validado)
@@ -56,6 +59,11 @@
 #
 # Emergência (documentada, e registrada no log do deploy): SPARK_DEPLOY_ALLOW_UNVERIFIED=1 pula a
 # verificação de procedência do commit — origin/main e CI verde. Nada mais é afrouxado por ela.
+#
+# Coach IA (T19.H4): o provider e o modelo vêm de `lib.gcp.sh` (SPARK_AI_PROVIDER e o modelo do
+# provider), a revision recebe só a chave do provider selecionado, e o smoke do provider roda antes
+# de qualquer tráfego (SPARK_AI_SMOKE_POLICY=fail|warn|skip; `warn` é a saída de emergência para
+# publicar com o provider fora do ar).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=ops/gcp/lib.gcp.sh
@@ -85,6 +93,15 @@ case "${SPARK_DR_PREDEPLOY_POLICY}" in
   run-backup|fail) : ;;
   *) fail "SPARK_DR_PREDEPLOY_POLICY inválida: '${SPARK_DR_PREDEPLOY_POLICY}' (use run-backup ou fail)" ;;
 esac
+
+case "${SPARK_AI_SMOKE_POLICY}" in
+  fail|warn|skip) : ;;
+  *) fail "SPARK_AI_SMOKE_POLICY inválida: '${SPARK_AI_SMOKE_POLICY}' (use fail, warn ou skip)" ;;
+esac
+
+# Provider de IA desta release (T19.H4) — validado antes de qualquer build: um provider
+# desconhecido não chega a gastar um push.
+resolve_ai_provider
 
 # ---------------------------------------------------------------- 1. árvore Git limpa
 
@@ -154,13 +171,18 @@ BACKUP_SA_EMAIL="$(sa_email "${SPARK_SA_BACKUP}")"
 
 DATABASE_URL_VERSION="$(resolve_secret_version "${SPARK_SECRET_DATABASE_URL}")"
 DATABASE_URL_DIRECT_VERSION="$(resolve_secret_version "${SPARK_SECRET_DATABASE_URL_DIRECT}")"
-GEMINI_API_KEY_VERSION="$(resolve_secret_version "${SPARK_SECRET_GEMINI_API_KEY}")"
+# Só a chave do provider SELECIONADO (T19.H4 §53): a do outro nem é resolvida — um secret de
+# reserva sem versão nunca bloqueia o deploy de quem não o usa.
+AI_KEY_VERSION="$(resolve_secret_version "${AI_KEY_SECRET}")"
 HMAC_KEY_VERSION="$(resolve_secret_version "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}")"
 
-API_SECRETS="DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:${DATABASE_URL_VERSION},GEMINI_API_KEY=${SPARK_SECRET_GEMINI_API_KEY}:${GEMINI_API_KEY_VERSION},ACCOUNT_DELETION_HMAC_KEY=${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}:${HMAC_KEY_VERSION}"
+AI_SECRET="${AI_KEY_ENV}=${AI_KEY_SECRET}:${AI_KEY_VERSION}"
+API_SECRETS="DATABASE_URL=${SPARK_SECRET_DATABASE_URL}:${DATABASE_URL_VERSION},${AI_SECRET},ACCOUNT_DELETION_HMAC_KEY=${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}:${HMAC_KEY_VERSION}"
 DIRECT_SECRET="DATABASE_URL_DIRECT=${SPARK_SECRET_DATABASE_URL_DIRECT}:${DATABASE_URL_DIRECT_VERSION}"
 
-log "versões de secret desta release (rastreabilidade revision → secret): ${SPARK_SECRET_DATABASE_URL}=v${DATABASE_URL_VERSION} ${SPARK_SECRET_DATABASE_URL_DIRECT}=v${DATABASE_URL_DIRECT_VERSION} ${SPARK_SECRET_GEMINI_API_KEY}=v${GEMINI_API_KEY_VERSION} ${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}=v${HMAC_KEY_VERSION}"
+log "versões de secret desta release (rastreabilidade revision → secret): ${SPARK_SECRET_DATABASE_URL}=v${DATABASE_URL_VERSION} ${SPARK_SECRET_DATABASE_URL_DIRECT}=v${DATABASE_URL_DIRECT_VERSION} ${AI_KEY_SECRET}=v${AI_KEY_VERSION} ${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}=v${HMAC_KEY_VERSION}"
+# O provider e o modelo, nunca a chave (§53).
+log "Coach IA desta release: provider=${SPARK_AI_PROVIDER} model=${AI_MODEL} (${AI_KEY_ENV} ← ${AI_KEY_SECRET}:${AI_KEY_VERSION})"
 
 # ---------------------------------------------------------------- 6. Jobs de DR e auditoria: só EXISTÊNCIA aqui (T18.3.2)
 #
@@ -311,7 +333,7 @@ deploy_api_revision() {
     --timeout "${SPARK_RUN_API_TIMEOUT}" \
     "${access_flag}" \
     --set-secrets "${API_SECRETS}" \
-    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=true,${AI_ENV},SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
     --quiet \
     "$@"
 }
@@ -320,6 +342,51 @@ api_service_url() {
   gcloud run services describe "$1" \
     --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" \
     --format='value(status.url)'
+}
+
+# ---------------------------------------------------------------- smoke do provider de IA (T19.H4 §70/§71)
+#
+# O `/health/ready` não prova que a chave externa existe, vale, tem quota e aceita o schema do
+# Coach — e trocar de provider por configuração só é seguro se isso for provado ANTES do tráfego.
+# Um Cloud Run Job com a MESMA imagem, a runtime SA e a MESMA configuração de IA da revision
+# (`AI_ENV` + a chave pinada) roda `ai:provider-smoke`: uma chamada real, com contexto sintético,
+# que imprime só metadata (provider, modelo, structured output, latência, tokens).
+#
+# O Job recebe a chave do provider e nada mais: nem banco, nem HMAC, nem bucket. Com
+# `AI_PROVIDER_SMOKE_GATE=provider`, o smoke passa quando o provider respondeu no formato do
+# contrato — uma recusa do validador semântico é qualidade do modelo, não infraestrutura, e sai como
+# WARN no log do Job.
+run_ai_provider_smoke() {
+  if [ "${SPARK_AI_SMOKE_POLICY}" = "skip" ]; then
+    log "SPARK_AI_SMOKE_POLICY=skip — smoke do provider de IA NÃO executado (provider=${SPARK_AI_PROVIDER} model=${AI_MODEL} sem prova de chave/quota)"
+    return 0
+  fi
+  log "Job ${SPARK_RUN_AI_SMOKE_JOB} → digest ${IMAGE_DIGEST} (provider=${SPARK_AI_PROVIDER} model=${AI_MODEL})"
+  gcloud run jobs deploy "${SPARK_RUN_AI_SMOKE_JOB}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --image "${IMAGE_DIGEST}" \
+    --command node \
+    --args dist/cli/ai-provider-smoke.js \
+    --service-account "${RUNTIME_SA_EMAIL}" \
+    --set-secrets "${AI_SECRET}" \
+    --set-env-vars "NODE_ENV=production,${AI_ENV},AI_PROVIDER_SMOKE_GATE=provider,LOG_LEVEL=warn" \
+    --max-retries 0 \
+    --task-timeout 120 \
+    --quiet
+  log "executando ${SPARK_RUN_AI_SMOKE_JOB} e aguardando — uma chamada real ao provider"
+  if gcloud run jobs execute "${SPARK_RUN_AI_SMOKE_JOB}" \
+    --project "${SPARK_GCP_PROJECT}" \
+    --region "${SPARK_GCP_REGION}" \
+    --wait; then
+    log "smoke do provider de IA: PASS (provider=${SPARK_AI_PROVIDER} model=${AI_MODEL})"
+    return 0
+  fi
+  if [ "${SPARK_AI_SMOKE_POLICY}" = "warn" ]; then
+    log "smoke do provider de IA FALHOU e SPARK_AI_SMOKE_POLICY=warn — seguindo SEM prova de que o Coach responde (leia o log do Job ${SPARK_RUN_AI_SMOKE_JOB})"
+    return 0
+  fi
+  return 1
 }
 
 if resource_exists run services describe "${SPARK_RUN_API_SERVICE}" --region "${SPARK_GCP_REGION}"; then
@@ -340,6 +407,10 @@ if resource_exists run services describe "${SPARK_RUN_API_SERVICE}" --region "${
   log "rodando smoke contra o candidate — falha aqui bloqueia a troca de tráfego (§10/§54)"
   if ! "${SCRIPT_DIR}/smoke-cloud-run.sh" "${CANDIDATE_URL}"; then
     fail "smoke do candidate FALHOU — tráfego antigo permanece. Corrija e repita o deploy."
+  fi
+
+  if ! run_ai_provider_smoke; then
+    fail "smoke do provider de IA FALHOU (provider=${SPARK_AI_PROVIDER} model=${AI_MODEL}) — tráfego antigo permanece. Leia o log do Job ${SPARK_RUN_AI_SMOKE_JOB}; SPARK_AI_SMOKE_POLICY=warn publica mesmo assim (emergência)."
   fi
 
   log "smoke PASS — movendo 100% do tráfego para o candidate"
@@ -385,6 +456,13 @@ else
     fail "smoke do serviço de validação FALHOU — ${SPARK_RUN_API_SERVICE} NÃO foi criado. Corrija e repita o deploy."
   fi
 
+  if ! run_ai_provider_smoke; then
+    log "removendo ${SPARK_RUN_API_VALIDATE_SERVICE} antes de abortar"
+    gcloud run services delete "${SPARK_RUN_API_VALIDATE_SERVICE}" \
+      --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --quiet || true
+    fail "smoke do provider de IA FALHOU (provider=${SPARK_AI_PROVIDER} model=${AI_MODEL}) — ${SPARK_RUN_API_SERVICE} NÃO foi criado. Leia o log do Job ${SPARK_RUN_AI_SMOKE_JOB}."
+  fi
+
   log "smoke PASS — removendo ${SPARK_RUN_API_VALIDATE_SERVICE} e criando ${SPARK_RUN_API_SERVICE}"
   gcloud run services delete "${SPARK_RUN_API_VALIDATE_SERVICE}" \
     --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}" --quiet
@@ -427,7 +505,7 @@ else
     --max-instances "${SPARK_RUN_MAINTENANCE_MAX_INSTANCES}" \
     --concurrency "${SPARK_RUN_MAINTENANCE_CONCURRENCY}" \
     --set-secrets "${API_SECRETS}" \
-    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,REQUIRE_GEMINI=false,SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,${AI_ENV},SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
     --quiet
 
   log "garantindo run.invoker de ${SPARK_SA_SCHEDULER} sobre ${SPARK_RUN_MAINTENANCE_SERVICE} (§35)"
@@ -500,4 +578,5 @@ else
 fi
 
 log "deploy concluído — imagem ${IMAGE_DIGEST}, commit ${GIT_SHA}"
-log "secrets pinados nesta release: ${SPARK_SECRET_DATABASE_URL}=v${DATABASE_URL_VERSION} ${SPARK_SECRET_DATABASE_URL_DIRECT}=v${DATABASE_URL_DIRECT_VERSION} ${SPARK_SECRET_GEMINI_API_KEY}=v${GEMINI_API_KEY_VERSION} ${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}=v${HMAC_KEY_VERSION}"
+log "secrets pinados nesta release: ${SPARK_SECRET_DATABASE_URL}=v${DATABASE_URL_VERSION} ${SPARK_SECRET_DATABASE_URL_DIRECT}=v${DATABASE_URL_DIRECT_VERSION} ${AI_KEY_SECRET}=v${AI_KEY_VERSION} ${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}=v${HMAC_KEY_VERSION}"
+log "Coach IA: provider=${SPARK_AI_PROVIDER} model=${AI_MODEL}"

@@ -215,7 +215,9 @@ jobs:
             docker run --rm --entrypoint "$tool" spark-backend:ci --version | grep -q '(PostgreSQL) 18\.' \
               || { echo "$tool não é a major 18 na imagem"; exit 1; }
           done
-          for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions manage-ai-capabilities; do
+          # `ai-provider-smoke` é o Job que o deploy roda antes do tráfego (T19.H4): sem ele na
+          # imagem, todo deploy pararia no smoke do provider de IA.
+          for cli in db-backup db-restore-drill storage-audit migrate-database reconcile-account-deletions manage-ai-capabilities ai-provider-smoke; do
             docker run --rm --entrypoint test spark-backend:ci -f "dist/cli/${cli}.js" \
               || { echo "dist/cli/${cli}.js ausente na imagem"; exit 1; }
           done

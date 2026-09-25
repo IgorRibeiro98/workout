@@ -128,4 +128,23 @@ check "spark-backend real NUNCA é criado" "não" \
 check "a mensagem explica que o serviço real não foi criado" "sim" \
   "$(printf '%s' "$SAIDA" | grep -q 'NÃO foi criado' && echo sim || echo não)"
 
+echo
+echo "=== primeiro deploy: smoke do PROVIDER DE IA falha (T19.H4) ==="
+
+CODIGO=0
+GCLOUD_MISSING_SERVICE=spark-backend GCLOUD_JOB_EXECUTE_FAILS=spark-ai-provider-smoke run_deploy || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+
+check "deploy falha" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "o smoke do provider roda contra a mesma imagem antes de criar o serviço real" "sim" \
+  "$(printf '%s\n' "$LOG" | grep -q 'run jobs execute spark-ai-provider-smoke' && echo sim || echo não)"
+check "o serviço de validação é removido antes de abortar" "sim" \
+  "$(printf '%s\n' "$LOG" | grep -q 'services delete spark-backend-validate' && echo sim || echo não)"
+check "spark-backend real NUNCA é criado" "não" \
+  "$(printf '%s\n' "$LOG" | grep -q 'run deploy spark-backend ' && echo sim || echo não)"
+check "a mensagem nomeia o provider" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'smoke do provider de IA FALHOU (provider=groq' && echo sim || echo não)"
+
 finish_checks "primeiro deploy e deploy seguinte seguem caminhos distintos e seguros"

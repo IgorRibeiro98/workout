@@ -87,7 +87,102 @@ SPARK_GITHUB_DEPLOY_ENVIRONMENT="${SPARK_GITHUB_DEPLOY_ENVIRONMENT:-production}"
 SPARK_SECRET_DATABASE_URL="${SPARK_SECRET_DATABASE_URL:-spark-database-url}"
 SPARK_SECRET_DATABASE_URL_DIRECT="${SPARK_SECRET_DATABASE_URL_DIRECT:-spark-database-url-direct}"
 SPARK_SECRET_GEMINI_API_KEY="${SPARK_SECRET_GEMINI_API_KEY:-spark-gemini-api-key}"
+# T19.H4: a chave da Groq, com o mesmo desenho da do Gemini — secret próprio, valor posto pelo
+# operador fora de qualquer script, Secret Accessor só para a runtime SA.
+SPARK_SECRET_GROQ_API_KEY="${SPARK_SECRET_GROQ_API_KEY:-spark-groq-api-key}"
 SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY="${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY:-spark-account-deletion-hmac-key}"
+
+# ---------------------------------------------------------------- Coach IA: provider (T19.H4)
+#
+# O provider de produção é decidido AQUI, num lugar só e versionado — nunca por uma variável posta
+# à mão no Cloud Run (o `--set-env-vars` do deploy substitui o conjunto inteiro, e ela sumiria no
+# deploy seguinte) nem por um override esquecido num shell (o próximo deploy com o default
+# desfaria a troca em silêncio). Trocar de provider é editar este default + deploy; um override
+# por ambiente (`SPARK_AI_PROVIDER=gemini ops/gcp/deploy-cloud-run.sh`) é só para emergência, e vale
+# até o próximo deploy.
+#
+# O modelo também é declarado aqui, e não herdado do default do código: a revision passa a dizer,
+# no próprio ambiente, qual provider e qual modelo ela atende (§53) — e o `config-drift-audit`
+# confere os dois.
+#
+# groq/openai/gpt-oss-120b desde 2026-09-25: escolhido pelo benchmark da T19.H4 (90% fim a fim, zero
+# violação crítica aceita, p95 ~5,7 s contra 20–24 s do Gemini free) com o Zero Data Retention da
+# organização Groq verificado pelo dono da conta no mesmo dia. Voltar ao Gemini é trocar este
+# default para `gemini` + deploy — a chave dele continua em `spark-gemini-api-key`.
+SPARK_AI_PROVIDER="${SPARK_AI_PROVIDER:-groq}"
+SPARK_GEMINI_MODEL="${SPARK_GEMINI_MODEL:-gemini-3.5-flash}"
+SPARK_GROQ_MODEL="${SPARK_GROQ_MODEL:-openai/gpt-oss-120b}"
+# Teto de saída POR provider (o raciocínio do modelo conta dentro dele nos dois). Medido na T19.H4
+# (2026-09-24): com `thinkingLevel=MEDIUM`, o `gemini-3.5-flash` truncou 4 de 6 respostas em 2 048
+# tokens e completou todas em 8 192, usando 2,3k–3,9k. Na Groq free o teto pedido é RESERVADO no
+# TPM de 8 000 do plano na chegada da chamada (medido: 13+10 tokens com teto 100 baixaram o saldo em
+# 113) — 3 000 = 8 000 − a maior entrada do Coach (~5 000). Benchmark de 2026-09-25 (GPT-OSS 120B,
+# 49 chamadas): saída p95 2 354, máx. 2 800, nenhuma truncada.
+SPARK_GEMINI_MAX_OUTPUT_TOKENS="${SPARK_GEMINI_MAX_OUTPUT_TOKENS:-8192}"
+SPARK_GROQ_MAX_OUTPUT_TOKENS="${SPARK_GROQ_MAX_OUTPUT_TOKENS:-3000}"
+# Quota do Spark ABAIXO da capacidade real do provider (T19.H4 §45): senão todos os usuários batem
+# no limite externo (um 429 opaco) antes da proteção interna. Gemini free: 20 requisições/dia por
+# modelo para o projeto inteiro — e o dia do Gemini vira à meia-noite do Pacífico, o do Spark à
+# meia-noite UTC; 15 deixa margem para o smoke de cada deploy e para esse desencontro de janelas.
+# Groq free: o teto real é o TPD (200 000 tokens/dia) ÷ tokens por chamada. O benchmark de
+# 2026-09-25 (GPT-OSS 120B, 29 + 20 cenários) mediu p95 de 5 679 / 5 424 tokens por chamada → 80% do
+# TPD dá 28–29 chamadas seguras por dia; 25 fica abaixo disso. A quota por conta impede que uma pessoa sozinha
+# esgote a global.
+SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY="${SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY:-15}"
+SPARK_GROQ_MAX_REQUESTS_GLOBAL_DAY="${SPARK_GROQ_MAX_REQUESTS_GLOBAL_DAY:-25}"
+SPARK_AI_MAX_REQUESTS_PER_USER_DAY="${SPARK_AI_MAX_REQUESTS_PER_USER_DAY:-8}"
+# §41 — `true` é a decisão escrita de aceitar o risco de um modelo Preview em produção. O backend
+# recusa subir com um modelo Preview sem ela.
+SPARK_GROQ_ALLOW_PREVIEW_MODEL="${SPARK_GROQ_ALLOW_PREVIEW_MODEL:-false}"
+# O smoke do provider antes do tráfego (§70): o `/health/ready` não prova que a chave externa
+# existe, vale, tem quota e aceita o schema do Coach. `fail` (default) bloqueia a troca de tráfego;
+# `warn` só registra (emergência: publicar um hotfix com o provider fora); `skip` não roda.
+SPARK_RUN_AI_SMOKE_JOB="${SPARK_RUN_AI_SMOKE_JOB:-spark-ai-provider-smoke}"
+SPARK_AI_SMOKE_POLICY="${SPARK_AI_SMOKE_POLICY:-fail}"
+
+# Traduz SPARK_AI_PROVIDER para o que o deploy e as auditorias precisam, num lugar só:
+#   AI_KEY_ENV / AI_KEY_SECRET — a variável e o secret da chave do provider selecionado
+#   AI_MODEL_ENV / AI_MODEL    — a variável e o valor do modelo
+#   AI_ENV                     — o trecho de env não-secreta da revision (vírgulas, sem espaços)
+# O provider que NÃO atende não recebe nada: nem chave, nem modelo (§53).
+# As cinco variáveis são a saída da função, lidas por `deploy-cloud-run.sh` e `config-drift-audit.sh`
+# depois do `source` — o ShellCheck não enxerga isso analisando este arquivo isoladamente.
+# shellcheck disable=SC2034
+resolve_ai_provider() {
+  case "${SPARK_AI_PROVIDER}" in
+    gemini)
+      AI_KEY_ENV=GEMINI_API_KEY
+      AI_KEY_SECRET="${SPARK_SECRET_GEMINI_API_KEY}"
+      AI_MODEL_ENV=GEMINI_MODEL
+      AI_MODEL="${SPARK_GEMINI_MODEL}"
+      AI_ENV="AI_PROVIDER=gemini,GEMINI_MODEL=${AI_MODEL},GEMINI_MAX_OUTPUT_TOKENS=${SPARK_GEMINI_MAX_OUTPUT_TOKENS},AI_MAX_REQUESTS_GLOBAL_DAY=${SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY},AI_MAX_REQUESTS_PER_USER_DAY=${SPARK_AI_MAX_REQUESTS_PER_USER_DAY},REQUIRE_AI_PROVIDER=false"
+      ;;
+    groq)
+      AI_KEY_ENV=GROQ_API_KEY
+      AI_KEY_SECRET="${SPARK_SECRET_GROQ_API_KEY}"
+      AI_MODEL_ENV=GROQ_MODEL
+      AI_MODEL="${SPARK_GROQ_MODEL}"
+      case "${SPARK_GROQ_ALLOW_PREVIEW_MODEL}" in
+        true|false) : ;;
+        *) fail "SPARK_GROQ_ALLOW_PREVIEW_MODEL inválido: '${SPARK_GROQ_ALLOW_PREVIEW_MODEL}' (use true ou false)" ;;
+      esac
+      AI_ENV="AI_PROVIDER=groq,GROQ_MODEL=${AI_MODEL},GROQ_MAX_OUTPUT_TOKENS=${SPARK_GROQ_MAX_OUTPUT_TOKENS},GROQ_ALLOW_PREVIEW_MODEL=${SPARK_GROQ_ALLOW_PREVIEW_MODEL},AI_MAX_REQUESTS_GLOBAL_DAY=${SPARK_GROQ_MAX_REQUESTS_GLOBAL_DAY},AI_MAX_REQUESTS_PER_USER_DAY=${SPARK_AI_MAX_REQUESTS_PER_USER_DAY},REQUIRE_AI_PROVIDER=false"
+      ;;
+    *) fail "SPARK_AI_PROVIDER inválido: '${SPARK_AI_PROVIDER}' (use gemini ou groq)" ;;
+  esac
+  [ -n "${AI_MODEL}" ] || fail "modelo vazio para SPARK_AI_PROVIDER=${SPARK_AI_PROVIDER}"
+  local number
+  for number in "${SPARK_GEMINI_MAX_OUTPUT_TOKENS}" "${SPARK_GROQ_MAX_OUTPUT_TOKENS}" \
+                "${SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY}" "${SPARK_GROQ_MAX_REQUESTS_GLOBAL_DAY}" \
+                "${SPARK_AI_MAX_REQUESTS_PER_USER_DAY}"; do
+    case "${number}" in
+      ''|*[!0-9]*) fail "teto de saída/quota do Coach inválido: '${number}' (inteiro)" ;;
+    esac
+  done
+  case "${AI_MODEL}" in
+    *,*|*' '*) fail "modelo inválido para --set-env-vars: '${AI_MODEL}'" ;;
+  esac
+}
 
 # ---------------------------------------------------------------- Object Storage
 

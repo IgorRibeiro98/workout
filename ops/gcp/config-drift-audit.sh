@@ -19,6 +19,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 require_cmd gcloud
 require_cmd jq
 
+# O provider de IA esperado (T19.H4): o mesmo helper que o deploy usa — chave, modelo e env.
+resolve_ai_provider
+
 RUNTIME_SA_EMAIL="$(sa_email "${SPARK_SA_RUNTIME}")"
 MIGRATOR_SA_EMAIL="$(sa_email "${SPARK_SA_MIGRATOR}")"
 SCHEDULER_SA_EMAIL="$(sa_email "${SPARK_SA_SCHEDULER}")"
@@ -51,7 +54,7 @@ done
 # ---------------------------------------------------------------- secrets: versão habilitada mais recente
 audit_section "secrets (versão habilitada)"
 declare -A EXPECTED_SECRET_VERSION
-for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
+for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${AI_KEY_SECRET}" "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
   version="$(gcloud secrets versions list "${secret}" --project "${SPARK_GCP_PROJECT}" --filter='state:enabled' --sort-by='~createTime' --limit=1 --format='value(name.basename())' 2> /dev/null || true)"
   if [ -z "${version}" ]; then
     audit_drift "secret ${secret}: nenhuma versão habilitada (ou sem acesso)"
@@ -59,6 +62,19 @@ for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT
   else
     audit_pass "secret ${secret}: versão habilitada mais recente = ${version}"
     EXPECTED_SECRET_VERSION["${secret}"]="${version}"
+  fi
+done
+
+# A chave do provider de reserva (T19.H4 §24): o failover é config + deploy, e só é isso se a chave
+# do outro provider já existir. Sem versão, não é drift (nada em produção a usa) — é um aviso de
+# que trocar de provider exigiria antes definir a chave.
+for standby in "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_GROQ_API_KEY}"; do
+  [ "${standby}" != "${AI_KEY_SECRET}" ] || continue
+  version="$(gcloud secrets versions list "${standby}" --project "${SPARK_GCP_PROJECT}" --filter='state:enabled' --sort-by='~createTime' --limit=1 --format='value(name.basename())' 2> /dev/null || true)"
+  if [ -z "${version}" ]; then
+    audit_not_verified "secret ${standby} (provider de reserva): sem versão habilitada — o failover exigiria defini-la antes do deploy"
+  else
+    audit_pass "secret ${standby} (provider de reserva): versão habilitada ${version} — failover é config + deploy"
   fi
 done
 
@@ -102,10 +118,13 @@ audit_env_values() {
 COMMON_API_ENV=(
   NODE_ENV=production DATABASE_MIGRATION_MODE=verify OBJECT_STORAGE_PROVIDER=gcs
   "GCS_BUCKET_NAME=${SPARK_GCS_BUCKET}" REQUIRE_FIREBASE_ADMIN=true FIREBASE_ADMIN_CREDENTIAL_MODE=adc
-  "FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT}" REQUIRE_GEMINI=false SYNC_WRITE_ENABLED=true
+  "FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT}" SYNC_WRITE_ENABLED=true
   MAINTENANCE_MODE=false BACKGROUND_JOBS_MODE=disabled
   "DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN}" "DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX}"
 )
+# Provider e modelo do Coach, exatamente como o deploy os declara (T19.H4 §53).
+IFS=, read -r -a AI_ENV_PAIRS <<< "${AI_ENV}"
+COMMON_API_ENV+=("${AI_ENV_PAIRS[@]}")
 
 audit_service() {
   # audit_service <nome> <sa> <cpu> <mem> <min> <max> <concurrency> <timeout|-> <AI_ENABLED>
@@ -142,8 +161,15 @@ audit_service() {
   audit_expect "${name} sem GOOGLE_APPLICATION_CREDENTIALS" "" "$(env_value "${envs}" GOOGLE_APPLICATION_CREDENTIALS)"
   audit_secret_refs "${name}" "${envs}" \
     "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}" \
-    "GEMINI_API_KEY=${SPARK_SECRET_GEMINI_API_KEY}" \
+    "${AI_KEY_ENV}=${AI_KEY_SECRET}" \
     "ACCOUNT_DELETION_HMAC_KEY=${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"
+  # Só a chave do provider selecionado (§53); a variável antiga não volta (ela mudaria de sentido).
+  local other
+  for other in GEMINI_API_KEY GROQ_API_KEY; do
+    [ "${other}" != "${AI_KEY_ENV}" ] || continue
+    audit_expect "${name} sem ${other} (provider fora de uso)" "" "$(secret_ref "${envs}" "${other}")$(env_value "${envs}" "${other}")"
+  done
+  audit_expect "${name} sem REQUIRE_GEMINI (substituída por REQUIRE_AI_PROVIDER)" "" "$(env_value "${envs}" REQUIRE_GEMINI)"
 }
 
 audit_job() {
@@ -199,6 +225,10 @@ audit_job "${SPARK_RUN_BACKUP_JOB}" "${BACKUP_SA_EMAIL}" "dist/cli/db-backup.js"
   OBJECT_STORAGE_PROVIDER=gcs "GCS_BUCKET_NAME=${SPARK_GCS_BUCKET}" "SPARK_DR_RETENTION_COUNT=${SPARK_DR_RETENTION_COUNT}"
 audit_job "${SPARK_RUN_STORAGE_AUDIT_JOB}" "${RUNTIME_SA_EMAIL}" "dist/cli/storage-audit.js" "DATABASE_URL=${SPARK_SECRET_DATABASE_URL}" \
   OBJECT_STORAGE_PROVIDER=gcs "GCS_BUCKET_NAME=${SPARK_GCS_BUCKET}" DATABASE_MIGRATION_MODE=verify
+# O smoke do provider de IA (T19.H4): runtime SA, só a chave do provider selecionado (pinada) e a
+# mesma configuração de IA da API — nunca banco nem HMAC.
+audit_job "${SPARK_RUN_AI_SMOKE_JOB}" "${RUNTIME_SA_EMAIL}" "dist/cli/ai-provider-smoke.js" "${AI_KEY_ENV}=${AI_KEY_SECRET}" \
+  NODE_ENV=production AI_PROVIDER_SMOKE_GATE=provider "${AI_ENV_PAIRS[@]}"
 BACKUP_JOB_IAM="$(gcloud_json_or_empty run jobs get-iam-policy "${SPARK_RUN_BACKUP_JOB}" --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}")"
 audit_expect "${SPARK_RUN_BACKUP_JOB} invokers" "serviceAccount:${SCHEDULER_SA_EMAIL}" "$(printf '%s' "${BACKUP_JOB_IAM}" | jq -r '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]] | sort | join(",")')"
 

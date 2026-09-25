@@ -75,7 +75,7 @@ build_pass_fixtures() {
     printf '' | fx iam service-accounts describe "${sa}" --format=value\(disabled\)
     printf '' | fx iam service-accounts keys list --iam-account "${sa}" --managed-by user --format=value\(name\)
   done
-  for secret in spark-database-url spark-database-url-direct spark-gemini-api-key spark-account-deletion-hmac-key; do
+  for secret in spark-database-url spark-database-url-direct spark-gemini-api-key spark-groq-api-key spark-account-deletion-hmac-key; do
     printf '3\n' | fx secrets versions list "${secret}" --filter=state:enabled --sort-by=~createTime --limit=1 --format=value\(name.basename\(\)\)
   done
 
@@ -92,12 +92,16 @@ build_pass_fixtures() {
             {name:"NODE_ENV",value:"production"},{name:"DATABASE_MIGRATION_MODE",value:"verify"},
             {name:"OBJECT_STORAGE_PROVIDER",value:"gcs"},{name:"GCS_BUCKET_NAME",value:"spark-private-assets-prod"},
             {name:"REQUIRE_FIREBASE_ADMIN",value:"true"},{name:"FIREBASE_ADMIN_CREDENTIAL_MODE",value:"adc"},
-            {name:"FIREBASE_PROJECT_ID",value:$f},{name:"AI_ENABLED",value:$ai},{name:"REQUIRE_GEMINI",value:"false"},
+            {name:"FIREBASE_PROJECT_ID",value:$f},{name:"AI_ENABLED",value:$ai},
+            {name:"AI_PROVIDER",value:"groq"},{name:"GROQ_MODEL",value:"openai/gpt-oss-120b"},
+            {name:"GROQ_MAX_OUTPUT_TOKENS",value:"3000"},{name:"GROQ_ALLOW_PREVIEW_MODEL",value:"false"},
+            {name:"AI_MAX_REQUESTS_GLOBAL_DAY",value:"25"},{name:"AI_MAX_REQUESTS_PER_USER_DAY",value:"8"},
+            {name:"REQUIRE_AI_PROVIDER",value:"false"},
             {name:"SYNC_WRITE_ENABLED",value:"true"},{name:"MAINTENANCE_MODE",value:"false"},
             {name:"BACKGROUND_JOBS_MODE",value:"disabled"},{name:"SOCIAL_PUSH_ENABLED",value:"false"},
             {name:"DATABASE_POOL_MIN",value:"0"},{name:"DATABASE_POOL_MAX",value:"5"},
             {name:"DATABASE_URL",valueFrom:{secretKeyRef:{name:"spark-database-url",key:"3"}}},
-            {name:"GEMINI_API_KEY",valueFrom:{secretKeyRef:{name:"spark-gemini-api-key",key:"3"}}},
+            {name:"GROQ_API_KEY",valueFrom:{secretKeyRef:{name:"spark-groq-api-key",key:"3"}}},
             {name:"ACCOUNT_DELETION_HMAC_KEY",valueFrom:{secretKeyRef:{name:"spark-account-deletion-hmac-key",key:"3"}}}
           ]
         }]}
@@ -122,6 +126,8 @@ build_pass_fixtures() {
     | fx run jobs describe spark-db-backup --format=json
   job_json "${RUNTIME}" dist/cli/storage-audit.js '[{"name":"DATABASE_URL","valueFrom":{"secretKeyRef":{"name":"spark-database-url","key":"3"}}},{"name":"OBJECT_STORAGE_PROVIDER","value":"gcs"},{"name":"GCS_BUCKET_NAME","value":"spark-private-assets-prod"},{"name":"DATABASE_MIGRATION_MODE","value":"verify"}]' \
     | fx run jobs describe spark-storage-audit --format=json
+  job_json "${RUNTIME}" dist/cli/ai-provider-smoke.js '[{"name":"GROQ_API_KEY","valueFrom":{"secretKeyRef":{"name":"spark-groq-api-key","key":"3"}}},{"name":"NODE_ENV","value":"production"},{"name":"AI_PROVIDER","value":"groq"},{"name":"GROQ_MODEL","value":"openai/gpt-oss-120b"},{"name":"GROQ_MAX_OUTPUT_TOKENS","value":"3000"},{"name":"GROQ_ALLOW_PREVIEW_MODEL","value":"false"},{"name":"AI_MAX_REQUESTS_GLOBAL_DAY","value":"25"},{"name":"AI_MAX_REQUESTS_PER_USER_DAY","value":"8"},{"name":"REQUIRE_AI_PROVIDER","value":"false"},{"name":"AI_PROVIDER_SMOKE_GATE","value":"provider"},{"name":"LOG_LEVEL","value":"warn"}]' \
+    | fx run jobs describe spark-ai-provider-smoke --format=json
   printf '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:%s"]}]}\n' "${SCHEDULER}" | fx run jobs get-iam-policy spark-db-backup --format=json
 
   jq -n --arg sa "${SCHEDULER}" '{schedule:"* * * * *",state:"ENABLED",httpTarget:{uri:"https://spark-maintenance-abc.a.run.app/internal/maintenance/run",oidcToken:{serviceAccountEmail:$sa}}}' \
@@ -138,7 +144,7 @@ build_pass_fixtures() {
   # IAM (iam-audit.sh)
   jq -n --arg r "${RUNTIME}" '{bindings:[{role:"roles/owner",members:["user:operador@example.com"]}]}' | fx projects get-iam-policy "${P}" --format=json
   jq -n --arg r "${RUNTIME}" '{bindings:[{role:"roles/firebaseauth.admin",members:[("serviceAccount:"+$r)]},{role:"roles/firebasecloudmessaging.admin",members:[("serviceAccount:"+$r)]}]}' | fx projects get-iam-policy "${F}" --format=json
-  for secret in spark-database-url spark-gemini-api-key spark-account-deletion-hmac-key; do
+  for secret in spark-database-url spark-gemini-api-key spark-groq-api-key spark-account-deletion-hmac-key; do
     jq -n --arg r "${RUNTIME}" '{bindings:[{role:"roles/secretmanager.secretAccessor",members:[("serviceAccount:"+$r)]}]}' | fx secrets get-iam-policy "${secret}" --format=json
   done
   jq -n --arg m "${MIGRATOR}" --arg b "${BACKUP}" '{bindings:[{role:"roles/secretmanager.secretAccessor",members:[("serviceAccount:"+$b),("serviceAccount:"+$m)]}]}' | fx secrets get-iam-policy spark-database-url-direct --format=json
@@ -154,7 +160,7 @@ build_pass_fixtures() {
   printf '[{"displayName":"spark-mensal","amount":{"specifiedAmount":{"units":"20","currencyCode":"BRL"}}}]\n' | fx billing budgets list --billing-account=ABC-123 --format=json
   jq -n '[{metadata:{name:"spark-backend"},spec:{template:{metadata:{annotations:{"autoscaling.knative.dev/maxScale":"1"}}}}},{metadata:{name:"spark-maintenance"},spec:{template:{metadata:{annotations:{"autoscaling.knative.dev/maxScale":"1"}}}}}]' \
     | fx run services list --format=json
-  jq -n '[{metadata:{name:"spark-db-backup"}},{metadata:{name:"spark-db-migrate"}},{metadata:{name:"spark-storage-audit"}}]' | fx run jobs list --format=json
+  jq -n '[{metadata:{name:"spark-ai-provider-smoke"}},{metadata:{name:"spark-db-backup"}},{metadata:{name:"spark-db-migrate"}},{metadata:{name:"spark-storage-audit"}}]' | fx run jobs list --format=json
   printf 'southamerica-east1\n' | fx run services list --format=value\(metadata.labels.\"cloud.googleapis.com/location\"\)
   printf 'spark-db-backup-daily\nspark-maintenance-cycle\n' | fx scheduler jobs list --format=value\(name.basename\(\)\)
   printf 'spark-private-assets-prod\n' | fx storage buckets list --format=value\(name\)

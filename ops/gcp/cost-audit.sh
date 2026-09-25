@@ -70,7 +70,9 @@ JOBS="$(gcloud_json_or_empty run jobs list --project "${SPARK_GCP_PROJECT}" --re
 if [ -z "${JOBS}" ]; then
   audit_not_verified "cloud run jobs: não listados"
 else
-  audit_expect "jobs existentes" "$(printf '%s\n%s\n%s' "${SPARK_RUN_BACKUP_JOB}" "${SPARK_RUN_MIGRATE_JOB}" "${SPARK_RUN_STORAGE_AUDIT_JOB}" | sort | paste -sd, -)" "$(printf '%s' "${JOBS}" | jq -r '[.[] | .metadata.name] | sort | join(",")')"
+  # O smoke do provider de IA (T19.H4) existe desde o primeiro deploy que o executa; um Job parado
+  # não custa, e ele só roda dentro do deploy.
+  audit_expect "jobs existentes" "$(printf '%s\n%s\n%s\n%s' "${SPARK_RUN_BACKUP_JOB}" "${SPARK_RUN_MIGRATE_JOB}" "${SPARK_RUN_STORAGE_AUDIT_JOB}" "${SPARK_RUN_AI_SMOKE_JOB}" | sort | paste -sd, -)" "$(printf '%s' "${JOBS}" | jq -r '[.[] | .metadata.name] | sort | join(",")')"
 fi
 # Serviços em OUTRAS regiões custam sem que ninguém olhe para eles.
 OTHER_REGIONS="$(gcloud run services list --project "${SPARK_GCP_PROJECT}" --format='value(metadata.labels."cloud.googleapis.com/location")' 2> /dev/null | sort -u | grep -v "^${SPARK_GCP_REGION}$" || true)"

@@ -7,7 +7,7 @@
 # decisão humana). Para cada identidade, compara o conjunto REAL de papéis (projeto de infra,
 # projeto Firebase, cada secret, o bucket, os serviços/jobs do Cloud Run) com o conjunto ESPERADO:
 #
-#   spark-backend-runtime        secrets: database-url, gemini, hmac · bucket: objectAdmin ·
+#   spark-backend-runtime        secrets: database-url, gemini, groq, hmac · bucket: objectAdmin ·
 #                                Firebase: firebaseauth.admin + firebasecloudmessaging.admin ·
 #                                projeto de infra: NENHUM papel
 #   spark-backend-migrator       secrets: database-url-direct · nada mais
@@ -111,6 +111,7 @@ audit_secret_members() {
 audit_secret_members "${SPARK_SECRET_DATABASE_URL}" "${RUNTIME}"
 audit_secret_members "${SPARK_SECRET_DATABASE_URL_DIRECT}" "$(printf '%s\n%s' "${BACKUP}" "${MIGRATOR}")"
 audit_secret_members "${SPARK_SECRET_GEMINI_API_KEY}" "${RUNTIME}"
+audit_secret_members "${SPARK_SECRET_GROQ_API_KEY}" "${RUNTIME}"
 audit_secret_members "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}" "${RUNTIME}"
 
 # ---------------------------------------------------------------- bucket

@@ -96,8 +96,12 @@ check "cria a Service Account de backup no projeto GCP" "sim" \
   "$(printf '%s\n' "$LOG_SEPARADOS" | grep -q 'iam service-accounts create spark-backend-backup --project infra-project' && echo sim || echo não)"
 check "backup SA recebe secretAccessor SÓ no secret direto" "sim" \
   "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding' | grep 'spark-backend-backup@' | grep -c . | grep -qx 1 && printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-database-url-direct' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
-check "backup SA nunca recebe Gemini/HMAC/pooled" "não" \
-  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding' | grep -E 'spark-gemini-api-key|spark-account-deletion-hmac-key|spark-database-url ' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
+check "backup SA nunca recebe Gemini/Groq/HMAC/pooled" "não" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding' | grep -E 'spark-gemini-api-key|spark-groq-api-key|spark-account-deletion-hmac-key|spark-database-url ' | grep -q 'spark-backend-backup@' && echo sim || echo não)"
+check "a chave da Groq só chega à runtime SA" "sim" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-groq-api-key ' | grep -q 'spark-backend-runtime@' && echo sim || echo não)"
+check "...e a nenhuma outra identidade de workload" "não" \
+  "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-groq-api-key ' | grep -qE 'spark-backend-(migrator|backup)@|spark-maintenance-scheduler@' && echo sim || echo não)"
 check "runtime SA NÃO recebe o secret direto" "não" \
   "$(printf '%s\n' "$LOG_SEPARADOS" | grep 'secrets add-iam-policy-binding spark-database-url-direct' | grep -q 'spark-backend-runtime@' && echo sim || echo não)"
 check "backup SA: objectAdmin condicionado ao prefixo de DR no bucket" "sim" \

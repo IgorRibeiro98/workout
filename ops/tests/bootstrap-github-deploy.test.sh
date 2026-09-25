@@ -98,7 +98,8 @@ check "cloudscheduler.admin é concedido ao deployer" "sim" \
 check "artifactregistry.writer é escopado ao repositório spark" "sim" \
   "$(printf '%s\n' "$LOG" | grep -q "artifacts repositories add-iam-policy-binding spark --project infra-project --location southamerica-east1 --member serviceAccount:${DEPLOYER_EMAIL} --role roles/artifactregistry.writer" && echo sim || echo não)"
 
-check "secretmanager.viewer é concedido nos 4 secrets (nunca secretAccessor)" "4" \
+# Cinco desde a T19.H4: banco pooled, banco direto, Gemini, Groq e HMAC.
+check "secretmanager.viewer é concedido nos 5 secrets (nunca secretAccessor)" "5" \
   "$(printf '%s\n' "$LOG" | grep -c "secrets add-iam-policy-binding .* roles/secretmanager.viewer" || true)"
 
 check "nunca secretAccessor para o deployer" "não" \

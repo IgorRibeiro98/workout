@@ -117,7 +117,9 @@ ensure_secret() {
     log "secret '${name}' já existe — não recriando (valor preservado)"
   else
     log "criando secret vazio '${name}' — defina o valor real fora deste script:"
-    log "  gcloud secrets versions add ${name} --data-file=- <<< 'valor real'"
+    # `read -rs` não ecoa nem grava no histórico; `printf '%s'` não acrescenta a quebra de linha que
+    # um here-string (`<<<`) ou um Enter antes do Ctrl-D gravariam junto com o valor.
+    log "  read -rsp 'valor: ' V && printf '%s' \"\$V\" | gcloud secrets versions add ${name} --data-file=- --project ${SPARK_GCP_PROJECT}; unset V"
     gcloud secrets create "${name}" --project "${SPARK_GCP_PROJECT}" --replication-policy automatic
   fi
 }
@@ -125,6 +127,9 @@ ensure_secret() {
 ensure_secret "${SPARK_SECRET_DATABASE_URL}"
 ensure_secret "${SPARK_SECRET_DATABASE_URL_DIRECT}"
 ensure_secret "${SPARK_SECRET_GEMINI_API_KEY}"
+# T19.H4: o secret da Groq nasce vazio como o do Gemini. Os dois existem sempre — o provider
+# selecionado (`SPARK_AI_PROVIDER`) decide qual deles a revision monta, e trocar é config + deploy.
+ensure_secret "${SPARK_SECRET_GROQ_API_KEY}"
 
 # A chave HMAC nunca é gerada de novo se já existir (§20: "não rotacionar automaticamente" — trocá
 # -la sem migração destruiria o reconhecimento de tombstones históricos). Só nasce, com entropia
@@ -140,7 +145,8 @@ else
   log "chave HMAC gerada e armazenada — o valor NUNCA é impresso por este script"
 fi
 
-# IAM por secret (§21/§47): runtime só os três da API; migrator só o direct.
+# IAM por secret (§21/§47): runtime só os da API (banco pooled, as chaves dos providers de IA e o
+# HMAC); migrator e backup só o direct.
 grant_secret_accessor() {
   local secret="$1" member="$2"
   gcloud secrets add-iam-policy-binding "${secret}" \
@@ -153,6 +159,7 @@ grant_secret_accessor() {
 log "concedendo Secret Accessor mínimo por secret"
 grant_secret_accessor "${SPARK_SECRET_DATABASE_URL}" "${RUNTIME_SA_EMAIL}"
 grant_secret_accessor "${SPARK_SECRET_GEMINI_API_KEY}" "${RUNTIME_SA_EMAIL}"
+grant_secret_accessor "${SPARK_SECRET_GROQ_API_KEY}" "${RUNTIME_SA_EMAIL}"
 grant_secret_accessor "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}" "${RUNTIME_SA_EMAIL}"
 # O runtime NUNCA recebe acesso ao secret direto (§9/§21) — só o migrator e, desde a T18.3, o
 # backup de DR (o `pg_dump` usa a conexão direta/admin, nunca o pooler).

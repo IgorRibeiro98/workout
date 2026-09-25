@@ -72,13 +72,13 @@ check "resolve a versão habilitada dos quatro secrets" "4" \
 check "nenhuma referência a secret usa :latest" "0" \
   "$(printf '%s\n' "$LOG" | grep -c ':latest' || true)"
 check "API: os três secrets pinados na versão 7" "sim" \
-  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-backend ' | grep -q 'DATABASE_URL=spark-database-url:7,GEMINI_API_KEY=spark-gemini-api-key:7,ACCOUNT_DELETION_HMAC_KEY=spark-account-deletion-hmac-key:7' && echo sim || echo não)"
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-backend ' | grep -q 'DATABASE_URL=spark-database-url:7,GROQ_API_KEY=spark-groq-api-key:7,ACCOUNT_DELETION_HMAC_KEY=spark-account-deletion-hmac-key:7' && echo sim || echo não)"
 check "manutenção: os três secrets pinados na versão 7" "sim" \
   "$(printf '%s\n' "$LOG" | grep 'run deploy spark-maintenance ' | grep -q 'spark-account-deletion-hmac-key:7' && echo sim || echo não)"
 check "migration: secret direto pinado na versão 7" "sim" \
   "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-migrate ' | grep -q 'DATABASE_URL_DIRECT=spark-database-url-direct:7' && echo sim || echo não)"
 check "o deploy imprime a correlação revision → versão de secret" "sim" \
-  "$(printf '%s' "$SAIDA" | grep -q 'secrets pinados nesta release: spark-database-url=v7 spark-database-url-direct=v7 spark-gemini-api-key=v7 spark-account-deletion-hmac-key=v7' && echo sim || echo não)"
+  "$(printf '%s' "$SAIDA" | grep -q 'secrets pinados nesta release: spark-database-url=v7 spark-database-url-direct=v7 spark-groq-api-key=v7 spark-account-deletion-hmac-key=v7' && echo sim || echo não)"
 check "§17 build sem provenance/SBOM" "sim" \
   "$(printf '%s\n' "$DOCKER" | grep '^build ' | grep -q -- '--provenance=false --sbom=false' && echo sim || echo não)"
 check "o digest usado nos jobs/serviços é o do Artifact Registry, nunca o da tag local" "sim" \
@@ -94,8 +94,8 @@ check "spark-db-backup roda dist/cli/db-backup.js" "sim" \
   "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-backup ' | grep -q -- '--args dist/cli/db-backup.js' && echo sim || echo não)"
 check "spark-db-backup recebe só o secret direto (pinado)" "sim" \
   "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-backup ' | grep -q -- '--set-secrets DATABASE_URL_DIRECT=spark-database-url-direct:7 ' && echo sim || echo não)"
-check "spark-db-backup nunca recebe Gemini/HMAC/pooled" "não" \
-  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-backup ' | grep -qE 'GEMINI|HMAC|DATABASE_URL=spark-database-url:' && echo sim || echo não)"
+check "spark-db-backup nunca recebe chave de IA/HMAC/pooled" "não" \
+  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-backup ' | grep -qE 'GEMINI|GROQ|HMAC|DATABASE_URL=spark-database-url:' && echo sim || echo não)"
 check "spark-db-backup conhece bucket, retenção, commit e digest" "sim" \
   "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-db-backup ' | grep -q 'OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=spark-private-assets-prod,SPARK_DR_RETENTION_COUNT=7,SPARK_GIT_COMMIT=abcdef123456,SPARK_IMAGE_DIGEST=sha256:' && echo sim || echo não)"
 check "spark-db-backup com 1Gi de memória e timeout de 1800s" "sim" \
@@ -327,14 +327,14 @@ check "...a mensagem explica a ausência de procedência" "sim" \
 echo
 echo "=== §19 secret sem versão habilitada → deploy para antes de qualquer revision ==="
 CODIGO=0
-run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z GCLOUD_SECRET_NO_VERSION=spark-gemini-api-key || CODIGO=$?
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z GCLOUD_SECRET_NO_VERSION=spark-groq-api-key || CODIGO=$?
 LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
 cleanup_logs
 check "deploy falha" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
 check "nenhum job nem serviço recebeu deploy" "não" \
   "$(printf '%s\n' "$LOG" | grep -qE 'run (jobs )?deploy' && echo sim || echo não)"
 check "a mensagem nomeia o secret sem versão" "sim" \
-  "$(printf '%s' "$SAIDA" | grep -q "secret 'spark-gemini-api-key' sem versão habilitada" && echo sim || echo não)"
+  "$(printf '%s' "$SAIDA" | grep -q "secret 'spark-groq-api-key' sem versão habilitada" && echo sim || echo não)"
 
 echo
 echo "=== política inválida é recusada antes de tudo ==="
@@ -344,5 +344,93 @@ LOG="$(cat "${GCLOUD_CALL_LOG}")"
 cleanup_logs
 check "SPARK_DR_PREDEPLOY_POLICY=skip é recusada" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
 check "...sem tocar em nada" "0" "$(printf '%s\n' "$LOG" | grep -c 'run ' || true)"
+
+echo
+echo "=== T19.H4 Coach IA: SPARK_AI_PROVIDER=gemini — só a chave dele, provider e modelo explícitos ==="
+CODIGO=0
+run_deploy --full FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GCLOUD_SECRET_VERSION=7 SPARK_AI_PROVIDER=gemini GCLOUD_SECRET_NO_VERSION=spark-groq-api-key || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+check "deploy com gemini termina mesmo com o secret da Groq sem versão (reserva não bloqueia)" "0" "${CODIGO}"
+check "o secret da Groq nem é resolvido quando o provider é gemini" "0" \
+  "$(printf '%s\n' "$LOG" | grep -c 'secrets versions list spark-groq-api-key' || true)"
+check "API: provider, modelo, teto de saída e quota explícitos no ambiente, REQUIRE_AI_PROVIDER no lugar de REQUIRE_GEMINI" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-backend ' | grep -q 'AI_PROVIDER=gemini,GEMINI_MODEL=gemini-3.5-flash,GEMINI_MAX_OUTPUT_TOKENS=8192,AI_MAX_REQUESTS_GLOBAL_DAY=15,AI_MAX_REQUESTS_PER_USER_DAY=8,REQUIRE_AI_PROVIDER=false' && echo sim || echo não)"
+check "API/manutenção nunca recebem REQUIRE_GEMINI nem a chave da Groq" "0" \
+  "$(printf '%s\n' "$LOG" | grep -E 'run deploy spark-(backend|maintenance) ' | grep -cE 'REQUIRE_GEMINI|GROQ_API_KEY' || true)"
+check "o log do deploy registra provider e modelo, nunca valor de chave" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'Coach IA desta release: provider=gemini model=gemini-3.5-flash' && echo sim || echo não)"
+
+echo
+echo "=== T19.H4 Coach IA: provider default (groq) — a revision recebe a chave da Groq e só ela ==="
+CODIGO=0
+run_deploy --full FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GCLOUD_SECRET_VERSION=7 GCLOUD_SECRET_NO_VERSION=spark-gemini-api-key || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+check "deploy com groq termina (a chave do Gemini sem versão não importa)" "0" "${CODIGO}"
+check "API: DATABASE_URL, GROQ_API_KEY e HMAC pinados — e nada do Gemini" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-backend ' | grep -q 'DATABASE_URL=spark-database-url:7,GROQ_API_KEY=spark-groq-api-key:7,ACCOUNT_DELETION_HMAC_KEY=spark-account-deletion-hmac-key:7' && echo sim || echo não)"
+check "API/manutenção sem GEMINI_API_KEY" "0" \
+  "$(printf '%s\n' "$LOG" | grep -E 'run deploy spark-(backend|maintenance) ' | grep -c 'GEMINI_API_KEY' || true)"
+check "API: AI_PROVIDER=groq, modelo de produção e Preview recusado por default" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-backend ' | grep -q 'AI_PROVIDER=groq,GROQ_MODEL=openai/gpt-oss-120b,GROQ_MAX_OUTPUT_TOKENS=3000,GROQ_ALLOW_PREVIEW_MODEL=false,AI_MAX_REQUESTS_GLOBAL_DAY=25,AI_MAX_REQUESTS_PER_USER_DAY=8,REQUIRE_AI_PROVIDER=false' && echo sim || echo não)"
+check "o log registra provider=groq e o modelo" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'provider=groq model=openai/gpt-oss-120b' && echo sim || echo não)"
+check "o Job de smoke recebe só a chave do provider (nem banco, nem HMAC)" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-ai-provider-smoke ' | grep -q -- '--set-secrets GROQ_API_KEY=spark-groq-api-key:7 ' && echo sim || echo não)"
+check "...e nunca DATABASE_URL/HMAC" "0" \
+  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-ai-provider-smoke ' | grep -cE 'DATABASE_URL|HMAC' || true)"
+check "o Job de smoke roda ai-provider-smoke.js com a runtime SA, o gate de provider e a mesma configuração de IA" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run jobs deploy spark-ai-provider-smoke ' | grep -q -- '--args dist/cli/ai-provider-smoke.js --service-account spark-backend-runtime@infra-project.iam.gserviceaccount.com .*NODE_ENV=production,AI_PROVIDER=groq,GROQ_MODEL=openai/gpt-oss-120b,GROQ_MAX_OUTPUT_TOKENS=3000,GROQ_ALLOW_PREVIEW_MODEL=false,AI_MAX_REQUESTS_GLOBAL_DAY=25,AI_MAX_REQUESTS_PER_USER_DAY=8,REQUIRE_AI_PROVIDER=false,AI_PROVIDER_SMOKE_GATE=provider' && echo sim || echo não)"
+check "o smoke do provider roda ANTES da troca de tráfego" "sim" \
+  "$( [ "$(line_no <(printf '%s\n' "$LOG") 'run jobs execute spark-ai-provider-smoke')" -lt "$(line_no <(printf '%s\n' "$LOG") 'update-traffic spark-backend')" ] && echo sim || echo não)"
+
+echo
+echo "=== T19.H4 Coach IA: smoke do provider FALHA — tráfego antigo permanece ==="
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GCLOUD_JOB_EXECUTE_FAILS=spark-ai-provider-smoke || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+check "deploy falha" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "nenhuma troca de tráfego" "não" "$(printf '%s\n' "$LOG" | grep -q 'update-traffic' && echo sim || echo não)"
+check "os Jobs de DR não recebem o digest não validado" "não" \
+  "$(printf '%s\n' "$LOG" | grep -q 'run jobs deploy spark-storage-audit' && echo sim || echo não)"
+check "a mensagem aponta o provider e a saída de emergência" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'smoke do provider de IA FALHOU (provider=groq' && printf '%s' "$SAIDA" | grep -q 'SPARK_AI_SMOKE_POLICY=warn' && echo sim || echo não)"
+
+echo
+echo "=== T19.H4 Coach IA: SPARK_AI_SMOKE_POLICY=warn segue; skip não chama o provider ==="
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" GCLOUD_JOB_EXECUTE_FAILS=spark-ai-provider-smoke SPARK_AI_SMOKE_POLICY=warn || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"; SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+check "warn: deploy termina mesmo com o smoke do provider falhando" "0" "${CODIGO}"
+check "warn: a troca de tráfego acontece" "sim" "$(printf '%s\n' "$LOG" | grep -q 'update-traffic spark-backend' && echo sim || echo não)"
+check "warn: o log deixa claro que não há prova de que o Coach responde" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'SPARK_AI_SMOKE_POLICY=warn — seguindo SEM prova' && echo sim || echo não)"
+CODIGO=0
+run_deploy FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" SPARK_AI_SMOKE_POLICY=skip || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"
+cleanup_logs
+check "skip: deploy termina" "0" "${CODIGO}"
+check "skip: o Job de smoke nunca é publicado nem executado" "0" \
+  "$(printf '%s\n' "$LOG" | grep -c 'spark-ai-provider-smoke' || true)"
+
+echo
+echo "=== T19.H4 Coach IA: provider ou política inválidos são recusados antes de tudo ==="
+recusado_antes_de_tudo() {
+  CODIGO=0
+  run_deploy "$@" || CODIGO=$?
+  LOG="$(cat "${GCLOUD_CALL_LOG}")"; DOCKER="$(cat "${DOCKER_CALL_LOG}")"
+  cleanup_logs
+  check "$* é recusado" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+  check "...antes de build e de qualquer recurso" "0" \
+    "$( { printf '%s\n' "$LOG" | grep -c 'run ' || true; } )$( [ -z "${DOCKER}" ] || echo '+docker')"
+}
+recusado_antes_de_tudo SPARK_AI_PROVIDER=openai
+recusado_antes_de_tudo SPARK_AI_SMOKE_POLICY=talvez
+recusado_antes_de_tudo SPARK_AI_PROVIDER=groq SPARK_GROQ_ALLOW_PREVIEW_MODEL=sim
+recusado_antes_de_tudo SPARK_GEMINI_MAX_OUTPUT_TOKENS=muito
+recusado_antes_de_tudo SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY=-1
 
 finish_checks "deploy: secrets pinados, jobs de DR, gate pré-migration e scheduler diário provados sem GCP"

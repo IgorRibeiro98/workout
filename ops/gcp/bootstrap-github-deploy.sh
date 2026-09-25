@@ -159,7 +159,7 @@ if [ "${VERIFY_ONLY}" -eq 1 ]; then
   fi
 
   audit_section "Secrets metadata"
-  for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
+  for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT}" "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_GROQ_API_KEY}" "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
     SECRET_POLICY="$(gcloud_json_or_empty secrets get-iam-policy "${secret}" --project "${SPARK_GCP_PROJECT}")"
     if [ -z "${SECRET_POLICY}" ]; then
       audit_not_verified "IAM de ${secret} não lido"
@@ -321,9 +321,10 @@ gcloud artifacts repositories add-iam-policy-binding "${SPARK_AR_REPO}" \
 
 # ---------------------------------------------------------------- 8. Secret Manager — metadata, NUNCA payload
 
-log "concedendo secretmanager.viewer (metadata/versão; nunca secretAccessor) nos 4 secrets"
+log "concedendo secretmanager.viewer (metadata/versão; nunca secretAccessor) nos 5 secrets"
 for secret in "${SPARK_SECRET_DATABASE_URL}" "${SPARK_SECRET_DATABASE_URL_DIRECT}" \
-              "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
+              "${SPARK_SECRET_GEMINI_API_KEY}" "${SPARK_SECRET_GROQ_API_KEY}" \
+              "${SPARK_SECRET_ACCOUNT_DELETION_HMAC_KEY}"; do
   gcloud secrets add-iam-policy-binding "${secret}" \
     --project "${SPARK_GCP_PROJECT}" \
     --member "${DEPLOYER_MEMBER}" --role roles/secretmanager.viewer > /dev/null
