@@ -41,7 +41,8 @@
 #         ↓
 #              deploy do spark-maintenance com o MESMO digest (privado, sem tráfego a mover)
 #         ↓
-#   garante os dois jobs do Cloud Scheduler (manutenção a cada minuto; backup de DR diário)
+#   garante os dois jobs do Cloud Scheduler (manutenção a cada 15 min — SPARK_SCHEDULER_CRON, T19.H6;
+#   backup de DR diário). O estado do job (ENABLED/PAUSED) nunca é alterado pelo deploy.
 #
 # Por que o primeiro deploy é um caminho à parte: `--no-traffic` não tem efeito na primeira
 # revision de um serviço Cloud Run novo — ela recebe 100% do (único) tráfego que existe,
@@ -102,6 +103,10 @@ esac
 # Provider de IA desta release (T19.H4) — validado antes de qualquer build: um provider
 # desconhecido não chega a gastar um push.
 resolve_ai_provider
+
+# Cadência do maintenance × stale do heartbeat × alerta de ausência (T19.H6) — a mesma expectativa
+# operacional, conferida antes de qualquer build: um cron trocado sozinho não chega a ser publicado.
+require_coherent_maintenance_timing
 
 # ---------------------------------------------------------------- 1. árvore Git limpa
 
@@ -505,7 +510,7 @@ else
     --max-instances "${SPARK_RUN_MAINTENANCE_MAX_INSTANCES}" \
     --concurrency "${SPARK_RUN_MAINTENANCE_CONCURRENCY}" \
     --set-secrets "${API_SECRETS}" \
-    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,${AI_ENV},SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS}" \
+    --set-env-vars "NODE_ENV=production,DATABASE_MIGRATION_MODE=verify,OBJECT_STORAGE_PROVIDER=gcs,GCS_BUCKET_NAME=${SPARK_GCS_BUCKET},REQUIRE_FIREBASE_ADMIN=true,FIREBASE_ADMIN_CREDENTIAL_MODE=adc,FIREBASE_PROJECT_ID=${SPARK_FIREBASE_PROJECT},AI_ENABLED=false,${AI_ENV},SYNC_WRITE_ENABLED=true,MAINTENANCE_MODE=false,BACKGROUND_JOBS_MODE=disabled,SOCIAL_PUSH_ENABLED=${SPARK_SOCIAL_PUSH_ENABLED:-false},DATABASE_POOL_MIN=${SPARK_DATABASE_POOL_MIN},DATABASE_POOL_MAX=${SPARK_DATABASE_POOL_MAX},DATABASE_CONNECTION_TIMEOUT_MS=${SPARK_DATABASE_CONNECTION_TIMEOUT_MS},SHUTDOWN_TIMEOUT_MS=${SPARK_SHUTDOWN_TIMEOUT_MS},MAINTENANCE_STALE_AFTER_MS=${SPARK_MAINTENANCE_STALE_AFTER_MS}" \
     --quiet
 
   log "garantindo run.invoker de ${SPARK_SA_SCHEDULER} sobre ${SPARK_RUN_MAINTENANCE_SERVICE} (§35)"

@@ -198,14 +198,31 @@ SPARK_GCS_SOFT_DELETE_MIN_SECONDS="${SPARK_GCS_SOFT_DELETE_MIN_SECONDS:-604800}"
 # ---------------------------------------------------------------- Cloud Scheduler
 
 SPARK_SCHEDULER_JOB="${SPARK_SCHEDULER_JOB:-spark-maintenance-cycle}"
-# Um ciclo por minuto, como o `AccountDeletionReconciler` já rodava em modo `interval` — §36 pede
-# esta cadência como ponto de partida, e cada chamada é bounded (§37/§38): os dois workers de baixa
-# frequência (mídia, backup) só executam quando o próprio ciclo decide que já é hora, via o CAS em
-# `server_metadata` que `MaintenanceCoordinator.claimDue` já aplica.
-SPARK_SCHEDULER_CRON="${SPARK_SCHEDULER_CRON:-* * * * *}"
+# Um ciclo a cada 15 minutos (T19.H6). Todo ciclo toca o PostgreSQL — conexão, BEGIN, lock,
+# heartbeat —, mesmo quando nenhum worker tem o que fazer. Com o ciclo de 1 minuto da T18.2, o Neon
+# (que suspende depois de 5 minutos sem consulta) nunca dormiu: a franquia mensal de compute do
+# plano Free acabou em ~17 dias e toda rota autenticada virou 503 (2026-09-28). A cada 15 minutos o
+# banco dorme ~10 por ciclo sem tráfego. Cada chamada continua bounded (§37/§38): os workers de
+# baixa frequência (mídia, backup, tamanho do banco, frescor do DR) só executam quando o próprio
+# ciclo decide que já é hora, via o CAS de `MaintenanceCoordinator.claimDue`.
+#
+# O cron, o stale do heartbeat e a janela do alerta de ausência são UMA expectativa operacional:
+# mudar um exige mudar os outros, e `require_coherent_maintenance_timing` recusa o deploy e os
+# alertas quando eles não batem. Sobrescrever continua possível — deliberadamente, os três juntos.
+SPARK_SCHEDULER_CRON="${SPARK_SCHEDULER_CRON:-*/15 * * * *}"
+# Sem ciclo bem-sucedido há mais que isto, o heartbeat diz `stale` (ms). Vai explícito para a
+# revision do spark-maintenance (`MAINTENANCE_STALE_AFTER_MS`; o default do backend é o mesmo
+# número). 35 min = o ciclo normal (15) + um ciclo perdido (15) + margem de cold start/deploy (5):
+# um ciclo isolado que falha nunca vira stale; dois seguidos viram.
+SPARK_MAINTENANCE_STALE_AFTER_MS="${SPARK_MAINTENANCE_STALE_AFTER_MS:-2100000}"
+# Sem nenhuma resposta 2xx do spark-maintenance por este tempo, `spark-maintenance-stale` dispara
+# (segundos; `monitoring-alerts.sh`). 45 min = três ciclos: nunca entre ciclos normais, nunca por um
+# ciclo isolado que falha, e sempre depois de o heartbeat já dizer `stale`.
+SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS="${SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS:-2700}"
 # T18.3 §9: o backup de DR tem o próprio agendamento — uma vez por dia, de madrugada (UTC), nunca
-# acoplado ao ciclo de 1 minuto da manutenção. O Scheduler dispara o Cloud Run Job pela API de
-# administração (`jobs.run`), com token OAuth da mesma Service Account do Scheduler.
+# acoplado ao ciclo da manutenção (e a cadência da manutenção nunca mexe nele). O Scheduler dispara
+# o Cloud Run Job pela API de administração (`jobs.run`), com token OAuth da mesma Service Account
+# do Scheduler.
 SPARK_BACKUP_SCHEDULER_JOB="${SPARK_BACKUP_SCHEDULER_JOB:-spark-db-backup-daily}"
 SPARK_BACKUP_SCHEDULER_CRON="${SPARK_BACKUP_SCHEDULER_CRON:-15 3 * * *}"
 
@@ -308,6 +325,77 @@ require_api_revision() {
 require_var() {
   local name="$1"
   [ -n "${!name:-}" ] || fail "variável obrigatória vazia ou ausente: ${name}"
+}
+
+# ---------------------------------------------------------------- cadência do maintenance (T19.H6)
+
+# O intervalo, em minutos, entre duas execuções de um cron — só para as formas de cadência
+# uniforme: `* * * * *` (1), `*/N * * * *` com N divisor de 60 até 30, e `M * * * *` (60). Qualquer
+# outra forma é recusada: a coerência com o stale e com o alerta não pode ser presumida de um cron
+# cujo intervalo ninguém calculou.
+cron_interval_minutes() {
+  local cron="$1" minute hour dom month dow extra step
+  read -r minute hour dom month dow extra <<< "${cron}"
+  if [ -z "${dow}" ] || [ -n "${extra}" ] || [ "${hour}" != "*" ] || [ "${dom}" != "*" ] \
+      || [ "${month}" != "*" ] || [ "${dow}" != "*" ]; then
+    fail "cron '${cron}' fora das formas suportadas: '* * * * *', '*/N * * * *' ou 'M * * * *'"
+  fi
+  case "${minute}" in
+    '*') printf '1' ;;
+    '*/'*)
+      step="${minute#\*/}"
+      case "${step}" in
+        ''|*[!0-9]*) fail "cron '${cron}': passo inválido" ;;
+      esac
+      step=$((10#${step}))
+      if [ "${step}" -lt 1 ] || [ "${step}" -gt 30 ] || [ $((60 % step)) -ne 0 ]; then
+        fail "cron '${cron}': o passo precisa dividir 60 (1–30), senão a cadência não é uniforme"
+      fi
+      printf '%s' "${step}"
+      ;;
+    *)
+      case "${minute}" in
+        ''|*[!0-9]*) fail "cron '${cron}' fora das formas suportadas: '* * * * *', '*/N * * * *' ou 'M * * * *'" ;;
+      esac
+      [ $((10#${minute})) -le 59 ] || fail "cron '${cron}': minuto inválido"
+      printf '60'
+      ;;
+  esac
+}
+
+# A cadência do Scheduler, o stale do heartbeat e a janela do alerta de ausência representam a MESMA
+# expectativa operacional (T19.H6 §14). Mudar só o cron é o patch que deixa o heartbeat `stale`
+# entre ciclos normais — ou o alerta disparando entre eles. Recusa, antes de tocar em qualquer
+# recurso, o conjunto que não for coerente:
+#   stale   ≥ 2 × intervalo   um único ciclo perdido nunca vira `stale`;
+#   ausência ≥ stale          o alerta nunca chega antes de o heartbeat dizer que parou.
+# Os limites de cada número são os que o backend (MAINTENANCE_STALE_AFTER_MS) e o Cloud Monitoring
+# (ausência ≥ 120 s) aceitariam — um valor recusado lá seria uma revision que não sobe.
+require_coherent_maintenance_timing() {
+  local interval_min stale_ms absence_s
+  # `|| exit 1` explícito: o `fail` do cron roda num subshell, e o `set -e` não vale quando quem
+  # chama está numa lista `&&`/`||` — a recusa não pode depender de como a função foi chamada.
+  interval_min="$(cron_interval_minutes "${SPARK_SCHEDULER_CRON}")" || exit 1
+  stale_ms="${SPARK_MAINTENANCE_STALE_AFTER_MS}"
+  absence_s="${SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS}"
+  case "${stale_ms}" in
+    ''|*[!0-9]*) fail "SPARK_MAINTENANCE_STALE_AFTER_MS inválido: '${stale_ms}' (inteiro, em ms)" ;;
+  esac
+  case "${absence_s}" in
+    ''|*[!0-9]*) fail "SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS inválido: '${absence_s}' (inteiro, em s)" ;;
+  esac
+  stale_ms=$((10#${stale_ms}))
+  absence_s=$((10#${absence_s}))
+  if [ "${stale_ms}" -lt 10000 ] || [ "${stale_ms}" -gt 86400000 ]; then
+    fail "SPARK_MAINTENANCE_STALE_AFTER_MS=${stale_ms} fora do intervalo aceito pelo backend (10000–86400000 ms)"
+  fi
+  [ "${absence_s}" -ge 120 ] \
+    || fail "SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=${absence_s} abaixo do mínimo do Cloud Monitoring (120 s)"
+  [ "${stale_ms}" -ge $((2 * interval_min * 60000)) ] \
+    || fail "SPARK_MAINTENANCE_STALE_AFTER_MS=${stale_ms} é menor que 2 × o intervalo do Scheduler (${SPARK_SCHEDULER_CRON} = ${interval_min} min): um único ciclo perdido viraria stale"
+  [ $((absence_s * 1000)) -ge "${stale_ms}" ] \
+    || fail "SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=${absence_s} é menor que o stale do heartbeat (${stale_ms} ms): o alerta dispararia antes de o maintenance estar parado"
+  log "cadência do maintenance: '${SPARK_SCHEDULER_CRON}' (${interval_min} min) · stale ${stale_ms} ms · alerta de ausência ${absence_s} s"
 }
 
 # ---------------------------------------------------------------- Secret Manager: versão pinada (T18.3 §19)

@@ -127,8 +127,9 @@ IFS=, read -r -a AI_ENV_PAIRS <<< "${AI_ENV}"
 COMMON_API_ENV+=("${AI_ENV_PAIRS[@]}")
 
 audit_service() {
-  # audit_service <nome> <sa> <cpu> <mem> <min> <max> <concurrency> <timeout|-> <AI_ENABLED>
+  # audit_service <nome> <sa> <cpu> <mem> <min> <max> <concurrency> <timeout|-> <AI_ENABLED> [NOME=valor ...]
   local name="$1" sa="$2" cpu="$3" mem="$4" min="$5" max="$6" conc="$7" timeout="$8" ai="$9"
+  shift 9
   local json
   json="$(gcloud_json_or_empty run services describe "${name}" --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}")"
   if [ -z "${json}" ]; then
@@ -155,7 +156,7 @@ audit_service() {
     *@sha256:*) audit_pass "${name} imagem por digest (${image##*@})" ;;
     *:latest|*) audit_drift "${name} imagem sem digest: ${image}" ;;
   esac
-  audit_env_values "${name}" "${envs}" "${COMMON_API_ENV[@]}" "AI_ENABLED=${ai}"
+  audit_env_values "${name}" "${envs}" "${COMMON_API_ENV[@]}" "AI_ENABLED=${ai}" "$@"
   # Nunca na API/manutenção: o secret direto e o arquivo de credencial.
   audit_expect "${name} sem DATABASE_URL_DIRECT" "" "$(secret_ref "${envs}" DATABASE_URL_DIRECT)$(env_value "${envs}" DATABASE_URL_DIRECT)"
   audit_expect "${name} sem GOOGLE_APPLICATION_CREDENTIALS" "" "$(env_value "${envs}" GOOGLE_APPLICATION_CREDENTIALS)"
@@ -206,8 +207,11 @@ API_IAM="$(gcloud_json_or_empty run services get-iam-policy "${SPARK_RUN_API_SER
 audit_expect "${SPARK_RUN_API_SERVICE} invokers" "allUsers" "$(printf '%s' "${API_IAM}" | jq -r '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]] | sort | join(",")')"
 
 audit_section "cloud run — ${SPARK_RUN_MAINTENANCE_SERVICE}"
+# O stale do heartbeat anda junto com o cron do Scheduler (T19.H6): a revision precisa declarar o
+# mesmo número que `lib.gcp.sh`, senão o heartbeat e o alerta falam de cadências diferentes.
 audit_service "${SPARK_RUN_MAINTENANCE_SERVICE}" "${RUNTIME_SA_EMAIL}" "${SPARK_RUN_MAINTENANCE_CPU}" "${SPARK_RUN_MAINTENANCE_MEMORY}" \
-  "${SPARK_RUN_MAINTENANCE_MIN_INSTANCES}" "${SPARK_RUN_MAINTENANCE_MAX_INSTANCES}" "${SPARK_RUN_MAINTENANCE_CONCURRENCY}" - false
+  "${SPARK_RUN_MAINTENANCE_MIN_INSTANCES}" "${SPARK_RUN_MAINTENANCE_MAX_INSTANCES}" "${SPARK_RUN_MAINTENANCE_CONCURRENCY}" - false \
+  "MAINTENANCE_STALE_AFTER_MS=${SPARK_MAINTENANCE_STALE_AFTER_MS}"
 MAINT_IAM="$(gcloud_json_or_empty run services get-iam-policy "${SPARK_RUN_MAINTENANCE_SERVICE}" --project "${SPARK_GCP_PROJECT}" --region "${SPARK_GCP_REGION}")"
 audit_expect "${SPARK_RUN_MAINTENANCE_SERVICE} invokers" "serviceAccount:${SCHEDULER_SA_EMAIL}" "$(printf '%s' "${MAINT_IAM}" | jq -r '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]] | sort | join(",")')"
 

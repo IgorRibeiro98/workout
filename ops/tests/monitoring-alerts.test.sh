@@ -71,27 +71,34 @@ CODIGO=0
 run_alerts env SPARK_ALERT_EMAIL=ops@example.com || CODIGO=$?
 check "termina com sucesso" "0" "${CODIGO}"
 check "cria o canal de e-mail com o endereço" "sim" "$(grep -q 'beta monitoring channels create .*--type email --channel-labels email_address=ops@example.com' "${GCLOUD_CALL_LOG}" && echo sim || echo não)"
-check "cria as 10 métricas log-based" "10" "$(grep -c '^logging metrics create spark_' "${GCLOUD_CALL_LOG}" || true)"
-for metric in spark_db_backup_completed spark_db_backup_failed spark_migration_failed spark_maintenance_completed spark_maintenance_failed spark_db_backup_stale spark_db_size_critical spark_restore_drill_failed spark_scheduler_failed spark_revision_start_failed; do
+check "cria as 11 métricas log-based" "11" "$(grep -c '^logging metrics create spark_' "${GCLOUD_CALL_LOG}" || true)"
+for metric in spark_db_backup_completed spark_db_backup_failed spark_migration_failed spark_maintenance_completed spark_maintenance_failed spark_db_backup_stale spark_db_size_critical spark_restore_drill_failed spark_scheduler_failed spark_revision_start_failed spark_db_compute_long_uptime; do
   check "métrica ${metric}" "sim" "$(grep -q "^logging metrics create ${metric} " "${GCLOUD_CALL_LOG}" && echo sim || echo não)"
 done
 check "a métrica de backup filtra o evento estruturado do Job" "sim" "$(grep '^logging metrics create spark_db_backup_failed' "${GCLOUD_CALL_LOG}" | grep -q 'resource.type="cloud_run_job" AND jsonPayload.event="db_backup_failed"' && echo sim || echo não)"
 check "a métrica de tamanho só conta PLAN/ACTION_REQUIRED" "sim" "$(grep '^logging metrics create spark_db_size_critical' "${GCLOUD_CALL_LOG}" | grep -q 'jsonPayload.level="PLAN" OR jsonPayload.level="ACTION_REQUIRED"' && echo sim || echo não)"
-check "cria 12 políticas" "12" "$(grep -c '^alpha monitoring policies create' "${GCLOUD_CALL_LOG}" || true)"
-for policy in spark-run-5xx spark-run-revision-failed spark-job-migrate-failed spark-job-migrate-task-failed spark-job-backup-failed spark-job-backup-task-failed spark-db-backup-stale spark-maintenance-stale spark-maintenance-failed spark-scheduler-failed spark-db-size-critical spark-restore-drill-failed; do
+check "cria 13 políticas" "13" "$(grep -c '^alpha monitoring policies create' "${GCLOUD_CALL_LOG}" || true)"
+for policy in spark-run-5xx spark-run-revision-failed spark-job-migrate-failed spark-job-migrate-task-failed spark-job-backup-failed spark-job-backup-task-failed spark-db-backup-stale spark-maintenance-stale spark-maintenance-failed spark-scheduler-failed spark-db-size-critical spark-db-compute-long-uptime spark-restore-drill-failed; do
   check "política ${policy} gravada" "sim" "$( [ -f "${POLICIES}/${policy}.json" ] && echo sim || echo não )"
 done
-check "toda política notifica o canal criado" "12" "$(grep -l '"projects/infra-project/notificationChannels/222"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
+check "toda política notifica o canal criado" "13" "$(grep -l '"projects/infra-project/notificationChannels/222"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
 check "5xx: limiar 5 em 5 min, na API" "sim" "$(jq -e '.conditions[0].conditionThreshold | .thresholdValue == 5 and (.filter | test("service_name=\"spark-backend\"")) and (.aggregations[0].alignmentPeriod == "300s")' "${POLICIES}/spark-run-5xx.json" > /dev/null && echo sim || echo não)"
-check "maintenance-stale é ausência de 2xx no spark-maintenance por 600s (métrica nativa)" "sim" "$(jq -e '.conditions[0].conditionAbsent.duration == "600s" and (.conditions[0].conditionAbsent.filter | test("run.googleapis.com/request_count") and test("service_name=\"spark-maintenance\"") and test("response_code_class=\"2xx\""))' "${POLICIES}/spark-maintenance-stale.json" > /dev/null && echo sim || echo não)"
+check "T19.H6: maintenance-stale é ausência de 2xx no spark-maintenance por 2700s (três ciclos de 15 min; métrica nativa)" "sim" "$(jq -e '.conditions[0].conditionAbsent.duration == "2700s" and (.conditions[0].conditionAbsent.filter | test("run.googleapis.com/request_count") and test("service_name=\"spark-maintenance\"") and test("response_code_class=\"2xx\""))' "${POLICIES}/spark-maintenance-stale.json" > /dev/null && echo sim || echo não)"
+check "T19.H6: nenhuma janela de ausência de 10 min sobrou" "0" "$(grep -l '"600s"' "${POLICIES}"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+check "T19.H6 §35: vários ciclos perdidos são CRITICAL; um erro isolado do Scheduler é WARNING" "CRITICAL WARNING" \
+  "$(jq -r .severity "${POLICIES}/spark-maintenance-stale.json") $(jq -r .severity "${POLICIES}/spark-scheduler-failed.json")"
+check "T19.H6: o compute do banco sem suspensão alerta pelo evento do maintenance, como aviso" "sim" \
+  "$(jq -e '.severity == "WARNING" and (.conditions[0].conditionMatchedLog.filter | test("jsonPayload.event=\"database_compute_long_uptime\"") and test("service_name=\"spark-maintenance\""))' "${POLICIES}/spark-db-compute-long-uptime.json" > /dev/null && echo sim || echo não)"
+check "T19.H6: a documentação do maintenance-failed distingue banco (stage=database) de worker" "sim" \
+  "$(jq -e '.documentation.content | test("stage=database") and test("stage=workers")' "${POLICIES}/spark-maintenance-failed.json" > /dev/null && echo sim || echo não)"
 check "nenhuma política depende de métrica log-based (propagação lenta): só nativas e log-match" "0" \
   "$(grep -l 'logging.googleapis.com/user/' "${POLICIES}"/*.json 2>/dev/null | wc -l | tr -d ' ')"
-check "8 políticas de evento alertam por LOG (conditionMatchedLog), com limite de 1 notificação/5 min" "8" \
+check "9 políticas de evento alertam por LOG (conditionMatchedLog), com limite de 1 notificação/5 min" "9" \
   "$(jq -e '.conditions[0].conditionMatchedLog.filter and .alertStrategy.notificationRateLimit.period == "300s"' "${POLICIES}"/*.json 2>/dev/null | grep -c true || true)"
 check "backup-failed casa o evento estruturado do Job" "sim" "$(jq -e '.conditions[0].conditionMatchedLog.filter | test("jsonPayload.event=\"db_backup_failed\"")' "${POLICIES}/spark-job-backup-failed.json" > /dev/null && echo sim || echo não)"
 check "db-size-critical só casa PLAN/ACTION_REQUIRED" "sim" "$(jq -e '.conditions[0].conditionMatchedLog.filter | test("PLAN") and test("ACTION_REQUIRED")' "${POLICIES}/spark-db-size-critical.json" > /dev/null && echo sim || echo não)"
 check "job-migrate-task-failed usa a métrica nativa de tarefas do Job" "sim" "$(jq -e '.conditions[0].conditionThreshold.filter | test("job/completed_task_attempt_count") and test("job_name=\"spark-db-migrate\"") and test("result=\"failed\"")' "${POLICIES}/spark-job-migrate-task-failed.json" > /dev/null && echo sim || echo não)"
-check "toda política fecha sozinha em 30 min e tem documentação" "12" "$(jq -e '.alertStrategy.autoClose == "1800s" and (.documentation.content | length > 0)' "${POLICIES}"/*.json 2>/dev/null | grep -c true || true)"
+check "toda política fecha sozinha em 30 min e tem documentação" "13" "$(jq -e '.alertStrategy.autoClose == "1800s" and (.documentation.content | length > 0)' "${POLICIES}"/*.json 2>/dev/null | grep -c true || true)"
 check "nenhuma política ou métrica menciona segredo" "não" "$(grep -qiE 'password|secret|token' "${POLICIES}"/*.json && echo sim || echo não)"
 
 echo
@@ -100,7 +107,7 @@ CODIGO=0
 run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_CHANNEL_EXISTS=1 || CODIGO=$?
 check "termina com sucesso" "0" "${CODIGO}"
 check "não cria canal" "não" "$(grep -q 'channels create' "${GCLOUD_CALL_LOG}" && echo sim || echo não)"
-check "usa o canal existente nas políticas" "12" "$(grep -l '"projects/infra-project/notificationChannels/111"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
+check "usa o canal existente nas políticas" "13" "$(grep -l '"projects/infra-project/notificationChannels/111"' "${POLICIES}"/*.json | wc -l | tr -d ' ')"
 
 echo
 echo "=== métrica recém-criada ainda invisível: a política tenta de novo (e desiste com honestidade) ==="
@@ -109,7 +116,7 @@ CODIGO=0
 run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_METRIC_NOT_READY_TIMES=3 || CODIGO=$?
 check "termina com sucesso depois de esperar a métrica" "0" "${CODIGO}"
 check "registrou as tentativas em que a métrica não estava visível" "3" "$(grep -c 'a métrica ainda não está visível' "${WORK}/out" || true)"
-check "todas as 12 políticas foram aplicadas mesmo assim" "12" "$(grep -c 'política criada:' "${WORK}/out" || true)"
+check "todas as 13 políticas foram aplicadas mesmo assim" "13" "$(grep -c 'política criada:' "${WORK}/out" || true)"
 CODIGO=0
 run_alerts env SPARK_ALERT_EMAIL=ops@example.com FAKE_METRIC_NOT_READY_TIMES=99 SPARK_ALERT_RETRIES=2 || CODIGO=$?
 check "com a métrica nunca visível, falha em vez de fingir" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
@@ -128,4 +135,17 @@ run_alerts env || CODIGO=$?
 check "sem SPARK_ALERT_EMAIL é recusado" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
 check "...antes de criar qualquer coisa" "0" "$(grep -cE 'create|update' "${GCLOUD_CALL_LOG}" || true)"
 
-finish_checks "alertas: canal, 10 métricas e 12 políticas criados de forma idempotente, sem tocar em nada com --list"
+echo
+echo "=== T19.H6: a janela de ausência só é aplicada se for coerente com o cron e com o stale ==="
+ALERT_ARGS=()
+CODIGO=0
+run_alerts env SPARK_ALERT_EMAIL=ops@example.com SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=600 || CODIGO=$?
+check "10 min de ausência com o Scheduler a cada 15 min é recusado" "sim" "$( [ "$CODIGO" != "0" ] && echo sim || echo não )"
+check "...antes de criar ou atualizar qualquer coisa" "0" "$(grep -cE 'create|update' "${GCLOUD_CALL_LOG}" || true)"
+check "...dizendo por quê" "sim" "$(grep -q 'menor que o stale do heartbeat' "${WORK}/out" && echo sim || echo não)"
+CODIGO=0
+run_alerts env SPARK_ALERT_EMAIL=ops@example.com 'SPARK_SCHEDULER_CRON=*/30 * * * *' SPARK_MAINTENANCE_STALE_AFTER_MS=3900000 SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=5400 || CODIGO=$?
+check "override coerente (30 min / 65 min / 90 min) é aplicado" "0" "${CODIGO}"
+check "...com a janela sobrescrita" "5400s" "$(jq -r '.conditions[0].conditionAbsent.duration' "${POLICIES}/spark-maintenance-stale.json")"
+
+finish_checks "alertas: canal, 11 métricas e 13 políticas criados de forma idempotente, sem tocar em nada com --list"

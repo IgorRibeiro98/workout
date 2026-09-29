@@ -110,7 +110,10 @@ build_pass_fixtures() {
     }'
   }
   service_json spark-backend true 20 180 | fx run services describe spark-backend --format=json
-  service_json spark-maintenance false 1 300 | fx run services describe spark-maintenance --format=json
+  # T19.H6: só a revision do maintenance declara o stale do heartbeat — o mesmo número de lib.gcp.sh.
+  service_json spark-maintenance false 1 300 \
+    | jq '.spec.template.spec.containers[0].env += [{name:"MAINTENANCE_STALE_AFTER_MS",value:"2100000"}]' \
+    | fx run services describe spark-maintenance --format=json
   printf '{"bindings":[{"role":"roles/run.invoker","members":["allUsers"]}]}\n' | fx run services get-iam-policy spark-backend --format=json
   printf '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:%s"]}]}\n' "${SCHEDULER}" | fx run services get-iam-policy spark-maintenance --format=json
 
@@ -130,7 +133,7 @@ build_pass_fixtures() {
     | fx run jobs describe spark-ai-provider-smoke --format=json
   printf '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:%s"]}]}\n' "${SCHEDULER}" | fx run jobs get-iam-policy spark-db-backup --format=json
 
-  jq -n --arg sa "${SCHEDULER}" '{schedule:"* * * * *",state:"ENABLED",httpTarget:{uri:"https://spark-maintenance-abc.a.run.app/internal/maintenance/run",oidcToken:{serviceAccountEmail:$sa}}}' \
+  jq -n --arg sa "${SCHEDULER}" '{schedule:"*/15 * * * *",state:"ENABLED",httpTarget:{uri:"https://spark-maintenance-abc.a.run.app/internal/maintenance/run",oidcToken:{serviceAccountEmail:$sa}}}' \
     | fx scheduler jobs describe spark-maintenance-cycle --format=json
   jq -n --arg sa "${SCHEDULER}" --arg p "${P}" '{schedule:"15 3 * * *",state:"ENABLED",httpTarget:{uri:("https://southamerica-east1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/" + $p + "/jobs/spark-db-backup:run"),oauthToken:{serviceAccountEmail:$sa}}}' \
     | fx scheduler jobs describe spark-db-backup-daily --format=json
@@ -265,5 +268,35 @@ printf '{"location":"SOUTHAMERICA-EAST1","public_access_prevention":"enforced","
 RESULT="$(run_audit config-drift-audit.sh)"
 check "config-drift-audit → DRIFT" "1|config-drift-audit: DRIFT" "${RESULT}"
 check "...apontando o soft delete" "sim" "$(grep -q 'soft_delete retentionDurationSeconds: esperado ≥ 604800' "${WORK}/audit.err" && echo sim || echo não)"
+
+echo
+echo "=== T19.H6 drift: o Scheduler da manutenção ainda a cada minuto (o que esgotou o Neon) ==="
+build_pass_fixtures
+mutate '.schedule = "* * * * *"' scheduler jobs describe spark-maintenance-cycle --format=json
+RESULT="$(run_audit config-drift-audit.sh)"
+check "config-drift-audit → DRIFT" "1|config-drift-audit: DRIFT" "${RESULT}"
+check "...apontando o cron antigo" "sim" "$(grep -q "spark-maintenance-cycle schedule: esperado '\*/15 \* \* \* \*', real '\* \* \* \* \*'" "${WORK}/audit.err" && echo sim || echo não)"
+
+echo
+echo "=== T19.H6 drift: o Scheduler da manutenção pausado (o estado do incidente) ==="
+build_pass_fixtures
+mutate '.state = "PAUSED"' scheduler jobs describe spark-maintenance-cycle --format=json
+RESULT="$(run_audit config-drift-audit.sh)"
+check "config-drift-audit → DRIFT" "1|config-drift-audit: DRIFT" "${RESULT}"
+check "...apontando o estado" "sim" "$(grep -q "spark-maintenance-cycle state: esperado 'ENABLED', real 'PAUSED'" "${WORK}/audit.err" && echo sim || echo não)"
+
+echo
+echo "=== T19.H6 drift: a revision do maintenance ainda com o stale de 5 min (o default antigo) ==="
+build_pass_fixtures
+mutate '(.spec.template.spec.containers[0].env[] | select(.name == "MAINTENANCE_STALE_AFTER_MS") | .value) = "300000"' \
+  run services describe spark-maintenance --format=json
+RESULT="$(run_audit config-drift-audit.sh)"
+check "config-drift-audit → DRIFT" "1|config-drift-audit: DRIFT" "${RESULT}"
+check "...apontando o stale" "sim" "$(grep -q "spark-maintenance env MAINTENANCE_STALE_AFTER_MS: esperado '2100000', real '300000'" "${WORK}/audit.err" && echo sim || echo não)"
+build_pass_fixtures
+mutate '.spec.template.spec.containers[0].env |= map(select(.name != "MAINTENANCE_STALE_AFTER_MS"))' \
+  run services describe spark-maintenance --format=json
+RESULT="$(run_audit config-drift-audit.sh)"
+check "sem a variável na revision (default do backend) também é DRIFT" "1|config-drift-audit: DRIFT" "${RESULT}"
 
 finish_checks "auditorias de drift, IAM e custo: PASS/DRIFT/NOT_VERIFIED provados offline, sem nenhuma remediação automática"

@@ -113,8 +113,18 @@ check "run.invoker da SA do Scheduler sobre o Job de backup" "sim" \
 # comando com os mesmos argumentos, e o grep aceita os dois.
 check "scheduler spark-db-backup-daily garantido com cron diário e OAuth da SA do Scheduler" "sim" \
   "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-db-backup-daily ' | grep -q -- '--schedule 15 3 \* \* \* --uri https://southamerica-east1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/infra-project/jobs/spark-db-backup:run --http-method POST --oauth-service-account-email spark-maintenance-scheduler@infra-project.iam.gserviceaccount.com' && echo sim || echo não)"
-check "o scheduler da manutenção continua a cada minuto, por OIDC" "sim" \
-  "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-maintenance-cycle ' | grep -q -- '--schedule \* \* \* \* \* .*--oidc-service-account-email' && echo sim || echo não)"
+check "T19.H6: o scheduler da manutenção roda a cada 15 minutos, por OIDC" "sim" \
+  "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-maintenance-cycle ' | grep -q -- '--schedule \*/15 \* \* \* \* .*--oidc-service-account-email' && echo sim || echo não)"
+check "T19.H6: nunca mais a cada minuto" "0" \
+  "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-maintenance-cycle ' | grep -c -- '--schedule \* \* \* \* \* ' || true)"
+check "T19.H6: a revision do maintenance declara o stale do heartbeat (35 min) junto com a cadência" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-maintenance ' | grep -q 'MAINTENANCE_STALE_AFTER_MS=2100000' && echo sim || echo não)"
+check "T19.H6: o deploy nunca pausa nem retoma o Scheduler (estado é decisão do operador)" "0" \
+  "$(printf '%s\n' "$LOG" | grep -cE 'scheduler jobs (pause|resume) ' || true)"
+check "T19.H6: o backup diário continua 15 3 * * *, separado da manutenção" "sim" \
+  "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-db-backup-daily ' | grep -q -- '--schedule 15 3 \* \* \* ' && echo sim || echo não)"
+check "T19.H6: o log do deploy diz a cadência, o stale e a janela do alerta" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q "cadência do maintenance: '\*/15 \* \* \* \*' (15 min) · stale 2100000 ms · alerta de ausência 2700 s" && echo sim || echo não)"
 
 echo
 echo "=== §10 gate de DR: backup válido recente → nenhum backup extra antes da migration ==="
@@ -479,5 +489,44 @@ recusado_antes_de_tudo SPARK_AI_SMOKE_POLICY=talvez
 recusado_antes_de_tudo SPARK_AI_PROVIDER=groq SPARK_GROQ_ALLOW_PREVIEW_MODEL=sim
 recusado_antes_de_tudo SPARK_GEMINI_MAX_OUTPUT_TOKENS=muito
 recusado_antes_de_tudo SPARK_GEMINI_MAX_REQUESTS_GLOBAL_DAY=-1
+
+echo
+echo "=== T19.H6 cadência × stale × alerta: uma expectativa só, conferida antes de tudo ==="
+# O patch incompleto que a T19.H6 proíbe: mudar um dos três sem os outros.
+recusado_antes_de_tudo SPARK_MAINTENANCE_STALE_AFTER_MS=300000
+recusado_antes_de_tudo SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=600
+recusado_antes_de_tudo 'SPARK_SCHEDULER_CRON=*/30 * * * *'
+# Formas cuja cadência não é uniforme (ou não é lida) não são presumidas coerentes.
+recusado_antes_de_tudo 'SPARK_SCHEDULER_CRON=0,15,30,45 * * * *'
+recusado_antes_de_tudo 'SPARK_SCHEDULER_CRON=*/7 * * * *'
+recusado_antes_de_tudo 'SPARK_SCHEDULER_CRON=*/15 3 * * *'
+recusado_antes_de_tudo SPARK_MAINTENANCE_STALE_AFTER_MS=35min
+recusado_antes_de_tudo SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=60
+CODIGO=0
+run_deploy SPARK_MAINTENANCE_STALE_AFTER_MS=300000 || CODIGO=$?
+SAIDA="$(cat "${GCLOUD_CALL_LOG}.out")"
+cleanup_logs
+check "...e a recusa diz por quê (um ciclo perdido viraria stale)" "sim" \
+  "$(printf '%s' "$SAIDA" | grep -q 'menor que 2 × o intervalo do Scheduler' && echo sim || echo não)"
+
+# Sobrescrever continua possível — deliberadamente, os três juntos.
+CODIGO=0
+run_deploy --full FAKE_DR_BACKUPS=2026-09-11T031500Z FAKE_DR_CREATED_MS="${FRESH_MS}" \
+  'SPARK_SCHEDULER_CRON=*/30 * * * *' SPARK_MAINTENANCE_STALE_AFTER_MS=3900000 SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS=5400 || CODIGO=$?
+LOG="$(cat "${GCLOUD_CALL_LOG}")"
+cleanup_logs
+check "override coerente (30 min / 65 min / 90 min) é aceito" "0" "${CODIGO}"
+check "...o Scheduler recebe o cron sobrescrito" "sim" \
+  "$(printf '%s\n' "$LOG" | grep -E 'scheduler jobs (create|update) http spark-maintenance-cycle ' | grep -q -- '--schedule \*/30 \* \* \* \* ' && echo sim || echo não)"
+check "...e a revision, o stale sobrescrito" "sim" \
+  "$(printf '%s\n' "$LOG" | grep 'run deploy spark-maintenance ' | grep -q 'MAINTENANCE_STALE_AFTER_MS=3900000' && echo sim || echo não)"
+
+# A recusa não pode depender de como a função é chamada: dentro de uma condição o `set -e` fica
+# suspenso, e uma falha num `$(...)` passaria em silêncio (achado ao escrever a T19.H6).
+check "a checagem recusa mesmo chamada como condição (set -e suspenso)" "recusado" \
+  "$( ( export SPARK_GCP_PROJECT=infra-project SPARK_SCHEDULER_CRON='0,15,30,45 * * * *'
+        # shellcheck source=ops/gcp/lib.gcp.sh
+        . "${OPS_DIR}/gcp/lib.gcp.sh"
+        if require_coherent_maintenance_timing; then echo aceito; fi ) 2> /dev/null || echo recusado)"
 
 finish_checks "deploy: secrets pinados, jobs de DR, gate pré-migration e scheduler diário provados sem GCP"
