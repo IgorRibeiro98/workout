@@ -313,6 +313,18 @@ export class PostgresService implements OnApplicationShutdown, DbClient {
   }
 
   /**
+   * Uma conexão dedicada do pool, com a mesma segunda chance de `transaction()` (T19.H6).
+   *
+   * Para quem precisa segurar a conexão por conta própria — o ciclo de manutenção prende nela a
+   * transação do lock consultivo. Com o Scheduler a cada 15 minutos e o Neon suspendendo depois de
+   * 5 sem consulta, quase todo ciclo começa acordando o banco: é exatamente o cold start que esta
+   * retentativa absorve. Quem recebe a conexão é dono do `release()`.
+   */
+  async connect(): Promise<PoolClient> {
+    return this.connectWithRetry();
+  }
+
+  /**
    * Adquire uma conexão do pool, com **uma** segunda tentativa para falha transitória de conexão.
    *
    * Uma só, e só na aquisição: aqui nada foi executado ainda, então repetir não pode duplicar

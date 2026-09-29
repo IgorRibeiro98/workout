@@ -118,4 +118,30 @@ describe('AppConfig (bootstrap de configuração)', () => {
     expect(customConfig.pushMaxAttempts).toBe(3);
     expect(customConfig.pushBatchSize).toBe(25);
   });
+
+  // --- T19.H6: a cadência do maintenance deixa o banco dormir --------------------------------
+  //
+  // O Scheduler passou de 1 para 15 minutos. O heartbeat precisa acompanhar: um ciclo perdido
+  // (30 min sem sucesso) não pode virar `stale`, dois seguidos (45 min) precisam virar. O par
+  // cron × stale × alerta de ausência é conferido de verdade em `ops/gcp/lib.gcp.sh` (o cron só
+  // existe lá); aqui fica o default que quem roda o ciclo fora do Cloud Run herda.
+
+  it('T19.H6 — MAINTENANCE_STALE_AFTER_MS é 35 min: absorve um ciclo de 15 min perdido, nunca dois', () => {
+    const schedulerIntervalMs = 15 * 60 * 1000;
+    const staleAfterMs = AppConfig.fromEnv(validEnv).maintenanceStaleAfterMs;
+    expect(staleAfterMs).toBe(35 * 60 * 1000);
+    expect(staleAfterMs).toBeGreaterThanOrEqual(2 * schedulerIntervalMs);
+    expect(staleAfterMs).toBeLessThan(3 * schedulerIntervalMs);
+  });
+
+  it('T19.H6 — o aviso de compute do banco sem suspensão vale 6 h por default, e 0 o desliga', () => {
+    expect(AppConfig.fromEnv(validEnv).databaseComputeUptimeWarnMs).toBe(6 * 60 * 60 * 1000);
+    expect(
+      AppConfig.fromEnv({ ...validEnv, DATABASE_COMPUTE_UPTIME_WARN_MS: '0' })
+        .databaseComputeUptimeWarnMs,
+    ).toBe(0);
+    expect(() => AppConfig.fromEnv({ ...validEnv, DATABASE_COMPUTE_UPTIME_WARN_MS: '-1' })).toThrow(
+      ConfigValidationError,
+    );
+  });
 });

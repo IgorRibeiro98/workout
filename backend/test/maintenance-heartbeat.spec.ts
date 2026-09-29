@@ -4,6 +4,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap/create-app';
 import { CLOCK } from '../src/common/clock';
+import { SparkLogger } from '../src/common/logger';
 import { classifyDatabaseSize, isDatabaseSizeAlerting } from '../src/database/database-size.policy';
 import { PostgresService } from '../src/database/postgres.service';
 import { drDumpObjectName, drManifestObjectName, serializeDrManifest } from '../src/dr/dr-manifest';
@@ -42,7 +43,7 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
         AppModule.forRoot(
           configFor(temp.path, {
             BACKGROUND_JOBS_MODE: 'disabled',
-            MAINTENANCE_STALE_AFTER_MS: String(5 * 60 * 1000),
+            // Sem MAINTENANCE_STALE_AFTER_MS: o default (35 min, T19.H6) é o que está sob teste.
             DATABASE_SIZE_CHECK_INTERVAL_MS: String(60 * 60 * 1000),
             DR_BACKUP_CHECK_INTERVAL_MS: String(30 * 60 * 1000),
             DR_BACKUP_MAX_AGE_MS: String(26 * 60 * 60 * 1000),
@@ -115,16 +116,55 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
   it('stale detection: mais de MAINTENANCE_STALE_AFTER_MS sem sucesso → stale, e o próximo ciclo registra maintenance_stale', async () => {
     await boot();
     await coordinator.runCycle();
-    clock.advance(4 * 60 * 1000);
+    clock.advance(34 * 60 * 1000);
     expect((await coordinator.status()).stale).toBe(false);
-    clock.advance(2 * 60 * 1000); // 6 min desde o sucesso
+    clock.advance(2 * 60 * 1000); // 36 min desde o sucesso
     const stale = await coordinator.status();
     expect(stale.stale).toBe(true);
-    expect(stale.ageMs).toBeGreaterThan(5 * 60 * 1000);
+    expect(stale.staleAfterMs).toBe(35 * 60 * 1000);
+    expect(stale.ageMs).toBeGreaterThan(35 * 60 * 1000);
 
     // Um ciclo novo recupera: deixa de ser stale.
     await coordinator.runCycle();
     expect((await coordinator.status()).stale).toBe(false);
+  });
+
+  it('T19.H6 — cadência de 15 min: ciclo normal e um ciclo perdido nunca são stale; dois perdidos são', async () => {
+    await boot();
+    const logger = app.get(SparkLogger);
+    const warn = jest.spyOn(logger, 'warn');
+
+    await coordinator.runCycle();
+    clock.advance(15 * 60 * 1000); // o próximo ciclo normal
+    expect((await coordinator.status()).stale).toBe(false);
+    await coordinator.runCycle();
+
+    clock.advance(30 * 60 * 1000); // um ciclo perdido: o seguinte chega 30 min depois
+    expect((await coordinator.status()).stale).toBe(false);
+    await coordinator.runCycle();
+    // Voltar depois de UM ciclo perdido não é um buraco: nada de maintenance_stale no log.
+    expect(warn.mock.calls.filter(([event]) => event === 'maintenance_stale')).toHaveLength(0);
+
+    clock.advance(45 * 60 * 1000); // dois ciclos perdidos
+    const status = await coordinator.status();
+    expect(status.stale).toBe(true);
+    expect(status.ageMs).toBeGreaterThan(status.staleAfterMs);
+    await coordinator.runCycle();
+    // A volta depois de dois ciclos perdidos é registrada, com quanto tempo ficou parado.
+    expect(warn).toHaveBeenCalledWith(
+      'maintenance_stale',
+      expect.objectContaining({ ageMs: expect.any(Number), staleAfterMs: 35 * 60 * 1000 }),
+    );
+    expect((await coordinator.status()).stale).toBe(false);
+  });
+
+  it('o valor configurado manda: MAINTENANCE_STALE_AFTER_MS explícito substitui o default', async () => {
+    await boot({ MAINTENANCE_STALE_AFTER_MS: String(5 * 60 * 1000) });
+    await coordinator.runCycle();
+    clock.advance(6 * 60 * 1000);
+    const status = await coordinator.status();
+    expect(status.staleAfterMs).toBe(5 * 60 * 1000);
+    expect(status.stale).toBe(true);
   });
 
   it('um ciclo que falha grava a falha (e o nome do erro), sem apagar o último sucesso', async () => {
@@ -245,7 +285,7 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
       await coordinator.runCycle();
       const release = await holdCycleLock();
       try {
-        clock.advance(60 * 1000);
+        clock.advance(15 * 60 * 1000); // um ciclo normal depois do último sucesso
         const result = await coordinator.runCycle();
         expect(result.skipped).toBe(true);
         expect(result.staleWhileLocked).toBeUndefined();
@@ -262,12 +302,12 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
       await coordinator.runCycle();
       const release = await holdCycleLock();
       try {
-        clock.advance(5 * 60 * 1000 + 1);
+        clock.advance(35 * 60 * 1000 + 1);
         const result = await coordinator.runCycle();
         expect(result.skipped).toBe(true);
         expect(result.staleWhileLocked).toEqual({
-          ageMs: 5 * 60 * 1000 + 1,
-          staleAfterMs: 5 * 60 * 1000,
+          ageMs: 35 * 60 * 1000 + 1,
+          staleAfterMs: 35 * 60 * 1000,
         });
         const res = await httpRun();
         expect(res.status).toBe(503);
@@ -289,7 +329,7 @@ describe('T18.3 — heartbeat do maintenance, stale detection e tamanho do banco
       try {
         const result = await coordinator.runCycle();
         expect(result.skipped).toBe(true);
-        expect(result.staleWhileLocked).toEqual({ ageMs: null, staleAfterMs: 5 * 60 * 1000 });
+        expect(result.staleWhileLocked).toEqual({ ageMs: null, staleAfterMs: 35 * 60 * 1000 });
         expect((await httpRun()).status).toBe(503);
       } finally {
         await release();

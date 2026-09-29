@@ -7,7 +7,7 @@ import {
   isDatabaseSizeAlerting,
   type DatabaseSizeLevel,
 } from '../database/database-size.policy';
-import { PostgresService } from '../database/postgres.service';
+import { PostgresService, type PoolClient } from '../database/postgres.service';
 import { DrBackupStore } from '../dr/dr-backup.store';
 import { NotificationDispatcher } from '../modules/social/notification.dispatcher';
 import { SocialMediaCleaner } from '../modules/social/social-media.cleaner';
@@ -30,6 +30,14 @@ export interface MaintenanceCycleResult {
   readonly drBackupChecked: boolean;
   readonly durationMs: number;
   /**
+   * T19.H6 — quando subiu o compute do PostgreSQL que atendeu este ciclo (`pg_postmaster_start_time`,
+   * epoch ms) e há quanto tempo ele estava de pé. O Neon reinicia o Postgres a cada retomada: um
+   * compute novo a cada ciclo é a prova de que o banco dormiu entre dois ciclos; o mesmo compute
+   * ciclo após ciclo é o banco que nunca dorme. `null` num ciclo `skipped`.
+   */
+  readonly databaseStartedAt: number | null;
+  readonly databaseUptimeMs: number | null;
+  /**
    * Só em resultado `skipped`: o lock estava tomado E o último sucesso já passou de
    * `MAINTENANCE_STALE_AFTER_MS`. Um `skipped` isolado é normal (retry do Scheduler); um `skipped`
    * com o heartbeat velho é o ciclo preso — e o controller responde 503 para o Scheduler e os
@@ -49,7 +57,25 @@ const SKIPPED_RESULT: MaintenanceCycleResult = {
   databaseSizeChecked: false,
   drBackupChecked: false,
   durationMs: 0,
+  databaseStartedAt: null,
+  databaseUptimeMs: null,
 };
+
+/**
+ * O lock do ciclo e a identidade do compute do banco, num round-trip só (T19.H6).
+ *
+ * Os dois relógios são do próprio banco (`clock_timestamp()` contra `pg_postmaster_start_time()`):
+ * o uptime não depende do relógio do processo, nem de um relógio falso num teste.
+ */
+const CYCLE_LOCK_SQL = `SELECT pg_try_advisory_xact_lock(hashtext('spark_maintenance_cycle_xact')) AS locked,
+       (extract(epoch FROM pg_postmaster_start_time()) * 1000)::bigint AS database_started_at,
+       (extract(epoch FROM (clock_timestamp() - pg_postmaster_start_time())) * 1000)::bigint AS database_uptime_ms`;
+
+interface CycleLockRow {
+  readonly locked: boolean;
+  readonly database_started_at: number | null;
+  readonly database_uptime_ms: number | null;
+}
 
 /**
  * O heartbeat persistido do maintenance e as duas observações que ele carrega (T18.3 §12/§13).
@@ -99,6 +125,7 @@ const KEYS = {
   drCheckedAt: 'dr_backup_checked_at',
   drLatestId: 'dr_backup_latest_id',
   drLatestCreatedAt: 'dr_backup_latest_created_at',
+  computeUptimeWarnedFor: 'database_compute_uptime_warned_for',
 } as const;
 
 /**
@@ -117,7 +144,7 @@ const KEYS = {
  * chamadas de verdade, mesmo com a configuração mais conservadora do Cloud Run. `runCycle()` tenta
  * `pg_try_advisory_xact_lock` numa conexão dedicada do pool **antes** de tocar em qualquer worker;
  * se não conseguir, devolve `skipped: true` sem processar nada — nunca bloqueia esperando, porque
- * um ciclo que não rodou agora roda no próximo minuto.
+ * um ciclo que não rodou agora roda na próxima chamada do Scheduler.
  *
  * ## Por que o lock é de TRANSAÇÃO, numa transação aberta pelo ciclo inteiro (T18.3)
  *
@@ -138,13 +165,14 @@ const KEYS = {
  * um ciclo de segundos, num processo que só faz isto. A chave mudou junto
  * (`spark_maintenance_cycle_xact`): um lock de sessão que tenha vazado para o pooler sob o esquema
  * antigo não pode bloquear o novo; ele evapora quando o pooler recicla a conexão. A conexão é
- * obtida e devolvida manualmente (`pool.connect()`), e não por `PostgresService.transaction()`,
- * porque os workers do ciclo usam as OUTRAS conexões do pool — esta só segura o lock.
+ * obtida e devolvida manualmente (`postgres.connect()`, com a mesma segunda chance de cold start de
+ * `transaction()`), e não por `PostgresService.transaction()`, porque os workers do ciclo usam as
+ * OUTRAS conexões do pool — esta só segura o lock.
  *
  * ## Por que cadência diferente por worker, e não "roda tudo toda vez"
  *
- * Notificação e exclusão de conta precisam de latência baixa — é gente esperando um convite chegar
- * ou uma conta terminar de sair. Os dois cleaners de órfãos são o oposto: órfão é raro, e cada
+ * Notificação e exclusão de conta rodam em todo ciclo — é gente esperando um convite chegar ou uma
+ * conta terminar de sair. Os dois cleaners de órfãos são o oposto: órfão é raro, e cada
  * varredura é uma listagem paga no Object Storage (§38). `claimDue` é um CAS atômico sobre
  * `server_metadata` — o mesmo tipo de linha que já guarda `migrations_applied_at` — que só deixa
  * o cleaner rodar quando já passou `*_CLEANUP_INTERVAL_MS` desde a última vez, reaproveitando os
@@ -156,8 +184,19 @@ const KEYS = {
  * — é o que `status()` lê e o que `maintenance_stale` usa para dizer "o Scheduler parou". Duas
  * observações de baixa cadência viajam no mesmo ciclo, pelo mesmo CAS dos cleaners:
  * `pg_database_size` classificado pelos limiares (`database-size.policy.ts`) e a idade do backup
- * de DR mais recente (`DrBackupStore.latestValid`). Nenhuma das duas roda a cada minuto, e uma
+ * de DR mais recente (`DrBackupStore.latestValid`). Nenhuma das duas roda em todo ciclo, e uma
  * falha nelas é registrada sem derrubar o ciclo — notificação e exclusão de conta importam mais.
+ *
+ * ## A cadência deixa o banco dormir (T19.H6)
+ *
+ * Todo ciclo toca o PostgreSQL — conexão, `BEGIN`, lock, heartbeat —, mesmo quando nenhum worker
+ * tem o que fazer. Com o Scheduler a cada minuto, o Neon (que suspende depois de 5 minutos sem
+ * consulta) nunca dormiu: a franquia mensal de compute acabou e toda rota autenticada virou 503.
+ * O Scheduler chama a cada 15 minutos desde então (`SPARK_SCHEDULER_CRON`), o que dá ao banco ~10
+ * minutos de sono por ciclo sem tráfego. Duas consequências vivem aqui: quase todo ciclo começa
+ * acordando o banco (daí a aquisição com retentativa), e o próprio ciclo mede isso — o compute que
+ * o atendeu vai no `maintenance_completed`, e um compute acordado há mais de
+ * `DATABASE_COMPUTE_UPTIME_WARN_MS` vira `database_compute_long_uptime`, uma vez por compute.
  */
 @Injectable()
 export class MaintenanceCoordinator {
@@ -174,19 +213,27 @@ export class MaintenanceCoordinator {
   ) {}
 
   async runCycle(): Promise<MaintenanceCycleResult> {
-    const client = await this.postgres.pool.connect();
-    let inTransaction = false;
     const startedAt = this.clock.now();
+    let client: PoolClient | undefined;
+    let inTransaction = false;
     try {
-      await client.query('BEGIN');
-      inTransaction = true;
-      const { rows } = await client.query<{ locked: boolean }>(
-        `SELECT pg_try_advisory_xact_lock(hashtext('spark_maintenance_cycle_xact')) AS locked`,
-      );
-      if (!(rows[0]?.locked ?? false)) {
+      let lock: CycleLockRow | undefined;
+      try {
+        client = await this.postgres.connect();
+        await client.query('BEGIN');
+        inTransaction = true;
+        const { rows } = await client.query<CycleLockRow>(CYCLE_LOCK_SQL);
+        lock = rows[0];
+      } catch (error) {
+        this.logDatabaseUnavailable(startedAt, error);
+        throw error;
+      }
+      if (!(lock?.locked ?? false)) {
         this.logger.info('maintenance.cycle.skipped_locked', {});
         return this.skippedResult();
       }
+      const databaseStartedAt = lock?.database_started_at ?? null;
+      const databaseUptimeMs = lock?.database_uptime_ms ?? null;
 
       await this.recordStarted(startedAt);
       this.logger.info('maintenance_started', { operation: 'maintenance_cycle' });
@@ -243,6 +290,8 @@ export class MaintenanceCoordinator {
           drBackupChecked = true;
         }
 
+        await this.checkComputeUptime(databaseStartedAt, databaseUptimeMs);
+
         const durationMs = this.clock.now() - startedAt;
         await this.recordCompleted(startedAt, durationMs);
         this.logger.info('maintenance_completed', {
@@ -255,6 +304,8 @@ export class MaintenanceCoordinator {
           backupPayloadSweepRan,
           databaseSizeChecked,
           drBackupChecked,
+          databaseStartedAt,
+          databaseUptimeMs,
         });
         // O evento histórico (T18.2) continua, para quem já filtra por ele.
         this.logger.info('maintenance.cycle.completed', {
@@ -275,6 +326,8 @@ export class MaintenanceCoordinator {
           databaseSizeChecked,
           drBackupChecked,
           durationMs,
+          databaseStartedAt,
+          databaseUptimeMs,
         };
       } catch (error) {
         const durationMs = this.clock.now() - startedAt;
@@ -283,6 +336,7 @@ export class MaintenanceCoordinator {
         this.logger.error('maintenance_failed', {
           operation: 'maintenance_cycle',
           status: 'FAILED',
+          stage: 'workers',
           durationMs,
           errorName,
         });
@@ -291,14 +345,36 @@ export class MaintenanceCoordinator {
     } finally {
       // ROLLBACK encerra a transação que segura o lock (não há nada a commitar nela). Se nem isso
       // funcionar, a conexão está em estado desconhecido: sai do pool destruída, nunca reciclada.
-      let releaseBroken = false;
-      if (inTransaction) {
-        await client.query('ROLLBACK').catch(() => {
-          releaseBroken = true;
-        });
+      if (client !== undefined) {
+        let releaseBroken = false;
+        if (inTransaction) {
+          await client.query('ROLLBACK').catch(() => {
+            releaseBroken = true;
+          });
+        }
+        client.release(releaseBroken || undefined);
       }
-      client.release(releaseBroken || undefined);
     }
+  }
+
+  /**
+   * O ciclo não chegou ao lock: sem conexão, sem `BEGIN` ou sem a consulta do lock (T19.H6).
+   *
+   * Nada rodou, e o heartbeat mora no mesmo banco que acabou de falhar — sem esta linha, o `500`
+   * não diz por quê. Em 2026-09-28, com a franquia do Neon esgotada, 194 ciclos seguidos falharam
+   * assim sem deixar nenhum log de aplicação: o Scheduler dizia `INTERNAL` e mais nada. O `code` é
+   * o SQLSTATE do servidor ou o código de rede do Node — nunca a mensagem, que pode carregar host.
+   */
+  private logDatabaseUnavailable(startedAt: number, error: unknown): void {
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    this.logger.error('maintenance_failed', {
+      operation: 'maintenance_cycle',
+      status: 'FAILED',
+      stage: 'database',
+      durationMs: this.clock.now() - startedAt,
+      errorName: error instanceof Error ? error.name : 'UNKNOWN',
+      errorCode: typeof code === 'string' ? code : null,
+    });
   }
 
   /**
@@ -441,6 +517,47 @@ export class MaintenanceCoordinator {
     } catch (error) {
       this.logger.warn('db_backup_freshness_check_failed', {
         operation: 'dr_backup_freshness_check',
+        errorName: error instanceof Error ? error.name : 'UNKNOWN',
+      });
+    }
+  }
+
+  /**
+   * O compute do banco está acordado há mais tempo do que deveria? (T19.H6)
+   *
+   * Um aviso por compute, não por ciclo: a chave guarda o `pg_postmaster_start_time` do compute já
+   * avisado, e só um compute novo (o Neon reinicia o Postgres a cada retomada) volta a avisar. No
+   * caminho comum — o próprio ciclo acordou o banco — nada é lido nem escrito aqui. Uma falha é
+   * registrada e engolida, como nas outras duas observações: isto nunca derruba o ciclo.
+   */
+  private async checkComputeUptime(
+    databaseStartedAt: number | null,
+    databaseUptimeMs: number | null,
+  ): Promise<void> {
+    const warnAfterMs = this.config.databaseComputeUptimeWarnMs;
+    if (
+      warnAfterMs === 0 ||
+      databaseStartedAt === null ||
+      databaseUptimeMs === null ||
+      databaseUptimeMs <= warnAfterMs
+    ) {
+      return;
+    }
+    try {
+      const warned = await this.readKeys([KEYS.computeUptimeWarnedFor]);
+      if (warned.get(KEYS.computeUptimeWarnedFor) === String(databaseStartedAt)) {
+        return;
+      }
+      await this.writeKeys([[KEYS.computeUptimeWarnedFor, String(databaseStartedAt)]]);
+      this.logger.error('database_compute_long_uptime', {
+        operation: 'database_compute_check',
+        databaseStartedAt,
+        databaseUptimeMs,
+        warnAfterMs,
+      });
+    } catch (error) {
+      this.logger.warn('database_compute_check_failed', {
+        operation: 'database_compute_check',
         errorName: error instanceof Error ? error.name : 'UNKNOWN',
       });
     }

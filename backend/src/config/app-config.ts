@@ -354,6 +354,11 @@ export class AppConfig {
     return this.env.MAINTENANCE_STALE_AFTER_MS;
   }
 
+  /** `0` desliga o aviso de compute do banco sem suspensão (T19.H6). */
+  get databaseComputeUptimeWarnMs(): number {
+    return this.env.DATABASE_COMPUTE_UPTIME_WARN_MS;
+  }
+
   get databaseSizeCheckIntervalMs(): number {
     return this.env.DATABASE_SIZE_CHECK_INTERVAL_MS;
   }

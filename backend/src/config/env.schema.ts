@@ -594,16 +594,41 @@ export const envSchema = z.object({
   /**
    * Depois de quanto tempo sem um ciclo de manutenção bem-sucedido o serviço é considerado parado.
    *
-   * O Cloud Scheduler chama `spark-maintenance` a cada minuto; cinco minutos sem sucesso cobre um
-   * retry atrasado e um deploy no meio, sem esconder um Scheduler desabilitado por muito tempo.
+   * O Cloud Scheduler chama `spark-maintenance` a cada 15 minutos (T19.H6). 35 minutos são o ciclo
+   * normal (15), mais um ciclo perdido (15), mais margem para cold start, deploy e o prazo de
+   * tentativa do Scheduler (5): um ciclo isolado que falha nunca vira `stale`; dois seguidos viram.
    * É o que `maintenance_stale` e `GET /internal/maintenance/status` usam.
+   *
+   * Precisa andar junto com o cron (`SPARK_SCHEDULER_CRON`) e com a janela do alerta de ausência:
+   * os três moram em `ops/gcp/lib.gcp.sh`, que passa este valor explicitamente à revision do
+   * `spark-maintenance` e recusa o deploy se eles não forem coerentes. Este default é o mesmo
+   * número, para quem roda o ciclo fora do Cloud Run.
    */
   MAINTENANCE_STALE_AFTER_MS: z.coerce
     .number()
     .int()
     .min(10_000)
     .max(24 * 60 * 60 * 1000)
-    .default(5 * 60 * 1000),
+    .default(35 * 60 * 1000),
+
+  /**
+   * Há quanto tempo o compute do PostgreSQL pode estar de pé, sem nenhuma suspensão, antes de o
+   * ciclo de manutenção avisar (`database_compute_long_uptime`, uma vez por compute). `0` desliga.
+   *
+   * T19.H6: o Neon Free suspende o compute depois de 5 minutos sem consulta, e a franquia mensal
+   * (100 CU-h) só dura o mês porque ele dorme. Com o Scheduler a cada minuto ele nunca dormiu, a
+   * franquia acabou em ~17 dias e toda rota autenticada virou 503 — sem nenhum sinal antes. O ciclo
+   * lê `pg_postmaster_start_time()` (o Neon reinicia o Postgres a cada retomada), então um compute
+   * acordado há horas é visível de dentro, sem credencial do Neon e sem nenhuma consulta a mais.
+   * Seis horas contínuas não acontecem com o tráfego atual; se passarem a acontecer, é a hora de
+   * rever o plano do banco — que é exatamente o aviso que faltou.
+   */
+  DATABASE_COMPUTE_UPTIME_WARN_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(30 * 24 * 60 * 60 * 1000)
+    .default(6 * 60 * 60 * 1000),
 
   /**
    * Cadência mínima entre duas medições de `pg_database_size` pelo ciclo de manutenção.

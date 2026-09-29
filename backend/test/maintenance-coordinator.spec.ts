@@ -7,6 +7,7 @@ import { FakeAuthTokenVerifier } from './support/fake-auth-token-verifier';
 import { FakeClock } from './support/fake-clock';
 import { MaintenanceCoordinator } from '../src/maintenance/maintenance.coordinator';
 import { PostgresService } from '../src/database/postgres.service';
+import { SparkLogger } from '../src/common/logger';
 import { SocialMediaCleaner } from '../src/modules/social/social-media.cleaner';
 import { BackupPayloadCleaner } from '../src/modules/backup/backup-payload.cleaner';
 
@@ -195,5 +196,153 @@ describe('T18.2 — MaintenanceCoordinator', () => {
     await app.get(MaintenanceCoordinator).runCycle();
     await expect(app.get(SocialMediaCleaner).sweep()).resolves.toBe(0);
     await expect(app.get(BackupPayloadCleaner).sweep()).resolves.toBe(0);
+  });
+
+  // ----------------------------------------------------------------------------------------------
+  // T19.H6 — o Scheduler passou de 1 para 15 minutos para o Neon voltar a dormir. Duas coisas
+  // mudam para o ciclo: quase todo ciclo começa acordando o banco, e o ciclo passa a medir se o
+  // banco de fato dorme (`pg_postmaster_start_time()`: o Neon reinicia o Postgres a cada retomada).
+  // ----------------------------------------------------------------------------------------------
+
+  describe('T19.H6 — cada ciclo começa acordando o banco', () => {
+    async function boot(overrides: Record<string, string> = {}): Promise<void> {
+      temp = createTempDb();
+      app = await createTestApp(
+        configFor(temp.path, { BACKGROUND_JOBS_MODE: 'disabled', ...overrides }),
+        new FakeAuthTokenVerifier(),
+      );
+    }
+
+    /** A próxima aquisição do pool falha com `error`; as seguintes seguem para o pool real. */
+    function failNextConnect(error: Error): jest.SpyInstance<Promise<unknown>, []> {
+      // `Pool.connect` tem sobrecarga (promise e callback), e o spy tipa a de callback.
+      const spy = jest.spyOn(
+        app.get(PostgresService).pool,
+        'connect',
+      ) as unknown as jest.SpyInstance<Promise<unknown>, []>;
+      return spy.mockRejectedValueOnce(error);
+    }
+
+    it('uma falha transitória ao conectar (o cold start do Neon) é absorvida pela segunda tentativa', async () => {
+      await boot();
+      const warn = jest.spyOn(app.get(SparkLogger), 'warn');
+      // Só a PRIMEIRA aquisição falha — é a do lock do ciclo; as demais seguem para o pool real.
+      const connect = failNextConnect(
+        Object.assign(new Error('the database system is starting up'), { code: '57P03' }),
+      );
+
+      const result = await app.get(MaintenanceCoordinator).runCycle();
+
+      expect(result.skipped).toBe(false);
+      expect(connect.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(warn).toHaveBeenCalledWith(
+        'database.connect.retry',
+        expect.objectContaining({ delayMs: expect.any(Number) }),
+      );
+    });
+
+    it('uma falha que não é de cold start não é repetida, e o ciclo diz por que falhou (stage=database)', async () => {
+      await boot();
+      const coordinator = app.get(MaintenanceCoordinator);
+      const error = jest.spyOn(app.get(SparkLogger), 'error');
+      const connect = failNextConnect(
+        Object.assign(new Error('Your project has exceeded the compute time quota.'), {
+          code: 'XX000',
+        }),
+      );
+
+      await expect(coordinator.runCycle()).rejects.toThrow('compute time quota');
+
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith(
+        'maintenance_failed',
+        expect.objectContaining({
+          operation: 'maintenance_cycle',
+          status: 'FAILED',
+          stage: 'database',
+          errorCode: 'XX000',
+        }),
+      );
+      // O código do servidor, nunca a mensagem.
+      expect(JSON.stringify(error.mock.calls)).not.toContain('compute time quota');
+      // O banco de volta, o ciclo seguinte roda normalmente.
+      expect((await coordinator.runCycle()).skipped).toBe(false);
+    });
+
+    it('o ciclo informa o compute que o atendeu — o mesmo compute enquanto o banco não dorme', async () => {
+      await boot();
+      const coordinator = app.get(MaintenanceCoordinator);
+      const info = jest.spyOn(app.get(SparkLogger), 'info');
+
+      const first = await coordinator.runCycle();
+      const second = await coordinator.runCycle();
+
+      expect(first.databaseStartedAt).toEqual(expect.any(Number));
+      expect(first.databaseStartedAt!).toBeLessThanOrEqual(Date.now());
+      expect(first.databaseUptimeMs!).toBeGreaterThanOrEqual(0);
+      // O PostgreSQL de teste não reinicia entre dois ciclos: mesmo compute, uptime que só cresce.
+      // Em produção, compute novo a cada ciclo é o banco que dormiu entre eles.
+      expect(second.databaseStartedAt).toBe(first.databaseStartedAt);
+      expect(second.databaseUptimeMs!).toBeGreaterThanOrEqual(first.databaseUptimeMs!);
+      expect(info).toHaveBeenCalledWith(
+        'maintenance_completed',
+        expect.objectContaining({
+          databaseStartedAt: first.databaseStartedAt,
+          databaseUptimeMs: first.databaseUptimeMs,
+        }),
+      );
+    });
+
+    it('compute acordado além de DATABASE_COMPUTE_UPTIME_WARN_MS: um aviso por compute, não por ciclo', async () => {
+      // 1 ms: qualquer PostgreSQL de teste já está de pé há mais do que isso.
+      await boot({ DATABASE_COMPUTE_UPTIME_WARN_MS: '1' });
+      const coordinator = app.get(MaintenanceCoordinator);
+      const error = jest.spyOn(app.get(SparkLogger), 'error');
+      const warnings = () =>
+        error.mock.calls.filter(([event]) => event === 'database_compute_long_uptime');
+
+      const first = await coordinator.runCycle();
+      expect(first.skipped).toBe(false);
+      expect(warnings()).toHaveLength(1);
+      expect(warnings()[0][1]).toMatchObject({
+        operation: 'database_compute_check',
+        databaseStartedAt: first.databaseStartedAt,
+        warnAfterMs: 1,
+      });
+
+      await coordinator.runCycle();
+      expect(warnings()).toHaveLength(1); // o mesmo compute não avisa de novo
+
+      // Um compute novo volta a avisar — simulado trocando o compute já avisado.
+      await app
+        .get(PostgresService)
+        .query(
+          `UPDATE server_metadata SET value = '1' WHERE key = 'database_compute_uptime_warned_for'`,
+        );
+      await coordinator.runCycle();
+      expect(warnings()).toHaveLength(2);
+    });
+
+    it.each([
+      ['desligado (0)', '0'],
+      ['abaixo do limite', String(30 * 24 * 60 * 60 * 1000)],
+    ])(
+      'aviso de compute %s: nada é lido nem escrito além do ciclo',
+      async (_label, warnAfterMs) => {
+        await boot({ DATABASE_COMPUTE_UPTIME_WARN_MS: warnAfterMs });
+        const error = jest.spyOn(app.get(SparkLogger), 'error');
+
+        const result = await app.get(MaintenanceCoordinator).runCycle();
+
+        expect(result.skipped).toBe(false);
+        expect(
+          error.mock.calls.filter(([event]) => event === 'database_compute_long_uptime'),
+        ).toEqual([]);
+        const { rows } = await app
+          .get(PostgresService)
+          .query(`SELECT 1 FROM server_metadata WHERE key = 'database_compute_uptime_warned_for'`);
+        expect(rows).toHaveLength(0);
+      },
+    );
   });
 });
