@@ -467,18 +467,137 @@ Nunca rebuilda imagem — só move tráfego de volta para uma revision que já e
 migration já aplicada **não** é desfeita pelo rollback (§56) — é por isso que migrations de
 produção são sempre additive.
 
+### Toda rota autenticada responde 503 (`auth.tombstone.unavailable`) — o PostgreSQL é Tier-0
+
+**Sintoma:** sync, social, backup e Coach falham **ao mesmo tempo** no app; a API responde `503`
+com `ACCOUNT_STATE_UNAVAILABLE` ("Account state is temporarily unavailable"); nos logs,
+`auth.tombstone.unavailable` seguido de `http.error`; `/health/live` continua `200`.
+
+**Por que tudo cai junto:** toda rota autenticada fora de `/v1/account` passa pelo `BearerAuthGuard`,
+que consulta `account_deletion_tombstones` **antes** de qualquer outra coisa. Sem PostgreSQL, ele
+não consegue provar que a conta não foi excluída e **falha fechado** — de propósito: "não consigo
+provar que a conta está ativa" nunca vira "considero ativa". O banco é dependência **Tier-0**: sem
+ele, nenhuma rota autenticada existe, o maintenance falha e o backup de DR falha. O app no aparelho
+continua inteiro (treino, histórico, Outbox pendente) — ver "O que NUNCA está quebrado".
+
+Diagnóstico, nesta ordem (tudo somente leitura):
+
+```bash
+API_URL="$(gcloud run services describe spark-backend --region southamerica-east1 --project "$SPARK_GCP_PROJECT" --format='value(status.url)')"
+curl -sS "$API_URL/health/ready"
+# {"status":"unavailable","checks":{"config":true,"database":false,...}}  → é o banco
+
+gcloud logging read 'resource.labels.service_name="spark-maintenance" AND jsonPayload.event="maintenance_failed"' \
+  --project "$SPARK_GCP_PROJECT" --freshness=2h --limit 3 --format='value(timestamp,jsonPayload.stage,jsonPayload.errorName,jsonPayload.errorCode)'
+# stage=database + o SQLSTATE (ou o código de rede) com que o banco recusou — desde a T19.H6
+```
+
+1. `database=false` → o banco não responde. Abra o **console do Neon** (projeto do Spark): o compute
+   está suspenso por **franquia de compute esgotada** ("exceeded the compute time quota")? É a
+   seção seguinte. Neon saudável → confira o secret `spark-database-url` (versão pinada na
+   revision), a política de TLS e a página de status do provedor.
+2. `database=true` e ainda `503` em rota autenticada → não é o banco: leia o `errorName` de
+   `auth.tombstone.unavailable` e `http.error`.
+
+**Nunca** "conserte" isto afrouxando o guard (tratar a falha da consulta como "conta ativa") — é
+exatamente a ressurreição de conta excluída que o tombstone existe para impedir.
+
+### Franquia de compute do Neon esgotada (incidente de 2026-09-28, T19.H6)
+
+O Neon Free inclui **100 CU-h por projeto por mês** e suspende o compute depois de **5 minutos sem
+consulta** (fixo no plano). Com a franquia esgotada, o compute fica suspenso **até o próximo período
+de cobrança ou um upgrade** — e o Spark inteiro autenticado fica em `503` (seção anterior). É
+incidente de **disponibilidade/capacidade**, não de integridade: os dados estão intactos no Neon.
+
+**Não faça:** criar outro projeto Neon, `DROP`, restore de backup de DR, ou trocar `DATABASE_URL`.
+Nenhum desses resolve quota, e todos trocam um incidente de horas por um risco de divergência de
+dados. O restore do [DISASTER_RECOVERY.md](./DISASTER_RECOVERY.md) é para perda ou corrupção **com
+evidência**.
+
+Procedimento (muda):
+
+1. **Pare o polling que consome o compute:**
+   `gcloud scheduler jobs pause spark-maintenance-cycle --location southamerica-east1 --project "$SPARK_GCP_PROJECT"`.
+   Não se perde nada: notificação pendente, exclusão de conta pendente e varreduras vivem no
+   PostgreSQL e convergem quando o ciclo voltar. **Não** pause `spark-db-backup-daily`: o backup
+   falha enquanto o banco estiver fora (alerta esperado) e volta sozinho.
+2. **Devolva o compute ao Neon** — decisão do dono da conta: esperar o reset da franquia no início
+   do próximo período de cobrança (o console mostra a data), ou mudar de plano. Anote qual foi.
+3. **Readiness:** `curl -sS "$API_URL/health/ready"` → `200`, `database: true`, `migrations: true`.
+4. **Rotas autenticadas:** `SPARK_SMOKE_FIREBASE_ID_TOKEN=… ops/gcp/smoke-cloud-run.sh "$API_URL"`
+   (conta de teste; ver [OPERATIONS_CHECKLIST.md](./OPERATIONS_CHECKLIST.md)) e o app num aparelho:
+   sync, social, backup, Coach. O incidente só fecha aqui.
+5. **Só então** o maintenance volta, na cadência nova: confirme que a produção já tem o deploy da
+   T19.H6 (`gcloud scheduler jobs describe spark-maintenance-cycle … --format='value(schedule)'` →
+   `*/15 * * * *`; o deploy atualiza o cron mas **nunca** muda o estado do job), depois
+   `gcloud scheduler jobs resume spark-maintenance-cycle …` e
+   `gcloud scheduler jobs run spark-maintenance-cycle …` para um ciclo imediato
+   (`maintenance_completed` no log).
+6. **Nas 24–72 h seguintes:** o banco voltou a dormir? — seção seguinte.
+
+Registro de 2026-09-28 (horários UTC):
+
+| Quando | O quê |
+| --- | --- |
+| 2026-09-11 ~15:04 | `spark-maintenance-cycle` passa a rodar `* * * * *`: 1 440 ciclos/dia, cada um com conexão, `BEGIN`, lock e heartbeat no PostgreSQL — com zero trabalho real (nas 24 h antes do incidente: 1 441 ciclos, 0 exclusões, 0 notificações; push desligado) |
+| 11/09 → 28/09 | uma consulta por minuto nunca deixa passar os 5 min de suspensão: o compute fica de pé 24/7, ~6 CU-h/dia a 0,25 CU. A API teve de 0 a 283 requisições/dia no período |
+| 2026-09-28 19:15:02 | último ciclo bem-sucedido |
+| 2026-09-28 19:16:29 | primeiro `auth.tombstone.unavailable`; `/health/ready` com `database: false` |
+| 19:16 → 22:29 | 194 ciclos falham (`INTERNAL` no Scheduler) **sem nenhum log de aplicação** — a falha de conexão acontecia antes do `try` que registra `maintenance_failed` (corrigido na T19.H6: `stage=database`) |
+| 19:16 → | `spark-run-5xx`, `spark-scheduler-failed` e `spark-maintenance-stale` dispararam e chegaram por e-mail (confirmado pelo operador) — nenhum aviso **antes** da franquia acabar, que é o que `spark-db-compute-long-uptime` passa a dar |
+| 2026-09-28 22:29:25 | Scheduler pausado pelo operador (passo 1) |
+| 2026-09-28 | decisão do dono da conta (passo 2): esperar o reset mensal da franquia — as rotas autenticadas ficam em `503` até lá; o deploy da T19.H6 e a retomada do Scheduler vêm depois de `/health/ready` voltar a `200` |
+
+A causa e a correção estão em `PROJECT_RULES.md` §13.31: Scheduler a cada 15 minutos, stale de
+35 min, alerta de ausência de 45 min, e o ciclo passou a medir se o banco dorme.
+
+### O banco não dorme (alerta `spark-db-compute-long-uptime`)
+
+**Sintoma:** `database_compute_long_uptime` no log do maintenance (o compute está de pé há mais de
+`DATABASE_COMPUTE_UPTIME_WARN_MS`, 6 h, sem suspender), ou o console do Neon mostra o consumo de
+CU-h subindo como se o banco nunca parasse.
+
+Todo `maintenance_completed` carrega o compute que atendeu o ciclo (`databaseStartedAt`, o
+`pg_postmaster_start_time` — o Neon reinicia o Postgres a cada retomada) e há quanto tempo ele estava
+de pé (`databaseUptimeMs`):
+
+```bash
+gcloud logging read 'resource.labels.service_name="spark-maintenance" AND jsonPayload.event="maintenance_completed"' \
+  --project "$SPARK_GCP_PROJECT" --freshness=1d --limit 200 --format=json \
+  | jq '{ciclos: length, computesDistintos: ([.[].jsonPayload.databaseStartedAt] | unique | length),
+         uptimeMaxMin: (([.[].jsonPayload.databaseUptimeMs] | max) / 60000 | floor)}'
+```
+
+Sem tráfego, cada ciclo encontra um compute **novo** (o banco dormiu entre dois ciclos) com uptime
+de segundos: `computesDistintos ≈ ciclos`. `computesDistintos = 1` com uptime de horas é o banco que
+nunca dorme — o padrão do incidente. Causas, da mais provável à menos:
+
+1. a cadência voltou (`gcloud scheduler jobs describe spark-maintenance-cycle … --format='value(schedule)'`
+   diferente de `*/15 * * * *`; o `config-drift-audit.sh` aponta);
+2. um poller novo do banco — um uptime check sobre `/health/ready`, um cron, um worker com
+   `setInterval` — que ninguém fez a conta de CU-h (ver `PROJECT_RULES.md` §13.31);
+3. tráfego real contínuo (requisições por hora na API, métrica `run.googleapis.com/request_count`):
+   aí o plano do banco precisa ser revisto — é crescimento, não defeito.
+
 ### `spark-maintenance` parece não estar rodando (alerta `spark-maintenance-stale`)
 
 ```bash
 ops/gcp/dr-status.sh                                # lê GET /internal/maintenance/status: stale, ageMs, lastErrorName
-gcloud scheduler jobs describe spark-maintenance-cycle --location southamerica-east1 --format='value(state,status.code,lastAttemptTime)'
+gcloud scheduler jobs describe spark-maintenance-cycle --location southamerica-east1 --format='value(state,schedule,status.code,lastAttemptTime)'
 gcloud scheduler jobs run spark-maintenance-cycle --location southamerica-east1   # dispara um ciclo agora
 gcloud run services logs read spark-maintenance --region southamerica-east1 --limit 50
 ```
 
+Desde a T19.H6 o Scheduler chama a cada **15 minutos**: o heartbeat só é `stale` depois de **35 min**
+sem sucesso (um ciclo perdido nunca é), e `spark-maintenance-stale` (CRITICAL) só dispara depois de
+**45 min** sem nenhuma resposta `2xx` — vários ciclos seguidos perdidos. Um `spark-scheduler-failed`
+isolado (WARNING) seguido de um ciclo bem-sucedido não é incidente. `state: PAUSED` é decisão de
+operador (o deploy nunca muda o estado do job) — confira se ainda faz sentido.
+
 `stale: true` com `lastErrorName` preenchido é um ciclo que **falha** (veja `maintenance_failed` no
-log); `stale: true` com `lastStartedAt` parado é o Scheduler que **não chama** (estado, IAM
-`run.invoker`, `status.code` do último attempt). Procure por `maintenance.cycle.skipped_locked` —
+log); `maintenance_failed` com `stage=database` é o **banco** que não respondeu (seção "Toda rota
+autenticada responde 503"); `stale: true` com `lastStartedAt` parado é o Scheduler que **não chama**
+(estado, IAM `run.invoker`, `status.code` do último attempt). Procure por `maintenance.cycle.skipped_locked` —
 se aparecer em toda chamada, outra execução está segurando o lock do ciclo. O lock é
 `pg_try_advisory_xact_lock` numa transação que dura o ciclo: some quando a transação termina, ou
 quando o processo morre (o pooler aborta a transação). Se mesmo assim persistir, o suspeito é uma

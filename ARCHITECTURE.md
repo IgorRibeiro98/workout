@@ -812,6 +812,7 @@ persistência do domínio        validação da resposta
 | T19.7 | Exercise Catalog UX V2: taxonomia visual derivada (`ExerciseVisualResolver`), emojis funcionais → ícones vetoriais, CRUD canônico (override) vs `CUSTOM` | **implementado** |
 | T19.8 | Workout Scheduling V2: `0..N` dias da semana por treino (`workout_template_schedules`), formulário com obrigatoriedade explícita, Hoje reconhece o dia agendado | **implementado** |
 | T19.9 | Rest Timer Behavior: `RestCompletionBehavior` (`AUTO_ADVANCE` padrão / `MANUAL_OVERTIME`) via `SettingsManager`; overtime derivado de `restEndsAt`, nunca contador de UI; backend N/A, migration Room N/A | **implementado** |
+| T19.H6 | Neon Compute Efficiency: Scheduler do maintenance de `* * * * *` para `*/15 * * * *` (o ciclo por minuto nunca deixou o Neon dormir e esgotou a franquia de compute → toda rota autenticada em 503), stale 5 → 35 min e alerta de ausência 10 → 45 min conferidos juntos (`require_coherent_maintenance_timing`), `maintenance_failed stage=database`, retry de cold start na conexão do ciclo, compute do banco por ciclo (`pg_postmaster_start_time`) e aviso único de compute sem suspensão; backup diário, lock, guard e IAM intactos; Android e migrations N/A | **CODE COMPLETE / COST VALIDATION PENDING** (deploy, retomada do Scheduler e 24–72 h de medição do scale-to-zero pendentes) |
 | T19.H5 | Compartilhar Progresso com disponibilidade real: `contractVersion` explícito (ausente = v1 legado, sem interruptores da T19.H3), motivo tipado para cada `UNAVAILABLE` (`availabilityReasons`), "Sincronizar dados" sobre o `SyncCoordinator` da T16, fuso declarado na abertura, geração contra resposta velha, smoke com conta de teste confere o contrato v2; migrations N/A | **CODE COMPLETE / REAL SOCIAL VALIDATION PENDING** (produção com T19.H3 + `0008` confirmada; deploy do contrato v2, aparelho e duas contas reais NOT VERIFIED) |
 | T19.H4 | Coach IA multi-provider: `GroqAiProviderGateway` (GPT-OSS 120B / Qwen 3.8 27B, structured output strict) ao lado do Gemini atrás de `AiProviderGateway`, escolhido por `AI_PROVIDER` num ponto só, sem fallback; teto de saída e quota por provider; benchmark reproduzível, relatório de uso e smoke do provider antes do tráfego; Android e migrations N/A | **CODE COMPLETE / PRODUCTION VALIDATION PENDING** (GPT-OSS 120B declarado em `lib.gcp.sh`, ZDR verificado; falta deploy, aparelho e revisão humana cega) |
 | T19.H3 | Refresh social explícito ("↻" + gesto, mesmo método, sem polling), foto do check-in consertada no optimizer (bounds `null` descartava toda foto; teto como invariante), Compartilhar Progresso V3 (estatísticas da semana no perfil + resumo de treino no check-in, derivados no servidor e filtrados por inclusão); migration backend `0008` | **implementado** (aparelho real, Cloud Run/GCS reais e duas contas reais NOT VERIFIED) |
@@ -1908,7 +1909,8 @@ roda e **quem** tem autoridade sobre o quê entre deploys, nunca o desenho de do
    (`maintenance-main.ts`) — usa `pg_try_advisory_xact_lock` numa transação que dura o ciclo para
    nunca sobrepor dois ciclos (lock de sessão fica preso no pooler do Neon; corrigido na T18.3), e
    um CAS sobre `server_metadata` para os dois workers de baixa cadência não escanearem o bucket a
-   cada chamada do Cloud Scheduler (que roda a cada minuto).
+   cada chamada do Cloud Scheduler (a cada minuto até a T19.H6; a cada 15 minutos desde então, para o
+   Neon poder dormir — itens 66–70).
 5. **Uma imagem, três superfícies.** O mesmo Dockerfile e o mesmo `dist/` servem a API
    (`node dist/main.js`), a manutenção (`node dist/maintenance-main.js`) e o Job de migration
    (`node dist/cli/migrate-database.js`) — a diferença é comando e Service Account, nunca o
@@ -1989,7 +1991,7 @@ social. O que nasce é uma camada operacional com provas executáveis.
       ▼                                                                                          ensaio: db-restore-drill
    migration → candidate → smoke → tráfego                                                          → CREATE DATABASE spark_drill_*
                                                                                                     → pg_restore (sem --clean)
-   Cloud Scheduler (1 min) ──OIDC──▶ spark-maintenance                                              → tabelas == manifesto
+   Cloud Scheduler (15 min) ──OIDC──▶ spark-maintenance                                             → tabelas == manifesto
       ├── heartbeat em server_metadata → GET /internal/maintenance/status (stale?)                  → migrations → readiness
       ├── pg_database_size → NORMAL/ATTENTION/INVESTIGATE/PLAN/ACTION_REQUIRED                       → RESTORE_DRILL_PASS
       └── idade do backup de DR → db_backup_stale
@@ -2648,6 +2650,32 @@ Regras normativas em `PROJECT_RULES.md` §13.30; contrato em
     na abertura de "Compartilhar progresso" quando o servidor não os tem — sem mover interruptor.
 65. **Resposta velha não escreve.** Cada leitura/escrita da tela pega uma geração; um "↻" que saiu
     antes de um `PATCH` ou de um sync não desfaz a tela. Durante o sync, os interruptores esperam.
+
+### A cadência do maintenance deixa o banco dormir (T19.H6)
+
+Regras normativas em `PROJECT_RULES.md` §13.31; operação em
+[`docs/operations/RUNBOOK.md`](docs/operations/RUNBOOK.md) e
+[`OBSERVABILITY.md`](docs/operations/OBSERVABILITY.md).
+
+66. **Todo ciclo toca o banco, então a cadência é custo.** Conexão, `BEGIN`, lock e heartbeat
+    acontecem mesmo sem trabalho; com o Scheduler a cada minuto o Neon (suspensão após 5 min sem
+    consulta) nunca dormiu e a franquia de compute acabou. `SPARK_SCHEDULER_CRON` é `*/15 * * * *`:
+    ~5 min de compute por ciclo sem tráfego. Os workers de baixa cadência continuam decidindo sozinhos
+    pelo CAS de `claimDue`; o backup diário é outro job e não muda.
+67. **Cron, stale e ausência andam juntos.** `ops/gcp/lib.gcp.sh` declara os três (15 / 35 / 45 min);
+    o stale vai explícito na revision do maintenance; `require_coherent_maintenance_timing` recusa
+    deploy e alertas incoerentes (stale ≥ 2 × intervalo, ausência ≥ stale, cadência uniforme); a
+    auditoria de drift confere cron, estado do job e o stale da revision.
+68. **Cold start é o caminho comum do ciclo.** A conexão do lock sai por `PostgresService.connect()`
+    (retentativa única, só na aquisição); falha antes do lock registra `maintenance_failed` com
+    `stage=database` e o `errorCode`, nunca a mensagem.
+69. **O ciclo mede o sono do banco.** A consulta do lock lê `pg_postmaster_start_time()`;
+    `maintenance_completed` carrega `databaseStartedAt`/`databaseUptimeMs` — compute novo a cada ciclo
+    é o banco que dormiu. Acima de `DATABASE_COMPUTE_UPTIME_WARN_MS` (6 h), um aviso por compute
+    (`database_compute_long_uptime`, alerta `spark-db-compute-long-uptime`).
+70. **O PostgreSQL é Tier-0 e o guard falha fechado.** Sem banco, nenhuma rota autenticada; nada
+    disto afrouxa o `BearerAuthGuard`, e franquia esgotada nunca vira restore, projeto novo ou troca
+    de `DATABASE_URL`. Não existe uptime check sobre `/health/ready` — seria o mesmo polling.
 
 ### Exclusão de conta — resolvida na T17.6
 

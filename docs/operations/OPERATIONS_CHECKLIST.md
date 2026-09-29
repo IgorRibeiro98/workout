@@ -29,10 +29,33 @@ Esperado: `dr-status: OK`, três `PASS`, `storage_audit_completed` com `status=C
 ```bash
 ops/gcp/dr-restore-drill.sh --record       # muda: nada em produção (PostgreSQL local descartável); registra o veredito no Cloud Logging
 ops/gcp/artifact-registry-retention.sh     # a política protege todos os digests em uso?
-ops/gcp/monitoring-alerts.sh --list        # os 12 alertas e o canal continuam lá?
+ops/gcp/monitoring-alerts.sh --list        # os 13 alertas e o canal continuam lá?
 ```
 
 Esperado: `RESTORE_DRILL_PASS`, `retenção do Artifact Registry: PASS`.
+
+### Neon — enquanto o Spark estiver num plano com franquia mensal rígida (T19.H6)
+
+A franquia de compute acabou uma vez (2026-09-28) e derrubou toda rota autenticada sem aviso — ver
+[`RUNBOOK.md`](./RUNBOOK.md) ("Franquia de compute do Neon esgotada"). Estes itens são `MANUAL
+CHECK` no console do Neon (projeto do Spark), mais uma consulta de log:
+
+- [ ] **Compute usage** (Billing/Usage): CU-h consumidos no período × franquia (Free: 100 CU-h). A
+      projeção linear até o fim do período fica abaixo da franquia com folga? Sem tráfego, o
+      maintenance a cada 15 min sozinho custa ~2 CU-h/dia (~60 no mês).
+- [ ] **Storage**: tamanho do banco × limite do plano (o maintenance já mede `pg_database_size`,
+      limiares em [`OBSERVABILITY.md`](./OBSERVABILITY.md)).
+- [ ] **Endpoint inactivity** (Monitoring do compute): o gráfico alterna ativo/inativo — períodos
+      reais de suspensão sem tráfego. Um gráfico sempre ativo é o padrão do incidente.
+- [ ] **Limite/plano**: o plano atual ainda cabe no uso real? A data do próximo reset da franquia.
+
+```bash
+# compute que atendeu cada ciclo nas últimas 24 h: ciclos ≈ computes distintos = o banco dorme entre ciclos
+gcloud logging read 'resource.labels.service_name="spark-maintenance" AND jsonPayload.event="maintenance_completed"' \
+  --project "$SPARK_GCP_PROJECT" --freshness=1d --limit 200 --format=json \
+  | jq '{ciclos: length, computesDistintos: ([.[].jsonPayload.databaseStartedAt] | unique | length), uptimeMaxMin: (([.[].jsonPayload.databaseUptimeMs] | max) / 60000 | floor)}'
+gcloud scheduler jobs describe spark-maintenance-cycle --location "$SPARK_GCP_REGION" --project "$SPARK_GCP_PROJECT" --format='value(state,schedule)'   # ENABLED  */15 * * * *
+```
 
 ## Antes de um deploy
 
@@ -88,8 +111,13 @@ job "Deploy"; o Step Summary do run traz commit, revision, digest e tráfego).
 ops/gcp/smoke-cloud-run.sh "$(gcloud run services describe spark-backend --region "$SPARK_GCP_REGION" --project "$SPARK_GCP_PROJECT" --format='value(status.url)')"
 ops/gcp/config-drift-audit.sh
 ops/gcp/artifact-registry-retention.sh
-gcloud scheduler jobs describe spark-maintenance-cycle --location "$SPARK_GCP_REGION" --project "$SPARK_GCP_PROJECT" --format='value(state,status.code,lastAttemptTime)'
+gcloud scheduler jobs describe spark-maintenance-cycle --location "$SPARK_GCP_REGION" --project "$SPARK_GCP_PROJECT" --format='value(state,schedule,status.code,lastAttemptTime)'
+gcloud scheduler jobs describe spark-db-backup-daily --location "$SPARK_GCP_REGION" --project "$SPARK_GCP_PROJECT" --format='value(state,schedule)'
 ```
+
+Esperado: `ENABLED */15 * * * *` na manutenção e `ENABLED 15 3 * * *` no backup. O deploy atualiza o
+cron mas **nunca** o estado: um job pausado de propósito (incidente) continua pausado até
+`gcloud scheduler jobs resume` — ver o procedimento em [`RUNBOOK.md`](./RUNBOOK.md).
 
 ## Rollback
 

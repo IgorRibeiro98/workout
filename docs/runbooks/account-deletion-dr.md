@@ -171,8 +171,10 @@ psql "$DATABASE_URL" -c "
 | `LEDGER_PENDING` | purge committed, conta bloqueada | gravar o ledger de DR |
 | `FIREBASE_PENDING` | ledger no disco | apagar o usuário no Firebase Auth |
 
-O `AccountDeletionReconciler` varre a tabela a cada minuto e avança as fases com backoff
-exponencial. Uma linha `LEDGER_PENDING` parada por muito tempo aponta problema de **disco**
+O `AccountDeletionReconciler` varre a tabela e avança as fases com backoff exponencial — a cada
+minuto na VPS (`BACKGROUND_JOBS_MODE=interval`), e a cada ciclo do `spark-maintenance` no Cloud Run
+(Scheduler a cada 15 minutos desde a T19.H6: um retry pode esperar até um ciclo a mais do que o
+backoff; a conta continua bloqueada pelo tombstone o tempo todo). Uma linha `LEDGER_PENDING` parada por muito tempo aponta problema de **disco**
 (volume cheio, montado somente-leitura, permissão errada em `/opt/spark/data`); uma
 `FIREBASE_PENDING` parada aponta problema de **credencial ou rede** com o Firebase Admin. `attempts`
 e `last_error` dizem qual dos dois.

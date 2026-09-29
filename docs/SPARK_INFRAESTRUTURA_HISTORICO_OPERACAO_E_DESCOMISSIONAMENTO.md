@@ -1066,6 +1066,11 @@ spark-maintenance-cycle
 cron: * * * * *
 ```
 
+> **Atualização (T19.H6, 2026-09-28):** este snapshot é de 2026-09-11. A cadência por minuto nunca
+> deixou o Neon suspender, esgotou a franquia mensal de compute e derrubou toda rota autenticada; o
+> default passou a `*/15 * * * *`, junto com stale de 35 min e alerta de ausência de 45 min. Ver
+> `PROJECT_RULES.md` §13.31 e `docs/operations/RUNBOOK.md`. Não volte ao cron por minuto.
+
 ```text
 spark-db-backup-daily
 cron: 15 3 * * *
@@ -1381,7 +1386,7 @@ Cadência:
 * * * * *
 ```
 
-Todo minuto.
+Todo minuto. (**Até a T19.H6** — desde 2026-09-28 é `*/15 * * * *`; ver a atualização em §9.8.)
 
 O ciclo executa de forma bounded:
 

@@ -103,6 +103,17 @@ O mesmo ensaio, com `pg_dump`/`pg_restore` reais, roda em todo CI (`ops/gcp/dr-b
 incluindo o cenário "snapshot antigo + tabela criada depois → a tabela NÃO existe no restaurado" e
 o cenário "conta excluída depois do backup → não ressuscita".
 
+### Antes de restaurar: o banco foi perdido, ou só está indisponível? (T19.H6)
+
+`/health/ready` com `database: false` não é, sozinho, perda de dado. Em 2026-09-28 o Neon Free
+esgotou a franquia mensal de compute e suspendeu o compute: toda rota autenticada virou `503` por
+horas, e os dados estavam intactos o tempo todo. Indisponibilidade ou capacidade (franquia, compute
+suspenso, provedor fora do ar) se resolve **no provedor** — reset da franquia, plano, status do
+Neon — e está em [RUNBOOK.md](./RUNBOOK.md) ("Franquia de compute do Neon esgotada"). O
+procedimento abaixo é para perda ou corrupção **com evidência**: criar outro projeto, restaurar o
+backup de DR ou trocar `DATABASE_URL` por causa de quota troca um incidente de horas por dados
+divergentes entre o banco antigo (que volta sozinho) e o novo.
+
 ### Procedimento — o PostgreSQL foi perdido (ou precisa voltar a um ponto anterior)
 
 **Nunca restaure por cima do banco atual.** O destino é sempre um banco NOVO e limpo; o banco

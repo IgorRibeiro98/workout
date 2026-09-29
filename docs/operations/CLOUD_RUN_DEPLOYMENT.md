@@ -34,7 +34,7 @@ Artifact Registry
        ├────► Cloud Run Job spark-db-backup    (DR do PostgreSQL, SA backup — T18.3)
        └────► Cloud Run Job spark-storage-audit (PostgreSQL ↔ GCS, somente leitura — T18.3)
 
-Cloud Scheduler ──OIDC──► spark-maintenance (privado, run.invoker apenas)       a cada minuto
+Cloud Scheduler ──OIDC──► spark-maintenance (privado, run.invoker apenas)       a cada 15 min (T19.H6)
 Cloud Scheduler ──OAuth──► Job spark-db-backup (run.invoker sobre o Job)         03:15 UTC, diário
 ```
 
@@ -229,7 +229,8 @@ falha de um dos smokes → tráfego antigo permanece    remove o temporário, cr
       ↓                                                     ↓
               deploy de spark-maintenance com o MESMO digest (privado, sem troca de tráfego)
       ↓
-garante os dois jobs do Cloud Scheduler (manutenção a cada minuto; backup de DR diário)
+garante os dois jobs do Cloud Scheduler (manutenção a cada 15 min; backup de DR diário) — o cron,
+nunca o estado: um job pausado continua pausado
 ```
 
 `--skip-maintenance` pula a manutenção e os schedulers quando só a API muda.
@@ -491,15 +492,38 @@ Cada chamada executa um ciclo bounded (`MaintenanceCoordinator.runCycle()`):
 3. `AccountDeletionReconciler.processDueJobs()` — sempre.
 4. `SocialMediaCleaner.sweep()` — só quando um CAS sobre `server_metadata` confirma que já passou
    `SOCIAL_MEDIA_CLEANUP_INTERVAL_MS` desde a última vez (§38 — nenhuma varredura de bucket em
-   toda chamada de 1 minuto).
+   toda chamada do Scheduler).
 5. `BackupPayloadCleaner.sweep()` — mesmo mecanismo, com `BACKUP_PAYLOAD_CLEANUP_INTERVAL_MS`.
+6. Tamanho do banco (`DATABASE_SIZE_CHECK_INTERVAL_MS`, 1 h) e frescor do backup de DR
+   (`DR_BACKUP_CHECK_INTERVAL_MS`, 30 min) — mesmo mecanismo (T18.3).
 
 Os mesmos dois valores de configuração servem os dois modos: em `interval` são o período do
 `setInterval`; em `disabled`/ciclo de manutenção, a cadência mínima entre duas execuções.
 
-### Cloud Scheduler (§34–§36)
+### Cloud Scheduler (§34–§36; cadência na T19.H6)
 
-Um único job HTTP, cadência `* * * * *` por padrão, OIDC:
+Um único job HTTP, cadência `*/15 * * * *` por padrão, OIDC. **Por que 15 minutos, e não 1:** todo
+ciclo toca o PostgreSQL (conexão, `BEGIN`, lock, heartbeat) mesmo sem trabalho; com o ciclo por
+minuto da T18.2 o Neon — que suspende depois de 5 min sem consulta — nunca dormiu, a franquia mensal
+de compute do plano Free acabou e toda rota autenticada virou 503 (2026-09-28, ver
+[RUNBOOK.md](./RUNBOOK.md)). O que a cadência muda em cada trabalho do ciclo:
+
+| Trabalho | Antes (1 min) | Depois (15 min) |
+| --- | --- | --- |
+| Notificações (`SOCIAL_PUSH_ENABLED=true`) | ≤ 1 min | ≤ 15 min até o despacho — aceito; hoje o push está **desligado** em produção (§11). Um evento que expira em menos de 15 min (convite de desafio criado a minutos do início) pode expirar sem push; o convite continua no app |
+| Exclusão de conta (retry) | ≤ 1 min + backoff | ≤ 15 min + backoff (20 s … 1 h). O `DELETE /v1/account` já faz tombstone, job e purge numa transação e tenta ledger + Firebase na hora; o reconciler só cobre falha parcial — a conta nunca volta a ser acessível durante a espera (o guard lê o tombstone) |
+| Mídia órfã (15 min) | a cada 16 ciclos | a cada 1–2 ciclos (15–30 min: o CAS exige 15 min cheios, e a hora exata de cada ciclo varia segundos) |
+| Payload de backup órfão (6 h) | 6 h | 6 h – 6 h 15 |
+| Tamanho do banco (1 h) | ~1 h | 1 h – 1 h 15 |
+| Frescor do DR (30 min) | ~31 min | 30–45 min (o alerta de 26 h chega no máximo 15 min mais tarde) |
+
+O cron, o stale do heartbeat (`SPARK_MAINTENANCE_STALE_AFTER_MS`, 35 min, passado à revision como
+`MAINTENANCE_STALE_AFTER_MS`) e a janela do alerta de ausência (`SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS`,
+45 min) moram juntos em `ops/gcp/lib.gcp.sh`; `require_coherent_maintenance_timing` recusa o deploy e
+o `monitoring-alerts.sh` quando stale < 2 × o intervalo ou a ausência < o stale, e só aceita crons
+de cadência uniforme (`* * * * *`, `*/N * * * *` com N divisor de 60, `M * * * *`). Sobrescrever
+continua possível — os três juntos. O backup diário (`spark-db-backup-daily`, `15 3 * * *`) é outro
+job e não muda com isso.
 
 ```text
 spark-maintenance-scheduler
@@ -557,7 +581,8 @@ Publicado e executado a cada deploy **antes** da troca de tráfego (§4): mesma 
 
 ### Configuração produtiva — `spark-maintenance`
 
-Mesmas variáveis, com `AI_ENABLED=false` (o Coach não é usado pela manutenção) e sem tráfego
+Mesmas variáveis, com `AI_ENABLED=false` (o Coach não é usado pela manutenção), mais
+`MAINTENANCE_STALE_AFTER_MS` (de `SPARK_MAINTENANCE_STALE_AFTER_MS`, 2 100 000 — T19.H6), e sem tráfego
 público (`--no-allow-unauthenticated`). Mesma runtime Service Account
 (`spark-backend-runtime`) — não faz sentido criar uma conta nova só por estética quando as
 permissões exigidas são exatamente as mesmas (§40).
@@ -711,7 +736,7 @@ Parâmetros novos, todos em `ops/gcp/lib.gcp.sh` (um lugar só):
 | `SPARK_RUN_BACKUP_MEMORY` / `SPARK_RUN_BACKUP_TIMEOUT` | `1Gi` / `1800` | recursos do Job de backup (o dump nasce em tmpfs) |
 | `SPARK_GCS_SOFT_DELETE_MIN_SECONDS` | `604800` | mínimo aceito pela auditoria |
 
-E no backend (`env.schema.ts`): `MAINTENANCE_STALE_AFTER_MS` (5 min), `DATABASE_SIZE_CHECK_INTERVAL_MS`
+E no backend (`env.schema.ts`): `MAINTENANCE_STALE_AFTER_MS` (35 min desde a T19.H6; 5 min antes), `DATABASE_SIZE_CHECK_INTERVAL_MS`
 (1 h), `DATABASE_SIZE_THRESHOLDS_MB` (`300,350,400,450`), `DR_BACKUP_MAX_AGE_MS` (26 h),
 `DR_BACKUP_CHECK_INTERVAL_MS` (30 min); e para os Jobs de DR, `SPARK_DR_RETENTION_COUNT`,
 `SPARK_DR_WORK_DIR`, `SPARK_DR_MAX_DUMP_BYTES`, `SPARK_GIT_COMMIT`, `SPARK_IMAGE_DIGEST`,

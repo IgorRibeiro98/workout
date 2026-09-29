@@ -919,7 +919,8 @@ A T18.2 coloca o Spark Backend em Cloud Run sem alterar nenhum dos invariantes a
   mesma imagem, entrypoint próprio) os chama via `MaintenanceCoordinator`, com
   `pg_try_advisory_xact_lock` (transação aberta pelo ciclo — lock de sessão não funciona no endpoint
   pooled do Neon; T18.3) contra sobreposição e um CAS sobre `server_metadata` para os dois workers
-  de baixa cadência não escanearem o bucket a cada chamada de 1 minuto do Cloud Scheduler.
+  de baixa cadência não escanearem o bucket a cada chamada do Cloud Scheduler (a cada 15 minutos
+  desde a T19.H6 — §13.31).
 - **Uma imagem, três superfícies, sem `latest` como identidade de deploy.** API, manutenção e Job
   de migration compartilham o mesmo Dockerfile e o mesmo `dist/`; o deploy rastreia até um digest
   exato do Artifact Registry.
@@ -1014,7 +1015,7 @@ abaixo são o que impede "existe um script" de virar "achamos que funciona". Det
   difere.
 - **O maintenance tem heartbeat persistido, e "parado" tem definição.** Cada ciclo grava início,
   fim, sucesso/falha e duração em `server_metadata`; `GET /internal/maintenance/status` (privado)
-  expõe `stale` (sem sucesso há mais de `MAINTENANCE_STALE_AFTER_MS`, 5 min), o tamanho do banco e
+  expõe `stale` (sem sucesso há mais de `MAINTENANCE_STALE_AFTER_MS` — 35 min desde a T19.H6, §13.31), o tamanho do banco e
   o frescor do backup de DR. O tamanho (`pg_database_size`) é medido na cadência de
   `DATABASE_SIZE_CHECK_INTERVAL_MS` — nunca por requisição — e classificado por
   `DATABASE_SIZE_THRESHOLDS_MB` (`300,350,400,450` → ATTENTION/INVESTIGATE/PLAN/ACTION_REQUIRED) em
@@ -1033,7 +1034,8 @@ abaixo são o que impede "existe um script" de virar "achamos que funciona". Det
 - **Alertas são eventos, não esperança.** Os componentes emitem `db_backup_*`, `db_restore_*`,
   `maintenance_*`, `database_size_*`, `db_backup_stale`, `storage_audit_*`, `migration_*` como JSON
   estruturado; `monitoring-alerts.sh` cria as métricas log-based e as 12 políticas de forma
-  idempotente. "Maintenance parado" é ausência de `maintenance_completed` por 10 min. Um alerta
+  idempotente. "Maintenance parado" é ausência de resposta `2xx` do `spark-maintenance` (métrica
+  nativa `request_count`) por 45 min desde a T19.H6 (§13.31). Um alerta
   só é `VERIFIED` depois de disparar de verdade.
 - **O que continua fora, e é decisão:** um segundo bucket em outra região (custo sem incidente
   que o justifique; soft delete de 7 dias + PAP + UBLA são a proteção); restore automático de
@@ -2336,6 +2338,68 @@ Contrato em [`docs/architecture/social-profile-contract.md`](docs/architecture/s
   `SparkSocialProfileGatewayTest`, `SocialProfileSharingAvailabilityTest`,
   `SocialProfileViewModelTest`, `SocialAssistedSyncTest`, `ProgressSharingAvailabilityScreenTest`,
   `ProgressSharingV3ScreenTest`, `SocialBoundaryInspectionTest`. Ops: `smoke-cloud-run.test.sh`.
+
+## 13.31 A cadência do maintenance deixa o banco dormir (T19.H6)
+
+Em 2026-09-28 a franquia mensal de compute do Neon (plano Free: 100 CU-h/projeto/mês) acabou, o
+compute foi suspenso e **toda rota autenticada** virou `503 ACCOUNT_STATE_UNAVAILABLE` — sync,
+social, backup e Coach juntos, com o Cloud Run inteiro de pé. A causa: o Cloud Scheduler chamava
+`spark-maintenance` a cada minuto desde 2026-09-11, e todo ciclo toca o PostgreSQL (conexão,
+`BEGIN`, lock, heartbeat) mesmo sem trabalho nenhum — nas 24 h antes do incidente foram 1 441 ciclos,
+zero exclusões de conta, zero notificações. O Neon suspende o compute depois de 5 minutos sem
+consulta (fixo no Free); uma consulta por minuto o manteve de pé 24/7, ~6 CU-h/dia, e a franquia
+acabou em ~17 dias. Detalhes em [`docs/operations/RUNBOOK.md`](docs/operations/RUNBOOK.md) e
+[`OBSERVABILITY.md`](docs/operations/OBSERVABILITY.md). As regras que não podem ser quebradas:
+
+- **Cadência de algo que toca o banco é decisão de custo, não só de latência.** Qualquer coisa que
+  consulte o PostgreSQL periodicamente — Scheduler, uptime check, worker com `setInterval`, poller
+  novo — precisa da conta de CU-h antes de existir: com o compute mínimo (0,25 CU) e a suspensão de
+  5 min, uma consulta a cada ≤ 5 min mantém o banco acordado 24/7 (~180 CU-h/mês, 1,8× a franquia).
+  Por isso **não existe uptime check sobre `/health/ready`**: o sinal de "banco fora" vem de sinais
+  que já existem (`spark-run-5xx`, `maintenance_failed stage=database`, `spark-maintenance-stale`).
+- **O Scheduler do maintenance roda a cada 15 minutos** (`SPARK_SCHEDULER_CRON`, default
+  `*/15 * * * *`): ~5 min de compute por ciclo sem tráfego, ~2 CU-h/dia. Mais frequente só com a conta
+  refeita e registrada; mais espaçado (30 min) só com medição que o justifique.
+- **Cron, stale e alerta de ausência são uma expectativa só.** Os três moram em
+  `ops/gcp/lib.gcp.sh` (`SPARK_SCHEDULER_CRON`, `SPARK_MAINTENANCE_STALE_AFTER_MS` = 35 min,
+  `SPARK_MAINTENANCE_ABSENCE_ALERT_SECONDS` = 45 min); o stale vai explícito na revision do
+  `spark-maintenance` (o default do backend é o mesmo número) e `require_coherent_maintenance_timing`
+  recusa o deploy e os alertas quando stale < 2 × intervalo, ausência < stale, ou o cron não tem
+  cadência uniforme. Mudar só o cron é o patch que deixa o heartbeat `stale` entre ciclos normais.
+- **Um ciclo perdido não é incidente; vários são.** Stale de 35 min absorve um ciclo perdido;
+  `spark-scheduler-failed` é WARNING; `spark-maintenance-stale` (45 min sem `2xx`) é CRITICAL.
+- **O backup diário não segue a cadência do maintenance.** `spark-db-backup-daily` continua
+  `15 3 * * *`, em job próprio. Economizar compute nunca reduz backup.
+- **O PostgreSQL é Tier-0, e o guard continua falhando fechado.** Sem banco, o `BearerAuthGuard` não
+  prova que a conta não foi excluída e responde `503`. Indisponibilidade de banco nunca se resolve
+  afrouxando o guard, e franquia esgotada nunca se resolve recriando o projeto, restaurando backup ou
+  trocando `DATABASE_URL`: é capacidade, não integridade.
+- **O ciclo mede se o banco dorme.** A mesma consulta do lock lê `pg_postmaster_start_time()` (o
+  Neon reinicia o Postgres a cada retomada): `maintenance_completed` carrega `databaseStartedAt` e
+  `databaseUptimeMs`, e um compute de pé há mais de `DATABASE_COMPUTE_UPTIME_WARN_MS` (6 h) vira
+  `database_compute_long_uptime` — **uma vez por compute** (`server_metadata`), nunca por ciclo — e o
+  alerta `spark-db-compute-long-uptime`. Nenhuma credencial do Neon e nenhuma consulta a mais.
+- **Quase todo ciclo começa acordando o banco.** A conexão do lock sai por `PostgresService.connect()`,
+  com a mesma retentativa única de cold start de `transaction()` — só na aquisição, onde nada rodou.
+  Uma falha antes do lock (conexão, `BEGIN`, consulta do lock) registra `maintenance_failed` com
+  `stage=database` e o `errorCode` (SQLSTATE ou código de rede), nunca a mensagem: em 2026-09-28,
+  194 ciclos falharam sem nenhum log de aplicação.
+- **O que continua igual:** `pg_try_advisory_xact_lock` numa transação que dura o ciclo, os CAS de
+  `claimDue` (cada worker de baixa cadência decide sozinho quando rodar), a idempotência do ciclo, o
+  IAM do Scheduler e do `spark-maintenance` (privado), e nenhuma migration.
+- **Latência aceita (decisão registrada):** notificação ≤ 15 min até o despacho quando
+  `SOCIAL_PUSH_ENABLED=true` (hoje desligado em produção); retry de exclusão de conta ≤ 15 min +
+  backoff (o `DELETE /v1/account` faz o trabalho canônico na hora); tamanho do banco e frescor do DR
+  com até 15 min de atraso. Se notificação precisar de menos, é tarefa própria orientada a evento
+  (evento → Cloud Tasks → dispatcher), com o PostgreSQL como autoridade — **nunca** a volta do
+  Scheduler por minuto.
+- **Testes.** Backend: `config.spec.ts`, `maintenance-heartbeat.spec.ts` (cadência de 15 min: um
+  ciclo perdido não é stale, dois são), `maintenance-coordinator.spec.ts` (cold start absorvido,
+  `stage=database` sem mensagem, compute por ciclo, aviso único por compute). Ops:
+  `deploy-hardening.test.sh` (cron `*/15`, stale na revision, recusa do conjunto incoerente, override
+  coerente aceito, recusa mesmo com `set -e` suspenso), `gcp-audits.test.sh` (cron antigo, Scheduler
+  pausado e stale ausente são DRIFT), `monitoring-alerts.test.sh` (ausência de 2700 s, severidades,
+  política do compute).
 
 ## 14. Tests and build are part of implementation
 
