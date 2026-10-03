@@ -547,6 +547,12 @@ Registro de 2026-09-28 (horários UTC):
 | 19:16 → | `spark-run-5xx`, `spark-scheduler-failed` e `spark-maintenance-stale` dispararam e chegaram por e-mail (confirmado pelo operador) — nenhum aviso **antes** da franquia acabar, que é o que `spark-db-compute-long-uptime` passa a dar |
 | 2026-09-28 22:29:25 | Scheduler pausado pelo operador (passo 1) |
 | 2026-09-28 | decisão do dono da conta (passo 2): esperar o reset mensal da franquia — as rotas autenticadas ficam em `503` até lá; o deploy da T19.H6 e a retomada do Scheduler vêm depois de `/health/ready` voltar a `200` |
+| 29/09 e 30/09 03:15 | `spark-db-backup-daily` falha (banco fora) — esperado; o último válido continuava o de 28/09 |
+| 2026-10-01 ~00:00 | reset da franquia no início do mês (último `5xx` da API: 30/09 23:52:46); a API volta sozinha — **zero** `5xx` desde então, sync e social com `200` para contas reais; backup de DR volta a passar às 03:15 |
+| 2026-10-03 15:47–15:53 | deploy da T19.H6 (`f02acb0`, workflow run 37134480634): `spark-backend-00028-roq`, `spark-maintenance-00014-9j6` com `MAINTENANCE_STALE_AFTER_MS=2100000`; Scheduler com `*/15 * * * *`, ainda `PAUSED` |
+| 2026-10-03 15:54 | alertas reaplicados: 13 políticas (`spark-maintenance-stale` 2700 s CRITICAL, `spark-scheduler-failed` WARNING, `spark-db-compute-long-uptime` nova) |
+| 2026-10-03 15:55 | Scheduler retomado (passo 5) + ciclo manual: `201` em 1,2 s, `maintenance_completed`; `maintenance_stale ageMs=420013197` registra o buraco; `config-drift-audit`: PASS; smoke: PASS |
+| 2026-10-03 16:09 / 16:15 | cold start de `/health/ready` após ~9 min ocioso: `200` em 0,86 s (0,09 s quente). O ciclo das 16:15 encontrou um compute **novo** (`databaseStartedAt` 16:15:03, uptime 0 s): o banco dormiu sem tráfego — scale-to-zero observado |
 
 A causa e a correção estão em `PROJECT_RULES.md` §13.31: Scheduler a cada 15 minutos, stale de
 35 min, alerta de ausência de 45 min, e o ciclo passou a medir se o banco dorme.
